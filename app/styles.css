@@ -775,6 +775,9 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
 .crumb--flat{display:inline-flex;align-items:center;gap:6px;
   height:var(--h-ctl);padding:0 9px;border:1px solid transparent;
   color:var(--mid);white-space:nowrap}
+/* Назва задачі в смузі — приглушена: «де я» каже вкладка. `.txt` усередині тримає колір крошки (`.crumb .txt` нижче дав би `--hi`). */
+.crumb--title{color:var(--dim)}
+.crumb--title .txt{color:inherit}
 /* Крошка СТОРІНКИ оверлею `#tasks-home` («Задачі», «Підключення», «Новий простір»): назва коротка й обрізати її нічим. Пізніше в
    файлі `.crumb{max-width:110px}` (крошки дерева шарів) перебиває ліміт 260px зверху, і в UK іконка стискалась до 0px.
    Два класи — щоб перемагати незалежно від порядку; `.crumb--flat` загалом НЕ чіпаємо: ним користується зовнішня оболонка превʼю. */
@@ -922,35 +925,6 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
 /* --dim замість прототипного --lo — та сама причина, що в .crumb-sep вище */
 .dd-kbd{flex:none;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
 .dd-marks{flex:none;display:inline-flex;gap:4px;align-items:center}
-/* ── дропдаун задач: пошук, список, футер (батч 1.52, Task 5) ──────────────
-   Прокручується ЛИШЕ `.dd-list`: пошук нагорі й «Усі задачі» внизу лишаються
-   видимими при будь-якій кількості задач. `.dd>*{flex-shrink:0}` вище стосується
-   прямих дітей — список мусить стискатись (`min-height:0`), інакше він росте за
-   `max-height` дропдауна, і прокрутка переїжджає назад на весь `.dd`. А діти
-   списку, навпаки, НЕ стискаються — той самий урок, що й над `.dd>*` (скрин
-   09.10.2026: пункти лягали одне на одне). */
-.dd--tasks{overflow:hidden;min-width:280px}
-.dd--tasks>.dd-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;
-  display:flex;flex-direction:column;gap:1px}
-.dd--tasks>.dd-list>*{flex-shrink:0}
-.dd-search{display:flex;align-items:center;gap:8px;height:var(--h-sm);padding:0 10px;
-  margin-bottom:4px;border-bottom:1px solid var(--line);color:var(--mid);cursor:text}
-.dd-search input{flex:1;min-width:0;border:0;background:none;color:var(--hi);font-size:13px}
-.dd-search input:focus{outline:none}
-.dd-search input::placeholder{color:var(--dim)}
-.dd-foot{display:flex;align-items:center;gap:8px;margin-top:4px;padding-top:4px;
-  border-top:1px solid var(--line)}
-.dd-foot .dd-item{flex:1;width:auto;min-width:0}
-.dd-hint{flex:none;padding:0 6px;font-size:11px;color:var(--dim);white-space:nowrap}
-/* Активний пункт клавіатури: смужка зліва, а не лише фон — поточна задача (`--on`)
-   теж має фон, і без смужки «де я» та «куди натисне Enter» зливались би. */
-.dd-item--cur{background:var(--s3);box-shadow:inset 2px 0 0 var(--sel)}
-.dd-k{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
-.dd-item--missing .dd-t{color:var(--dim)}
-.dd-item--missing .dd-k{color:var(--open)}
-.dd mark{background:var(--sel-tint-2);color:inherit;
-  border-radius:2px}
 /* ── простори (Deai 1.0, етап 1): фішка в смузі й її дропдаун ──────────────
    `.space-h` — хост дропдауна (`.ddhost`), стоїть ПОЗА `.crumbs` і НЕ стискається
    (`flex:none`): крошки стискаються першими, а «де я» найвищого рівня лишається —
@@ -1019,7 +993,6 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
    колонка збила б центрування зони 2 (див. `bar-model.js`, zone1). */
 .pal-open{display:flex;align-items:center;flex:none;
   padding-right:6px;margin-right:2px;border-right:1px solid var(--s4)}
-.pal-open .lbl-pal{font-variant-numeric:tabular-nums;letter-spacing:.02em}
 
 .zone-2{justify-content:center}
 .zone-3{justify-content:flex-end}
@@ -1042,7 +1015,7 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
    згаданий коментарем вище («на 1024 керування виглядом ставало недосяжним
    ЗОВСІМ»), лише для нового контролу. */
 @container (max-width:1300px){ .lbl-gl{display:none} }
-@container (max-width:1180px){ .lbl-mode,.lbl-pal,.lbl-upd{display:none} }
+@container (max-width:1180px){ .lbl-mode,.lbl-upd{display:none} }
 @container (max-width:1060px){
   .view-extra{display:none}
   .view-more{display:inline-flex}

@@ -29,8 +29,8 @@ import { apiProblem } from './api-guard.js';
 import { barModel } from './bar-model.js';
 import { ISLAND_SHELL, applyBadge, badgeFor, islandParts } from './claude-status.js';
 import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.js';
-import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
-import { matches, readHomeUi, relTime, taskKey } from './tasks-model.js';
+import { barHTML } from './shell-bar.js';
+import { cleanTitle, readHomeUi, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasNotify, hasTeamComments, healTarget,
@@ -162,26 +162,8 @@ let shootProgress = null;
 let commentMode = (() => { try { return localStorage.getItem('dc-comment-mode') || 'local'; } catch (e) { return 'local'; } })();
 
 /* ===== Смуга (Task 3 Плану B): стан, якого нема більш ніде ===== */
-/** Який дропдаун смуги розкритий: `'task'|'iter'|'gl'|'pub'|'more'|null`. */
+/** Який дропдаун смуги розкритий: `'iter'|'gl'|'pub'|'more'|'space'|null`. */
 let openDd = null;
-/* Пошук у дропдауні задач (батч 1.52). Запит і курсор живуть ТУТ, а не в полі:
-   `paintBar()` міняє `bar.innerHTML` цілком, тож усе, що лише в DOM, смуга
-   стирає на кожному опитуванні статусу Клода чи зміні інспектора — посеред
-   набору. Поле після перемальовки малюється з цих змінних і отримує назад
-   фокус та позицію курсора (`paintBar`). */
-let taskQ = '';
-let taskCursor = 0;
-/* Триває IME-композиція в полі пошуку: до `compositionend` ні значення не
-   застосовуємо, ні смугу не перемальовуємо — перемальовка знищила б поле і
-   обірвала б набір (той самий клас пастки, що `panelComposing` у фільтрі
-   панелі). Відкладена перемальовка виконується на `compositionend`. */
-let taskComposing = false;
-let taskPaintPending = false;
-/* Дропдаун задач був відкритий на ПОПЕРЕДНЬОМУ малюванні: відрізняє «щойно
-   відкрили» (запит порожній, фокус у поле) від «перемалювали відкритий»
-   (запит і курсор лишаються). Один прапорець замість того, щоб скидати запит
-   у кожному з місць, що ставлять `openDd = 'task'` (клік і ⌘K). */
-let taskDdWasOpen = false;
 /* Відкритий екран «Задачі» (вхід — логотип у смузі). Прапорець ділять смуга
    (`barState().homeOpen` міняє її склад) і сам екран (`enterHome`/`leaveHome`
    нижче ставлять ще й клас `home-open` на `body`). */
@@ -255,7 +237,7 @@ let spacesResp = null;
 let spacesSeq = 0;
 /* Дропдаун просторів був відкритий на ПОПЕРЕДНЬОМУ малюванні: відрізняє «щойно
    відкрили» (фокус на поточний рядок) від «перемалювали відкритий» (фокус лишається
-   на тому рядку, де був). Той самий прийом, що `taskDdWasOpen`. */
+   на тому рядку, де був). */
 let spaceDdWasOpen = false;
 
 /** Поточний простір (`{id, name, color, capabilities, …}`) або `null`: шар вимкнено,
@@ -864,17 +846,6 @@ const itNum = (id) => String(id).replace(/^it/, '');
  * саме такий стан у `render()` до першого вдалого фетчу і при фатальному
  * `tasksErr` (жодного попереднього успіху не було).
  */
-/** Що дропдаун задач бере зі стану модуля. Окремою функцією, бо цим же
- *  годується легка перемальовка списку при наборі (`repaintTaskList`). */
-function taskDdState() {
-  return {
-    taskList: (curTaskList && curTaskList.tasks) || [],
-    curTaskId: curTaskList ? curTaskList.current : null,
-    taskQuery: taskQ,
-    taskCursor,
-  };
-}
-
 /** Відносний час локальної публікації для підпису («5 хв тому»); час невідомий (`null`) — порожньо. */
 function pubWhenText(at) {
   if (typeof at !== 'number') return '';
@@ -928,11 +899,9 @@ function barState() {
     view: canvasView,
     vp, vpw: vpWidth === null ? '' : String(vpWidth),
     // Крошка — ІДЕНТИФІКАТОР, не довгий заголовок (спека прототипу): jira,
-    // коли є, інакше id задачі. `taskList`/`curTaskId` модель СВІДОМО не
-    // несе (перелік задач — окремий запит `/api/tasks`); без них перемикання
-    // між задачами лишилось би контролом, що нічого не робить.
+    // коли є, інакше id задачі.
     taskId: curTask ? (curTask.jira || curTask.id || '') : '',
-    ...taskDdState(),
+    taskTitle: curTask ? cleanTitle(curTask) : '',
     hasIteration: !!pickedIt,
     iterLabel: pickedIt ? t('iterTag', itNum(pickedIt.id)) : '',
     /* `label_text` із сервера вже несе повний підпис («Іт.3 · Категорія») —
@@ -1033,7 +1002,7 @@ function barState() {
        фішки в смузі нема зовсім: шар вимкнено або просторів ще нема. */
     space: spaceNow(),
     spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : [],
-    /* Оновлення інструмента: пігулка в смузі й дії ⌘K (`pillModel`). */
+    /* Оновлення інструмента: пігулка в рядку вкладок і дії ⌘K (`pillModel`). */
     update: updateInfo,
   };
 }
@@ -1059,26 +1028,7 @@ function barState() {
  */
 function paintBar() {
   barSeeded = true;
-  /* ⛔ Прапорець композиції не сміє пережити дропдаун. Закрили його посеред
-     набору (клік повз, ⌘K) — вузол поля зник, і `compositionend` на ньому може
-     так і не прийти: `taskComposing` лишався б `true`, і КОЖЕН наступний
-     `paintBar` із відкритим дропдауном тихо вертався б нижче — дропдаун не
-     малювався б до перезавантаження. Тому: не задачний дропдаун → скидаємо; і
-     «щойно відкрили» → теж скидаємо (відкриття не буває посеред композиції). */
-  if (openDd !== 'task' || !taskDdWasOpen) { taskComposing = false; taskPaintPending = false; }
-  /* Триває композиція в полі пошуку — не чіпаємо смугу (`taskComposing`). */
-  if (openDd === 'task' && taskComposing) { taskPaintPending = true; return; }
-  taskPaintPending = false;
-  /* Знімаємо стан поля ДО перемальовки: після `innerHTML` старого вузла вже
-     нема, а з ним і позиції курсора. */
-  const prev = bar.querySelector('#task-q');
-  const hadFocus = !!prev && document.activeElement === prev;
-  const caret = prev ? [prev.selectionStart, prev.selectionEnd] : null;
-  const listTop = prev ? (bar.querySelector('.dd--tasks .dd-list')?.scrollTop ?? 0) : 0;
-  const fresh = openDd === 'task' && !taskDdWasOpen;
-  taskDdWasOpen = openDd === 'task';
-  if (fresh) { taskQ = ''; taskCursor = initialTaskCursor(); }
-  /* Фокус дропдауна просторів — те саме: `innerHTML` знищує вузол, а з ним і фокус.
+  /* Фокус дропдауна просторів: `innerHTML` знищує вузол, а з ним і фокус.
      Запамʼятовуємо ІНДЕКС рядка (ідентичність вузла після перемальовки інша) і те,
      що фокус стояв на фішці. */
   const spDd = bar.querySelector('.dd--spaces');
@@ -1103,26 +1053,6 @@ function paintBar() {
     /* Дропдаун закрили (Esc, повторне натискання), коли фокус був на фішці, — вузол
        новий, фокус вертаємо. */
     bar.querySelector('.space-chip')?.focus({ preventScroll: true });
-  }
-  /* Прокрутка списку: `innerHTML` створює новий `.dd-list` з `scrollTop = 0`, і
-     активний пункт, до якого дійшли стрілками в довгому списку, виїжджав би за
-     межі видимого. Повертаємо те, що було (а не `scrollIntoView` активного:
-     людина могла прокрутити колесом убік навмисно). */
-  if (openDd === 'task' && listTop) {
-    const l = bar.querySelector('.dd--tasks .dd-list');
-    if (l) l.scrollTop = listTop;
-  }
-  /* Фокус у поле: щойно відкрили — завжди; перемалювали відкритий — лише якщо
-     він там БУВ. Інакше опитування статусу крало б фокус у того, хто після
-     відкриття дропдауна клікнув у макет (клік в iframe закриває його не
-     одразу — документ смуги цього кліку не бачить). */
-  if (openDd === 'task' && (fresh || hadFocus)) {
-    const q = bar.querySelector('#task-q');
-    if (q) {
-      q.focus({ preventScroll: true });
-      const end = q.value.length;
-      try { q.setSelectionRange(caret ? caret[0] : end, caret ? caret[1] : end); } catch (e) {}
-    }
   }
 }
 
@@ -1312,7 +1242,6 @@ async function resetSpaceState({ reload = true } = {}) {
   dropGlState();
   tasksErr = false; tasksErrKey = null;
   homeUi.q = ''; homeUi.tags.clear(); homeUi.designers.clear(); saveHomeUi();
-  taskQ = ''; taskCursor = 0;
   if (reload) await loadSpaces();
 }
 
@@ -1779,10 +1708,7 @@ const BAR_ACTIONS = {
      бачив — розмітка була правильна, модель правильна, реєстр правильний,
      а лежав він в іншому реєстрі. */
   palette: () => openPalette(),
-  /* Перемкнути задачу. `bar-model.js` свідомо не несе перелік задач (це
-     окремий запит), тому дані йдуть через `state.taskList` у `crumbTask()`
-     (`shell-bar.js`) — без цього перемикання зникло б без заміни: 01.09.2026
-     задач заведено 16, і перемикач — не рідкісний кут. */
+  /* Перемкнути задачу (вкладка в рядку вкладок і екран «Задачі»). */
   task: async (val) => {
     if (!val || val === curTaskList?.current) return;
     if (refuseMissingTask(val)) return;
@@ -2777,7 +2703,7 @@ let homeData = null;
  *  новішого запиту, не сміє перемалювати екран. */
 let homeSeq = 0;
 /* IME-композиція в полі пошуку: перемальовка під час неї знищила б поле і
-   обірвала набір (клас пастки `taskComposing`/`panelComposing`). */
+   обірвала набір (клас пастки `panelComposing`). */
 let homeComposing = false;
 let homePaintPending = false;
 /* Задача відкривається (запит у дорозі): другий Enter/клік не запускає друге. */
@@ -3890,73 +3816,6 @@ document.addEventListener('keydown', (ev) => {
   if (next) next.focus();
   else if (ev.key === 'ArrowUp') q?.focus();
 }, false);
-
-/* ── пошук у дропдауні задач ─────────────────────────────────────────────── */
-
-/** Досяжні пункти дропдауна в порядку стрілок: задачі, далі футер. */
-const taskDdItems = () => [...bar.querySelectorAll('.dd--tasks .dd-list .dd-item, .dd--tasks .dd-foot .dd-item')];
-
-/** Перемалювати ЛИШЕ список і футер — поле пошуку лишається тим самим вузлом
- *  (інакше кожен символ губив би фокус, позицію курсора й IME). */
-function repaintTaskList() {
-  const dd = bar.querySelector('.dd--tasks');
-  if (!dd) return;
-  const st = taskDdState();
-  const list = dd.querySelector('.dd-list');
-  list.innerHTML = taskListHTML(st);
-  list.scrollTop = 0;
-  dd.querySelector('.dd-foot').innerHTML = taskFootHTML(st);
-  taskCursor = Math.min(taskCursor, taskDdItems().length - 1);
-  const act = dd.querySelector('.dd-item--cur');
-  const q = dd.querySelector('#task-q');
-  if (act) q.setAttribute('aria-activedescendant', act.id);
-  else q.removeAttribute('aria-activedescendant');
-}
-
-/** Пересунути активний пункт без перемальовки: міняємо лише клас. */
-function moveTaskCursor(delta) {
-  const items = taskDdItems();
-  if (!items.length) return;
-  /* «Нема активного» (-1, порожня видача): ↑ лишає як є, ↓ входить на перший. */
-  if (taskCursor < 0 && delta < 0) return;
-  taskCursor = Math.min(Math.max(taskCursor + delta, 0), items.length - 1);
-  items.forEach((el, i) => el.classList.toggle('dd-item--cur', i === taskCursor));
-  items[taskCursor].scrollIntoView({ block: 'nearest' });
-  bar.querySelector('#task-q')?.setAttribute('aria-activedescendant', items[taskCursor].id);
-}
-
-/** Початковий курсор нового запиту: перший пункт, а в порожній видачі — ніякого. */
-const initialTaskCursor = () => (taskDdState().taskList.some((x) => matches(x, taskQ)) ? 0 : -1);
-
-function applyTaskQuery(inp) {
-  taskQ = inp.value;
-  taskCursor = initialTaskCursor();
-  repaintTaskList();
-}
-bar.addEventListener('input', (ev) => {
-  if (ev.target.id !== 'task-q' || taskComposing || ev.isComposing) return;
-  applyTaskQuery(ev.target);
-});
-bar.addEventListener('compositionstart', (ev) => { if (ev.target.id === 'task-q') taskComposing = true; });
-bar.addEventListener('compositionend', (ev) => {
-  if (ev.target.id !== 'task-q') return;
-  taskComposing = false;
-  applyTaskQuery(ev.target);
-  if (taskPaintPending) paintBar();
-});
-bar.addEventListener('keydown', (ev) => {
-  if (ev.target.id !== 'task-q' || ev.isComposing) return;
-  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
-    ev.preventDefault();      // без цього каретка стрибає на початок/кінець поля
-    moveTaskCursor(ev.key === 'ArrowDown' ? 1 : -1);
-  } else if (ev.key === 'Enter') {
-    ev.preventDefault();
-    /* Той самий шлях, що в кліку: `click()` на пункті йде в делегацію смуги, а
-       не другим викликом `BAR_ACTIONS` — відмова для задачі без теки, закриття
-       дропдауна й перемикання лишаються в одному місці. */
-    taskDdItems()[taskCursor]?.click();
-  }
-});
 
 /* ── смуга: своя ширина макета (поле лишається, доки в ньому набирають) ── */
 bar.addEventListener('input', (ev) => {

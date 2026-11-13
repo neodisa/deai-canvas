@@ -340,15 +340,9 @@ const UK = {
   // дія, і формулюється вона як сусідні («Аудиторія коментарів: …»).
   tasks: 'Задачі',
   allTasks: 'Усі задачі',
-  /* Пошук у дропдауні задач (батч 1.52): поле, заголовок списку без запиту,
-     порожня видача, задача без теки на цій машині і підказка клавіш у футері. */
-  taskSearchPh: 'Знайти задачу…',
-  recentTasks: 'Нещодавні',
-  noTasksFound: (q) => `Нічого не знайдено за «${q}»`,
+  /* Задача без теки на цій машині (екран «Задачі»). */
   folderMissing: 'теки немає на цій машині',
   folderMissingOpen: (key) => `Задачу ${key} не відкрити: теки немає на цій машині.`,
-  ddKeysHint: '↑↓ · Enter · Esc',
-  backToTask: (key) => `Повернутися до ${key}`,
   publishBusy: 'Публікую…',
   publishDeployFailed: (n, dir, err) => `Зібрано ${n} ітерацій у:\n${dir}\n\nДеплой не вдався: ${err}`,
   publishNotTaskLink: (owner, url) => `Це ТВОЄ превʼю (${url}), а не посилання задачі: задача веде на превʼю власника — ${owner}. Менеджеру давай його посилання.`,
@@ -681,11 +675,6 @@ const UK = {
      (`localStorage`), а сніпет пише сервер, який про цей вибір не знає.
      Сніпет читає `dc-lang` сам і бере свій рядок; щоб дві копії не
      розійшлись, їх приколює тест `test_audience_labels_match_dictionary`. */
-  /* Двері в палітру. Підпис — сам акорд: він і називає дію, і вчить
-     клавіші, і влазить у 58px, яких коштує голова зони 1. Повне речення
-     живе в `paletteOpenTitle` — у підказці, а не в смузі. */
-  paletteOpen: '⌘K',
-  paletteOpenTitle: 'Що зробити? — пошук по всіх діях, мова інтерфейсу\nй налаштування (⌘K)',
   audTabLocal: 'Клод',
   audTabTeam: 'Команда',
   audLocal: 'Аудиторія коментарів: Клод',
@@ -1531,13 +1520,8 @@ const EN = {
   // Task 3 of Plan B — see the UK block for why these exist.
   tasks: 'Tasks',
   allTasks: 'All tasks',
-  taskSearchPh: 'Find a task…',
-  recentTasks: 'Recent',
-  noTasksFound: (q) => `Nothing found for “${q}”`,
   folderMissing: 'folder is not on this machine',
   folderMissingOpen: (key) => `Cannot open ${key}: its folder is not on this machine.`,
-  ddKeysHint: '↑↓ · Enter · Esc',
-  backToTask: (key) => `Back to ${key}`,
   publishBusy: 'Publishing…',
   publishDeployFailed: (n, dir, err) => `Collected ${n} iterations into:\n${dir}\n\nDeploy failed: ${err}`,
   publishNotTaskLink: (owner, url) => `This is YOUR preview (${url}), not the task link: the task points to its owner's preview — ${owner}. Give the manager that link.`,
@@ -1751,8 +1735,6 @@ const EN = {
   langEn: 'Interface language: English',
   langCur: 'already selected',
   langDone: 'Language changed · ⌘K to switch back',
-  paletteOpen: '⌘K',
-  paletteOpenTitle: 'What can I do? — search every action, interface language and settings (⌘K)',
   audTabLocal: 'Claude',
   audTabTeam: 'Team',
   audLocal: 'Comment audience: Claude',

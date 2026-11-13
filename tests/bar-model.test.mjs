@@ -31,12 +31,11 @@ test("модель віддає три зони, і кожен контрол л
   assert.equal(new Set(ids).size, ids.length, "контрол трапляється двічі");
 });
 
-/* «Контрол не бреше про режим»: інспектор працює по живому DOM, якого в
-   «Огляді» не існує — там кадри це знімки. Він мусить ЗНИКАТИ, а не стояти
-   ввімкненим і нічого не робити. */
-test("інспектора немає в «Огляді»", () => {
-  assert.ok(barModel(base).zone2.some((x) => x.id === "inspector"));
-  assert.ok(!barModel({ ...base, mode: "overview" }).zone2.some((x) => x.id === "inspector"));
+/* Інспектор переїхав в острівець (`island.js`, 0.25.0): його видимість за режимом тепер стереже `tests/island.test.mjs`. */
+test("смуга не несе інспектора в жодному режимі (він в острівці)", () => {
+  for (const mode of ["layout", "overview"]) {
+    assert.ok(!barModel({ ...base, mode }).zone2.some((x) => x.id === "inspector"));
+  }
 });
 
 test("перемикач «Сітка / Флоу» є лише в «Огляді»", () => {
@@ -235,9 +234,9 @@ test("крошка ітерації несе мітки «в превью» і �
    задачі, і фікстура носила `hasIteration` без жодного assert. Крошки
    ітерації тоді немає ЗОВСІМ (не «є, але вимкнена») — так само, як
    інспектор чи «Флоу» зникають, а не показуються бляклими. */
-test("задача без ітерацій: крошки ітерації нема, крошка задачі є", () => {
-  const m = barModel({ ...base, hasIteration: false });
-  assert.ok(m.zone1.some((x) => x.id === "task"), "крошка задачі мусить лишитись");
+test("задача без ітерацій: крошки ітерації нема, назва задачі є", () => {
+  const m = barModel({ ...base, hasIteration: false, taskTitle: "Картка" });
+  assert.ok(m.zone1.some((x) => x.id === "title"), "назва задачі мусить лишитись");
   assert.ok(!m.zone1.some((x) => x.id === "iter"), "крошки ітерації без ітерації бути не може");
 });
 
@@ -337,66 +336,41 @@ test("порожній перелік не ламає крошку", () => {
   assert.deepEqual(it.items, []);
 });
 
-/* Логотип — перший контрол зони 1, ПЕРЕД палітрою (батч 1.52, екран «Задачі»).
-   Порядок змінено свідомо: раніше палітра була головою зони 1, і тест це
-   фіксував. Логотип відповідає на «де я / як вийти до всіх задач» — це старший
-   рівень за палітру («що я можу»), тому він стоїть першим. Палітра далі
-   несе ярус підпису; `tier: 0` бо саму кнопку ховати нікуди: у зоні 1 немає
-   «⋯», і схована кнопка стала б знову зниклою дією — рівно тим, що ця кнопка
-   й лікує. */
-test("зона 1 починається з логотипа, далі палітра, і її підпис має ярус", () => {
-  const m = barModel(base);
-  assert.equal(m.zone1[0].id, "home", "логотип не перший в зоні 1");
-  assert.equal(m.zone1[0].tier, 0, "логотип ховати нікуди");
-  assert.equal(m.zone1[0].on, false, "без homeOpen логотип не активний");
-  assert.equal(m.zone1[1].id, "palette", "палітра мусить лишитись другою");
-  assert.equal(m.zone1[1].tier, 0, "саму кнопку палітри ховати нікуди");
-  assert.equal(m.zone1[1].labelTier, TIERS.mode,
-    "підпис палітри мусить зникати разом із рештою підписів");
-  assert.equal(m.zone1[2].id, "task", "крошка задачі мусить лишитись третьою");
-});
-
-/* `on` — те, що фарбує логотип «ми на екрані Задачі». Якби модель його не
-   несла, розмітка не мала б звідки взяти підсвітку. */
-test("логотип активний рівно коли відкритий екран «Задачі»", () => {
-  assert.equal(barModel({ ...base, homeOpen: true }).zone1[0].on, true);
-  assert.equal(barModel({ ...base, homeOpen: false }).zone1[0].on, false);
-});
-
-/* Сторінка «Підключення» — той самий оверлей, але «де я» там каже крошка «Підключення»; логотип, що світиться як
-   поточна сторінка, суперечив би їй (а читач екрана почув би «поточна сторінка» двічі). Лише рівно `"conn"`: решта значень
-   (ніщо, «tasks», сміття) лишають «Задачі» — як було, і ЛІГА-golden (там `homePage` не задано) не зсувається. */
-test("логотип не активний на сторінці «Підключення»; на решті сторінок оверлея й без нього — як було", () => {
-  assert.equal(barModel({ ...base, homeOpen: true, homePage: "conn" }).zone1[0].on, false, "на «Підключенні» логотип не «поточний»");
-  assert.equal(barModel({ ...base, homeOpen: true, homePage: "conn", taskId: "" }).zone1[0].on, false, "без задачі теж");
-  for (const homePage of [undefined, null, "tasks", "", "CONN"]) {
-    assert.equal(barModel({ ...base, homeOpen: true, homePage }).zone1[0].on, true, `homePage=${String(homePage)}: «Задачі» — логотип активний`);
+/* Рядок вкладок (0.25.0) забрав логотип, палітру, перемикач задач, пігулку оновлення й «Відгук»; острівець — інспектор. */
+test("смуга задачі: зона 1 — ітерація й назва; нічого з рядка вкладок чи острівця", () => {
+  const m = barModel({ ...base, hasIteration: true, iterLabel: "Іт.3", taskTitle: "Картка" });
+  assert.deepEqual(m.zone1.map((x) => x.id), ["iter", "title"]);
+  assert.equal(m.zone1[1].label, "Картка");
+  assert.equal(m.zone1[1].tier, 0, "назву ховати нікуди");
+  const ids = [...m.zone1, ...m.zone2, ...m.zone3].map((x) => x.id);
+  for (const gone of ["home", "palette", "space", "task", "update", "feedback", "inspector", "back"]) {
+    assert.ok(!ids.includes(gone), `«${gone}» переїхав зі смуги`);
   }
-  assert.equal(barModel({ ...base, homeOpen: false, homePage: "conn" }).zone1[0].on, false, "поза оверлеєм він не активний і з homePage");
 });
 
-/* Без ітерації зона 1 — це логотип + палітра + задача, і не більше: палітра не
-   сміє зникнути разом із крошкою ітерації (вона до неї не має стосунку). */
-test("палітра лишається, коли ітерації немає", () => {
-  const m = barModel({ ...base, hasIteration: false });
-  assert.equal(m.zone1[0].id, "home");
-  assert.equal(m.zone1[1].id, "palette");
-  assert.equal(m.zone1.length, 3, "очікував логотип + палітру + задачу");
+test("смуга задачі без ітерації — лише назва", () => {
+  assert.deepEqual(barModel({ ...base, hasIteration: false, taskTitle: "Картка" }).zone1.map((x) => x.id), ["title"]);
 });
 
-/* Екран «Задачі»: склад смуги описує МОДЕЛЬ (принцип 5 PRODUCT.md — контрол,
-   безглуздий у цьому режимі, прихований), розмітка лише малює. Без задачі
-   (`taskId` порожній) «Назад» не має куди вести — його немає, а не мертвий. */
-test("екран «Задачі»: логотип, палітра, крошка «Задачі», «Назад до …» — і нічого з макета", () => {
+test("назва задачі: без `taskTitle` — ідентифікатор задачі", () => {
+  assert.equal(barModel({ ...base, hasIteration: false }).zone1[0].label, base.taskId);
+});
+
+/* Екран «Задачі»: склад смуги описує МОДЕЛЬ (принцип 5 PRODUCT.md — контрол, безглуздий у цьому режимі, прихований),
+   розмітка лише малює. Вихід до задач — логотип у рядку вкладок, тож «Назад» і логотипа тут нема. */
+test("екран «Задачі»: крошка «Задачі» і нічого з макета", () => {
   const m = barModel({ ...base, homeOpen: true });
-  assert.deepEqual(m.zone1.map((x) => x.id), ["home", "palette", "crumb-tasks", "back"]);
-  assert.equal(m.zone1[0].on, true);
-  assert.equal(m.zone1[2].labelKey, "tasks");
-  assert.equal(m.zone1[3].label, base.taskId, "«Назад» мусить нести ключ поточної задачі");
+  assert.deepEqual(m.zone1.map((x) => x.id), ["crumb-tasks"]);
+  assert.equal(m.zone1[0].labelKey, "tasks");
   assert.deepEqual(m.zone2, [], "перемикач «Макет/Огляд» без задачі безглуздий");
   assert.deepEqual(m.zone3, [], "публікація/GitLab/Figma без вигляду задачі безглузді");
-  assert.equal(barModel({ ...base, homeOpen: true, taskId: "" }).zone1
-    .some((x) => x.id === "back"), false, "без задачі «Назад» вести нікуди");
+});
+
+test("«Задачі»/«Налаштування»: фішка простору й заголовок; майстер — лише заголовок", () => {
+  const sp = { id: "s", name: "S", color: "space-1" };
+  assert.deepEqual(barModel({ ...base, homeOpen: true, homePage: "tasks", space: sp, taskId: "A" }).zone1.map((x) => x.id), ["space", "crumb-tasks"]);
+  assert.deepEqual(barModel({ ...base, homeOpen: true, homePage: "conn", space: sp }).zone1.map((x) => x.id), ["space", "crumb-conn"]);
+  assert.deepEqual(barModel({ ...base, homeOpen: true, homePage: "wiz", space: sp }).zone1.map((x) => x.id), ["crumb-wiz"]);
 });
 
 /* Екран «Підключення» (етап 3a) — та сама сторінка-оверлей, що «Задачі», тому склад смуги той самий. Міняється
@@ -420,22 +394,19 @@ test("екран «Підключення»: крошка `crumb-conn` замі�
 });
 
 /* Майстер нового простору (етап 3b) — третя сторінка того самого оверлею (`homePage === "wiz"`). Склад смуги ІНШИЙ, ніж на
-   «Задачах» і «Підключенні»: нема фішки простору (майстер привʼязаний до СВОГО простору — перемикач посеред кроків лише
-   плутав би) і нема «назад до задачі» (вихід із майстра — його власні кнопки й логотип, що лишається в моделі й веде на «Задачі»). Логотип
-   не «поточна сторінка»: її називає крошка. Лише рівно `"wiz"`. */
-test("майстер: логотип, палітра й крошка `crumb-wiz` — без фішки простору й без «назад до задачі»", () => {
+   «Задачах» і «Налаштуваннях»: нема фішки простору (майстер привʼязаний до СВОГО простору — перемикач посеред кроків лише
+   плутав би), лише крошка «де я». Лише рівно `"wiz"`. */
+test("майстер: лише крошка `crumb-wiz` — без фішки простору", () => {
   const m = barModel({ ...base, homeOpen: true, homePage: "wiz", space: { name: "Studio", color: "space-2" }, taskId: "t1" });
-  assert.deepEqual(m.zone1.map((x) => x.id), ["home", "palette", "crumb-wiz"]);
-  assert.equal(m.zone1.find((x) => x.id === "crumb-wiz").labelKey, "wzCrumb");
-  assert.equal(m.zone1.find((x) => x.id === "crumb-wiz").tier, 0, "крошку «де я» ховати нікуди");
-  assert.equal(m.zone1.find((x) => x.id === "home").on, false, "логотип на майстрі не «поточна сторінка»");
+  assert.deepEqual(m.zone1.map((x) => x.id), ["crumb-wiz"]);
+  assert.equal(m.zone1[0].labelKey, "wzCrumb");
+  assert.equal(m.zone1[0].tier, 0, "крошку «де я» ховати нікуди");
   assert.deepEqual([m.zone2, m.zone3], [[], []]);
-  /* Свідок: на «Задачах» з тим самим станом фішка й «назад» є — тож їхня відсутність вище не випадковість стану. */
+  /* Свідок: на «Задачах» з тим самим станом фішка є — тож її відсутність вище не випадковість стану. */
   const tasks = barModel({ ...base, homeOpen: true, space: { name: "Studio", color: "space-2" }, taskId: "t1" });
-  assert.ok(tasks.zone1.some((x) => x.id === "space") && tasks.zone1.some((x) => x.id === "back"));
+  assert.ok(tasks.zone1.some((x) => x.id === "space"));
   /* Без задачі й без простору склад той самий — майстер від них не залежить. */
-  assert.deepEqual(barModel({ ...base, homeOpen: true, homePage: "wiz", taskId: "" }).zone1.map((x) => x.id),
-    ["home", "palette", "crumb-wiz"]);
+  assert.deepEqual(barModel({ ...base, homeOpen: true, homePage: "wiz", taskId: "" }).zone1.map((x) => x.id), ["crumb-wiz"]);
 });
 
 test("майстер: лише рівно `wiz` і лише на оверлеї; смуга помилки читання задач лишається", () => {
@@ -502,27 +473,25 @@ test("«В Figma» в «Огляді» — лише іконка, у «Маке�
 const NO_ROLES = { publish: null, tokens: null, comments: null, vcs: null, notify: null, dashboard: null, tracker: null };
 const SP = (o = {}) => ({ id: "p", name: "P", color: "space-2", capabilities: NO_ROLES, ...o });
 
-test("простір: фішка в зоні 1 між палітрою й задачею, з назвою і кольором", () => {
+test("простір: смуга задачі фішки не має (простір каже вкладка), зона 1 — ітерація й назва", () => {
   const m = barModel({ ...base, space: SP() });
-  assert.deepEqual(m.zone1.map((x) => x.id), ["home", "palette", "space", "task", "iter"]);
-  const chip = m.zone1[2];
-  assert.equal(chip.label, "P");
-  assert.equal(chip.color, "space-2");
-  assert.equal(chip.tier, 0, "фішку ховати нікуди: у зоні 1 немає «⋯»");
+  assert.deepEqual(m.zone1.map((x) => x.id), ["iter", "title"]);
 });
 
-test("простір: без `space` — смуга як була, фішки нема (шар вимкнено / просторів нема)", () => {
+test("простір: без `space` — смуга та сама, зона 3 повна", () => {
   for (const space of [undefined, null]) {
     const m = barModel({ ...base, space });
-    assert.deepEqual(m.zone1.map((x) => x.id), ["home", "palette", "task", "iter"]);
+    assert.deepEqual(m.zone1.map((x) => x.id), ["iter", "title"]);
     assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "gl", "publish"]);
   }
 });
 
-test("простір на екрані «Задачі»: фішка є, між палітрою й крошкою «Задачі»", () => {
+test("простір на екрані «Задачі»: фішка є, перед крошкою «Задачі»", () => {
   const m = barModel({ ...base, space: SP(), homeOpen: true });
-  assert.deepEqual(m.zone1.map((x) => x.id), ["home", "palette", "space", "crumb-tasks", "back"]);
-  assert.equal(m.zone1[2].label, "P");
+  assert.deepEqual(m.zone1.map((x) => x.id), ["space", "crumb-tasks"]);
+  assert.equal(m.zone1[0].label, "P");
+  assert.equal(m.zone1[0].tier, 0, "фішку ховати нікуди: у зоні 1 немає «⋯»");
+  assert.equal(m.zone1[0].color, "space-2");
 });
 
 test("простір без ролей: у зоні 3 нема GitLab і публікації, «В Figma» лишається", () => {
@@ -755,58 +724,16 @@ test("`pubpw` є для мігрованого запису ЛІГА (compat.pub
   assert.ok(!pubItems({ space: OUT("vercel-publish") }).includes("pubpw"), "без compat — модуль, пароля ЛІГА нема");
 });
 
-/* ── Пігулка оновлення (0.23.0) ────────────────────────────────────────────
-   Нові контроли додаються в КІНЕЦЬ `zone1` кожного з трьох складів (екран «Задачі», майстер, звичайний): так індекси наявних
-   контролів ([0]…[3]) лишаються. Склад вирішує `pillModel`: лише коли оновлення Є й остання перевірка вдала. */
+/* ── Пігулка оновлення й «Відгук» переїхали зі смуги (0.25.0) ─────────────────────────────────────────────────────────
+   Пігулку веде рядок вкладок (`tabs-model.js`/`tabs-view.js`, `pillModel` — `update-model.test.mjs`), «Відгук» — острівець (`island.js`).
+   Присутність `update` у стані смузі нічого не додає ні на одному екрані. */
 const UPD = { current: "0.1.0", latest: "0.2.0", available: true, state: "ok", checked_at: 1, boot: "a", restart_failed: false };
 
-test("оновлення: контрол `update` у кінці zone1 лише коли available (три склади)", () => {
+test("оновлення в стані не додає контролів у смугу (пігулка й «Відгук» — не тут)", () => {
   for (const o of [{}, { homeOpen: true }, { homeOpen: true, homePage: "conn" }, { homeOpen: true, homePage: "wiz" }, { hasIteration: false }]) {
-    const on = barModel({ ...base, ...o, update: UPD }).zone1;
-    /* Після пігулки в кінець додається ще «Відгук» (0.23.0, Task 8): `update` — передостанній, останній — `feedback`. */
-    const upd = on[on.length - 2];
-    assert.equal(on[on.length - 1].id, "feedback", `${JSON.stringify(o)}: «Відгук» — останній у zone1`);
-    assert.equal(upd.id, "update", `${JSON.stringify(o)}: контрол оновлення — безпосередньо перед «Відгуком»`);
-    assert.equal(upd.version, "0.2.0");
-    assert.equal(upd.tier, 0, "ховати нікуди");
-    assert.equal(upd.labelTier, TIERS.mode, "підпис ховається з рештою на ярусі «режим»");
-    for (const off of [undefined, null, { ...UPD, available: false }, { ...UPD, state: "offline" }, { ...UPD, state: null }, { ...UPD, state: "error" }]) {
-      assert.ok(!barModel({ ...base, ...o, update: off }).zone1.some((x) => x.id === "update"), `${JSON.stringify(o)} / ${JSON.stringify(off)}: контролу бути не має`);
+    const a = barModel({ ...base, ...o });
+    for (const upd of [UPD, null, { ...UPD, available: false, restart_failed: true }]) {
+      assert.deepEqual(barModel({ ...base, ...o, update: upd }), a, `${JSON.stringify(o)} / ${JSON.stringify(upd)}`);
     }
   }
-});
-
-test("оновлення: наявні індекси zone1 не зсунуті присутністю пігулки", () => {
-  const a = barModel(base).zone1.map((x) => x.id);
-  const b = barModel({ ...base, update: UPD }).zone1.map((x) => x.id);
-  assert.deepEqual(b, [...a, "update", "feedback"]);
-  const h1 = barModel({ ...base, homeOpen: true }).zone1.map((x) => x.id);
-  const h2 = barModel({ ...base, homeOpen: true, update: UPD }).zone1.map((x) => x.id);
-  assert.deepEqual(h2, [...h1, "update", "feedback"]);
-  assert.deepEqual(h2.slice(0, 4), ["home", "palette", "crumb-tasks", "back"], "зміна: нові контроли в кінці zone1 — [0]…[3] ті самі");
-});
-
-test("оновлення: невдалий перезапуск дає пігулку-попередження (restart:true) навіть без available", () => {
-  const c = barModel({ ...base, update: { ...UPD, available: false, restart_failed: true } }).zone1.find((x) => x.id === "update");
-  assert.equal(c.restart, true);
-});
-
-/* ── «Відгук» (0.23.0, Task 8): на КОЖНОМУ екрані, в кінці zone1, лише іконка ───────────────────────────────────────────────
-   Ключ `update` у стані — ознака справжнього застосунку (`barState()` дає його завжди; еталони ЛІГИ його не мають, див. `bar-model.js`). */
-test("«Відгук»: є на екрані задачі, «Задачі», «Підключення», майстрі й без ітерації — останнім у zone1, без labelTier", () => {
-  for (const o of [{}, { hasIteration: false }, { homeOpen: true }, { homeOpen: true, taskId: "" }, { homeOpen: true, homePage: "conn" }, { homeOpen: true, homePage: "wiz" }]) {
-    const z = barModel({ ...base, ...o, update: null }).zone1;
-    const last = z[z.length - 1];
-    assert.equal(last.id, "feedback", `${JSON.stringify(o)}: «Відгук» мусить бути (останній у zone1)`);
-    assert.equal(last.tier, 0);
-    assert.equal("labelTier" in last, false, "лише іконка: ярусів не множимо");
-  }
-});
-
-test("«Відгук»: стан без ключа `update` (еталони) контролу не має; наявні індекси zone1 не зсунуті", () => {
-  assert.ok(!barModel(base).zone1.some((x) => x.id === "feedback"));
-  const a = barModel({ ...base, homeOpen: true }).zone1.map((x) => x.id);
-  const b = barModel({ ...base, homeOpen: true, update: null }).zone1.map((x) => x.id);
-  assert.deepEqual(b, [...a, "feedback"]);
-  assert.deepEqual(b.slice(0, 4), ["home", "palette", "crumb-tasks", "back"]);
 });

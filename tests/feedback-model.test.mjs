@@ -257,9 +257,9 @@ test("app.js: перегляд без diag_hash не годиться; 409 по�
   assert.match(fb, /sess\.shotUrl\(\)/);
 });
 
-/* Кнопка «Відгук» стоїть за ключем `update` у стані смуги/палітри: без нього вона зникає мовчки (еталони ЛІГИ його не мають).
-   Поведінкового гону `barState()` тут нема (він читає десятки змінних модуля app.js), тож — текст-пін обох функцій. */
-test("barState() і paletteState() ЗАВЖДИ несуть ключ update (від нього залежить кнопка «Відгук»)", () => {
+/* Ключ `update` у стані смуги/палітри живить пігулку оновлення (рядок вкладок) і дії ⌘K «Баг / ідея»; кнопка «Відгук» тепер в острівці
+   (`island.js`) і від нього не залежить. Поведінкового гону `barState()` тут нема (він читає десятки змінних модуля app.js), тож — текст-пін. */
+test("barState() і paletteState() ЗАВЖДИ несуть ключ update (від нього залежать пігулка оновлення й ⌘K «Баг / ідея»)", () => {
   const body = (name) => {
     const m = new RegExp(`function ${name}\\(`).exec(appJs);
     assert.ok(m, `нема ${name}`);
@@ -271,8 +271,8 @@ test("barState() і paletteState() ЗАВЖДИ несуть ключ update (в
     }
     throw new Error("немає закриття");
   };
-  assert.match(body("barState"), /^\s{4}update: updateInfo,$/m, "barState без update — кнопка зникла б");
+  assert.match(body("barState"), /^\s{4}update: updateInfo,$/m, "barState без update — пігулка зникла б");
   assert.match(body("paletteState"), /^\s{4}update: st\.update,$/m, "paletteState без update — ⌘K «Баг / ідея» зникло б");
   const model = readFileSync(path.join(APP, "bar-model.js"), "utf8");
-  assert.match(model, /s\.update === undefined \? \[\] : \[\{ id: "feedback", tier: 0 \}\]/);
+  assert.doesNotMatch(model, /id: "feedback"/, "«Відгук» переїхав зі смуги в острівець");
 });

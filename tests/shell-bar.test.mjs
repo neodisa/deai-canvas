@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { barModel } from "../app/bar-model.js";
-import { barHTML, taskListHTML } from "../app/shell-bar.js";
+import { barHTML } from "../app/shell-bar.js";
 import { setLang, t } from "../app/i18n.js";
 
 const S = (o = {}) => ({
@@ -22,92 +22,43 @@ test("розмітка дає рівно три зони", () => {
   assert.equal((html().match(/class="zone /g) || []).length, 3);
 });
 
-/* Двері в палітру. До 02.09.2026 палітра жила ТІЛЬКИ на ⌘K, і власник шукав її
-   словами «поиск по функционалам, куда-то он делся, потерялся» — тобто схована
-   дія без видимих дверей це не схована дія, а зникла. Тест стереже три речі, і
-   кожна має свою причину впасти. */
-test("палітра має видимі двері в смузі", () => {
-  const h = html();
-  assert.match(h, /data-act="palette"/, "кнопки палітри в смузі немає");
-
-  // Іконка — без неї кнопка невидима на вузьких ширинах, де підпис уже схований.
-  const btn = /<button[^>]*data-act="palette"[\s\S]*?<\/button>/.exec(h);
-  assert.ok(btn, "кнопка палітри не розібралась");
-  assert.match(btn[0], /<svg/, "кнопка палітри без іконки");
-
-  // Підпис-акорд у власному класі: контейнерний запит ховає саме його на 1180.
-  assert.match(btn[0], /class="lbl-pal"/, "підпис не має класу, за який його ховає CSS");
-
-  // Акорд оком видно, екранним читачем — ні: для нього «⌘K» просто два символи.
-  assert.match(btn[0], /aria-keyshortcuts="[^"]*K/, "акорд не оголошений для читача");
-});
-
-/* Логотип — вхід на екран «Задачі». Стоїть ПЕРЕД палітрою (свідома зміна
-   порядку: «де я / до всіх задач» старше за «що я можу»). Імʼя кнопки несе
-   `aria-label`, бо всередині лише декоративний SVG. */
-test("логотип — кнопка data-act=home перед палітрою, з іменем і станом", () => {
-  const h = html();
-  const btn = /<button[^>]*data-act="home"[\s\S]*?<\/button>/.exec(h);
-  assert.ok(btn, "кнопки логотипа в смузі немає");
-  assert.match(btn[0], /aria-label="[^"]+"/, "кнопка логотипа без імені для читача");
-  assert.match(btn[0], /<svg[^>]*viewBox="0 0 283 283"/, "у кнопці немає логотипа");
-  assert.ok(!/ctl--on/.test(btn[0]), "без homeOpen логотип не активний");
-  assert.ok(h.indexOf('data-act="home"') < h.indexOf('data-act="palette"'),
-    "логотип мусить стояти перед палітрою");
-  const on = /<button[^>]*data-act="home"[^>]*>/.exec(html({ homeOpen: true }))[0];
-  assert.match(on, /ctl--on/, "на екрані «Задачі» логотип мусить бути активним");
-  /* Кнопка не вимикається повторним кліком, тож це не перемикач: стан «ми тут»
-     оголошуємо як `aria-current="page"`, а не `aria-pressed`. */
-  assert.match(on, /aria-current="page"/, "активний логотип не оголошений як поточна сторінка");
-  assert.ok(!/aria-pressed/.test(on), "логотип не перемикач — aria-pressed тут брехня");
-  assert.ok(!/aria-current/.test(btn[0]), "поза екраном «Задачі» aria-current не ставимо");
-});
-
-/* Логотип на сторінці «Підключення»: крошка каже «Підключення», тож логотип не світиться й не оголошує себе поточною
-   сторінкою (інакше читач екрана чув би «поточна сторінка» двічі, а око — дві підсвічені «де я»). Кнопка при цьому лишається:
-   вона веде на «Задачі». */
-test("логотип на «Підключенні»: без ctl--on і aria-current, але кнопка й імʼя на місці; на «Задачах» — як було", () => {
-  const conn = /<button[^>]*data-act="home"[\s\S]*?<\/button>/.exec(html({ homeOpen: true, homePage: "conn", taskId: "t1" }));
-  assert.ok(conn, "кнопки логотипа на сторінці «Підключення» нема — дорога на «Задачі» зникла");
-  assert.doesNotMatch(conn[0], /ctl--on/, "логотип світиться на «Підключенні»");
-  assert.doesNotMatch(conn[0], /aria-current/, "логотип оголошує себе поточною сторінкою на «Підключенні»");
-  assert.match(conn[0], /aria-label="[^"]+"/, "кнопка логотипа втратила імʼя");
-  for (const o of [{ homeOpen: true }, { homeOpen: true, homePage: "tasks" }]) {
-    const tasks = /<button[^>]*data-act="home"[^>]*>/.exec(html(o))[0];
-    assert.match(tasks, /ctl--on/, JSON.stringify(o));
-    assert.match(tasks, /aria-current="page"/, JSON.stringify(o));
+/* 0.25.0: логотип, двері в палітру, пігулка оновлення, «Відгук», перемикач задач і «Назад» зі смуги ПЕРЕЇХАЛИ (рядок вкладок —
+   `tabs-view.js`, острівець — `island.js`; палітра лишилась лише на ⌘K, її акорд оголошує логотип). Смуга їх не малює ні на
+   одному екрані — інакше вони стояли б у двох місцях. */
+test("смуга не малює ні логотипа, ні палітри, ні пігулки, ні «Відгуку», ні інспектора, ні перемикача задач", () => {
+  const taskList = [{ id: "a", jira: "", title: "Перша" }];
+  for (const o of [{}, { hasIteration: false }, { homeOpen: true }, { homeOpen: true, homePage: "conn", taskId: "t1" },
+    { homeOpen: true, homePage: "wiz" }, { mode: "overview" }, { update: { current: "0.1.0", latest: "0.2.0", available: true, state: "ok" } },
+    { openDd: "task", taskList }, { space: { id: "a", name: "A", color: "space-1" } }]) {
+    const h = html(o);
+    assert.doesNotMatch(h, /data-act="(palette|home|update|feedback|inspector|back|task)"/, JSON.stringify(o));
+    assert.doesNotMatch(h, /data-dd="task"|logo-btn|pal-open|upd-pill|fb-btn|task-q|dd--tasks/, JSON.stringify(o));
   }
 });
 
-/* Екран «Задачі»: три зони лишаються в DOM (грид на них тримається), але
-   склад інший — лише «де я» і шлях назад. */
-test("екран «Задачі»: крошка «Задачі» і «Назад до …», без макета й публікації", () => {
+/* Смуга задачі: крошка ітерації, а за нею — назва задачі приглушено й нерухомо (це не перемикач: «де я» каже вкладка). */
+test("смуга задачі: крошка ітерації, потім назва задачі — плоска, приглушена, з повною назвою в title", () => {
+  const h = html({ taskTitle: 'Картка "клієнта"' });
+  assert.match(h, /<span class="crumb crumb--flat crumb--title" title="Картка &quot;клієнта&quot;"><span class="txt">Картка &quot;клієнта&quot;<\/span><\/span>/);
+  assert.ok(h.indexOf('data-dd="iter"') < h.indexOf("crumb--title"), "назва — після крошки ітерації");
+  assert.ok(h.indexOf("crumb--title") < h.indexOf('class="zone zone-2"'), "назва лишається в зоні 1");
+  assert.doesNotMatch(/<span class="crumb crumb--flat crumb--title"[\s\S]*?<\/span><\/span>/.exec(h)[0], /<button|data-/, "назва — не контрол");
+});
+
+test("назва задачі екранується", () => {
+  const h = html({ taskTitle: '<img src=x onerror="alert(1)">' });
+  assert.ok(!h.includes("<img src=x"));
+});
+
+/* Екран «Задачі»: три зони лишаються в DOM (грид на них тримається), але склад інший — лише «де я». */
+test("екран «Задачі»: крошка «Задачі», без «Назад», логотипа, макета й публікації", () => {
   const h = html({ homeOpen: true });
   assert.equal((h.match(/class="zone /g) || []).length, 3, "зон мусить лишитись три");
   assert.match(h, /crumb--flat[^>]*>[\s\S]*?Задачі/, "немає плоскої крошки «Задачі»");
-  const back = /<button[^>]*data-act="back"[\s\S]*?<\/button>/.exec(h);
-  assert.ok(back, "немає кнопки «Назад»");
-  assert.match(back[0], /LIGA-7003/, "«Назад» не називає задачу");
-  assert.match(back[0], /aria-label="[^"]*LIGA-7003/, "«Назад» без імені для читача");
-  assert.ok(!/data-dd="task"/.test(h), "крошка-перемикач задач на екрані «Задачі» зайва");
   assert.ok(!/data-dd="iter"/.test(h), "крошка ітерації на екрані «Задачі» зайва");
+  assert.ok(!/crumb--title/.test(h), "назва задачі на екрані «Задачі» зайва");
   assert.ok(!/data-act="publish"/.test(h), "публікація без вигляду задачі безглузда");
   assert.ok(!/data-act="mode"/.test(h), "сегмент «Макет/Огляд» без задачі безглуздий");
-  assert.match(h, /data-act="home"/, "логотип мусить лишитись");
-  assert.match(h, /data-act="palette"/, "палітра мусить лишитись");
-});
-
-/* Порядок несучий: двері стоять ПЕРЕД крошками (голова зони 1). Якби вони
-   поїхали в хвіст, вони б розділяли крошки й зону 2 — тобто читались би як
-   частина «де я», чим вони не є. */
-test("двері палітри стоять перед крошками, а не між ними й зоною 2", () => {
-  const h = html();
-  const pal = h.indexOf('data-act="palette"');
-  const crumbs = h.indexOf('class="crumbs"');
-  const zone2 = h.indexOf('class="zone zone-2"');
-  assert.ok(pal !== -1 && crumbs !== -1 && zone2 !== -1);
-  assert.ok(pal < crumbs, "двері палітри мусять бути перед крошками");
-  assert.ok(crumbs < zone2, "крошки мусять лишитись у зоні 1");
 });
 
 /* Кожен контрол моделі мусить доїхати до розмітки з тим самим ідентифікатором:
@@ -178,11 +129,11 @@ test("текст із моделі екранується", () => {
   assert.match(h, /&lt;img/);
 });
 
-/* Без ітерацій крошки ітерації немає взагалі — так само, як зникають інспектор
-   і «Флоу». «Є, але вимкнена» читалось би як «щось поламалось». */
-test("без ітерацій крошки ітерації немає, крошка задачі лишається", () => {
+/* Без ітерацій крошки ітерації немає взагалі — так само, як зникає «Флоу» поза «Оглядом».
+   «Є, але вимкнена» читалось би як «щось поламалось». Назва задачі лишається. */
+test("без ітерацій крошки ітерації немає, назва задачі лишається", () => {
   const h = html({ hasIteration: false });
-  assert.match(h, /data-dd="task"/);
+  assert.match(h, /crumb--title/);
   assert.doesNotMatch(h, /data-dd="iter"/);
 });
 
@@ -191,150 +142,6 @@ test("без ітерацій крошки ітерації немає, крош
 test("дропдаун малюється лише для відкритого меню", () => {
   assert.doesNotMatch(html(), /class="dd"/);
   assert.match(barHTML(barModel(S()), S({ openDd: "iter" })), /class="dd"/);
-});
-
-/* Task 3 Плану B: `state.taskList` — те, чого `bar-model.js` свідомо не
-   несе (список задач приходить з окремого `/api/tasks`, а не з `/api/task`,
-   який бачить модель). Без цього перемикання задач лишилось би в новій
-   смузі кнопкою, що нічого не робить: жоден `data-act="task"` не доїхав би
-   до розмітки, і делегація в app.js мала б звідки клікати, та нікуди. */
-test("дропдаун задачі несе перелік із state.taskList, поточна позначена", () => {
-  const st = S({
-    openDd: "task",
-    taskList: [{ id: "a", jira: "", title: "Перша" }, { id: "b", jira: "LIGA-1", title: "Друга" }],
-    curTaskId: "b",
-  });
-  const h = barHTML(barModel(st), st);
-  assert.match(h, /data-act="task" data-val="a"/);
-  assert.match(h, /data-act="task" data-val="b"/);
-  // позначена саме «b» (curTaskId), а не «a»
-  const bItem = h.slice(h.indexOf('data-val="b"') - 40, h.indexOf('data-val="b"') + 10);
-  assert.match(bItem, /dd-item--on/);
-});
-
-/* ── Пошук і клавіатура в перемикачі задач (батч 1.52, Task 5) ───────────── */
-const TASKS = [
-  { id: "alpha", jira: "LIGA-11", title: "LIGA-11 · Перша задача" },
-  { id: "beta", jira: "LIGA-22", title: "Друга <b>задача</b>" },
-  { id: "gone", jira: "LIGA-33", title: "Без теки", missing: true },
-  { id: "boss-interface", jira: "", title: "Boss" },
-];
-const dd = (o = {}) => {
-  const st = S({ openDd: "task", taskList: TASKS, curTaskId: "alpha", taskQuery: "", taskCursor: 0, ...o });
-  const h = barHTML(barModel(st), st);
-  const at = h.indexOf('class="dd dd--tasks"');
-  if (at < 0) return "";
-  const hint = h.indexOf("dd-hint", at);          // кінець дропдауна — підказка футера
-  return h.slice(at, hint < 0 ? undefined : h.indexOf("</span>", hint) + 7);
-};
-const itemOf = (h, id) => new RegExp(`<button[^>]*data-act="task" data-val="${id}"[\\s\\S]*?</button>`).exec(h)?.[0] ?? "";
-
-test("дропдаун задач: поле пошуку з плейсхолдером і заголовок «Нещодавні» при порожньому запиті", () => {
-  const h = dd();
-  assert.match(h, /<input[^>]*id="task-q"/);
-  assert.ok(h.includes(`placeholder="${t("taskSearchPh")}"`), "плейсхолдер зі словника");
-  assert.ok(h.includes(t("recentTasks")), "порожній запит — «Нещодавні»");
-  assert.ok(!dd({ taskQuery: "перш" }).includes(t("recentTasks")), "із запитом заголовка нема");
-});
-
-test("дропдаун задач: значення поля — з state.taskQuery, екрановане", () => {
-  assert.match(dd({ taskQuery: 'a"b<' }), /id="task-q"[^>]*value="a&quot;b&lt;"/);
-});
-
-test("дропдаун задач: фільтр за ключем / id / назвою, усі слова, без регістру", () => {
-  const ids = (q) => [...dd({ taskQuery: q }).matchAll(/data-act="task" data-val="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(ids(""), ["alpha", "beta", "gone", "boss-interface"]);
-  assert.deepEqual(ids("liga-22"), ["beta"]);
-  assert.deepEqual(ids("BOSS"), ["boss-interface"]);
-  assert.deepEqual(ids("друга задача"), ["beta"]);
-  assert.deepEqual(ids("друга перша"), []);
-});
-
-test("пункт: ключ Jira зверху, назва без дубля ключа, ✓ на поточній", () => {
-  const h = dd();
-  const a = itemOf(h, "alpha");
-  assert.match(a, /dd-k">LIGA-11</, "ключ окремим рядком");
-  assert.match(a, /dd-t">Перша задача</, "назва без ключа");
-  assert.ok(!/LIGA-11 · Перша/.test(a), "ключ не дублюється в назві");
-  assert.match(a, /dd-item--on/);
-  assert.match(a, /<use href="#i-check"/, "✓ на поточній");
-  assert.ok(!/#i-check/.test(itemOf(h, "beta")), "✓ лише на поточній");
-  assert.match(itemOf(h, "boss-interface"), /dd-k">boss-interface</, "без Jira ключ = id");
-});
-
-test("пункт: підсвітка збігів у <mark>, а текст назви лишається текстом (екранування ДО підсвітки)", () => {
-  const b = itemOf(dd({ taskQuery: "задача" }), "beta");
-  assert.match(b, /<mark>задача<\/mark>/);
-  assert.ok(!b.includes("<b>"), "тег з назви не став розміткою");
-  assert.match(b, /&lt;b&gt;<mark>задача<\/mark>&lt;\/b&gt;/);
-  const k = itemOf(dd({ taskQuery: "liga-2" }), "beta");
-  assert.match(k, /dd-k"><mark>LIGA-2<\/mark>2</, "ключ підсвічується теж");
-});
-
-test("задача без теки: причина в приглушеному рядку, пункт ПОЗНАЧЕНИЙ, але не disabled (Enter мусить сказати причину)", () => {
-  const g = itemOf(dd(), "gone");
-  assert.match(g, /dd-item--missing/);
-  assert.ok(g.includes(t("folderMissing")));
-  assert.ok(!/\sdisabled/.test(g), "disabled зробив би пункт недосяжним для клавіатури");
-  assert.ok(!itemOf(dd(), "beta").includes(t("folderMissing")));
-});
-
-test("taskCursor позначає активний пункт; за межами — затискається; футер = останній досяжний", () => {
-  const cur = (h) => [...h.matchAll(/<button[^>]*dd-item--cur[^>]*data-act="([^"]+)" data-val="([^"]*)"/g)]
-    .map((m) => `${m[1]}:${m[2]}`);
-  assert.deepEqual(cur(dd({ taskCursor: 1 })), ["task:beta"]);
-  assert.deepEqual(cur(dd({ taskCursor: 0 })), ["task:alpha"]);
-  assert.deepEqual(cur(dd({ taskCursor: 99 })), ["home:"], "понад кінець — футер");
-  assert.deepEqual(cur(dd({ taskCursor: -5 })), ["task:alpha"]);
-  assert.deepEqual(cur(dd({ taskCursor: 4 })), ["home:"], "індекс n (після n пунктів) — футер");
-});
-
-test("футер «Усі задачі»: data-act=home, останній у списку з підказкою клавіш", () => {
-  const h = dd();
-  const acts = [...h.matchAll(/data-act="([^"]+)"/g)].map((m) => m[1]);
-  assert.equal(acts.at(-1), "home");
-  assert.ok(h.includes(t("allTasks")));
-  assert.ok(h.includes(t("ddKeysHint")));
-  assert.equal(taskListHTML(S({ taskList: TASKS })).includes("data-act=\"home\""), false,
-    "футер не входить у перемальовку списку");
-});
-
-test("порожня видача: активного пункту нема (-1), футер активний лише після ↓ (0)", () => {
-  const none = dd({ taskQuery: "zzzz", taskCursor: -1 });
-  assert.ok(!/dd-item--cur/.test(none), "активного нема");
-  assert.ok(!/aria-activedescendant/.test(none));
-  assert.match(dd({ taskQuery: "zzzz", taskCursor: 0 }), /dd-item--foot dd-item--cur/);
-  // непорожня видача -1 не діє: перший пункт активний
-  assert.match(itemOf(dd({ taskCursor: -1 }), "alpha"), /dd-item--cur/);
-});
-
-test("a11y: combobox-поле керує listbox-ом через aria-activedescendant; поточна — aria-current", () => {
-  const h = dd({ taskCursor: 1 });
-  const input = /<input[^>]*id="task-q"[^>]*>/.exec(h)[0];
-  assert.match(input, /role="combobox"/);
-  assert.match(input, /aria-controls="task-list"/);
-  assert.match(input, /aria-activedescendant="task-opt-1"/);
-  assert.match(h, /<div class="dd-list" id="task-list" role="listbox"/);
-  assert.match(itemOf(h, "beta"), /id="task-opt-1"/);
-  assert.match(itemOf(h, "beta"), /dd-item--cur/, "id у активного збігається з курсором");
-  assert.match(itemOf(h, "alpha"), /aria-current="true"/, "поточна задача");
-  assert.ok(!/aria-current/.test(itemOf(h, "beta")));
-  assert.ok(!/aria-selected/.test(h), "aria-selected не вживаємо — це не вибір");
-  assert.match(dd({ taskCursor: 99 }), /aria-activedescendant="task-opt-foot"/);
-  assert.match(dd({ taskCursor: 99 }), /id="task-opt-foot"/);
-});
-
-test("нічого не знайдено: текст із запитом (екранованим), футер лишається", () => {
-  const h = dd({ taskQuery: "<zz>" });
-  assert.ok(h.includes(t("noTasksFound", "&lt;zz&gt;")));
-  assert.ok(!/data-act="task"/.test(h));
-  assert.match(h, /data-act="home"/);
-});
-
-/* Без `state.taskList` (наприклад, дропдаун ще не відкривали) дропдаун не
-   падає — лишається порожнім списком, а не кидає на `undefined.map`. */
-test("дропдаун задачі не падає без state.taskList", () => {
-  assert.doesNotThrow(() => barHTML(barModel(S({ openDd: "task" })), S({ openDd: "task" })));
 });
 
 /* Принцип 6 PRODUCT.md: контролів коментатора у смузі оболонки немає.
@@ -360,7 +167,7 @@ test("дропдаун задачі не падає без state.taskList", () =
 test("у смузі немає перемикача аудиторії — ні в жодному дропдауні", () => {
   const iterList = [{ id: "it1", label: "Іт.1", note: "перша", pub: true, onGl: false }];
   const taskList = [{ id: "LIGA-7003", jira: "LIGA-7003", title: "Задача" }];
-  for (const dd of [null, "task", "iter", "more", "gl", "pub"]) {
+  for (const dd of [null, "iter", "more", "gl", "pub"]) {
     const st = S({ openDd: dd, commentMode: "project", iterList, taskList, gl: "behind" });
     const h = barHTML(barModel(st), st);
     assert.doesNotMatch(h, /data-act="cmode"/, `«cmode» лишився в дропдауні ${dd}`);
@@ -597,7 +404,7 @@ test("простір без інтеграцій: відкриті дропда�
 });
 
 test("фішка простору: data-dd=space, кольорова крапка зі змінної, назва, шеврон", () => {
-  const h = html({ space: SP() });
+  const h = html({ homeOpen: true, space: SP() });
   const c = chip(h);
   assert.ok(c, "фішки data-dd=space немає");
   assert.match(c, /class="space-dot"[^>]*style="background:var\(--space-2\)"/);
@@ -610,26 +417,26 @@ test("фішка простору: data-dd=space, кольорова крапк�
 
 test("фішка простору: повна назва — у `title` (довга обрізається трикрапкою), екранована", () => {
   const long = "Дуже довга назва простору клієнта «Альфа» & Co";
-  const c = chip(html({ space: SP({ name: long }) }));
+  const c = chip(html({ homeOpen: true, space: SP({ name: long }) }));
   assert.match(c, /data-dd="space" title="Дуже довга назва простору клієнта «Альфа» &amp; Co"/);
-  const evil = chip(html({ space: SP({ name: '"><img src=x onerror=alert(1)>' }) }));
+  const evil = chip(html({ homeOpen: true, space: SP({ name: '"><img src=x onerror=alert(1)>' }) }));
   assert.doesNotMatch(evil, /<img/, "назва з даних не стала тегом");
   assert.match(evil, /title="&quot;&gt;&lt;img/);
 });
 
-test("фішка стоїть після палітри й ПЕРЕД крошками задачі", () => {
-  const h = html({ space: SP() });
-  const pal = h.indexOf('data-act="palette"');
+test("фішка на екрані «Задачі» стоїть ПЕРЕД крошкою сторінки", () => {
+  const h = html({ homeOpen: true, space: SP() });
   const sp = h.indexOf('data-dd="space"');
   const crumbs = h.indexOf('class="crumbs"');
-  assert.ok(pal !== -1 && sp !== -1 && crumbs !== -1);
-  assert.ok(pal < sp && sp < crumbs, "порядок: палітра → простір → крошки");
+  assert.ok(sp !== -1 && crumbs !== -1);
+  assert.ok(sp < crumbs, "порядок: простір → крошка");
 });
 
-test("без `space` фішки нема ніде — ні в смузі задачі, ні на екрані «Задачі»", () => {
+test("без `space` фішки нема ніде; а в смузі задачі її нема й з `space` (простір каже вкладка)", () => {
+  assert.doesNotMatch(html({ space: SP() }), /data-dd="space"|space-dot/);
   assert.doesNotMatch(html(), /data-dd="space"/);
   assert.doesNotMatch(html({ homeOpen: true }), /data-dd="space"/);
-  assert.doesNotMatch(html({ space: null }), /space-dot/);
+  assert.doesNotMatch(html({ homeOpen: true, space: null }), /space-dot/);
 });
 
 test("на екрані «Задачі» фішка є — це той самий перемикач, а не крошка", () => {
@@ -640,14 +447,14 @@ test("на екрані «Задачі» фішка є — це той сами�
 
 test("назва простору екранується: <b> не стає тегом, лапка не виходить з атрибута", () => {
   const evil = '<b>x</b>" onclick="alert(1)';
-  const h = html({ space: SP({ name: evil }) });
+  const h = html({ homeOpen: true, space: SP({ name: evil }) });
   assert.doesNotMatch(h, /<b>x<\/b>/, "назва стала розміткою");
   assert.match(chip(h), /&lt;b&gt;x&lt;\/b&gt;/);
   assert.doesNotMatch(h, /onclick="alert/, "лапка вийшла з атрибута");
 });
 
 test("колір: лише space-1…6; усе інше — space-1, а не довільний CSS у style", () => {
-  const dot = (color) => /class="space-dot"[^>]*style="([^"]*)"/.exec(chip(html({ space: SP({ color }) })))[1];
+  const dot = (color) => /class="space-dot"[^>]*style="([^"]*)"/.exec(chip(html({ homeOpen: true, space: SP({ color }) })))[1];
   assert.equal(dot("space-4"), "background:var(--space-4)");
   for (const bad of ["red", "space-2);position:fixed;(", "space-9", undefined]) {
     assert.equal(dot(bad), "background:var(--space-1)", String(bad));
@@ -655,8 +462,8 @@ test("колір: лише space-1…6; усе інше — space-1, а не д�
 });
 
 test("дропдаун просторів: закритий — нема; відкритий — перелік із ✓, підписом і діями", () => {
-  assert.doesNotMatch(html({ space: SP(), spaces: SPACES }), /Простори/);
-  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  assert.doesNotMatch(html({ homeOpen: true, space: SP(), spaces: SPACES }), /Простори/);
+  const h = html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" });
   assert.match(chip(h), /aria-expanded="true"/);
   assert.match(h, /class="dd-head">Простори</);
   const rows = [...h.matchAll(/<button[^>]*data-act="space"[^>]*>[\s\S]*?<\/button>/g)].map((m) => m[0]);
@@ -678,19 +485,19 @@ test("дропдаун просторів: закритий — нема; від
    решта футера, — тому roving focus по `.dd--spaces .dd-item` бере його сам. Пункт лише в ВІДКРИТОМУ дропдауні:
    закрита смуга (а з нею й ЛІГА-golden) лишається побайтно та сама. */
 test("дропдаун просторів: «Підключення…» після «Назва й колір…»", () => {
-  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  const h = html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" });
   assert.match(h, /data-act="spaceedit"[\s\S]*?<\/button>\s*<button[^>]*data-act="conn"[\s\S]*?Підключення…/);
   const conn = /<button[^>]*data-act="conn"[\s\S]*?<\/button>/.exec(h)?.[0];
   assert.match(conn, /<svg/, "пункт без іконки");
   assert.equal((h.match(/data-act="conn"/g) || []).length, 1, "пункт один");
-  assert.doesNotMatch(html({ space: SP(), spaces: SPACES }), /data-act="conn"/, "закритий дропдаун пункту не несе");
-  assert.match(html({ space: SP(), openDd: "space" }), /data-act="conn"/, "без переліку просторів пункт теж є");
+  assert.doesNotMatch(html({ homeOpen: true, space: SP(), spaces: SPACES }), /data-act="conn"/, "закритий дропдаун пункту не несе");
+  assert.match(html({ homeOpen: true, space: SP(), openDd: "space" }), /data-act="conn"/, "без переліку просторів пункт теж є");
 });
 
 /* Клавіатурний roving по дропдауну просторів іде за `.dd--spaces .dd-item` (`app.js`, `rovingIndex`): пункт без цього
    класу випав би зі стрілок. Тож «Підключення…» мусить бути саме `ddItem`, а не окремою кнопкою. */
 test("дропдаун просторів: «Підключення…» — `dd-item` у `.dd--spaces`, тож клавіатурний roving його бере", () => {
-  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  const h = html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" });
   const conn = /<button[^>]*data-act="conn"[^>]*>/.exec(h)?.[0];
   assert.ok(conn, "пункту нема");
   assert.match(conn, /class="[^"]*\bdd-item\b[^"]*"/, "пункт без `dd-item` випадає з клавіатурного roving");
@@ -706,7 +513,7 @@ test("дропдаун просторів: «Підключення…» — `dd
 /* На самій сторінці «Підключення» пункт нічого б не робив — той самий принцип, що в ⌘K (`space-conn` там теж
    прихований). На «Задачах» і на смузі задачі він є: ведуть ВІД них. Лише рівно `homePage === "conn"`. */
 test("дропдаун просторів: «Підключення…» нема на самій сторінці «Підключення», є скрізь, де ведуть на неї", () => {
-  const on = (o) => /data-act="conn"/.test(html({ space: SP(), spaces: SPACES, openDd: "space", ...o }));
+  const on = (o) => /data-act="conn"/.test(html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space", ...o }));
   assert.equal(on({ homeOpen: true, homePage: "conn" }), false, "на сторінці — пункт, що нічого не робить");
   assert.equal(on({ homeOpen: true, homePage: "tasks" }), true, "на «Задачах» пункт є");
   assert.equal(on({ homeOpen: true }), true, "оверлей без homePage — як «Задачі»");
@@ -722,36 +529,34 @@ test("дропдаун просторів: «Підключення…» нем�
 test("дропдаун просторів: «Connections…» англійською", () => {
   setLang("en");
   try {
-    assert.match(html({ space: SP(), spaces: SPACES, openDd: "space" }), /data-act="conn"[\s\S]*?Connections…/);
+    assert.match(html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" }), /data-act="conn"[\s\S]*?Connections…/);
   } finally { setLang("uk"); }
 });
 
-/* Смуга на сторінці «Підключення»: склад як на «Задачах», крошка інша. Плоска крошка — не кнопка, «назад до задачі»
-   лишається (вона про задачу, з якої прийшли, а не про сторінку). */
-test("смуга на сторінці «Підключення»: плоска крошка «Підключення», «назад до задачі» лишається", () => {
+/* Смуга на сторінці «Налаштування»: склад як на «Задачах», крошка інша. Плоска крошка — не кнопка; «Назад» і логотипа
+   тут нема (вихід — логотип у рядку вкладок). */
+test("смуга на сторінці «Налаштування»: фішка простору й плоска крошка", () => {
   const h = html({ space: SP(), homeOpen: true, homePage: "conn", taskId: "t1" });
   assert.match(h, /crumb crumb--flat[\s\S]*?Налаштування</);
   assert.doesNotMatch(h, /<span class="txt">Задачі</);
-  assert.match(h, /data-act="back"/);
-  /* Екран, а не смуга задачі: зони 2 і 3 порожні, як на «Задачах». Логотип тут НЕ «поточний»: сторінка названа крошкою. */
+  assert.doesNotMatch(h, /data-act="back"|data-act="home"/);
+  /* Екран, а не смуга задачі: зони 2 і 3 порожні, як на «Задачах». */
   assert.equal((h.match(/class="zone /g) || []).length, 3);
   assert.doesNotMatch(h, /data-act="figma"|data-act="publish"|data-dd="iter"/);
-  assert.doesNotMatch(/<button[^>]*data-act="home"[^>]*>/.exec(h)[0], /ctl--on|aria-current/);
+  assert.ok(h.indexOf('data-dd="space"') < h.indexOf("crumb--flat"), "фішка перед крошкою");
   /* Іконка крошки — `sliders` (та сама, що в дропдауні й палітрі), а не `grid` «Задач». */
   const flat = (x) => /<span class="crumb crumb--flat crumb--page">[\s\S]*?<\/span><\/span>/.exec(x)[0];
   const tasks = flat(html({ space: SP(), homeOpen: true, taskId: "t1" }));
   assert.match(flat(h), /#i-sliders/);
   assert.doesNotMatch(flat(h), /#i-grid/);
   assert.match(tasks, /#i-grid[\s\S]*Задачі</, "крошка «Задач» змінилась");
-  /* Без задачі «назад» вести нікуди — і на цій сторінці теж. */
-  assert.doesNotMatch(html({ space: SP(), homeOpen: true, homePage: "conn", taskId: "" }), /data-act="back"/);
 });
 
 /* Смуга на сторінці майстра (етап 3b): плоска крошка «Новий простір» з іконкою `plus`; жодної фішки простору й кнопки
    «назад до задачі» (модель їх не дає — розмітка не малює). Дві перевірки: на готовій моделі (контракт `crumb-wiz`) і наскрізно
    через `barModel` (склад, який справді збирає застосунок). */
 test("крошка майстра: іконка plus і «Новий простір», жодної фішки простору й кнопки «назад»", () => {
-  const model = { zone1: [{ id: "home", tier: 0, on: false }, { id: "palette", tier: 0 }, { id: "crumb-wiz", tier: 0, labelKey: "wzCrumb" }], zone2: [], zone3: [] };
+  const model = { zone1: [{ id: "crumb-wiz", tier: 0, labelKey: "wzCrumb" }], zone2: [], zone3: [] };
   const h = barHTML(model, {});
   assert.match(h, /<span class="crumb crumb--flat crumb--page">[\s\S]*?#i-plus[\s\S]*?<span class="txt">Новий простір<\/span>/);
   assert.doesNotMatch(h, /data-act="back"/);
@@ -761,26 +566,19 @@ test("крошка майстра: іконка plus і «Новий прост�
   assert.doesNotMatch(h, /data-act="figma"|data-act="publish"|data-dd="iter"|data-dd="task"/);
 });
 
-test("смуга на сторінці майстра: з простором і задачею в стані — без фішки й «назад», крошка «Новий простір», логотип не світиться", () => {
+test("смуга на сторінці майстра: з простором і задачею в стані — без фішки й «назад», лише крошка «Новий простір»", () => {
   const h = html({ space: SP(), spaces: SPACES, homeOpen: true, homePage: "wiz", taskId: "t1" });
   assert.match(h, /<span class="crumb crumb--flat crumb--page">[\s\S]*?#i-plus[\s\S]*?<span class="txt">Новий простір<\/span>/);
   assert.doesNotMatch(h, /data-dd="space"/, "фішка простору на майстрі");
-  assert.doesNotMatch(h, /data-act="back"/, "«назад до задачі» на майстрі");
+  assert.doesNotMatch(h, /data-act="back"|data-act="home"|data-act="palette"/, "контролів рядка вкладок у смузі нема");
   assert.doesNotMatch(h, /<span class="txt">Задачі<\/span>|<span class="txt">Підключення<\/span>/, "чужа крошка");
-  const logo = /<button[^>]*data-act="home"[^>]*>/.exec(h);
-  assert.ok(logo, "дорога на «Задачі» (логотип) мусить лишитись");
-  assert.doesNotMatch(logo[0], /ctl--on|aria-current/);
-  assert.match(logo[0], /aria-label="[^"]+"/);
-  assert.match(h, /data-act="palette"/, "двері в палітру на місці");
   /* Англійською крошка — своє слово. */
   setLang("en");
   try {
     assert.match(html({ space: SP(), homeOpen: true, homePage: "wiz" }), /<span class="txt">New space<\/span>/);
   } finally { setLang("uk"); }
-  /* Свідок: на «Задачах» із тим самим станом фішка й «назад» є. */
-  const tasks = html({ space: SP(), spaces: SPACES, homeOpen: true, taskId: "t1" });
-  assert.match(tasks, /data-dd="space"/);
-  assert.match(tasks, /data-act="back"/);
+  /* Свідок: на «Задачах» із тим самим станом фішка є. */
+  assert.match(html({ space: SP(), spaces: SPACES, homeOpen: true, taskId: "t1" }), /data-dd="space"/);
 });
 
 /* Крошка сторінки оверлею («Задачі», «Підключення», «Новий простір») має модифікатор `crumb--page`: за ним CSS знімає ліміт
@@ -797,7 +595,7 @@ test("крошка сторінки оверлею має `crumb--page` — на
 });
 
 test("дропдаун просторів: недоступний простір приглушений, не вимкнений, і каже чому", () => {
-  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  const h = html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" });
   const gone = /<button[^>]*data-val="gone"[\s\S]*?<\/button>/.exec(h)[0];
   assert.match(gone, /dd-item--muted/);
   assert.doesNotMatch(gone, / disabled/, "вимкнений пункт не клікнути — а перейти й побачити причину треба");
@@ -807,13 +605,13 @@ test("дропдаун просторів: недоступний простір
 
 test("дропдаун просторів: назви й шляхи з реєстру екрануються", () => {
   const spaces = [{ id: "e", name: "<img src=x onerror=1>", color: "space-1", path: '"><script>', tasks: 1 }];
-  const h = html({ space: SP({ id: "e" }), spaces, openDd: "space" });
+  const h = html({ homeOpen: true, space: SP({ id: "e" }), spaces, openDd: "space" });
   assert.doesNotMatch(h, /<img src=x/);
   assert.doesNotMatch(h, /<script>/);
 });
 
 test("дропдаун просторів без переліку не падає: лише дії «Новий…» і «Назва й колір…»", () => {
-  const h = html({ space: SP(), openDd: "space" });
+  const h = html({ homeOpen: true, space: SP(), openDd: "space" });
   assert.match(h, /data-act="spacenew"/);
   assert.match(h, /data-act="spaceedit"/);
   assert.doesNotMatch(h, /data-act="space"/);
@@ -822,7 +620,7 @@ test("дропдаун просторів без переліку не пада�
 test("дропдаун просторів у англійському інтерфейсі — англійською", () => {
   setLang("en");
   try {
-    const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+    const h = html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" });
     assert.match(h, /class="dd-head">Spaces</);
     assert.match(h, /12 tasks · \/w\/liga/);
     assert.match(h, /1 task · \/w\/p/);
@@ -838,7 +636,7 @@ test("дропдаун просторів: колір рядка йде кріз
   const evil = [{
     id: '"><script>', name: "<b>x</b>", color: "space-2);position:fixed;(", path: "/p", tasks: 1,
   }];
-  const h = html({ space: SP({ id: "p" }), spaces: evil, openDd: "space" });
+  const h = html({ homeOpen: true, space: SP({ id: "p" }), spaces: evil, openDd: "space" });
   const row = /<button[^>]*data-act="space"[^>]*>[\s\S]*?<\/button>/.exec(h)?.[0];
   assert.ok(row, "рядок простору не знайдено");
   assert.deepEqual([...row.matchAll(/style="([^"]*)"/g)].map((m) => m[1]), ["background:var(--space-1)"],
@@ -852,7 +650,7 @@ test("дропдаун просторів: колір рядка йде кріз
    чує. Рішення ревʼю Task 6 (план, Додаток Б): рядки лишаються `ddItem`, а Task 7
    дає roving focus по `.dd--spaces .dd-item`. */
 test("дропдаун просторів: aria-current лише на поточному рядку; решта дропдаунів без нього", () => {
-  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  const h = html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" });
   const rows = [...h.matchAll(/<button[^>]*data-act="space"[^>]*>/g)].map((m) => m[0]);
   assert.equal(rows.length, 3);
   assert.doesNotMatch(rows[0], /aria-current/);
@@ -862,27 +660,31 @@ test("дропдаун просторів: aria-current лише на поточ
   // `current` — необовʼязковий параметр `ddItem`: решта дропдаунів його не знає
   const iterList = [{ id: "it1", label: "Іт.1", note: "перша", pub: true, onGl: false }];
   for (const openDd of ["iter", "gl", "pub", "more"]) {
-    assert.doesNotMatch(html({ openDd, iterList, gl: "behind" }), /aria-current/, openDd);
+    assert.doesNotMatch(html({ homeOpen: true, openDd, iterList, gl: "behind" }), /aria-current/, openDd);
   }
 });
 
 test("дропдаун просторів: роздільник перед «Новий простір…» є з переліком і нема без нього", () => {
-  const withList = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  const withList = html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" });
   assert.match(withList,
     /data-val="gone"[\s\S]*?<\/button>\s*<div class="dd-sep"><\/div>\s*<button[^>]*data-act="spacenew"/);
-  assert.doesNotMatch(html({ space: SP(), openDd: "space" }), /dd-sep/, "порожній перелік — роздільника нема");
+  assert.doesNotMatch(html({ homeOpen: true, space: SP(), openDd: "space" }), /dd-sep/, "порожній перелік — роздільника нема");
 });
 
 /* Снапшот-страж: простір З інтеграціями змінює смугу рівно на фішку — ні байтом
    більше. Це те, що береже ЛІГА (legacy-простір) від випадкових змін розмітки. */
-test("розмітка зі space без відомостей про ролі = розмітка без space мінус блок фішки — побайтно", () => {
+test("розмітка зі space = розмітка без space мінус блок фішки — побайтно (екрани оверлею); смуга задачі від space не залежить", () => {
   const stripChip = (h) => h.replace(/<div class="ddhost space-h">[\s\S]*?<\/div>/, "");
   const iterList = [{ id: "it1", label: "Іт.1", note: "перша", pub: true, onGl: false }];
-  for (const o of [{}, { homeOpen: true }, { openDd: "pub" }, { openDd: "gl", gl: "behind" },
-    { openDd: "iter", iterList }, { openDd: "more" }, { hasIteration: false }, { tasksErr: true }]) {
-    const withSpace = html({ ...o, space: { id: "p", name: "P", color: "space-2" } });
+  const sp = { id: "p", name: "P", color: "space-2" };
+  for (const o of [{ homeOpen: true }, { homeOpen: true, homePage: "conn" }, { homeOpen: true, tasksErr: true }]) {
+    const withSpace = html({ ...o, space: sp });
     assert.ok(chip(withSpace), `фішки нема: ${JSON.stringify(o)}`);
     assert.equal(stripChip(withSpace), html(o), `розмітка розійшлась: ${JSON.stringify(o)}`);
+  }
+  for (const o of [{}, { openDd: "pub" }, { openDd: "gl", gl: "behind" },
+    { openDd: "iter", iterList }, { openDd: "more" }, { hasIteration: false }, { tasksErr: true }]) {
+    assert.equal(html({ ...o, space: sp }), html(o), `смуга задачі змінилась від space: ${JSON.stringify(o)}`);
   }
 });
 
@@ -1028,85 +830,23 @@ test("застереження малюються лише у відкритом
   }
 });
 
-/* ── Пігулка оновлення (0.23.0) ────────────────────────────────────────────
-   Є лише при `available` (рішення — `pillModel`), стоїть ОДРАЗУ ПІСЛЯ дверей у палітру й перед крошками, і на екрані «Задачі»
-   теж. `data-act="update"` ↔ `id` контролу моделі. */
+/* ── Пігулка оновлення й «Відгук» (0.25.0) ────────────────────────────────
+   Обидва переїхали зі смуги: пігулка — в рядок вкладок (`tabs-view.js`, її розмітка — `update-view.js`), «Відгук» — в острівець
+   (`island.js`). Присутність `update` у стані смугу не міняє. */
 const UPD = { current: "0.1.0", latest: "0.2.0", available: true, state: "ok", checked_at: 1, boot: "a", restart_failed: false };
 
-test("оновлення: пігулка є лише коли available; без нього вузла нема", () => {
-  assert.match(html({ update: UPD }), /data-act="update"/);
-  for (const update of [undefined, null, { ...UPD, available: false }, { ...UPD, state: "offline" }, { ...UPD, state: null }]) {
-    assert.doesNotMatch(html({ update }), /data-act="update"|upd-pill/, JSON.stringify(update));
+test("оновлення в стані не міняє розмітку смуги (пігулка й «Відгук» — не тут)", () => {
+  for (const o of [{}, { homeOpen: true }, { homeOpen: true, homePage: "conn", taskId: "t1" }, { hasIteration: false }]) {
+    assert.equal(html({ update: UPD, ...o }), html(o), JSON.stringify(o));
+    assert.doesNotMatch(html({ update: UPD, ...o }), /data-act="update"|upd-pill|data-act="feedback"/, JSON.stringify(o));
   }
 });
 
-test("оновлення: порядок — логотип, палітра, ПІГУЛКА, крошки, зона 2; на екрані «Задачі» так само", () => {
-  for (const o of [{}, { homeOpen: true }, { homeOpen: true, homePage: "conn", taskId: "t1" }, { space: { id: "a", name: "A", color: "space-1" } }]) {
-    const h = html({ update: UPD, ...o });
-    const pal = h.indexOf('data-act="palette"');
-    const upd = h.indexOf('data-act="update"');
-    const crumbs = h.indexOf('class="crumbs"');
-    assert.ok(pal !== -1 && upd !== -1 && crumbs !== -1, JSON.stringify(o));
-    assert.ok(pal < upd, "пігулка мусить стояти ПІСЛЯ дверей у палітру");
-    assert.ok(upd < crumbs, "пігулка мусить стояти ПЕРЕД крошками");
-    if (o.space) assert.ok(upd < h.indexOf('data-dd="space"'), "і перед фішкою простору");
-  }
-});
-
-test("оновлення: підпис пігулки — з версією, мовою інтерфейсу; ярус підпису — той самий, що в палітри", () => {
-  setLang("uk");
-  assert.match(html({ update: UPD }), /Оновлення 0\.2\.0/);
-  setLang("en");
-  assert.match(html({ update: UPD }), /Update 0\.2\.0/);
-  setLang("uk");
-  assert.equal(barModel(S({ update: UPD })).zone1.find((x) => x.id === "update").labelTier,
-    barModel(S()).zone1.find((x) => x.id === "palette").labelTier);
-});
-
-test("оновлення: розмітка смуги з пігулкою збалансована за тегами", () => {
-  const h = html({ update: UPD });
-  for (const tag of ["div", "button", "span"]) {
-    assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length, (h.match(new RegExp(`</${tag}>`, "g")) || []).length, tag);
-  }
-});
-
-/* ── «Відгук» (0.23.0, Task 8) ─────────────────────────────────────────────
-   Кнопка-іконка на ВСІХ екранах (задача, «Задачі», «Підключення», майстер): одразу після дверей у палітру, а коли є пігулка оновлення —
-   після неї; перед фішкою простору й крошками. Стан без ключа `update` (еталони ЛІГИ) кнопки не має. */
-test("«Відгук»: є на всіх екранах і доступний з клавіатури (нативна button, title/aria-label)", () => {
-  setLang("uk");
-  for (const o of [{}, { hasIteration: false }, { homeOpen: true }, { homeOpen: true, taskId: "" }, { homeOpen: true, homePage: "conn" }, { homeOpen: true, homePage: "wiz" }]) {
-    const h = html({ update: null, ...o });
-    const m = /<button[^>]*data-act="feedback"[^>]*>[\s\S]*?<\/button>/.exec(h);
-    assert.ok(m, `${JSON.stringify(o)}: кнопки «Відгук» нема`);
-    assert.match(m[0], /title="Баг \/ ідея"/);
-    assert.match(m[0], /aria-label="Баг \/ ідея"/);
-    assert.match(m[0], /<svg/);
-    assert.doesNotMatch(m[0], /tabindex="-1"/, "кнопка мусить бути досяжна клавіатурою");
-  }
-  assert.doesNotMatch(html(), /data-act="feedback"/, "стан без ключа update — еталон: кнопки нема");
-});
-
-test("«Відгук»: порядок — палітра, пігулка оновлення (коли є), «Відгук», фішка простору, крошки", () => {
-  for (const o of [{}, { homeOpen: true }, { homeOpen: true, homePage: "conn", taskId: "t1" }, { space: { id: "a", name: "A", color: "space-1" } }]) {
-    for (const update of [null, UPD]) {
-      const h = html({ update, ...o });
-      const pal = h.indexOf('data-act="palette"');
-      const upd = h.indexOf('data-act="update"');
-      const fb = h.indexOf('data-act="feedback"');
-      const crumbs = h.indexOf('class="crumbs"');
-      assert.ok(pal !== -1 && fb !== -1 && crumbs !== -1, JSON.stringify(o));
-      assert.ok(pal < fb, "«Відгук» — після дверей у палітру");
-      if (update) assert.ok(upd !== -1 && upd < fb, "і після пігулки оновлення");
-      assert.ok(fb < crumbs, "і перед крошками");
-      if (o.space) assert.ok(fb < h.indexOf('data-dd="space"'), "і перед фішкою простору");
+test("розмітка смуги збалансована за тегами", () => {
+  for (const o of [{}, { homeOpen: true }]) {
+    const h = html(o);
+    for (const tag of ["div", "button", "span"]) {
+      assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length, (h.match(new RegExp(`</${tag}>`, "g")) || []).length, tag);
     }
-  }
-});
-
-test("«Відгук»: розмітка смуги збалансована за тегами", () => {
-  const h = html({ update: UPD });
-  for (const tag of ["div", "button", "span"]) {
-    assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length, (h.match(new RegExp(`</${tag}>`, "g")) || []).length, tag);
   }
 });

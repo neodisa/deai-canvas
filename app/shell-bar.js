@@ -28,14 +28,10 @@
  */
 
 import { TIERS } from "./bar-model.js";
-import { LOGO_SVG } from "./logo.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
-import { cleanTitle, matches, taskKey } from "./tasks-model.js";
 import { spaceColorToken, spaceRows } from "./spaces-model.js";
-import { updatePillHTML } from "./update-view.js";
-import { feedbackBtnHTML } from "./feedback-view.js";
 
 /** Клас, яким контейнерний запит ховає лише ПІДПИС контролу (іконка лишається).
  *  Значення `labelTier` у моделі — це саме пороги `TIERS.mode`/`TIERS.gl`, а
@@ -121,77 +117,6 @@ function spaceChip(model, state, openDd) {
 }
 
 /**
- * Список задач у дропдауні крошки — одне з речей, що беруться зі `state` в обхід
- * моделі (усі названо в шапці `barHTML` нижче): `state.taskList` і
- * `state.curTaskId`. `bar-model.js` свідомо не знає списку задач — це той
- * самий контракт, що й для `iterLabel`: модель описує СКЛАД смуги, а не
- * перелічує сутності, яких не бачить (список задач приходить з `/api/tasks`,
- * окремого від `/api/task` запиту). Без цього перемикання між задачами
- * лишилось би без жодного контролу в новій смузі — старий `#task-sel`
- * зникав би без заміни (функціональний регрес: 01.09.2026 задач заведено 16).
- */
-function crumbTask(model, state, openDd) {
-  const task = model.zone1.find((x) => x.id === "task");
-  const open = openDd === "task";
-  /* Дропдаун = три шари: поле пошуку, СПИСОК (єдине, що прокручується) і
-     футер. Прокрутка саме списку, а не всього `.dd`, бо пошук і «Усі задачі»
-     мусять лишатися видимими при 30+ задачах — інакше поле, в яке щойно
-     набирали, виїхало б нагору разом із прокруткою. */
-  const dd = `<div class="dd dd--tasks">
-    <label class="dd-search">${ico("search", 14)}
-      <input id="task-q" type="text" autocomplete="off" spellcheck="false"
-        placeholder="${esc(t("taskSearchPh"))}" value="${esc(state?.taskQuery ?? "")}"
-        aria-label="${esc(t("taskSearchPh"))}" role="combobox" aria-autocomplete="list"
-        aria-expanded="true" aria-controls="task-list"${activeAttr(state)}></label>
-    <div class="dd-list" id="task-list" role="listbox">${taskListHTML(state)}</div>
-    <div class="dd-foot">${taskFootHTML(state)}</div>
-  </div>`;
-  return `<div class="ddhost crumb-h crumb--task">
-    <button class="ctl crumb crumb--task" data-dd="task"
-      aria-expanded="${open}" aria-haspopup="true">
-      ${ico("task")}<span class="txt txt--fix">${esc(task.label)}</span>
-      ${ico("chevdown", 14, "ico caret")}</button>
-    ${open ? dd : ""}
-  </div>`;
-}
-
-/**
- * Задачі, що проходять запит: ЄДИНЕ місце, де перелік фільтрується. Модуль
- * пошуку — `matches` з `tasks-model.js` (той самий, що на екрані «Задачі»):
- * друга копія правила «усі слова, без регістру» розійшлась би з першою
- * першого ж разу, коли хтось додасть ще одне шукане поле.
- */
-export function visibleTasks(state) {
-  return (state?.taskList ?? []).filter((x) => matches(x, state?.taskQuery ?? ""));
-}
-
-/**
- * Активний пункт: індекс у ряду «задачі…, футер». Футер — ОСТАННІЙ досяжний
- * (його індекс = кількість задач), тож стрілки доходять до нього, а Enter на
- * ньому відкриває екран «Задачі». Затиск тут, а не в `app.js`: нова видача
- * може бути коротшою за стару, і курсор, що лишився за її межею, не показав
- * би жодного активного пункту — а Enter тоді мовчав би.
- */
-export function taskCursorIndex(state) {
-  const n = visibleTasks(state).length;
-  const c = Number.isFinite(state?.taskCursor) ? state.taskCursor : 0;
-  /* Порожня видача: активного пункту НЕМА (-1), доки людина не зайде на футер
-     стрілкою. Інакше єдиний пункт — футер — ставав би активним сам, і Enter на
-     «Нічого не знайдено» мовчки кидав би її на екран «Задачі». */
-  if (n === 0) return c < 0 ? -1 : 0;
-  return Math.min(Math.max(c, 0), n);
-}
-
-/** `id` пункту за індексом ряду «задачі…, футер» (для `aria-activedescendant`). */
-const optId = (i, n) => (i === n ? "task-opt-foot" : `task-opt-${i}`);
-
-/** Атрибут активного пункту для поля пошуку (порожньо, коли активного нема). */
-function activeAttr(state) {
-  const i = taskCursorIndex(state);
-  return i < 0 ? "" : ` aria-activedescendant="${optId(i, visibleTasks(state).length)}"`;
-}
-
-/**
  * Підсвітка збігів. ⛔ Порядок: спершу `esc` КОЖНОГО шматка, потім `<mark>`.
  * Навпаки (вставити тег у сирий текст і екранувати все) зробило б теги
  * видимим текстом, а екранувати вже після `innerHTML` неможливо — назва
@@ -217,47 +142,6 @@ export function mark(text, q) {
     at = m.index + m[0].length;
   }
   return out + esc(src.slice(at));
-}
-
-/** Список дропдауна задач: заголовок (лише без запиту), пункти або «нічого». */
-export function taskListHTML(state) {
-  const q = state?.taskQuery ?? "";
-  const list = visibleTasks(state);
-  const cur = taskCursorIndex(state);
-  if (!list.length) {
-    return `<div class="dd-note dd-empty">${esc(t("noTasksFound", q))}</div>`;
-  }
-  const head = q.trim() ? "" : `<div class="dd-head">${esc(t("recentTasks"))}</div>`;
-  const items = list.map((x, i) => {
-    const on = x.id === state?.curTaskId;
-    const key = x.missing
-      ? `${mark(taskKey(x), q)} · ${esc(t("folderMissing"))}`
-      : mark(taskKey(x), q);
-    /* `missing` — НЕ `disabled`: вимкнену кнопку не можна ні клікнути, ні
-       вибрати стрілками, і причина «чому не відкривається» лишилась би
-       підказкою, яку ніхто не побачить. Пункт живий і каже причину сам. */
-    const cls = `dd-item dd-item--task${x.missing ? " dd-item--missing" : ""}`
-      + `${i === cur ? " dd-item--cur" : ""}${on ? " dd-item--on" : ""}`;
-    /* `aria-current`, а не `aria-selected`: у списку з `aria-activedescendant`
-       «вибраний» читач розуміє як «той, на якому стоїть курсор», а поточна
-       задача — це «де я зараз», тобто саме `current`. */
-    return `<button class="${cls}" data-act="task" data-val="${esc(x.id)}"
-      id="${optId(i, list.length)}" role="option"${on ? ' aria-current="true"' : ""}${x.missing ? ' aria-disabled="true"' : ""}>
-      ${ico("task")}
-      <span class="dd-body"><span class="dd-k">${key}</span>
-      <span class="dd-t">${mark(cleanTitle(x), q)}</span></span>
-      ${on ? `<span class="dd-marks">${ico("check", 14)}</span>` : ""}</button>`;
-  }).join("");
-  return head + items;
-}
-
-/** Футер: «Усі задачі» (досяжний стрілками — останній) і підказка клавіш. */
-export function taskFootHTML(state) {
-  const n = visibleTasks(state).length;
-  const on = taskCursorIndex(state) === n;
-  return `<button class="dd-item dd-item--foot${on ? " dd-item--cur" : ""}" id="task-opt-foot" data-act="home" data-val="">
-    ${ico("grid")}<span class="dd-body"><span class="dd-t">${esc(t("allTasks"))}</span></span></button>
-    <span class="dd-hint">${esc(t("ddKeysHint"))}</span>`;
 }
 
 /* ⛔ Перемикача аудиторії коментарів у цьому дропдауні БІЛЬШЕ НЕМА, і це не
@@ -331,8 +215,8 @@ function crumbIter(model, openDd) {
       String(it.origin.it || "").replace(/^it/, "")) : "",
     t("iterForeign"),
   ].filter(Boolean).join(" — "))}"`;
-  return `${ico("chevright", 14, "ico crumb-sep")}
-  <div class="ddhost crumb-h crumb--iter">
+  /* Роздільника перед крошкою нема: вона перша в зоні 1 (раніше його ставили після крошки задачі). */
+  return `<div class="ddhost crumb-h crumb--iter">
     <button class="ctl crumb crumb--iter${foreign}" data-dd="iter"${foreignTitle}
       aria-expanded="${open}" aria-haspopup="true">
       ${ico("iter")}<span class="txt txt--fix">${esc(it.label)}</span>
@@ -375,16 +259,8 @@ function vpSeg(model) {
   return `<div class="seg seg--icons view-extra" role="group" data-seg="vp">${buttons}${custom}</div>`;
 }
 
-function inspectorBtn(model) {
-  const c = model.zone2.find((x) => x.id === "inspector");
-  if (!c) return "";
-  return `<button class="ctl ${c.active ? "ctl--on" : "ctl--out"} view-extra"
-    data-act="inspector" aria-pressed="${c.active}" title="${esc(t(c.labelKey))}">
-    ${ico("inspect")}<span class="${lblCls(c.labelTier)}">${esc(t(c.labelKey))}</span></button>`;
-}
-
 /* «⋯ Вигляд» — не окремий набір контролів, а ті самі, що зникли з бару:
-   рівно `vp` та `inspector`, тобто контроли з `tier === TIERS.view`. Порахувати
+   лише `vp` (ширини), тобто контроли з `tier === TIERS.view`. Порахувати
    це з моделі, а не продублювати список руками, — щоб дропдаун не розійшовся
    зі складом бару, якщо колись зʼявиться третій контрол цього ярусу. */
 function ddMore(model, state) {
@@ -396,7 +272,7 @@ function ddMore(model, state) {
         title: t(sub.labelKey), on: sub.id === c.value,
       })).join("");
     }
-    return ddItem({ act: c.id, icon: "inspect", title: t(c.labelKey), on: !!c.active });
+    return "";
   }).join("");
   return `<div class="dd dd--right"><div class="dd-head">${esc(t("view"))}</div>${parts}</div>`;
 }
@@ -407,7 +283,7 @@ function zone2HTML(model, state, openDd) {
       title="${esc(t("view"))}">${ico("dots")}</button>
     ${openDd === "more" ? ddMore(model, state) : ""}
   </div>`;
-  return `${seg(model, "mode")}${seg(model, "view")}${vpSeg(model)}${inspectorBtn(model)}${more}`;
+  return `${seg(model, "mode")}${seg(model, "view")}${vpSeg(model)}${more}`;
 }
 
 /* ── зона 3: GitLab і публікація ──────────────────────────────────────────── */
@@ -524,92 +400,48 @@ function zonePublish(c, openDd) {
   </div>`;
 }
 
+/* Голова зони 1 екрана «Задачі»: плоска крошка «Задачі» (нерухома — це «де я»,
+   не перемикач). Склад вирішила модель (`homeOpen`), тут лише малюнок. На сторінці «Налаштування» (етап 3a) модель дає
+   `crumb-conn` замість `crumb-tasks` — крошка та сама, але з іконкою `sliders`. Сторінка майстра нового простору
+   (етап 3b) — `crumb-wiz`: іконка `plus`, «Новий простір»; фішки простору там модель не дає, тож розмітка її і не малює. */
+function homeCrumbs(model) {
+  const wiz = model.zone1.some((x) => x.id === "crumb-wiz");
+  const conn = model.zone1.some((x) => x.id === "crumb-conn");
+  const [icon, key] = wiz ? ["plus", "wzCrumb"] : conn ? ["sliders", "cnTitle"] : ["grid", "tasks"];
+  /* `crumb--page` — крошка сторінки оверлею без ліміту ширини (див. `.crumb.crumb--page` у styles.css): інакше глобальний
+     `.crumb{max-width:110px}` стискав іконку до 0px. */
+  return `<div class="crumbs"><span class="crumb crumb--flat crumb--page">${ico(icon)}<span class="txt">${esc(t(key))}</span></span></div>`;
+}
+
+/* Назва задачі — приглушено й нерухомо: «де я» тепер каже вкладка, а перемикати задачі — теж вона. */
+function crumbTitle(model) {
+  const c = model.zone1.find((x) => x.id === "title");
+  if (!c) return "";
+  return `<span class="crumb crumb--flat crumb--title" title="${esc(c.label)}"><span class="txt">${esc(c.label)}</span></span>`;
+}
+
 /**
  * Розмітка всієї смуги. `model` — вихід `barModel()` (склад і причини),
  * `state` — вихідний стан екрана: із нього беруться речі, яких модель свідомо
  * не несе — `state.openDd` (який дропдаун розкритий), `state.iterLabel`
  * (підпис поточної ітерації для «Надіслати Іт.3 на GitLab» — текст, що
  * складає вже DOM-шар, не модель, за її ж контрактом `t()`-виклику лише тут),
- * `state.taskList`/`state.curTaskId` (перелік задач для дропдауна крошки —
- * модель бачить лише ПОТОЧНУ задачу, список приходить окремим запитом),
  * `state.space`/`state.spaces` (ПОТОЧНИЙ простір і перелік для дропдауна
- * фішки: `space` — обʼєкт `{id, name, color, capabilities}` з `/api/task`,
- * `spaces` — масив `/api/spaces`; без `space` фішки нема зовсім).
+ * фішки на екранах «Задачі»/«Налаштування»: `space` — обʼєкт
+ * `{id, name, color, capabilities}` з `/api/task`, `spaces` — масив
+ * `/api/spaces`; без `space` фішки нема зовсім).
  *
  * ⛔ `state.commentMode` тут БІЛЬШЕ НЕ читається: смуга нічого не знає про
  * аудиторію коментарів (принцип 6 PRODUCT.md, коментар над `crumbIter`).
  * `barState()` його все ще віддає — але для ⌘K (`paletteState()` в
  * `app.js`), не для смуги.
  */
-/* Двері в палітру ⌘K. Іконка лишається на будь-якій ширині, підпис-акорд
-   зникає разом із рештою підписів на 1180 (`labelTier` у моделі): без
-   підпису кнопка ще працює, без іконки її не було б видно взагалі.
-
-   `aria-keyshortcuts` — не косметика: підпис «⌘K» бачить око, а екранний
-   читач мусить дізнатись про акорд окремо, бо для нього це просто два
-   символи в тексті кнопки. */
-function paletteBtn(model) {
-  const c = model.zone1.find((x) => x.id === "palette");
-  if (!c) return "";
-  return `<div class="pal-open"><button class="ctl ctl--icon" data-act="palette"
-    title="${esc(t("paletteOpenTitle"))}" aria-keyshortcuts="Meta+K Control+K"
-    >${ico("search")}<span class="lbl-pal">${esc(t("paletteOpen"))}</span></button></div>`;
-}
-
-/* Пігулка оновлення (0.23.0): одразу ПІСЛЯ дверей у палітру, перед фішкою простору й крошками — «що в інструменті нового» стоїть
-   поряд із «що я можу», а не губиться серед шляху «де я». Є лише коли модель дала контрол `update` (`pillModel`, `update-model.js`):
-   нема оновлення — нема й вузла. Розмітку веде `update-view.js`, щоб діалог і пігулка не розходились у словах. */
-function updateBtn(model) {
-  return updatePillHTML(model.zone1.find((x) => x.id === "update"));
-}
-
-/* «Відгук» (0.23.0): іконка-кнопка одразу після дверей у палітру (і після пігулки оновлення, коли вона є), на ВСІХ екранах. Контрол
-   дає модель (`feedback`); розмітку веде `feedback-view.js`. */
-function feedbackBtn(model) {
-  return feedbackBtnHTML(model.zone1.find((x) => x.id === "feedback"));
-}
-
-/* Логотип — вхід на екран «Задачі». Імʼя несе `aria-label`: усередині лише
-   декоративний SVG. `ctl--on` — «ми зараз там»; `aria-current="page"` дублює
-   це для читача, бо колір сам по собі стану не оголошує. НЕ `aria-pressed`:
-   повторний клік не вимикає екран, тож це не перемикач. */
-function homeBtn(model) {
-  const c = model.zone1.find((x) => x.id === "home");
-  if (!c) return "";
-  const name = esc(t("allTasks"));
-  return `<button class="ctl ctl--icon logo-btn${c.on ? " ctl--on" : ""}" data-act="home"
-    aria-label="${name}" title="${name}"${c.on ? ' aria-current="page"' : ""}>${LOGO_SVG}</button>`;
-}
-
-/* Голова зони 1 екрана «Задачі»: плоска крошка «Задачі» (нерухома — це «де я»,
-   не перемикач) і шлях назад до задачі, з якої прийшли. Склад вирішила модель
-   (`homeOpen`), тут лише малюнок. На сторінці «Підключення» (етап 3a) модель дає
-   `crumb-conn` замість `crumb-tasks` — крошка та сама, але з іконкою `sliders` і
-   підписом «Підключення»; «назад до задачі» лишається, бо вона про задачу, з якої
-   прийшли, а не про сторінку. Сторінка майстра нового простору (етап 3b) — `crumb-wiz`: іконка `plus`, «Новий простір»;
-   фішки простору й «назад до задачі» там модель не дає, тож розмітка їх і не малює. */
-function homeCrumbs(model) {
-  const back = model.zone1.find((x) => x.id === "back");
-  const wiz = model.zone1.some((x) => x.id === "crumb-wiz");
-  const conn = model.zone1.some((x) => x.id === "crumb-conn");
-  const [icon, key] = wiz ? ["plus", "wzCrumb"] : conn ? ["sliders", "cnTitle"] : ["grid", "tasks"];
-  /* `crumb--page` — крошка сторінки оверлею без ліміту ширини (див. `.crumb.crumb--page` у styles.css): інакше глобальний
-     `.crumb{max-width:110px}` стискав іконку до 0px. */
-  const crumb = `<span class="crumb crumb--flat crumb--page">${ico(icon)}<span class="txt">${esc(t(key))}</span></span>`;
-  if (!back) return `<div class="crumbs">${crumb}</div>`;
-  const why = esc(t("backToTask", back.label));
-  return `<div class="crumbs">${crumb}</div>
-    <button class="ctl ctl--out" data-act="back" title="${why}" aria-label="${why}">`
-    + `${ico("chevleft")}<span class="txt txt--fix">${esc(back.label)}</span></button>`;
-}
-
 export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
   const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
   const zone1 = home
-    ? `${homeBtn(model)}${paletteBtn(model)}${updateBtn(model)}${feedbackBtn(model)}${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
-    : `${homeBtn(model)}${paletteBtn(model)}${updateBtn(model)}${feedbackBtn(model)}${spaceChip(model, state, openDd)}<div class="crumbs">`
-      + `${crumbTask(model, state, openDd)}${crumbIter(model, openDd)}</div>`;
+    ? `${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
+    : `<div class="crumbs">${crumbIter(model, openDd)}${crumbTitle(model)}</div>`;
   /* Зони 2 і 3 екрана «Задачі» порожні в МОДЕЛІ — не малюємо їхніх контролів,
      але самі вузли лишаються (грид смуги на них тримається). */
   const zone2 = home ? "" : zone2HTML(model, state, openDd);
