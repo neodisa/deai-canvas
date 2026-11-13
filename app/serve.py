@@ -5905,8 +5905,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return False
             if self.path.split('?')[0] in self._MACHINE_ROUTES:
                 self._drain_body()
-                self._send_json({'ok': False, 'error': 'оновлення й відгук не привʼязані до задачі: '
-                                 'звертайся до /api/update*, /api/feedback* без префікса /t/<id>/'}, status=400)
+                self._send_json({'ok': False, 'error': 'маршрути машини (оновлення, відгук, статуси Claude) '
+                                 'не привʼязані до задачі: звертайся до них без префікса /t/<id>/'}, status=400)
                 return False
         else:
             if self.path.split('?')[0] in self._MACHINE_ROUTES:

@@ -41,12 +41,19 @@ const homeShown = (page) => page.evaluate(() => {
 const barTitle = (page) => page.textContent("#bar .crumb--title");
 const islandActs = (page) => page.$$eval("#hud .isl-btn", (els) => els.map((e) => e.dataset.act));
 
+/** Опитує умову з боку node (Playwright не чекає проміс у waitForFunction). */
+async function until(fn, ms = 15000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (await fn()) return; await new Promise((r) => setTimeout(r, 100)); }
+  throw new Error("умова не виконалась за " + ms + " мс");
+}
+
 /** Логотип → «Задачі» → картка → чекаємо, що сервер і екран перейшли на `id`. */
 async function openFromHome(page, url, id) {
   await page.click('#tabs [data-act="home"]');
   await page.waitForSelector(`#tasks-home .th-card[data-id="${id}"]`);
   await page.click(`#tasks-home .th-card[data-id="${id}"]`);
-  await page.waitForFunction(async (want) => (await (await fetch("/api/tasks")).json()).current === want, id);
+  await until(async () => (await (await fetch(`${url}/api/tasks`)).json()).current === id);
   await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
   await page.waitForFunction((want) => !!document.querySelector(`#tabs [data-act="tab"][data-val="${want}"][aria-current="page"]`), id);
 }
@@ -75,9 +82,10 @@ test("3: клік по першій вкладці перемикає задач
   await openFromHome(page, url, "t0");
   assert.match(await barTitle(page), /Задача 0/);
   await page.click('#tabs [data-act="tab"][data-val="fixture"]');
-  await page.waitForFunction(async () => (await (await fetch("/api/tasks")).json()).current === "fixture");
+  await until(async () => (await cur(url)) === "fixture");
   await page.waitForFunction(() => !!document.querySelector('#tabs [data-act="tab"][data-val="fixture"][aria-current="page"]'));
   assert.equal(await cur(url), "fixture");
+  await page.waitForFunction(() => /Фікстура/.test(document.querySelector("#bar .crumb--title")?.textContent || ""));
   assert.deepEqual(await activeTab(page), ["fixture"]);
   assert.match(await barTitle(page), /Фікстура/);
   assert.deepEqual(await tabIds(page), ["fixture", "t0"], "перемикання не губить вкладок");
@@ -168,4 +176,76 @@ test("7: острівець за екранами — «Макет»: інспе
   await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
   assert.deepEqual(await islandActs(page), ["feedback"], "«Задачі»");
+});
+
+const focusedAct = (page) => page.evaluate(() => {
+  const a = document.activeElement;
+  return a && a.dataset ? `${a.dataset.act || ""}|${a.dataset.val || ""}` : "";
+});
+
+test("8: фокус на вкладці переживає перемальовку рядка (зміна стану Claude)", async (t) => {
+  const { page, url } = await boot(t, PORT_BASE + 800);
+  await openFromHome(page, url, "t0");
+  let stub = null;
+  await page.route("**/api/claude-statuses", (route) => (stub
+    ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(stub) })
+    : route.continue()));
+  await page.focus('#tabs [data-act="tab"][data-val="t0"]');
+  assert.equal(await focusedAct(page), "tab|t0");
+  stub = { tasks: { t0: { state: "working", age_s: 1 } } };
+  await page.waitForSelector("#tabs .tab-claude", { timeout: 12000 });
+  assert.equal(await focusedAct(page), "tab|t0", "фокус втрачено після перемальовки вкладок");
+});
+
+test("9: Enter на кнопці інспектора в острівці лишає фокус на ній і перемикає aria-pressed", async (t) => {
+  const { page } = await boot(t, PORT_BASE + 900);
+  await frameReady(page);
+  const sel = '#hud [data-act="inspector"]';
+  const before = await page.getAttribute(sel, "aria-pressed");
+  await page.focus(sel);
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(([s, b]) => document.querySelector(s)?.getAttribute("aria-pressed") !== b, [sel, before]);
+  assert.equal(await focusedAct(page), "inspector|", "фокус зник з кнопки інспектора");
+  assert.notEqual(await page.getAttribute(sel, "aria-pressed"), before);
+});
+
+test("10: закриття вкладки з клавіатури лишає фокус на вкладці чи логотипі, не на body", async (t) => {
+  const { page, url } = await boot(t, PORT_BASE + 1000);
+  await openFromHome(page, url, "t0");
+  await page.focus('#tabs [data-act="tabclose"][data-val="t0"]');
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.querySelector('#tabs [data-act="tab"][data-val="t0"]'));
+  await until(async () => (await focusedAct(page)) !== "|").catch(() => {});
+  const f = await focusedAct(page);
+  assert.ok(f.startsWith("tab|") || f === "home|", `фокус на «${f}», а не на вкладці/логотипі`);
+  await page.focus('#tabs [data-act="tabclose"]');
+  await page.keyboard.press("Enter");
+  await until(async () => (await focusedAct(page)) !== "|").catch(() => {});
+  const g = await focusedAct(page);
+  assert.ok(g.startsWith("tab|") || g === "home|", `після закриття останньої фокус на «${g}»`);
+});
+
+test("11: швидкі кліки по двох вкладках — одна зміна задачі за раз, виграє остання", async (t) => {
+  const { page, url } = await boot(t, PORT_BASE + 1100);
+  for (const id of ["t0", "t1", "t2"]) await openFromHome(page, url, id);
+  await page.click('#tabs [data-act="tab"][data-val="fixture"]');
+  await until(async () => (await cur(url)) === "fixture" && (await page.evaluate(() => document.querySelector('#tabs [aria-current="page"]')?.dataset.val)) === "fixture");
+  await page.waitForTimeout(500);
+  let inflight = 0; let maxInflight = 0; let posts = 0;
+  await page.route("**/api/task-switch", async (route) => {
+    inflight += 1; posts += 1; maxInflight = Math.max(maxInflight, inflight);
+    await new Promise((r) => setTimeout(r, 400));
+    await route.continue();
+    inflight -= 1;
+  });
+  await page.evaluate(() => {
+    document.querySelector('#tabs [data-act="tab"][data-val="t0"]').click();
+    document.querySelector('#tabs [data-act="tab"][data-val="t1"]').click();
+    document.querySelector('#tabs [data-act="tab"][data-val="t2"]').click();
+  });
+  await until(async () => (await cur(url)) === "t2" && (await page.evaluate(() => document.querySelector('#tabs [aria-current="page"]')?.dataset.val)) === "t2");
+  await page.waitForTimeout(800);
+  assert.equal(await cur(url), "t2", "виграла не остання вкладка");
+  assert.equal(maxInflight, 1, `одночасних task-switch: ${maxInflight}`);
+  assert.equal(posts, 2, `зайвих task-switch: ${posts} (мало бути перший і останній)`);
 });

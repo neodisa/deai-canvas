@@ -1101,7 +1101,7 @@ test("потік switchTask (refresh до render): ключ — цільова �
   assert.equal(env.glKey, "plain|B|", "ключ запиту — задача B, до якої сервер уже перемкнено, а не curTask A");
   assert.equal(env.glCache.busy, true, "стан A не тримається для B");
   assert.equal(env.log.timers.length, 1);
-  render(env);                                          // BAR_ACTIONS.task / leaveHome
+  render(env);                                          // BAR_ACTIONS.tab / leaveHome
   env.status = REAL_B;
   await env.log.timers[0].fn();
   assert.equal(env.log.api.length, 2, "повтор опитав B");

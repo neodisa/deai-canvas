@@ -94,7 +94,7 @@ test("A+B: удар → острівець «Claude працює» внизу п
   await page.waitForFunction(() =>
     /Claude працює/.test(document.querySelector("#claude-hud .claude-island")?.textContent || ""), null, { timeout: 12000 });
   assert.equal(await page.locator("#bar .claude-chip, #bar .claude-island").count(), 0, "статус лишився в смузі");
-  assert.equal(await page.evaluate(() => document.body.classList.contains("claude-on")), true);
+  assert.equal(await page.locator("#claude-hud .claude-island").count(), 1, "сегмент Claude відсутній у острівці");
   /* Унизу й по центру ВИДИМОЇ робочої області: панель шарів відкрита, тож центр
      області зсунутий праворуч від центру вікна. */
   const geo = await page.evaluate(() => {
@@ -107,8 +107,8 @@ test("A+B: удар → острівець «Claude працює» внизу п
 
   stub = { state: null };
   await page.waitForFunction(() => !document.querySelector("#claude-hud .claude-island"), null, { timeout: 12000 });
-  assert.equal(await page.evaluate(() => document.body.classList.contains("claude-on")), false,
-    "claude-on пережив згаслий статус — тост і плашки висіли б задерті над порожнечею");
+  assert.equal(await page.evaluate(() => document.getElementById("claude-hud").children.length), 0,
+    "сегмент Claude пережив згаслий статус — острівець висів би над порожнечею");
 });
 
 test("C: сторінка, змінена щойно, має точку в панелі", async (t) => {

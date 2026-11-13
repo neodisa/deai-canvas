@@ -367,8 +367,7 @@ test("openPalette: під відкритим діалогом (.cv-ask-scrim) н
   assert.ok(body.includes(guard), "⌘K відкрив би палітру поверх форми, що чекає відповіді сервера");
   assert.ok(body.indexOf(guard) < body.indexOf("paletteOverlay = 'pal'"), "перевірка ДО будь-якої зміни стану");
   assert.ok(body.indexOf(guard) < body.indexOf("openDd = null"), "і до закриття дропдауна");
-  /* І кнопка в смузі, і ⌘K йдуть тим самим openPalette (див. BAR_ACTIONS.palette): другого входу повз перевірку нема. */
-  assert.match(src, /palette: \(\) => openPalette\(\),/);
+  /* ⌘K іде через openPalette: другого входу повз перевірку нема (кнопки палітри в смузі вже нема). */
   assert.match(src, /if \(meta && ev\.key\.toLowerCase\(\) === 'k'\) \{\s*ev\.preventDefault\(\);\s*openPalette\(\);/);
 });
 

@@ -1019,17 +1019,58 @@ const tabsEl = document.getElementById('tabs');
 const hudEl = document.getElementById('hud');
 const islTools = document.getElementById('isl-tools');
 const islandEl = hudEl.querySelector('.island');
+/**
+ * Записати розмітку в контейнер, не гублячи фокус клавіатури: `innerHTML` знищує вузол, а з ним і фокус. Той самий рядок,
+ * що й минулого разу, — нічого не пишемо взагалі (опит стану Claude та `paintBar` кличуть перемальовку часто); інакше
+ * запамʼятовуємо `data-act`+`data-val` сфокусованої кнопки й вертаємо фокус на таку саму в новій розмітці.
+ * Віддає `true`, коли DOM справді переписано.
+ */
+function writeKeepFocus(el, html, prev) {
+  if (html === prev) return false;
+  const a = document.activeElement;
+  const had = a && a !== document.body && el.contains(a) && a.dataset && a.dataset.act
+    ? { act: a.dataset.act, val: a.dataset.val } : null;
+  el.innerHTML = html;
+  if (had) {
+    const same = [...el.querySelectorAll('[data-act]')].find((x) => x.dataset.act === had.act && x.dataset.val === had.val);
+    if (same) same.focus({ preventScroll: true });
+  }
+  return true;
+}
+/** Ціль зміни задачі, що зараз летить (`BAR_ACTIONS.tab`), і остання ціль, яку клікнули за цей час. */
+let tabSwitch = null;
+let tabQueued = null;
+let tabsHtmlLast = null;
+let islHtmlLast = null;
+let tabsActiveSeen = null;
 /** Рядок вкладок: логотип, вкладки, «+», пігулка оновлення, шестерня. */
 function paintTabs() {
   tabsEl.setAttribute('aria-label', t('tabsNav'));
-  tabsEl.innerHTML = tabsHTML(tabsModel({ tabs, activeId: currentTaskId, homeOpen, homePage, claude: claudeAll,
+  const html = tabsHTML(tabsModel({ tabs, activeId: currentTaskId, homeOpen, homePage, claude: claudeAll,
     update: pillModel(updateInfo) }));
+  const list = tabsEl.querySelector('.tabs-list');
+  const scrolled = list ? list.scrollLeft : 0;
+  if (!writeKeepFocus(tabsEl, html, tabsHtmlLast)) return;
+  tabsHtmlLast = html;
+  const nl = tabsEl.querySelector('.tabs-list');
+  /* Переписаний список скидає прокрутку: вертаємо, а до активної вкладки докручуємо лише коли вона щойно стала активною
+     й опинилась поза видимою зоною (інакше ручна прокрутка людини вернулась би назад на кожен опит стану Claude). */
+  if (nl) nl.scrollLeft = scrolled;
+  const on = tabsEl.querySelector('[data-act="tab"][aria-current="page"]');
+  const onId = on ? on.dataset.val : null;
+  if (on && nl && onId !== tabsActiveSeen) {
+    const r = on.getBoundingClientRect();
+    const lr = nl.getBoundingClientRect();
+    if (r.left < lr.left || r.right > lr.right) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  tabsActiveSeen = onId;
 }
 /** Інструменти острівця (інспектор лише в «Макеті», баг/ідея скрізь); сегмент Claude веде `paintClaude`. */
 function paintIsland() {
   islandEl.setAttribute('aria-label', t('islandNav'));
-  islTools.innerHTML = islandToolsHTML({ screen: homeOpen ? 'home' : 'task', mode: mode === 'canvas' ? 'overview' : 'layout',
+  const html = islandToolsHTML({ screen: homeOpen ? 'home' : 'task', mode: mode === 'canvas' ? 'overview' : 'layout',
     inspectorOn: !!inspectorApi()?.on });
+  if (writeKeepFocus(islTools, html, islHtmlLast)) islHtmlLast = html;
 }
 /** Відкрита задача — вкладка; задачі поточного простору, яких вже нема, — геть (чистка лише в межах простору, що його
  *  віддав `/api/tasks`: чужий простір чи задачу без теки не викидаємо — збій мережі не мусить закривати вкладки). */
@@ -1698,7 +1739,7 @@ frame.addEventListener('load', () => syncFrame(frame, cleanView, () => toggleCle
 /**
  * Переключення поточної задачі: `POST /api/task-switch` і скидання пер-задачного
  * стану. Віддає `true`, коли переключило, `false` — коли ні (причину вже показав
- * `tell`). Перемальовку НЕ кличе: кличе викликач — `BAR_ACTIONS.task` робить
+ * `tell`). Перемальовку НЕ кличе: кличе викликач — `BAR_ACTIONS.tab` робить
  * `render()`, а вихід з екрана «Задачі» (`homeOpenTask`) — `leaveHome()`, який
  * теж робить один `render()`; два рендери поспіль перезавантажили б рамку двічі.
  */
@@ -1708,7 +1749,7 @@ async function switchTask(val) {
     /* Увесь пер-задачний стан — ОДНИМ викликом (`resetPerTaskState`, його
        докстрінг): перелік того, що належить задачі, не сміє лежати в тілі
        кнопки, інакше другий вхід перепише половину. Це ЄДИНИЙ вхід до зміни
-       задачі в браузері: і дропдаун крихти, і картки екрана «Задачі» ідуть
+       задачі в браузері: і вкладки рядка вкладок, і картки екрана «Задачі» ідуть
        через цю функцію (⌘K «Задачі» веде на екран, а не міняє задачу сам), а
        `POST /api/task-new` (бутстрап Liga Design Office) канвас не кличе
        взагалі — його зміну поточної задачі вкладка бачить лише після
@@ -1742,15 +1783,38 @@ const BAR_ACTIONS = {
   tab: async (val) => {
     if (!val) return;
     if (homeOpen) { if (cnDrawer && !(await dismissCnDrawer())) return; await homeOpenTask(val); return; }
+    /* Зміна задачі вже летить: ще один `task-switch` не запускаємо. Клік по цілі, що вже летить, скасовує чергу (людина
+       передумала), клік по іншій — заміщає чергу; перемикаємо на ОСТАННЮ вибрану, коли поточне завершиться. */
+    if (tabSwitch) { tabQueued = val === tabSwitch ? null : val; return; }
     if (val === currentTaskId) return;
     if (refuseMissingTask(val)) return;
-    if (await switchTask(val)) render();
+    tabSwitch = val;
+    try { if (await switchTask(val)) render(); }
+    finally { tabSwitch = null; }
+    const q = tabQueued; tabQueued = null;
+    if (q && q !== currentTaskId) await BAR_ACTIONS.tab(q);
   },
   tabclose: async (val) => {
+    const hadFocus = tabsEl.contains(document.activeElement);
+    const at = tabs.findIndex((x) => x.id === val);
     const r = closeTab(tabs, val, homeOpen ? null : currentTaskId);
     tabs = r.tabs; saveTabs(); paintTabs();
-    if (r.next === 'home') { enterHome({ page: 'tasks' }); return; }
-    if (r.next) await BAR_ACTIONS.tab(r.next);
+    if (r.next === 'home') enterHome({ page: 'tasks' });
+    else if (r.next) {
+      await BAR_ACTIONS.tab(r.next);
+      /* Перемикання на сусіда не відбулось (нема теки, збій): людина лишилась на цій задачі, тож її вкладку вертаємо
+         одразу, а не чекаємо наступної перемальовки. */
+      if (!tabSwitch && !homeOpen && val === currentTaskId && !tabs.some((x) => x.id === val) && curTask && curTaskList) {
+        rememberTab(curTask, curTaskList);
+      }
+    }
+    if (!hadFocus) return;
+    /* Кнопка, що мала фокус, зникла разом із вкладкою: без цього фокус падає на `body`. Нова активна вкладка, інакше
+       сусід на тому самому місці (чи остання), інакше логотип. */
+    const btns = [...tabsEl.querySelectorAll('[data-act="tab"]')];
+    const target = (r.next && r.next !== 'home' ? tabsEl.querySelector('[data-act="tab"][aria-current="page"]') : null)
+      || btns[Math.min(at, btns.length - 1)] || tabsEl.querySelector('[data-act="home"]');
+    target?.focus({ preventScroll: true });
   },
   tabnew: () => BAR_ACTIONS.home(),
   /* Шестерня → «Налаштування» (сторінка `conn`; вхід — `enterConnections`, як у ⌘K) з тим самим захистом незбереженого, що в `home`. */
@@ -1760,23 +1824,6 @@ const BAR_ACTIONS = {
     enterConnections();
   },
   clean: () => toggleClean(),
-  /* Кнопка робить РІВНО те, що ⌘K, тим самим викликом — не другою копією:
-     палітра сама чистить `openDd` і сама вирішує, що показати.
-
-     ⚠️ Цей рядок спершу опинився в `PANEL_ACTIONS`, і кнопка в смузі тихо
-     нічого не робила: делегація смуги шукає дію в `BAR_ACTIONS`, а панелі —
-     у своєму. Рівно та вада, про яку попереджає коментар до делегації
-     («забутий рядок проводки це кнопка, що нічого не робить»), і рівно та
-     причина, чому живий тест тисне КОЖЕН контрол: жоден юніт цього не
-     бачив — розмітка була правильна, модель правильна, реєстр правильний,
-     а лежав він в іншому реєстрі. */
-  palette: () => openPalette(),
-  /* Перемкнути задачу (вкладка в рядку вкладок і екран «Задачі»). */
-  task: async (val) => {
-    if (!val || val === curTaskList?.current) return;
-    if (refuseMissingTask(val)) return;
-    if (await switchTask(val)) render();
-  },
 
   /* Простори (Deai 1.0, етап 1). `space` — рядок дропдауна фішки (`data-val` = id) і
      пункт ⌘K; `spacenew`/`spaceedit` — його ж футер і привітання. Розкриває дропдаун
@@ -2647,9 +2694,6 @@ bar.addEventListener('click', (ev) => {
     return;
   }
   const act = el.dataset.act;
-  /* Задача без теки на цій машині: причина тостом, дропдаун ЛИШАЄТЬСЯ — людина
-     ще вибирає, а закритий список після відмови змусив би відкривати його знову. */
-  if (act === 'task' && refuseMissingTask(el.dataset.val)) return;
   const hadOpenDd = !!openDd;
   /* Рядок дропдауна просторів — фокус після закриття вернемо на фішку (див. нижче). */
   const fromSpaces = openDd === 'space' && !!el.closest('.dd--spaces');
@@ -5437,7 +5481,6 @@ const claudeHud = document.getElementById('claude-hud');  // сегмент Clau
 let claudeBadge = null;
 function paintClaude(force = false) {
   const p = islandParts(claudeView);
-  document.body.classList.toggle('claude-on', !!p);
   if (!p) claudeHud.replaceChildren();
   else {
     if (!claudeHud.firstElementChild) claudeHud.innerHTML = ISLAND_SHELL;
@@ -5465,6 +5508,8 @@ const badgeChannel = typeof BroadcastChannel === 'function' ? new BroadcastChann
 badgeChannel?.addEventListener('message', () => paintClaude(true));
 /* Стан Claude на вкладках: один запит на всі задачі, лише коли відкрита хоч одна вкладка. Той самий таймер, що й `pollClaude`. */
 async function pollClaudeAll() {
+  /* Крапки на вкладках приховане вікно не бачить; `visibilitychange` опитує одразу, коли воно знову видиме. */
+  if (document.visibilityState !== 'visible') return;
   if (!tabs.length) { if (claudeAll) { claudeAll = null; paintTabs(); } return; }
   let r; try { r = await api('/api/claude-statuses'); } catch (e) { r = null; }
   const next = r && r.tasks && typeof r.tasks === 'object' ? r.tasks : null;
@@ -7488,7 +7533,7 @@ function switchLang(v) {
   setLang(v);
   try { localStorage.setItem(LANG_KEY, v); } catch (e) {}
   toast(t('langDone'));
-  paintBar(); renderPanel(); paintInsp(); paintCanvasChrome();
+  paintBar(); paintClaude(); renderPanel(); paintInsp(); paintCanvasChrome();
   /* Екран «Задачі» — окремий вузол зі своєю розміткою: без цього він лишався б
      старою мовою, поки його щось не змусить перемалюватись. */
   if (homeOpen) paintHome();
