@@ -55,8 +55,11 @@ import { initPwa } from './pwa.js';
 import { connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
 import { TRUST_POST_TIMEOUT_MS, trustDialogHTML } from './trust-view.js';
 import {
-  RESTART_POLL_MS, UPDATE_POLL_MS, blockedHelp, bootBefore, codeOfBody, nextUpdateInfo, waitRestart,
+  RESTART_POLL_MS, UPDATE_POLL_MS, blockedHelp, bootBefore, codeOfBody, nextUpdateInfo, pillModel, waitRestart,
 } from './update-model.js';
+import { TABS_KEY, closeTab, pruneTabs, readTabs, tabsModel, upsertTab, writeTabs } from './tabs-model.js';
+import { tabsHTML } from './tabs-view.js';
+import { islandToolsHTML } from './island.js';
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
@@ -1007,6 +1010,44 @@ function barState() {
   };
 }
 
+/* Вкладки відкритих задач (0.25.0): клієнтський стан цього вікна (`tabs-model.js`, його шапка). */
+let tabs = (() => { try { return readTabs(localStorage.getItem(TABS_KEY)); } catch (e) { return []; } })();
+function saveTabs() { try { localStorage.setItem(TABS_KEY, writeTabs(tabs)); } catch (e) {} }
+/** `{ключ: {state, age_s}}` з `/api/claude-statuses` або `null` (стан Claude на вкладках). */
+let claudeAll = null;
+const tabsEl = document.getElementById('tabs');
+const hudEl = document.getElementById('hud');
+const islTools = document.getElementById('isl-tools');
+const islandEl = hudEl.querySelector('.island');
+/** Рядок вкладок: логотип, вкладки, «+», пігулка оновлення, шестерня. */
+function paintTabs() {
+  tabsEl.setAttribute('aria-label', t('tabsNav'));
+  tabsEl.innerHTML = tabsHTML(tabsModel({ tabs, activeId: currentTaskId, homeOpen, homePage, claude: claudeAll,
+    update: pillModel(updateInfo) }));
+}
+/** Інструменти острівця (інспектор лише в «Макеті», баг/ідея скрізь); сегмент Claude веде `paintClaude`. */
+function paintIsland() {
+  islandEl.setAttribute('aria-label', t('islandNav'));
+  islTools.innerHTML = islandToolsHTML({ screen: homeOpen ? 'home' : 'task', mode: mode === 'canvas' ? 'overview' : 'layout',
+    inspectorOn: !!inspectorApi()?.on });
+}
+/** Відкрита задача — вкладка; задачі поточного простору, яких вже нема, — геть (чистка лише в межах простору, що його
+ *  віддав `/api/tasks`: чужий простір чи задачу без теки не викидаємо — збій мережі не мусить закривати вкладки). */
+function rememberTab(task, taskList) {
+  const sp = task.space || null;
+  const spId = sp?.id || null;
+  const ids = (taskList.tasks || []).map((x) => x.id);
+  tabs = pruneTabs(tabs, spId, ids);
+  const id = taskList.current ?? currentTaskId;
+  const entry = (taskList.tasks || []).find((x) => x.id === id);
+  if (id) {
+    tabs = upsertTab(tabs, { id, title: entry ? cleanTitle(entry) : cleanTitle(task), space: spId, color: sp?.color ?? null,
+      jira: entry?.jira ?? task.jira ?? null });
+  }
+  saveTabs();
+  paintTabs();
+}
+
 /**
  * Легка перемальовка ЛИШЕ смуги: без мережі, без iframe, без панелі. Для
  * відкриття/закриття дропдауна, підсвітки інспектора після клавіші `I`
@@ -1040,6 +1081,8 @@ function paintBar() {
   spaceDdWasOpen = openDd === 'space';
   const st = barState();
   bar.innerHTML = barHTML(barModel(st), st);
+  paintTabs();
+  paintIsland();
   paintInsp();
   if (openDd === 'space') {
     /* Щойно відкрили — фокус на ПОТОЧНИЙ рядок (там людина й так хоче почати); інакше —
@@ -1079,6 +1122,7 @@ async function render({ keepFrame = false } = {}) {
     }
     curTask = task; curTaskList = taskList; tasksErr = false; tasksErrKey = null;
     currentTaskId = taskList.current ?? currentTaskId;
+    rememberTab(task, taskList);
     /* Пакет тюнера не читався для цієї задачі ні разу (`tuneRev` невизначена): задачі не
        було, коли стартував канвас або коли її «забув» `showNoTask`, і вона зʼявилась сама
        (агент). Запис без ревізії затер би чужий `.dc-tuner.json`, тож перечитуємо тут. */
@@ -1693,9 +1737,28 @@ const BAR_ACTIONS = {
      «Відкинути зміни?» (`dismissCnDrawer`; під запитом панелі — ігнор), без панелі — як було, синхронно. На сторінці
      майстра (3b) логотип — те саме, що «Закрити майстер» (до створення — «Скасувати»): питає про незбережене кроку 3. */
   home: async () => { if (homeOpen && homePage === 'wiz') { await wiz.requestExit(); return; } if (cnDrawer && !(await dismissCnDrawer())) return; enterHome({ page: 'tasks' }); },
-  /* Назад до задачі: повний `render()` (`leaveHome`), бо під екраном «Задачі»
-     макет міг змінитись, а смуга мусить знову показати свіжий склад. Панель «Підключення» — як у логотипа. */
-  back: async () => { if (cnDrawer && !(await dismissCnDrawer())) return; leaveHome(); },
+  /* Вкладка (0.25.0): та сама зміна задачі, що й скрізь (`switchTask`); з «Задач» — через `homeOpenTask`, який і виходить
+     з оверлею. Відмова (нема теки, збій) — причину вже показано тостом, вкладка лишається. */
+  tab: async (val) => {
+    if (!val) return;
+    if (homeOpen) { if (cnDrawer && !(await dismissCnDrawer())) return; await homeOpenTask(val); return; }
+    if (val === currentTaskId) return;
+    if (refuseMissingTask(val)) return;
+    if (await switchTask(val)) render();
+  },
+  tabclose: async (val) => {
+    const r = closeTab(tabs, val, homeOpen ? null : currentTaskId);
+    tabs = r.tabs; saveTabs(); paintTabs();
+    if (r.next === 'home') { enterHome({ page: 'tasks' }); return; }
+    if (r.next) await BAR_ACTIONS.tab(r.next);
+  },
+  tabnew: () => BAR_ACTIONS.home(),
+  /* Шестерня → «Налаштування» (сторінка `conn`; вхід — `enterConnections`, як у ⌘K) з тим самим захистом незбереженого, що в `home`. */
+  settings: async () => {
+    if (homeOpen && homePage === 'wiz') { await wiz.requestExit(); return; }
+    if (cnDrawer && !(await dismissCnDrawer())) return;
+    enterConnections();
+  },
   clean: () => toggleClean(),
   /* Кнопка робить РІВНО те, що ⌘K, тим самим викликом — не другою копією:
      палітра сама чистить `openDd` і сама вирішує, що показати.
@@ -2316,7 +2379,7 @@ async function openUpdateDialog() {
       sections: null, restartFailed: info.restart_failed === true,
     }), {
       /* Пігулку перемальовує смуга, а після оновлення вона може зникнути: фокус — на пігулку, а коли її нема, на двері в палітру. */
-      focusBack: () => document.querySelector('.upd-pill') ?? document.querySelector('.pal-open .ctl'),
+      focusBack: () => document.querySelector('#tabs .upd-pill') ?? document.querySelector('#tabs [data-act="home"]'),
       onMount(form) {
         formEl = form;
         /* «Копіювати» біля команди: буфер, а коли його нема (не-https, відмовлені права) — виділяємо команду, щоб скопіювати руками. */
@@ -2437,7 +2500,7 @@ async function openFeedback() {
       shot: shotState(preview), shotUrl: sess.shotUrl(), previewFailed: !preview,
       previewText: preview ? previewText(sentView(preview, { includeDiag: true, includeShot: false })) : t('fbPreviewFail'),
     }), {
-      focusBack: () => document.querySelector('.fb-btn') ?? document.querySelector('.pal-open .ctl'),
+      focusBack: () => document.querySelector('#hud [data-act="feedback"]') ?? document.querySelector('#tabs [data-act="home"]'),
       onMount(form) {
         formEl = form;
         /* Перегляд не вдався: діагностика за замовчуванням ВИМКНЕНА (галочку знімає розмітка). Людина може ввімкнути — тоді `change` питає знову. */
@@ -2604,6 +2667,23 @@ bar.addEventListener('click', (ev) => {
      (`spacenew`/`spaceedit`) далі запамʼятає її як відкривача. */
   if (fromSpaces) focusChip();
   BAR_ACTIONS[act]?.(el.dataset.val, el, ev);
+});
+
+/* Рядок вкладок і острівець: той самий шлях, що в смуги, — `data-act` → `BAR_ACTIONS`. Відкритий дропдаун смуги закриває
+   загальний клік по документу (нижче), тож тут його не чіпаємо. Середня кнопка по вкладці — закрити її. */
+function onChromeClick(ev) {
+  const el = ev.target.closest('[data-act]');
+  if (!el || el.disabled) return;
+  BAR_ACTIONS[el.dataset.act]?.(el.dataset.val, el, ev);
+}
+tabsEl.addEventListener('click', onChromeClick);
+hudEl.addEventListener('click', onChromeClick);
+tabsEl.addEventListener('auxclick', (ev) => {
+  if (ev.button !== 1) return;
+  const el = ev.target.closest('[data-act="tab"]');
+  if (!el) return;
+  ev.preventDefault();
+  BAR_ACTIONS.tabclose(el.dataset.val);
 });
 
 /* Дропдаун закривається кліком повз нього. `.closest('.ddhost')` рятує від
@@ -2917,9 +2997,9 @@ async function leaveHome() {
   await render();
   /* Вернулись до задачі, а статус синку лишився «зайнято» без відкладеного повтору (його скасував `enterHome`) — повертаємо. */
   if (glCache?.busy && !glBusyTimer) scheduleGlRetry(glKeyNow());
-  /* Фокус вертається на логотип — те, чим екран відкривали: вузол, на якому він
+  /* Фокус вертається на активну вкладку (чи логотип) — те, чим екран відкривали: вузол, на якому він
      був (картка, поле), тепер схований, і клавіатура лишилась би «в нікуди». */
-  bar.querySelector('[data-act="home"]')?.focus({ preventScroll: true });
+  (tabsEl.querySelector('[data-act="tab"][aria-current]') ?? tabsEl.querySelector('[data-act="home"]'))?.focus({ preventScroll: true });
 }
 
 /* Екран «Задачі» відкритий, а людина була деінде — у терміналі, де агент заводить простори й
@@ -5352,13 +5432,13 @@ let reloadState = null;
    (удари — у памʼяті сервера; `tasks.json` читається, але він малий); у фоні Chrome
    сам рідшає таймери (до ~1 хв). */
 const CLAUDE_EVERY_MS = 5000;
-const claudeHud = document.getElementById('claude-hud');
+const claudeHud = document.getElementById('claude-hud');  // сегмент Claude в острівці (`#hud`)
 /** Останній застосований вид бейджа (`badgeFor`): API не смикаємо кожні 5 с. */
 let claudeBadge = null;
 function paintClaude(force = false) {
   const p = islandParts(claudeView);
   document.body.classList.toggle('claude-on', !!p);
-  if (!p) { claudeHud.replaceChildren(); document.body.classList.remove('claude-lift'); }
+  if (!p) claudeHud.replaceChildren();
   else {
     if (!claudeHud.firstElementChild) claudeHud.innerHTML = ISLAND_SHELL;
     const el = claudeHud.firstElementChild;
@@ -5383,12 +5463,22 @@ async function pollClaude() {
    бейдж за всіх. Решта вікон чує це й ставлять свій стан знову. */
 const badgeChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('deai-canvas-badge') : null;
 badgeChannel?.addEventListener('message', () => paintClaude(true));
+/* Стан Claude на вкладках: один запит на всі задачі, лише коли відкрита хоч одна вкладка. Той самий таймер, що й `pollClaude`. */
+async function pollClaudeAll() {
+  if (!tabs.length) { if (claudeAll) { claudeAll = null; paintTabs(); } return; }
+  let r; try { r = await api('/api/claude-statuses'); } catch (e) { r = null; }
+  const next = r && r.tasks && typeof r.tasks === 'object' ? r.tasks : null;
+  if (JSON.stringify(next) === JSON.stringify(claudeAll)) return;
+  claudeAll = next; paintTabs();
+}
 setInterval(pollClaude, CLAUDE_EVERY_MS);
+setInterval(pollClaudeAll, CLAUDE_EVERY_MS);
 /* Старт: спершу ЗНЯТИ бейдж, що міг лишитись від упалого вікна (`pagehide` тоді не
    прийшов), — інакше перший опит з «нічого» дорівнював би початковому `null`, і
    застарілий бейдж висів би, поки статус не зміниться. Потім — перший опит одразу. */
 paintClaude(true);
 pollClaude();
+pollClaudeAll();
 /* Оновлення інструмента: перший знімок одразу, ще один — коли сервер вже встиг першу перевірку тегів (вона стартує за кілька секунд
    після запуску; без цього пігулка зʼявилась би лише за півгодини), далі раз на півгодини. Сам remote питає сервер, не вкладка. */
 pollUpdate();
@@ -5397,7 +5487,7 @@ setInterval(pollUpdate, UPDATE_POLL_MS);
 /* Повернулись до вікна — правду одразу, не через 5 с; бейдж — ще раз, якщо система
    його скинула. */
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { paintClaude(true); pollClaude(); }
+  if (document.visibilityState === 'visible') { paintClaude(true); pollClaude(); pollClaudeAll(); }
 });
 /* Вікно закрили — опитувати більше нікому, і бейдж без нагляду брехав би. Решту вікон
    канваса про це сповіщаємо: бейдж спільний, вони поставлять його знову. */
@@ -5409,7 +5499,7 @@ addEventListener('pagehide', () => {
 /* Сторінку повернули з bfcache — бейдж знято на pagehide, а відповідь сервера та
    сама, тож `pollClaude` його б не повернув. Опитуємо й одразу: `claudeView` у
    відновленої сторінки може бути годинної давнини. */
-addEventListener('pageshow', (e) => { if (e.persisted) { paintClaude(true); pollClaude(); } });
+addEventListener('pageshow', (e) => { if (e.persisted) { paintClaude(true); pollClaude(); pollClaudeAll(); } });
 /** Чи відкрита смужка режимів коментатора (`.modes.show`) — у рамці («Макет») чи на
  *  полотні («Огляд»). Острівець тоді піднімається над нею: інакше він накривав би
  *  «Area»/«Freeze» саме тоді, коли дизайнер коментує. Заглядаємо в тіньовий DOM
@@ -5419,8 +5509,8 @@ function layerModesShown() {
   try { if (shown(document)) return true; } catch (e) { /* немає полотна — далі рамка */ }
   try { return shown(frame.contentDocument); } catch (e) { return false; }
 }
+/* Острівець видно завжди (інструменти), тож піднімаємо його над смужкою режимів і без сегмента Claude. */
 setInterval(() => {
-  if (!document.body.classList.contains('claude-on')) return;
   document.body.classList.toggle('claude-lift', layerModesShown());
 }, 500);
 /** Чи є в рамці щось, що перезавантаження знищило б: відкритий інспектор

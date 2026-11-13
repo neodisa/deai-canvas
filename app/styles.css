@@ -48,7 +48,7 @@
   /* Сітка висот. Вісім різних висот у смузі 46px — те, з чого почався аудит;
      тепер їх три, і вони токени, а не числа в правилах. Охоронець
      `tests/css-guards.test.mjs` не пускає число поза цією сіткою. */
-  --h-ctl:32px; --h-sm:28px; --h-xs:24px; --h-bar:46px;
+  --h-ctl:32px; --h-sm:28px; --h-xs:24px; --h-bar:46px; --h-tabs:36px; --h-top:calc(var(--h-tabs) + var(--h-bar));
   --r:8px; --r-sm:6px; --r-lg:10px;
   /* Ширина панелі шарів (Task 4 Плану B), токеном, бо те саме число потрібне
      і тут (ширина `.panel`/`.panel--rail`), і у зсуві сцени/полотна нижче
@@ -134,7 +134,7 @@ body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);
 /* Чистий перегляд макета (fb-01102026-7f7b6d): лише макет, без оболонки й пінів.
    !important — бо розкладку сцени ставлять правила `body.with-panel…` вищої
    специфічності; чистий режим мусить перекрити їх усі разом. */
-html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean .cv-notice,
+html.cv-clean #tabs,html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean .cv-notice,
 html.cv-clean .errbar,html.cv-clean .cv-zoom,html.cv-clean .cv-canvas-hint,html.cv-clean .cv-hud,
 html.cv-clean [data-comment-layer],html.cv-clean .cn-drawer{display:none!important}
 html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!important;width:100%!important}
@@ -142,18 +142,43 @@ html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!importan
   font:inherit;font-size:12px;cursor:pointer;color:var(--hi);background:var(--s1);border:1px solid var(--line2);
   opacity:.55;box-shadow:0 6px 20px rgba(0,0,0,.35);transition:opacity .15s ease}
 .cv-unclean:hover,.cv-unclean:focus-visible{opacity:1}
-/* Статус Клода — острівець унизу робочої області (12.10.2026; до того — фішка в
-   зоні 1, що з'їдала крихти на вузькому вікні). `.cv-hud` — смужка нульової висоти
-   з тими самими left/width, що й `.cv-canvas` (правила панелей нижче, ті самі
-   селектори), тож острівець центрується по ВИДИМІЙ області й їде разом із панелями.
-   Кліків не перехоплює: під ним живий макет. `--z-widget` — шар плаваючих віджетів
-   над макетом: вище за панелі (`--z-panel`), нижче за смугу (`--z-bar`), тож
-   випадаючі меню смуги його накривають, а тост (300) і плашки (310) — тим паче. */
-.cv-hud{position:fixed;left:0;right:0;bottom:0;height:0;z-index:var(--z-widget);pointer-events:none}
-.claude-island{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
-  display:inline-flex;align-items:center;gap:7px;max-width:calc(100% - 28px);
-  background:rgba(26,35,30,.9);color:#fff;font-size:12px;padding:6px 14px;
-  border-radius:999px;white-space:nowrap;transition:bottom .2s ease}
+/* Рядок вкладок (0.25.0): над смугою, тло --s0. Вкладки стискаються й прокручуються, рядок не ширший за вікно. */
+.tabs{position:fixed;top:0;left:0;right:0;height:var(--h-tabs);z-index:var(--z-bar);display:flex;align-items:center;
+  gap:2px;padding:0 6px;background:var(--s0);border-bottom:1px solid var(--line);min-width:0}
+.tabs .logo-btn{flex:none}
+.tabs-list{display:flex;align-items:stretch;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;height:100%}
+.tabs-list::-webkit-scrollbar{display:none}
+.tab{display:flex;align-items:center;flex:0 1 auto;min-width:72px;max-width:180px;height:100%;
+  border-radius:8px 8px 0 0;color:var(--mid)}
+.tab:hover{background:var(--s1)}
+.tab--on{background:var(--s1);color:var(--hi)}
+.tab-main{display:flex;align-items:center;gap:6px;min-width:0;flex:1;height:100%;padding:0 4px 0 10px;
+  background:none;border:0;color:inherit;font:inherit;font-size:12px;cursor:pointer}
+.tab-id{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab-dot{width:8px;height:8px;border-radius:2px;flex:none;background:var(--lo)}
+.tab-claude{width:7px;height:7px;border-radius:50%;flex:none}
+.tab-claude--working{background:#3fb950}.tab-claude--waiting{background:#d29922}
+.tab-claude--blocked{background:#f85149}.tab-claude--done{background:var(--sel)}
+.tab-x{display:grid;place-items:center;flex:none;width:28px;height:28px;margin-right:2px;border:0;border-radius:6px;
+  background:none;color:inherit;cursor:pointer;opacity:0}
+.tab:hover .tab-x,.tab--on .tab-x,.tab-x:focus-visible{opacity:1}
+.tab-x:hover{background:var(--s2)}
+.tabs-new{flex:none}
+.tabs-sp{flex:1}
+/* Острівець унизу робочої області (12.10.2026; інтерактивний — 0.25.0): сегмент стану Клода | інструменти (інспектор,
+   баг/ідея). `.cv-hud` — смужка нульової висоти з тими самими left/width, що й `.cv-canvas` (правила панелей нижче, ті
+   самі селектори), тож острівець центрується по ВИДИМІЙ області й їде разом із панелями. Сама смужка кліків не
+   перехоплює (під нею живий макет), а `.island` — приймає. Шар `--z-widget` + 1: вище за панелі й оверлей «Задач»
+   (`--z-panel`) і за бічну панель `.cn-drawer` (той самий `--z-widget`, але вузол створюється в DOM пізніше й
+   на вузькому вікні, ≤ ~900px, накривав би острівець посередині — виміряно на 760px), нижче за смугу й рядок
+   вкладок (`--z-bar`), тож випадаючі меню його накривають, а тост (400) і плашки (310) — тим паче. */
+.cv-hud{position:fixed;left:0;right:0;bottom:0;height:0;z-index:calc(var(--z-widget) + 1);pointer-events:none}
+.island{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:inline-flex;align-items:center;gap:4px;
+  max-width:calc(100% - 28px);padding:4px;border-radius:999px;background:rgba(26,35,30,.92);color:#fff;
+  pointer-events:auto;box-shadow:0 6px 20px rgba(0,0,0,.3);transition:bottom .2s ease}
+.isl-claude{display:flex;min-width:0}
+.isl-claude:empty{display:none}
+.claude-island{display:inline-flex;align-items:center;gap:7px;min-width:0;padding:0 10px;font-size:12px;white-space:nowrap}
 .claude-island .lbl-claude{overflow:hidden;text-overflow:ellipsis}
 .claude-island .claude-age{color:rgba(255,255,255,.7);flex:none}
 .claude-dot{width:7px;height:7px;border-radius:50%;background:var(--lo);flex:none}
@@ -162,21 +187,27 @@ html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!importan
 .claude-island--blocked .claude-dot{background:#f85149}
 .claude-island--done .claude-dot{background:var(--sel)}
 @keyframes claude-pulse{50%{opacity:.35}}
-@media (prefers-reduced-motion:reduce){.claude-island{transition:none}.claude-island--working .claude-dot{animation:none}}
+@media (prefers-reduced-motion:reduce){.island{transition:none}.claude-island--working .claude-dot{animation:none}}
+.isl-tools{display:inline-flex;align-items:center;gap:2px}
+.isl-claude:not(:empty)+.isl-tools::before{content:"";width:1px;height:20px;margin:0 4px;background:rgba(255,255,255,.18)}
+.isl-btn{display:grid;place-items:center;width:36px;height:36px;border:0;border-radius:999px;background:none;color:inherit;cursor:pointer}
+.isl-btn:hover{background:rgba(255,255,255,.1)}
+.isl-btn--on{background:rgba(255,255,255,.18)}
+.isl-btn:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.isl-sep{width:1px;height:20px;margin:0 4px;background:rgba(255,255,255,.18)}
 /* Смужка режимів коментатора (`.modes.show`: низ на 20px, висота 42px — виміряно
    на 1440 і 1024) стоїть там само, де острівець, — тоді він піднімається над нею
    (клас ставить `app.js`, `layerModesShown`). 76px = 20 + 42 + проміжок 14px, той
    самий, що в спокої між острівцем і краєм вікна. */
-body.claude-lift .claude-island{bottom:76px}
-/* Поки острівець видно: підказка «Огляду» стоїть на тому самому місці — ховаємо;
-   тост і стійкі плашки піднімаються над острівцем (обидва центровані внизу) —
-   лише коли острівець справді видно: не в чистому перегляді й не на «Задачах»,
-   де він схований, а тост без причини висів би задертим над порожнечею. */
+body.claude-lift .island{bottom:76px}
+/* Поки є сегмент Клода, підказка «Огляду» стоїть на тому самому місці — ховаємо (Task 8 переносить її над острівець);
+   тост і стійкі плашки піднімаються над острівцем завжди — він видно на кожному екрані, крім чистого перегляду. */
 body.claude-on #canvas-hint{visibility:hidden}
-html:not(.cv-clean) body.claude-on:not(.home-open) .cv-toast{bottom:58px}
-html:not(.cv-clean) body.claude-on:not(.home-open) .cv-notice{bottom:100px}
-/* Екран «Задачі»: статус про відкритий макет, а його тут не видно. */
-body.home-open .cv-hud{display:none!important}
+html:not(.cv-clean) .cv-toast{bottom:64px}
+html:not(.cv-clean) .cv-notice{bottom:106px}
+/* Екран «Задачі»/«Налаштування» (оверлей `#tasks-home`): острівець лишається з одним «Баг / ідея»; панелей шарів нема, тож
+   `.cv-hud` — на повну ширину вікна. */
+body.home-open .cv-hud{left:0!important;width:100%!important}
 /* «Змінено щойно» в рядках панелі. */
 .row-recent-dot{width:6px;height:6px;border-radius:50%;background:var(--sel);flex:none;margin-left:4px}
 .cv-ctx{position:fixed;z-index:200;background:var(--s1);border:1px solid var(--line2);
@@ -385,7 +416,7 @@ body.home-open .cv-hud{display:none!important}
    `getComputedStyle(stage).display` у режимі «Огляд»). Рядок-страхування
    `[hidden]{display:none}` тут стояв і прибраний свідомо: під власною мутацією
    тест лишався зеленим, тобто охоронець не ніс ваги, а вдавав, що несе. */
-.cv-stage{position:fixed;top:46px;left:0;right:0;bottom:0;background:var(--bg);
+.cv-stage{position:fixed;top:var(--h-top);left:0;right:0;bottom:0;background:var(--bg);
   overflow-x:auto;overflow-y:hidden}
 /* явна ширина, а не auto: iframe — replaced-елемент, width:auto дав би йому
    інтринсик ~300px → макет рендериться у мобільній вузькій колонці.
@@ -406,7 +437,7 @@ body.vp-fixed .cv-frame{width:var(--cv-vpw);
    внизу), а кадр, накритий діапазоном, Chrome заливає кольором виділення. Жест
    панорами нічого виділяти й не мусить: усе, що на полотні читають, читають зумом,
    а текст беруть із самого макета. */
-.cv-canvas{position:fixed;top:46px;left:0;right:0;bottom:0;overflow:hidden;
+.cv-canvas{position:fixed;top:var(--h-top);left:0;right:0;bottom:0;overflow:hidden;
   background:var(--g200);cursor:grab;touch-action:none;
   user-select:none;-webkit-user-select:none}
 /* Картинку кадру браузер тягне СВОЇМ жестом (native drag), і виділення до цього
@@ -638,7 +669,7 @@ body.vp-fixed .cv-frame{width:var(--cv-vpw);
   background:rgba(26,35,30,.82);color:#fff;font-size:12px;padding:6px 14px;
   border-radius:20px;pointer-events:none;white-space:nowrap}
 /* --- панель шарів (ітерація + сторінки) --- */
-.pages-panel{position:fixed;top:46px;left:0;bottom:0;width:220px;z-index:90;
+.pages-panel{position:fixed;top:var(--h-top);left:0;bottom:0;width:220px;z-index:90;
   background:var(--s1);border-right:1px solid var(--line);display:flex;flex-direction:column;
   transition:width .12s ease}
 /* Панель зсуває СЦЕНУ, а не рамку: рамка з 01.09.2026 лежить у потоці сцени й
@@ -709,7 +740,7 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
    (виміряно: внутрішній форсований до 2197px, зовнішній лишився 1024).
    Точка монтування несе лише тло й висоту — щоб «Завантаження…» до першого
    рендера не блимало білим. */
-.bar-mount{position:fixed;top:0;left:0;right:0;height:var(--h-bar);
+.bar-mount{position:fixed;top:var(--h-tabs);left:0;right:0;height:var(--h-bar);
   background:var(--s1);color:var(--mid);display:flex;align-items:center;
   padding:0 12px;z-index:var(--z-bar)}
 /* ── смуга: три зони ───────────────────────────────────────────────────── */
@@ -720,7 +751,7 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
    `container-type` стоїть НА СМУЗІ, а не на зовнішній оболонці: інструмент
    живе у вікні, яке рідко розгорнуте на весь екран, і медіа-запит по вікну
    брехав би — смуга мусить міряти себе. */
-.bar{position:fixed;top:0;left:0;right:0;height:var(--h-bar);
+.bar{position:fixed;top:var(--h-tabs);left:0;right:0;height:var(--h-bar);
   container-type:inline-size;
   display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
   align-items:center;gap:10px;padding:0 10px;color:var(--hi);
@@ -972,7 +1003,7 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
    робити під ним однаково нічого. Охоронець — `tests/live/shell.test.mjs`,
    перевірка 0: вона питає браузер, що лежить у ТОЧЦІ центру смуги, бо і
    `isVisible()`, і наявність у DOM були зелені на зламаному стані. */
-.errbar{position:fixed;top:var(--h-bar);left:0;right:0;z-index:var(--z-bar);
+.errbar{position:fixed;top:var(--h-top);left:0;right:0;z-index:var(--z-bar);
   display:flex;align-items:center;gap:10px;padding:9px 12px;
   /* Тло МУСИТЬ бути непрозорим, і це наслідок позиціювання вище: доки смуга
      лежала (невидимо) в темній стрічці, 12% червоного по `--s1` читалось. Над
@@ -988,12 +1019,6 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
 .errbar .ctl{margin-left:auto;border-color:rgba(243,115,115,.45);color:#FFD9D9}
 /* три зони смуги */
 .zone{display:flex;align-items:center;gap:6px;min-width:0}
-/* Двері в палітру — у голові зони 1, відділені рискою: вона не про «де я»,
-   і риска це й каже. Своєї колонки сітки не отримує свідомо — четверта
-   колонка збила б центрування зони 2 (див. `bar-model.js`, zone1). */
-.pal-open{display:flex;align-items:center;flex:none;
-  padding-right:6px;margin-right:2px;border-right:1px solid var(--s4)}
-
 .zone-2{justify-content:center}
 .zone-3{justify-content:flex-end}
 /* ── контейнерні запити смуги ─────────────────────────────────────────── */
@@ -1033,7 +1058,7 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
      розділ A, забороняє `--lo` як `color:` де завгодно, не лише в тексті).
    Ширина — токенами `--panel-w`/`--panel-rail-w` (`:root` вище): те саме
    число потрібне і зсуву сцени/полотна (`body.with-panel .cv-stage`…). */
-.panel{position:fixed;top:var(--h-bar);left:0;bottom:0;z-index:var(--z-panel);
+.panel{position:fixed;top:var(--h-top);left:0;bottom:0;z-index:var(--z-panel);
   width:var(--panel-w);
   background:var(--s2);border-right:1px solid var(--line);
   display:flex;flex-direction:column;min-height:0;
@@ -1218,7 +1243,7 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
    `z-index:var(--z-panel)` — той САМИЙ шар, що ліва панель шарів: обидві
    стоять по краях і одна одну ніколи не перекривають, тож ділити з нею
    рівень — не помилка, а точна відповідність «панель оболонки». */
-.insp{position:fixed;top:var(--h-bar);right:0;bottom:0;z-index:var(--z-panel);
+.insp{position:fixed;top:var(--h-top);right:0;bottom:0;z-index:var(--z-panel);
   width:var(--insp-w);
   background:var(--s2);border-left:1px solid var(--line);
   display:flex;flex-direction:column;min-height:0}
@@ -1494,7 +1519,7 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
 body.home-open #stage,body.home-open #canvas,body.home-open #pages-panel,
 body.home-open #insp-panel,body.home-open [data-comment-layer],
 body.home-open .cv-notice{display:none!important}
-#tasks-home{position:fixed;top:var(--h-bar);left:0;right:0;bottom:0;overflow-y:auto;
+#tasks-home{position:fixed;top:var(--h-top);left:0;right:0;bottom:0;overflow-y:auto;
   background:var(--s1);color:var(--hi);z-index:var(--z-panel)}
 #tasks-home[hidden]{display:none}
 .th-in{max-width:1320px;margin:0 auto;padding:22px 28px 60px}
@@ -1659,7 +1684,7 @@ body.home-open .cv-notice{display:none!important}
    (`--z-widget` > `--z-panel`). Ховається двома шляхами: атрибутом `hidden` (власне правило `[hidden]`, бо авторський
    `display:flex` інакше перебив би стиль браузера) і правилом `body:not(.home-open)` — оверлей закрито, панелі
    не бачити, хай би що лишилось у `hidden`. */
-.cn-drawer{position:fixed;top:var(--h-bar);right:0;bottom:0;width:420px;max-width:100%;z-index:var(--z-widget);
+.cn-drawer{position:fixed;top:var(--h-top);right:0;bottom:0;width:420px;max-width:100%;z-index:var(--z-widget);
   display:flex;flex-direction:column;background:var(--s1);border-left:1px solid var(--line2);box-shadow:-18px 0 44px rgba(0,0,0,.35)}
 .cn-drawer[hidden]{display:none}
 body:not(.home-open) .cn-drawer{display:none}
@@ -1781,14 +1806,8 @@ body:not(.home-open) .cn-drawer{display:none}
 .wz-agent{margin-top:0}
 /* `.th-in` дає `padding:22px 28px 60px`; тут те саме правило пізніше й тієї ж специфічності — вузьке вікно його перебиває. */
 @media (max-width:719px){.wz{padding:16px 16px 48px}.wz-two{grid-template-columns:1fr}}
-/* Логотип і двері в палітру — окремі речі: рискою зліва `.pal-open` стає
-   такою ж «оправою», як справа від неї (там вона відділяє від крихт). Селектор
-   по сусідству, а не новий вузол у розмітці смуги: порядок «логотип → палітра»
-   стереже `tests/shell-bar.test.mjs`. */
-.logo-btn + .pal-open{margin-left:4px;padding-left:8px;border-left:1px solid var(--s4)}
-/* Відгук (0.23.0, `feedback-view.js`): кнопка в смузі — звичайний контрол-іконка; діалог — та сама біла картка `askForm`. Поле тексту й
+/* Відгук (0.23.0, `feedback-view.js`): кнопка — в острівці (`island.js`); діалог — та сама біла картка `askForm`. Поле тексту й
    «Що буде надіслано» (прокрутний `<pre>` із фокусом, як `.up-notes`) — лише наявні токени. */
-.fb-btn{flex:none;margin-right:2px}
 .cv-ask--form:has(.fb){width:560px}
 .fb .fb-kinds{display:flex;gap:16px}
 .fb textarea{font:inherit;font-size:14px;padding:8px 10px;min-width:0;resize:vertical;border:1px solid var(--border);border-radius:6px;

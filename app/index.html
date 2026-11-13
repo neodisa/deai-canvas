@@ -9,15 +9,19 @@
 <link rel="stylesheet" href="styles.css">
 </head><body>
 <div id="sprite"></div>
+<nav id="tabs" class="tabs" aria-label="Відкриті задачі"></nav>
 <div id="bar" class="bar-mount">Завантаження…</div>
 <div id="stage" class="cv-stage"><iframe id="frame" class="cv-frame"></iframe></div>
 <div id="canvas" class="cv-canvas" hidden><div id="world" class="cv-world"></div>
   <div id="cv-zoom" class="cv-zoom">100%</div>
   <div id="canvas-hint" class="cv-canvas-hint">тягни — рух · колесо — зум · клік по макету — відкрити в повний розмір (там живий інтерактив і коментарі)</div>
 </div>
-<!-- Статус Клода (12.10.2026): острівець унизу робочої області. `role="status"` —
-     на ПОСТІЙНОМУ вузлі: острівець усередині оновлюється на місці (`app.js` paintClaude). -->
-<div id="claude-hud" class="cv-hud" role="status"></div>
+<!-- Острівець унизу робочої області (12.10.2026; інтерактивний — 0.25.0): сегмент стану Клода + інструменти.
+     `role="status"` — лише на ПОСТІЙНОМУ вузлі сегмента Клода (`app.js` paintClaude оновлює його на місці);
+     кнопки інструментів (`#isl-tools`) у живу область не входять. -->
+<div id="hud" class="cv-hud"><div class="island" role="group" aria-label="Інструменти">
+  <div id="claude-hud" class="isl-claude" role="status"></div><div id="isl-tools" class="isl-tools"></div>
+</div></div>
 <div id="insp-panel" class="insp" hidden></div>
 <!-- comment-layer у режимі «полотно» для пінів на «Огляді» (T-45). Класичні
      скрипти ДО модуля: `app.js` їх не імпортує, а бере з window. Адаптер каналу

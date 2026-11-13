@@ -29,7 +29,7 @@ test("дії смуги: conn веде на сторінку, логотип —
 
 test("логотип і «назад до задачі» не гублять брудну панель мовчки: через dismissCnDrawer, а без панелі — синхронно, як було", () => {
   /* Умова `cnDrawer &&` ПЕРЕД `await`: без панелі дія виконується в тому ж такті (жодного зайвого мікрозавдання). */
-  assert.match(src, /\n  back: async \(\) => \{ if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; leaveHome\(\); \},/);
+  assert.doesNotMatch(src, /\n  back: async/, "дія back прибрана: назад до задачі — вкладка");
   assert.match(src, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
   const b = fnc("dismissCnDrawer");
   assert.match(b, /^\{\s*if \(!cnDrawer\) return true;\s*if \(cnDrawer\.busy\) return false;\s*await requestCloseCnDrawer\(\);\s*return !cnDrawer;\s*\}$/,

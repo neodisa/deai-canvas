@@ -166,7 +166,7 @@ test("app.js: проводка — waitRestart, bootBefore перед POST (бе
   assert.match(appJs, /const prevBoot = bootBefore\(await fetchUpdate\(\)\);\n\s*if \(!prevBoot\) \{ status\(''\); return t\('upErrNoAnswer'\); \}/);
   assert.ok(appJs.indexOf("bootBefore(await fetchUpdate())") < appJs.indexOf("updateFetch('/api/update-apply'"), "guard мусить бути ДО запиту");
   assert.match(appJs, /nextUpdateInfo\(updateInfo, next, updateMisses\)/);
-  assert.match(appJs, /focusBack: \(\) => document\.querySelector\('\.upd-pill'\) \?\? document\.querySelector\('\.pal-open \.ctl'\)/);
+  assert.match(appJs, /focusBack: \(\) => document\.querySelector\('#tabs \.upd-pill'\) \?\? document\.querySelector\('#tabs \[data-act="home"\]'\)/);
   assert.match(appJs, /location\.reload\(\)/);
   assert.match(appJs, /setInterval\(pollUpdate, UPDATE_POLL_MS\)/);
   /* Опит оновлень не малює смугу першим: до першого `paintBar()` від старту стан задачі ще не завантажений (пароль превʼю губився). */

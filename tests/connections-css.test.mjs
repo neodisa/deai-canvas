@@ -81,7 +81,7 @@ test("бічна панель: 420px, над оверлеєм і під смуг
   const d = rule(".cn-drawer");
   assert.ok(d, "правила .cn-drawer немає");
   assert.match(d, /position:fixed/);
-  assert.match(d, /top:var\(--h-bar\)/);
+  assert.match(d, /top:var\(--h-top\)/);
   assert.match(d, /width:420px/);
   assert.match(d, /z-index:var\(--z-widget\)/);
   assert.match(rule(".cn-drawer[hidden]") ?? "", /display:none/);

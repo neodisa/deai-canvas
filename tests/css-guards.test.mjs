@@ -331,7 +331,8 @@ test("токени висот у :root самі лежать у сітці 24/28
   assert.ok(hs.length >= 3,
     `у :root знайдено лише ${hs.length} токенів родини --h-* — регексп/блок `
       + `:root зламані, а не «сітка чиста»`);
-  const bad = hs.filter(([, px]) => !ALLOWED_HEIGHTS.has(px))
+  /* `--h-tabs` (0.25.0) — висота РЯДКА вкладок над смугою, а не контрола: у сітку контролів не входить. */
+  const bad = hs.filter(([name, px]) => name !== "h-tabs" && !ALLOWED_HEIGHTS.has(px))
     .map(([name, px]) => `--${name}:${px}px`);
   assert.deepEqual(bad, [],
     `токени родини --h-* поза сіткою (24/28/32/46):\n${bad.join("\n")}`);

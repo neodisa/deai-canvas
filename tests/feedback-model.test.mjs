@@ -12,7 +12,7 @@ import { DICT, setLang, t } from "../app/i18n.js";
 import {
   CONTACT_MAX, TEXT_MAX, TEXT_MIN, createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate,
 } from "../app/feedback-model.js";
-import { feedbackBtnHTML, feedbackDialogHTML } from "../app/feedback-view.js";
+import { feedbackDialogHTML } from "../app/feedback-view.js";
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "app");
 const appJs = readFileSync(path.join(APP, "app.js"), "utf8");
@@ -162,14 +162,6 @@ test("діалог: усе з даних (діагностика, текст, к
 test("діалог без перегляду: у pre — фраза, що перегляд недоступний", () => {
   const h = feedbackDialogHTML({ shot: { available: false, reasonKey: "fbShotNone" }, previewText: "" });
   assert.ok(h.includes("Нічого, крім вашого тексту.") || h.includes(t("fbPreviewNone")));
-});
-
-test("кнопка в смузі: іконка, title/aria-label зі словника, без підпису в тексті", () => {
-  const h = feedbackBtnHTML({ id: "feedback" });
-  assert.match(h, /data-act="feedback"/);
-  assert.match(h, /title="Баг \/ ідея" aria-label="Баг \/ ідея"/);
-  assert.match(h, /class="ctl ctl--icon fb-btn"/);
-  assert.equal(feedbackBtnHTML(undefined), "");
 });
 
 /* ── проводка app.js (текст-виборка) ─────────────────────────────────────── */

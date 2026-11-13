@@ -8,7 +8,6 @@
  * ⛔ Усе, що не з нашого словника (текст людини, JSON діагностики з повідомленнями помилок) — лише через `esc()`; JSON іде в `<pre>`.
  */
 import { esc } from "./esc.js";
-import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { TEXT_MAX } from "./feedback-model.js";
 
@@ -65,11 +64,4 @@ export function feedbackDialogHTML(d) {
       <button type="submit" data-a="ok">${esc(t("fbSend"))}</button>
     </div>
   </form>`;
-}
-
-/** Кнопка в смузі. `m` — контрол `feedback` з `bar-model.js`. Лише іконка: підпис несуть `title`/`aria-label`. */
-export function feedbackBtnHTML(m) {
-  if (!m) return "";
-  const label = esc(t("fbOpen"));
-  return `<button class="ctl ctl--icon fb-btn" data-act="feedback" title="${label}" aria-label="${label}">${ico("comment")}</button>`;
 }
