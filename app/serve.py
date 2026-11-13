@@ -1211,6 +1211,20 @@ def claude_view(beats, now, task_id, aliases=()):
             'note': b.get('note') or '', 'age_s': age}
 
 
+def claude_views(beats, now):
+    """Статуси всіх задач, де серцебиття ще свіже, — для вкладок канваса (0.25.0). Чиста функція.
+
+    Ключ — те, що шле мод (`id` чи Jira-ключ задачі); клієнт шукає вкладку за обома. Назовні йдуть лише
+    `state` і `age_s`: нотатка й фаза — для острівця поточної задачі (`claude_view`), не для списку."""
+    keys = {b.get('task') for b in beats.values() if isinstance(b.get('task'), str) and b.get('task')}
+    out = {}
+    for k in keys:
+        v = claude_view(beats, now, k)
+        if v.get('state'):
+            out[k] = {'state': v['state'], 'age_s': v['age_s']}
+    return out
+
+
 def recent_pages(idir, now=None):
     """Id сторінок, чиї файли змінились за `RECENT_PAGE_S` — «де саме міняє»."""
     now = time.time() if now is None else now
@@ -5831,7 +5845,7 @@ class Handler(SimpleHTTPRequestHandler):
     #: `tasks.json`). `_take_task` для них НЕ фіксує простір і не читає задач; префіксна форма `/t/<id>/api/…` відхиляється 400.
     #: Обробники самі й тотально збирають контекст (простір, задача). Точна відповідність (шлях без query), кожен маршрут окремо.
     _MACHINE_ROUTES = ('/api/update', '/api/update-check', '/api/update-apply', '/api/update-notes',
-                       '/api/feedback', '/api/feedback-preview')
+                       '/api/feedback', '/api/feedback-preview', '/api/claude-statuses')
 
     def _pin_current_space(self):
         """Не названа задача: простір запиту — поточний простір машини НА ВХОДІ. Запит дочитує
@@ -6139,6 +6153,11 @@ class Handler(SimpleHTTPRequestHandler):
             here = os.path.isdir(idir)
             self._send_json({'it': it, 'stamp': _content_mtime(idir) if here else 0,
                              'recent': recent_pages(idir) if here else []})
+            return
+        if self.path == '/api/claude-statuses':
+            with CLAUDE_LOCK:
+                beats = dict(CLAUDE_BEATS)
+            self._send_json({'tasks': claude_views(beats, time.time())})
             return
         if self.path == '/api/claude-status':
             tid, task = self._current_task()
