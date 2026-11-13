@@ -1,0 +1,15 @@
+{
+  "name": "deai-commenter",
+  "private": true,
+  "version": "1.3.0",
+  "description": "Коментатор Deai Canvas: піни на макеті. Перенесено з comment-layer (design-office @3581cd0).",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}
