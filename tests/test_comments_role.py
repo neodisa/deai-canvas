@@ -1454,6 +1454,15 @@ class LegacyPagesTest(PagesEnv):
         self.assertEqual(self.cfg_of(project)['url'], sbconf.SB_URL)
         self.assertNotIn('cdn.jsdelivr.net', project)
 
+    def test_host_flag_adds_the_shell_callbacks_to_both_channels_and_only_with_it(self):
+        """0.26.0: `host=1` у URL — колбеки-посилки в оболонку; без нього сторінка така, як була (еталони вище)."""
+        self.use(self.liga)
+        for ch in ('local', 'project'):
+            with self.subTest(ch=ch):
+                self.assertEqual(self.page(ch, '&host=1').count('dc-comments'), 1)
+                self.assertNotIn('dc-comments', self.page(ch))
+                self.assertNotIn('host: (function', self.page(ch, '&host=0'))
+
     def test_comment_config_legacy_none_and_local_keep_their_bodies(self):
         self.use(self.liga)
         st, body = self.fetch('/api/comment-config?ch=project&it=it1')
@@ -1847,6 +1856,23 @@ class SnippetUnitTest(unittest.TestCase):
         args.update(kw)
         return serve.inject_module_comment_layer(args.pop('html'), args.pop('assets_base'), args.pop('client_urls'),
                                                  args.pop('config'), **args)
+
+    def test_host_arg_is_empty_without_host_and_carries_the_origin_bound_bridge_with_it(self):
+        self.assertEqual(serve.host_arg(False), '')
+        js = serve.host_arg(True)
+        for need in ('host: (function', "'dc-comments'", 'location.origin'):
+            self.assertIn(need, js, need)
+        self.assertNotIn("'*'", js)
+
+    def test_both_injections_carry_dc_comments_exactly_once_and_only_with_host(self):
+        base = '<html><body></body></html>'
+        mod = serve.inject_module_comment_layer(base, 'http://h/app/vendor', [], {'channel': 'c'}, version='1')
+        self.assertNotIn('dc-comments', mod)
+        self.assertEqual(self.inject(host=True).count('dc-comments'), 1)
+        loc = serve.inject_local_comment_layer(base, '/api/local-comments', 'p', 'http://h/app/vendor', version='1')
+        self.assertNotIn('dc-comments', loc)
+        loc_host = serve.inject_local_comment_layer(base, '/api/local-comments', 'p', 'http://h/app/vendor', version='1', host=True)
+        self.assertEqual(loc_host.count('dc-comments'), 1)
 
     def test_adapter_urls_are_attribute_escaped_and_each_is_one_tag(self):
         urls = ['/x"><script>alert(1)</script>.js', "/y' onerror='alert(1).js", '/z&amp;.js']

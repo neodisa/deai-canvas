@@ -2888,6 +2888,32 @@ def audiences_arg(active):
                                  project=js(active == 'project'))
 
 
+# Режим хоста коментатора (Deai 0.26.0) — аргументом `init`, за ПРАПОРЦЕМ на виклику, як `audiences`.
+#
+# Панель коментарів переїхала в оболонку: коментатор у рамці ховає ручку й свою панель і повідомляє оболонку
+# посилками (`postMessage` у батьківське вікно того самого походження), а оболонка керує ним методами
+# `window.CommentLayer.*`. Чому лише за `host=1` в URL: оболонка ЗАВЖДИ його додає, а сторінка без нього (відкрита
+# напряму, старі еталони `tests/fixtures/comments-role/`, публікація) — байт у байт як до 0.26.0. Публікація `host`
+# не отримує НІКОЛИ: у превʼю колег нема оболонки, і схована ручка лишила б їх без коментарів.
+# Чому `location.origin`, а не `'*'`: батько — оболонка цього ж сервера; чужому вікну посилка не потрібна.
+HOST_ARG = """,
+        host: (function () {
+          var send = function (m) { m.type = 'dc-comments'; window.parent.postMessage(m, location.origin); };
+          return {
+            onReady: function () { send({ ev: 'ready' }); },
+            onChange: function (s) { send({ ev: 'change', snapshot: s }); },
+            onSelect: function (id) { send({ ev: 'select', id: id }); },
+            onMode: function (on) { send({ ev: 'mode', on: !!on }); }
+          };
+        })()"""
+
+
+def host_arg(on):
+    """Аргумент `host` для `init` (колбеки-посилки в оболонку) або порожній рядок. `HOST_ARG` — готовий JS, без
+    плейсхолдерів: у шаблон сніпета він іде ЗНАЧЕННЯМ `format`, тож фігурні дужки в ньому не екрануються."""
+    return HOST_ARG if on else ''
+
+
 LOCAL_COMMENT_SNIPPET = """
 <script src="{assets}/local-adapter.js"></script>
 <script src="{assets}/comment-layer.min.js"></script>
@@ -2898,7 +2924,7 @@ LOCAL_COMMENT_SNIPPET = """
     var store = window.CommentLayerLocal({{ endpoint: '{endpoint}' }});
     store.ready.then(function () {{
       window.CommentLayer.init({{ projectId: '{project}', storage: store,
-        version: '{version}', local: true{audiences} }});
+        version: '{version}', local: true{audiences}{host} }});
     }});
   }};
   if (document.readyState !== 'loading') init();
@@ -2908,8 +2934,8 @@ LOCAL_COMMENT_SNIPPET = """
 
 
 def inject_local_comment_layer(html, endpoint, project, assets_base, version='',
-                               audiences=False, profile='', space=None):
-    """Локальний канал (фідбек Клоду у файл задачі). `audiences=True` — рядок
+                               audiences=False, profile='', space=None, host=False):
+    """Локальний канал (фідбек Клоду у файл задачі). `host=True` — колбеки оболонки (`host_arg`). `audiences=True` — рядок
     вкладок у панелі коментатора; цей сніпет їде ЛИШЕ в робоче місце, але
     прапорець тут симетричний проєктному свідомо: обидва канали мусять уміти
     сказати «немає вкладок», інакше межа publish трималась би на тому, що
@@ -2918,7 +2944,7 @@ def inject_local_comment_layer(html, endpoint, project, assets_base, version='',
     snippet = LOCAL_COMMENT_SNIPPET.format(
         endpoint=endpoint, project=project, assets=assets_base, version=version,
         ds=inspector_ds_arg(profile, space),
-        audiences=audiences_arg('local' if audiences else None))
+        audiences=audiences_arg('local' if audiences else None), host=host_arg(host))
     out, n = re.subn(r'</body>', snippet + '</body>', html, count=1, flags=re.I)
     return out if n else html + snippet
 
@@ -2987,7 +3013,7 @@ window.__deaiCommentsCfg = {cfg_js};
     }}
     Promise.resolve(store.ready).then(function () {{
       window.CommentLayer.init({{ projectId: cfg.channel, storage: store,
-        version: {version_js}{audiences} }});
+        version: {version_js}{audiences}{host} }});
     }}).catch(function (e) {{
       window.__clDown((e && e.message) || 'сервіс коментарів не відповів');
     }});
@@ -3012,8 +3038,8 @@ def module_client_urls(prov, space=None):
 
 
 def inject_module_comment_layer(html, assets_base, client_urls, config, version='',
-                                inspector=False, audiences=False, profile='', space=None):
-    """Канал коментарів МОДУЛЯ: шар коментатора (`<assets_base>/comment-layer.min.js`), файли адаптера (`client_urls`, по
+                                inspector=False, audiences=False, profile='', space=None, host=False):
+    """Канал коментарів МОДУЛЯ (`host=True` — колбеки оболонки, `host_arg`): шар коментатора (`<assets_base>/comment-layer.min.js`), файли адаптера (`client_urls`, по
     порядку), `window.__deaiCommentsCfg = config` і завантажувач із `storage: DeaiComments.create(…)`.
 
     `config` — вже ПЕРЕВІРЕНА публічна конфігурація з `channel` (див. `deai_modules.comments_client`/`channel_for`): тут вона
@@ -3027,7 +3053,7 @@ def inject_module_comment_layer(html, assets_base, client_urls, config, version=
         inspector=INSPECTOR_TAG.format(
             assets=assets, ds=inspector_ds_arg(profile, space)) if inspector else '',
         cfg_js=js_literal(config), version_js=js_literal(version),
-        audiences=audiences_arg('project' if audiences else None))
+        audiences=audiences_arg('project' if audiences else None), host=host_arg(host))
     return _insert_before_body(html, snippet)
 
 
@@ -6235,6 +6261,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(400, 'bad iteration')
             return
         bare = q.get('bare', ['0'])[0] == '1'
+        host = q.get('host', ['0'])[0] == '1'          # 0.26.0: оболонка завжди додає; сторінка без нього — як була
         if self._task_override is not None and not bare:
             # Коментатор пише піни на `/api/local-comments` і тягне бандли з
             # `/app/vendor` БЕЗ префікса — тобто пін, поставлений на сторінці
@@ -6316,14 +6343,14 @@ class Handler(SimpleHTTPRequestHandler):
                 # тихо нічого не робила (виміряно в браузері).
                 html = inject_module_comment_layer(
                     html, f'{origin}/app/vendor', module_client_urls(mod, page_space), module_cfg, version=ver,
-                    inspector=True, audiences=team, profile=task_ds(task, page_space), space=page_space)
+                    inspector=True, audiences=team, profile=task_ds(task, page_space), space=page_space, host=host)
             else:
                 # режим «Локальні · мені» (дефолт): фідбек Claude у локальний файл, НЕ Supabase
                 local_key = f'{tid}/local' + ('' if page.get('id') == 'main' else f'/{page["id"]}')
                 html = inject_local_comment_layer(
                     html, f'{origin}/api/local-comments', local_key,
                     f'{origin}/app/vendor', version=ver, audiences=team,
-                    profile=task_ds(task, page_space), space=page_space)
+                    profile=task_ds(task, page_space), space=page_space, host=host)
                 if notice:
                     html = inject_comment_notice(html, f'командні коментарі не піднялись ({notice}), показано локальні')
         body = html.encode('utf-8')

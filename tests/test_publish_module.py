@@ -412,6 +412,8 @@ class BuildPreview(TaskFixture):
             self.assertIn('dc/fixture', html, rel)
             depth_up = '../' * rel.count('/')           # `it1/alpha/index.html` → `../../`
             self.assertIn(f'{depth_up}comment-layer/comment-layer.min.js', html, rel)
+            self.assertNotIn('dc-comments', html, rel)        # 0.26.0: публікація НІКОЛИ не отримує режиму хоста
+            self.assertNotIn('host:', html, rel)
         self.assertTrue(self._mentions(pub, b'supabase'),
                         'контроль: з коментарями supabase у дереві МАЄ бути')
 
