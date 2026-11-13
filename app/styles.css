@@ -208,6 +208,9 @@ html:not(.cv-clean) .cv-notice{bottom:106px}
 /* Екран «Задачі»/«Налаштування» (оверлей `#tasks-home`): острівець лишається з одним «Баг / ідея»; панелей шарів нема, тож
    `.cv-hud` — на повну ширину вікна. */
 body.home-open .cv-hud{left:0!important;width:100%!important}
+/* Стан Claude — про макет, якого на цих екранах нема: сегмент (і роздільник перед інструментами) ховаємо, лишається «Баг / ідея». */
+body.home-open .isl-claude{display:none}
+body.home-open .isl-tools::before{display:none}
 /* «Змінено щойно» в рядках панелі. */
 .row-recent-dot{width:6px;height:6px;border-radius:50%;background:var(--sel);flex:none;margin-left:4px}
 .cv-ctx{position:fixed;z-index:200;background:var(--s1);border:1px solid var(--line2);
