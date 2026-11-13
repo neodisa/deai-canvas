@@ -8,12 +8,15 @@ import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 
+// Службове значення, яким коментатор закриває вручну (`commenter/src/comment-layer.js`, `resolveComment`): не текст людини.
+const MANUAL_REASON = "resolved manually";
+
 const btn = (act, val, label, icon) => `<button type="button" class="cmt-act" data-act="${act}" data-val="${esc(val)}"`
   + ` aria-label="${esc(label)}" title="${esc(label)}">${icon ? ico(icon) : esc(label)}</button>`;
 
 function modeTag(m) {
   if (!m || !m.mode || m.mode === "element") return "";
-  const txt = m.mode === "multi" ? t("cmtModeMulti", m.count || 0) : m.mode === "area" ? t("cmtModeArea") : t("cmtModeText");
+  const txt = m.mode === "multi" ? (m.count > 0 ? t("cmtModeMulti", m.count) : t("cmtModeMultiBare")) : m.mode === "area" ? t("cmtModeArea") : t("cmtModeText");
   return `<span class="cmt-tag">${esc(txt)}</span>`;
 }
 
@@ -36,7 +39,7 @@ function cardHTML(c, st, kind) {
     + `<img src="${esc(src)}" alt="${esc(t("cmtShot"))}"></button>` : "";
   const done = c.status === "resolved"
     ? `<p class="cmt-done">${esc(c.resolvedV != null ? t("cmtDone", c.resolvedV) : t("cmtClosedPlain"))}</p>`
-      + (c.resolveReason ? `<p class="cmt-reason">${esc(c.resolveReason)}</p>` : "")
+      + (c.resolveReason && c.resolveReason !== MANUAL_REASON ? `<p class="cmt-reason">${esc(c.resolveReason)}</p>` : "")
     : "";
   const iter = kind === "earlier" && c.iter != null ? `<p class="cmt-iter">${esc(t("cmtIter", c.iter))}</p>` : "";
   let acts = "";
@@ -69,7 +72,7 @@ export function commentsPanelHTML(st) {
     : "";
   const hidden = !!(st.snapshot && st.snapshot.pinsHidden);
   const pins = `<button type="button" class="icon-btn" data-act="cmtpins" aria-pressed="${hidden}"`
-    + ` aria-label="${esc(t(hidden ? "cmtPinsShow" : "cmtPinsHide"))}" title="${esc(t(hidden ? "cmtPinsShow" : "cmtPinsHide"))}">${ico("eye")}</button>`;
+    + ` aria-label="${esc(t("cmtPins"))}" title="${esc(t("cmtPins"))}">${ico("eye")}</button>`;
   const top = `<div class="insp-top cmt-top"><span class="panel-title">${esc(t("cmtTitle"))}</span>`
     + `<span class="cmt-total">${total}</span>${seg}${pins}`
     + `<button type="button" class="icon-btn" data-act="comments" aria-label="${esc(t("cmtClose"))}" title="${esc(t("cmtClose"))}">${ico("x")}</button></div>`;

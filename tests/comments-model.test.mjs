@@ -43,3 +43,21 @@ test("мініатюра — лише data:image і http(s)", () => {
   assert.equal(shotSrc({ meta: { shot: "data:text/html;base64,AAA" } }), null);
   assert.equal(shotSrc({}), null);
 });
+
+test("#1 не збігається з #12", () => {
+  assert.equal(matchQuery(C({ n: 12 }), "#1"), false);
+  assert.equal(matchQuery(C({ n: 1 }), "#1"), true);
+});
+
+test("закриті без resolvedAt — за номером спаданням", () => {
+  const snap = { comments: [C({ id: "p", n: 1, status: "resolved" }), C({ id: "q", n: 5, status: "resolved" }),
+    C({ id: "r", n: 3, status: "resolved", meta: { resolvedAt: 50 } })] };
+  assert.deepEqual(commentSections(snap).closed.map((c) => c.id), ["r", "q", "p"]);
+});
+
+test("мініатюра: shotUrl без shot; svg, //host і javascript: відхиляються", () => {
+  assert.equal(shotSrc({ meta: { shotUrl: "http://x.example/a.png" } }), "http://x.example/a.png");
+  assert.equal(shotSrc({ meta: { shot: "data:image/svg+xml;base64,AAA" } }), null);
+  assert.equal(shotSrc({ meta: { shotUrl: "//host/x" } }), null);
+  assert.equal(shotSrc({ meta: { shotUrl: "javascript:alert(1)" } }), null);
+});

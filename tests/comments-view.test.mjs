@@ -80,3 +80,58 @@ test("пошук без збігів — «Нічого не знайдено.»
   assert.match(html, /Нічого не знайдено/);
   assert.match(html, /id="cmt-q"[^>]*value="&quot;&gt;&lt;x"/);
 });
+
+const one = (c, over = {}) => commentsPanelHTML(base({ snapshot: { iteration: "3", comments: [c] }, ...over }));
+
+test("мініатюра: растровий data:image малюється кнопкою cmtshot з img", () => {
+  const html = one(C({ id: "a", n: 1, meta: { shot: "data:image/png;base64,AA" } }));
+  assert.match(html, /data-act="cmtshot" data-val="a"/);
+  assert.match(html, /<img src="data:image\/png;base64,AA"/);
+});
+
+test("перемикач пінів: aria-pressed від pinsHidden, підпис один; закриття — data-act=comments", () => {
+  const off = commentsPanelHTML(base());
+  const on = commentsPanelHTML(base({ snapshot: { iteration: "3", pinsHidden: true, comments: [] } }));
+  assert.match(off, /data-act="cmtpins" aria-pressed="false" aria-label="Піни · H"/);
+  assert.match(on, /data-act="cmtpins" aria-pressed="true" aria-label="Піни · H"/);
+  assert.match(off, /data-act="comments"/);
+});
+
+test("цитата, ширина, тег режиму; multi без кількості — без нуля", () => {
+  const html = one(C({ id: "a", n: 1, meta: { sel: "Купити", viewport: { w: 375, h: 812 }, mode: "area" } }));
+  assert.match(html, /<p class="cmt-sel">“Купити”<\/p>/);
+  assert.match(html, /375×812/);
+  assert.match(html, /<span class="cmt-tag">область<\/span>/);
+  const multi = one(C({ id: "b", n: 2, meta: { mode: "multi" } }));
+  assert.match(multi, /кілька елементів/);
+  assert.equal(/елементів: 0/.test(multi), false);
+  assert.match(one(C({ id: "c", n: 3, meta: { mode: "multi", count: 4 } })), /елементів: 4/);
+});
+
+test("у режимі редагування кнопки дій цієї картки не малюються", () => {
+  const html = one(C({ id: "a", n: 1 }), { editingId: "a" });
+  for (const act of ["cmtres", "cmtdel", "cmtedit", "cmtshow"]) assert.equal(html.includes(`data-act="${act}"`), false);
+});
+
+test("закрита картка: клас cmt-card--closed і дія cmtreopen", () => {
+  const html = one(C({ id: "d", n: 1, status: "resolved" }), { expanded: { earlier: false, closed: true } });
+  assert.match(html, /class="cmt-card cmt-card--closed"[^>]*data-cid="d"/);
+  assert.match(html, /data-act="cmtreopen" data-val="d"/);
+});
+
+test("екранування: причина закриття, цитата й id з розміткою", () => {
+  const evil = '"><img onerror=alert(1)>';
+  const html = one(C({ id: evil, n: 1, status: "resolved", resolvedV: 2, resolveReason: "<img onerror=alert(2)>", meta: { sel: "<img onerror=alert(3)>" } }),
+    { expanded: { earlier: false, closed: true } });
+  assert.equal(/<img onerror/.test(html), false);
+  assert.match(html, /data-cid="&quot;&gt;&lt;img onerror=alert\(1\)&gt;"/);
+  assert.match(html, /&lt;img onerror=alert\(2\)&gt;/);
+  assert.match(html, /&lt;img onerror=alert\(3\)&gt;/);
+});
+
+test("службова причина «resolved manually» не показується", () => {
+  const html = one(C({ id: "d", n: 1, status: "resolved", resolveReason: "resolved manually" }), { expanded: { earlier: false, closed: true } });
+  assert.equal(html.includes("resolved manually"), false);
+  assert.equal(html.includes("cmt-reason"), false);
+  assert.match(html, /Закрито/);
+});
