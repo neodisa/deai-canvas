@@ -65,8 +65,8 @@ async function configError(res) {
 }
 
 /** Пауза до повтору командної частини «Огляду», що не піднялась (5xx конфігурації, адаптер не завантажився, сервіс
- *  мовчав): повтор — лише на вході/перебудові полотна, не частіше за цей строк, бо шар перебудовується разом із
- *  кадрами. Тест підставляє свій строк через `env.teamRetryMs`, годинник — через `env.now`. */
+ *  мовчав): повтор — лише при ПОВЕРНЕННІ в «Огляд» (`enter()` після `leave()`), не частіше за цей строк. Перебудова
+ *  полотна (`rebuild()`, на кожен кадр) повтору не викликає: вона знищила б живий шар разом із відкритою формою піна. Тест підставляє свій строк через `env.teamRetryMs`, годинник — через `env.now`. */
 const TEAM_RETRY_MS = 60000;
 
 /** id модуля → фабрика його адаптера (`window.DeaiComments`, захоплена ОДРАЗУ після завантаження його файлів). */
@@ -85,7 +85,7 @@ const FACTORIES = new Map();
  * `channel` і `onChange` — ядра: модуль не перекриє їх ключами свого `config`. `onChange` порожній: шар коментатора живе
  * через `store.subscribe`. Невдача (файл не завантажився, фабрики нема, `create` кинув) — виняток викликачу; нічого не
  * кешується, тож наступний вхід в «Огляд» спробує знову, а сам «Огляд» без пінів працює. У «Огляді» командна
- * частина, що не піднялась, повторюється лише після паузи `TEAM_RETRY_MS` (див. `ensure()`).
+ * частина, що не піднялась, повторюється лише при поверненні в «Огляд» і лише після паузи `TEAM_RETRY_MS` (див. `ensure()`).
  * @param cfg {{module: string, client?: string[], config?: object, channel: string}}
  */
 export async function moduleStore(cfg, { load = loadScript, win = window, factories = FACTORIES } = {}) {
@@ -113,14 +113,14 @@ export async function moduleStore(cfg, { load = loadScript, win = window, factor
 
 /** Закрити сховище, якщо воно вміє (`close` необовʼязковий у контракті). Збій закриття не має заступити причину,
  *  заради якої закриваємо, тож тут він проковтується. */
-/** Закрите сховище, що ніхто вже не чекає, може відхилити `ready` пізніше — без обробника це необроблена відмова. */
-function silence(store) {
-  try { Promise.resolve(store && store.ready).catch(() => {}); } catch { /* немає що гасити */ }
-}
-
 function closeQuietly(store) {
   try { if (store && typeof store.close === "function") store.close(); }
   catch { /* закриття — найкраще зусилля */ }
+}
+
+/** Закрите сховище, що ніхто вже не чекає, може відхилити `ready` пізніше — без обробника це необроблена відмова. */
+function silence(store) {
+  try { Promise.resolve(store && store.ready).catch(() => {}); } catch { /* немає що гасити */ }
 }
 
 /**
@@ -330,13 +330,13 @@ export function overviewComments(env) {
    * старий на перемиканні каналу не знищувався. Осиротілий ловив `C` і писав
    * «Клода» в канал «Команди» (ревʼю T-45, D1). Тепер виклик у дорозі — спільний.
    */
-  async function ensure() {
+  async function ensure({ retryTeam = false } = {}) {
     if (!env.picked()) return;
     const key = keyNow();
     /* Командна частина лежала (`teamDown`) і пауза минула — ключ вважаємо застарілим: шар перебудується, і обидві
-       конфігурації читаються заново. Лише тут (вхід/перебудова), без таймера. */
+       конфігурації читаються заново. Лише при поверненні в «Огляд» (`retryTeam` ставить тільки `enter()`), без таймера. */
     const nowMs = (env.now || Date.now)();
-    const retry = cfgKey === key && cl && !inflight && cl.store && cl.store.teamDown
+    const retry = retryTeam && cfgKey === key && cl && !inflight && cl.store && cl.store.teamDown
       && nowMs - builtAt >= (env.teamRetryMs == null ? TEAM_RETRY_MS : env.teamRetryMs);
     if (cfgKey === key && (cl || inflight) && !retry) return inflight;
     if (cl) { cl.destroy(); cl = null; subs.length = 0; }
@@ -411,8 +411,8 @@ export function overviewComments(env) {
       // Інстанс уже є під цей канал — перечитати: живий вид міг лишити/видалити
       // піни, а локальний адаптер сам не опитує (ревʼю T-45, D2).
       const had = back && cl && cfgKey === keyNow();
-      ensure().catch(fail);
-      if (had && cl.store && typeof cl.store.refresh === "function") {
+      ensure({ retryTeam: back }).catch(fail);
+      if (had && cl && cl.store && typeof cl.store.refresh === "function") {
         Promise.resolve(cl.store.refresh()).catch(() => { /* мережа — наступного разу */ });
       }
       tick();

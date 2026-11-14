@@ -646,7 +646,7 @@ function flaky(mod) {
   return { b, state };
 }
 
-test("T7-R1: командне лежало — перебудова в межах паузи шар не чіпає; після паузи обидві конфігурації читаються заново й командне піднімається", async () => {
+test("T7-R1: командне лежало — повернення в «Огляд» у межах паузи шар не чіпає; після паузи обидві конфігурації читаються заново й командне піднімається", async () => {
   const { b, state } = flaky("m-r1");
   let now = 1000;
   try {
@@ -657,18 +657,18 @@ test("T7-R1: командне лежало — перебудова в межа�
     assert.equal(typeof b.inits[0].storage.teamDown, "string");
     state.up = true;
     now += 4999;
-    oc.rebuild();
+    oc.leave(); oc.enter();
     await settle();
     assert.equal(b.fetched.length, 2, "у межах паузи — жодного нового запиту");
     assert.equal(b.inits.length, 1, "шар той самий");
     now += 1;
-    oc.rebuild();
+    oc.leave(); oc.enter();
     await settle();
     assert.equal(b.fetched.length, 4, "після паузи — обидва конфіги заново");
     assert.equal(b.inits.length, 2);
     assert.equal(b.destroyed, 1, "старий шар знищено");
     assert.equal(b.inits[1].storage.teamDown, null, "командне піднялось");
-    oc.rebuild();
+    oc.leave(); oc.enter();
     await settle();
     assert.equal(b.fetched.length, 4, "піднялось — далі шар живе без повторів");
     assert.deepEqual(b.errors, []);
@@ -682,10 +682,29 @@ test("T7-R1b: командне лежить далі — повтор не ча�
     const oc = overviewComments({ ...dualEnv(b, "dual"), teamRetryMs: 100, now: () => now });
     oc.enter();
     await settle();
-    now = 100; oc.rebuild(); await settle();
+    now = 100; oc.leave(); oc.enter(); await settle();
     assert.equal(b.inits.length, 2);
-    oc.rebuild(); await settle();
+    oc.leave(); oc.enter(); await settle();
     assert.equal(b.inits.length, 2, "щойно перебудовано — знову чекаємо паузу");
+  } finally { b.restore(); }
+});
+
+test("T7-R2: перебудова полотна (`rebuild()`, кожен кадр) командного НЕ повторює навіть після паузи — живий шар і форма піна цілі", async () => {
+  const { b, state } = flaky("m-r2");
+  let now = 0;
+  try {
+    const oc = overviewComments({ ...dualEnv(b, "dual"), teamRetryMs: 100, now: () => now });
+    oc.enter();
+    await settle();
+    state.up = true;
+    now = 10000;
+    oc.rebuild(); await settle();
+    oc.rebuild(); await settle();
+    assert.equal(b.fetched.length, 2, "жодного нового запиту");
+    assert.equal(b.inits.length, 1);
+    assert.equal(b.destroyed, 0, "шар не знищено");
+    oc.enter(); await settle();   // `enter()` без `leave()` — не повернення: теж не чіпає
+    assert.equal(b.destroyed, 0);
   } finally { b.restore(); }
 });
 
