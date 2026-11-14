@@ -116,7 +116,7 @@ test("ревʼю T9: тост «нових» не переживає зміну 
 test("ревʼю T9: оновлення на focus працює й без команди — refreshLocal, інакше refresh (поведінка)", () => {
   const line = /^const cmtRefreshLocal = .*$/m.exec(src);
   assert.ok(line, "нема cmtRefreshLocal");
-  const make = (store) => new Function("cmtLayer", `${line[0]}\nreturn cmtRefreshLocal;`)(() => ({ store }));
+  const make = (store, homeOpen = false) => new Function("cmtLayer", "homeOpen", `${line[0]}\nreturn cmtRefreshLocal;`)(() => ({ store }), homeOpen);
   const calls = [];
   make({ refreshLocal() { calls.push(["local", this]); } , refresh() { calls.push(["full"]); } })();
   assert.deepEqual(calls.map((c) => c[0]), ["local"], "комбіноване: лише локальні");
@@ -125,6 +125,9 @@ test("ревʼю T9: оновлення на focus працює й без ком
   assert.equal(calls[1][0], "plain", "локальний адаптер без refreshLocal: кличе refresh");
   assert.equal(calls[1][1], plain, "this = сховище");
   assert.doesNotThrow(() => make(undefined)());
+  // Під екраном «Задачі» макет схований — тиша (вихід з екрана однаково перезавантажує рамку).
+  make({ refreshLocal() { calls.push(["home"]); }, refresh() { calls.push(["home-full"]); } }, true)();
+  assert.equal(calls.length, 2, "під «Задачами» focus не кличе сховище");
 });
 
 /* --- Числа на вкладках (Б2, Task 10) --- */

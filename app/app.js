@@ -1776,8 +1776,9 @@ function loadSeen(key) { try { return readSeen(localStorage.getItem(key)); } cat
 function saveSeen(key, set) { try { localStorage.setItem(key, writeSeen(set)); } catch (e) {} }
 /** Причина падіння командного з комбінованого сховища шару (`DeaiDualStore.teamDown`), або `null`. */
 function readTeamDown(L) { try { const v = L && L.store && L.store.teamDown; return typeof v === 'string' && v ? v : null; } catch (e) { return null; } }
-/** Свіжість локальних (Б2.1): комбіноване сховище перечитує локальні піни з диска (їх міг дописати Claude). */
-const cmtRefreshLocal = () => { try { const st = cmtLayer()?.store; (st?.refreshLocal || st?.refresh)?.call(st); } catch (e) {} };
+/** Свіжість локальних (Б2.1): комбіноване сховище перечитує локальні піни з диска (їх міг дописати Claude).
+ *  Під екраном «Задачі» — тиша: макет схований, а вихід (`leaveHome` → `render()`) однаково перезавантажує рамку. */
+const cmtRefreshLocal = () => { if (homeOpen) return; try { const st = cmtLayer()?.store; (st?.refreshLocal || st?.refresh)?.call(st); } catch (e) {} };
 /** Знімок коментатора поточного виду змінився: маркер, свіжі, число острівця, дерево, тост. */
 let cmtNewsTask = null;
 let cmtNewsPagesKey = '{}';
