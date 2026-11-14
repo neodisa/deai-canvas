@@ -363,10 +363,10 @@ test("G: острівець над смужкою режимів комента�
   await stubWorking(page);
   await page.goto(`${url}/app/`);
   await page.waitForSelector("#claude-hud .claude-island", { timeout: 12000 });
-  /* Як дизайнер: клац по ручці «Comment» на правому краї рамки (тіньовий корінь коментатора). */
+  /* Як дизайнер: кнопка «Коментарі» в острівці оболонки (ручка коментатора в режимі хоста схована) — вмикає режим у рамці. */
   await page.waitForFunction(() => document.getElementById("frame").contentDocument
     ?.querySelector("[data-comment-layer]")?.shadowRoot?.querySelector(".handle"), null, { timeout: 15000 });
-  await page.frameLocator("#frame").locator(".handle").click();
+  await page.click('#isl-tools [data-act="comments"]');
   await page.waitForFunction(() => document.getElementById("frame").contentDocument
     .querySelector("[data-comment-layer]").shadowRoot.querySelector(".modes.show"), null, { timeout: 5000 });
 
@@ -381,18 +381,18 @@ test("G: острівець над смужкою режимів комента�
       `${width}: острівець накриває смужку режимів коментатора (запас ${g.barTop - g.islBottom}px): ${JSON.stringify(g)}`);
   }
 
-  /* Вийшли з коментування (та сама ручка, тепер «Stop») → смужка зникла → острівець опускається. */
-  await page.frameLocator("#frame").locator(".handle").click();
+  /* Вийшли з коментування (та сама кнопка острівця, друге натискання) → смужка зникла → острівець опускається. */
+  await page.click('#isl-tools [data-act="comments"]');
   const g = await settled(page, (m) => m.winH - m.islBottom <= 24);
   assert.ok(g.winH - g.islBottom >= 8 && g.winH - g.islBottom <= 24,
     `острівець лишився піднятим після виходу з коментування: відступ ${g.winH - g.islBottom}px`);
 
-  /* «Огляд»: коментатор полотна живе в документі оболонки, а не в рамці — той самий підйом. */
+  /* «Огляд»: коментатор полотна живе в документі оболонки, а не в рамці — той самий підйом; режим вмикає та сама кнопка острівця. */
   await page.click('[data-act="mode"][data-val="overview"]');
   await page.waitForSelector("#canvas:not([hidden])");
   await page.waitForFunction(() => document.querySelector("#canvas [data-comment-layer]")?.shadowRoot?.querySelector(".handle"),
     null, { timeout: 15000 });
-  await page.locator("#canvas [data-comment-layer] .handle").click();
+  await page.click('#isl-tools [data-act="comments"]');
   await page.waitForFunction(() => document.querySelector("#canvas [data-comment-layer]").shadowRoot.querySelector(".modes.show"),
     null, { timeout: 5000 });
   let gap = 0;

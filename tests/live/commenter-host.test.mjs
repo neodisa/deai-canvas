@@ -216,3 +216,45 @@ test("з host: destroy() не кличе колбеків (хост сам по�
   assert.deepEqual(await page.evaluate((k) => window.__ev.slice(k), n), [], "destroy() у режимі хоста кликав колбеки");
   await page.close();
 });
+
+test("з host.rightInset: композер ТЕКСТОВОГО режиму (виділення біля правого краю) теж не заходить під панель хоста", async () => {
+  const page = await boot({ withHost: true, rightInset: 400 });
+  await page.evaluate(() => {
+    const p = document.createElement("p");
+    p.id = "r"; p.textContent = "Біля краю";
+    p.style.cssText = "position:absolute;right:10px;top:200px;width:160px;margin:0";
+    document.body.appendChild(p);
+    window.CommentLayer.setCommentMode(true);
+    document.querySelector("[data-comment-layer]").shadowRoot.querySelector('.mode[data-mode="text"]').click();
+    const range = document.createRange(); range.selectNodeContents(p);
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  });
+  await page.dispatchEvent("#r", "mouseup");
+  await page.waitForFunction(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose"));
+  const edge = await page.evaluate(() => ({
+    right: document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose").getBoundingClientRect().right,
+    w: window.innerWidth }));
+  assert.ok(edge.right <= edge.w - 400 + 0.5, `композер текстового режиму заходить під панель хоста: right=${edge.right}, innerWidth=${edge.w}`);
+  await page.close();
+});
+
+test("з host + anchors (полотно): destroy() гасить armed(false) у постачальника, але onMode(false) хосту не летить", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.setContent(PAGE);
+  await page.addScriptTag({ content: BUNDLE });
+  await page.evaluate(() => {
+    window.__ev = []; window.__armed = [];
+    const mem = [];
+    const anchors = { place: () => [], subscribe: () => {}, active: () => true, armed: (on) => window.__armed.push(on) };
+    window.CommentLayer.init({ projectId: "t", storage: { load: () => mem.slice(), save: () => {} }, version: "2",
+      user: { name: "Тест" }, anchors,
+      host: { onReady: () => window.__ev.push(["ready"]), onChange: () => {}, onSelect: () => {}, onMode: (on) => window.__ev.push(["mode", on]) } });
+    window.CommentLayer.setCommentMode(true);
+  });
+  assert.deepEqual(await page.evaluate(() => window.__armed), [true]);
+  const n = await page.evaluate(() => window.__ev.length);
+  await page.evaluate(() => window.CommentLayer.destroy());
+  assert.deepEqual(await page.evaluate(() => window.__armed), [true, false], "постачальник не дізнався, що режим вимкнено");
+  assert.deepEqual(await page.evaluate((k) => window.__ev.slice(k), n), [], "destroy() кликав колбеки хоста");
+  await page.close();
+});

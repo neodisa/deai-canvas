@@ -27,6 +27,9 @@ const PAGE = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head><b
 </body></html>`;
 const SHOT = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='20'%3E%3Crect width='40' height='20' fill='%23c00'/%3E%3C/svg%3E";
 
+/* Картка оболонки показує лише растрові знімки (data:image/png|jpeg|webp|gif або http(s)) — SVG вона навмисно відкидає (безпека розмітки). */
+const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
 function ghost(url, extra = {}) {
   return {
     id: "ghost-1", author: "Фікстура", text: "Правка до кроку 2", status: "open",
@@ -75,6 +78,33 @@ test("A+B: картка каже «немає на екрані» з конте�
     return lb ? lb.getAttribute("src") : null;
   }, null, { timeout: 5000 }).then((h) => h.jsonValue(), () => null);
   assert.ok(lightbox && lightbox.startsWith("data:image/svg"), "клік по стрілці мовчить замість знімка");
+});
+
+test("A+B у оболонці (0.26.0): картка в панелі коментарів каже «немає на екрані», мініатюра відкриває знімок у рамці", async (t) => {
+  /* Прямий `/commented` (без host=1) лишається з власною панеллю коментатора — її стережуть тести вище; дизайнер же в
+     оболонці бачить картку `#cmt-panel`, а лайтбокс знімка й далі малює коментатор усередині рамки. */
+  const { dir } = taskFixture({ html: PAGE, pages: ["kartka"] });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 500 });
+  t.after(() => child.kill());
+  const r = await fetch(`${url}/api/local-comments`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ comments: [ghost(url, { shot: PNG })] }) });
+  assert.ok(r.ok, `посів пінів: ${r.status}`);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(`${url}/app/`);
+  await page.waitForSelector('#hud [data-act="comments"]');
+  const frame = await (await page.$("#frame")).contentFrame();
+  await frame.waitForFunction(() => window.CommentLayer && window.CommentLayer._inited, null, { timeout: 20000 });
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector('#cmt-panel [data-cid="ghost-1"]', { timeout: 10000 });
+  const note = await page.textContent('#cmt-panel [data-cid="ghost-1"] .cmt-note');
+  assert.match(note, /Елемента зараз немає на екрані/);
+  await page.click('#cmt-panel [data-cid="ghost-1"] [data-act="cmtshot"]');
+  await frame.waitForFunction(() => {
+    const lb = document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".cllb img");
+    return lb && lb.getAttribute("src").startsWith("data:image/png");
+  }, null, { timeout: 5000 });
 });
 
 test("A: пін, чий елемент є на екрані, позначки не має", async (t) => {

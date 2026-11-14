@@ -845,8 +845,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
            вікні оболонки (ми вішаємось на всі same-origin предки нижче) і
            відкривав свою невидиму панель поверх полотна. */
         if (this.anchors ? !this.anchors.active() : hiddenFrame()) return;
-        /* Хост: клавіші з полів ХОСТА (пошук, редагування в його панелі — поза нашим shadow root) — його, не наші:
-           інакше Esc у його полі виходив би з режиму коментування. Своя форма/редагування лишаються за шарованим Escape. */
+        /* Хост: клавіші з будь-якого поля набору поза нашим shadow root (пошук і редагування в панелі хоста, а також поля самої сторінки-макета) — не наші:
+           інакше Esc у такому полі виходив би з режиму коментування. Своя форма/редагування лишаються за шарованим Escape. */
         if (this._hostOpts) { const o = keyOrigin(e); if (isTypingField(o) && !(this._sh && this._sh.contains(o))) return; }
         const eaten = () => { e.preventDefault(); e.stopImmediatePropagation(); }; // ours — the host must not also act on it
         if (e.key === 'Escape') {

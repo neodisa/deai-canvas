@@ -61,6 +61,8 @@ function armed(page) {
   });
 }
 
+const panelOpen = (page) => page.evaluate(() => { const p = document.getElementById("cmt-panel"); return !!p && !p.hidden; });
+
 async function boot(t) {
   const { dir } = taskFixture({ html: PAGE });
   const { child, url } = await startServer(dir, { portBase: PORT_BASE, supabase: true });
@@ -83,6 +85,22 @@ test("A. набір «chip» у палітрі ⌘K не вмикає комен
     "літери c/p/h з'їдені шорткатом коментатора");
   assert.deepEqual(await armed(page), { arming: false, freeze: false },
     "набір у палітрі увімкнув режим коментування");
+  /* C тепер клавіша ОБОЛОНКИ (вмикає панель коментарів), тож охороняємо і її: панель лишилась закритою. */
+  assert.equal(await panelOpen(page), false, "набір у палітрі відкрив панель коментарів оболонки");
+});
+
+test("A2. набір «chip» у полі самого макета не вмикає коментування й не відкриває панель оболонки", async (t) => {
+  const page = await boot(t);
+  await page.frameLocator("#frame").locator("body").evaluate((b) => {
+    const ta = b.ownerDocument.createElement("textarea"); ta.id = "mockfield"; ta.style.cssText = "position:fixed;left:200px;top:200px;width:200px";
+    b.appendChild(ta);
+  });
+  await page.frameLocator("#frame").locator("#mockfield").click();
+  await page.keyboard.type("chip");
+  assert.equal(await page.frameLocator("#frame").locator("#mockfield").inputValue(), "chip",
+    "літери c/p/h з'їдені шорткатом (поле макета)");
+  assert.deepEqual(await armed(page), { arming: false, freeze: false }, "набір у полі макета увімкнув режим коментування");
+  assert.equal(await panelOpen(page), false, "набір у полі макета відкрив панель коментарів оболонки");
 });
 
 test("B. контроль: фокус у тілі рамки — `c` вмикає коментування", async (t) => {
@@ -95,4 +113,5 @@ test("B. контроль: фокус у тілі рамки — `c` вмика�
     return !!w.document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".arming");
   }, null, { timeout: 3000 });
   assert.equal((await armed(page)).arming, true, "шорткат `c` мусить вмикати режим");
+  assert.equal(await panelOpen(page), true, "шорткат `c` мусить відкривати панель коментарів оболонки");
 });

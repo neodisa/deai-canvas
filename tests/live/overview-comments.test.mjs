@@ -252,7 +252,7 @@ test("D+E: клік по піну відкриває картку; клік по
   await page.close();
 });
 
-test("F: колесо над піном зумить полотно; над списком панелі — ні", async () => {
+test("F: колесо над піном зумить полотно; з відкритою панеллю коментарів полотно закінчується там, де вона починається", async () => {
   const page = await overview();
   const pin = (await pinsOf(page)).find((p) => !p.cluster && !p.off && p.vis);
   const before = (await settleCam(page)).scale;
@@ -262,35 +262,41 @@ test("F: колесо над піном зумить полотно; над сп
   assert.ok(mid > before * 1.05, "колесо над піном не дійшло до полотна");
   await page.keyboard.press("c");   // панель оболонки (P зникла — панель = режим)
   await page.waitForSelector(SHELL_PANEL);
-  // Без паузи точка могла б лягти за край вікна, а колесо крутилось би в порожнечі й перевірка
-  // зеленіла б без охорони. Тому ще й доводимо, що точка — НА панелі.
+  /* Панель — СУСІД `#canvas`, а не його нащадок, і слухач колеса висить на полотні: «колесо над панеллю не зумить» зеленіло б
+     саме собою. Справжня охорона — розкладка: з панеллю (`body.with-cmt`) полотно мусить закінчуватись там, де вона починається,
+     інакше панель накрила б край полотна й піни під нею лишились би недосяжні. Чекаємо кінця анімації ширини. */
   await page.waitForTimeout(450);
-  const list = await page.evaluate(() => {
-    const body = document.querySelector("#cmt-panel .cmt-body");
-    const r = body.getBoundingClientRect();
-    const x = r.left + r.width / 2, y = r.top + Math.min(60, r.height / 2);
-    return { x, y, onPanel: !!document.elementFromPoint(x, y)?.closest("#cmt-panel") && x < innerWidth };
-  });
-  assert.ok(list.onPanel, `точка колеса не на панелі: ${JSON.stringify(list)}`);
-  await page.mouse.move(list.x, list.y);
-  await zoomWheel(page, 0, 120);
-  const after = (await settleCam(page)).scale;
-  assert.equal(after, mid, "колесо над панеллю зумнуло полотно");
+  const lay = await page.evaluate(() => ({
+    canvasRight: document.getElementById("canvas").getBoundingClientRect().right,
+    panelLeft: document.getElementById("cmt-panel").getBoundingClientRect().left,
+    panelW: document.getElementById("cmt-panel").getBoundingClientRect().width }));
+  assert.ok(lay.panelW > 0 && lay.panelLeft < VIEW.width, `панель не на екрані: ${JSON.stringify(lay)}`);
+  assert.ok(lay.canvasRight <= lay.panelLeft + 0.5, `полотно заходить під панель коментарів: ${JSON.stringify(lay)}`);
   await page.close();
 });
 
-test("G: на «Огляді» C бере коментатор полотна (панель оболонки + режим), а прихований живий iframe мовчить", async () => {
+test("G: на «Огляді» C бере коментатор полотна (панель оболонки + режим), а прихований живий iframe мовчить — і на Esc", async () => {
   const page = await overview();
   await page.mouse.move(700, 450);
   await page.keyboard.press("c");
   await page.waitForSelector(SHELL_PANEL);
-  const st = await page.evaluate(() => {
+  const frameState = () => page.evaluate(() => {
     const F = document.getElementById("frame").contentWindow.CommentLayer;
-    return { shell: !document.getElementById("cmt-panel").hidden,
-             canvasMode: document.getElementById("canvas").classList.contains("cv-commenting"),
-             frameMode: !!F.commentMode, framePanel: F._panel.classList.contains("show") };
+    return { frameMode: !!F.commentMode,
+             frameModes: !!document.getElementById("frame").contentDocument.querySelector("[data-comment-layer]").shadowRoot.querySelector(".modes.show") };
   });
-  assert.deepEqual(st, { shell: true, canvasMode: true, frameMode: false, framePanel: false });
+  const st = await page.evaluate(() => ({ shell: !document.getElementById("cmt-panel").hidden,
+    canvasMode: document.getElementById("canvas").classList.contains("cv-commenting") }));
+  assert.deepEqual(st, { shell: true, canvasMode: true });
+  assert.deepEqual(await frameState(), { frameMode: false, frameModes: false });
+  /* Охорона замість порожнього `framePanel === false` (панель коментатора в режимі хоста сховано завжди): Esc із фокусом в
+     оболонці не мусить зачепити прихований живий iframe — його обробник вішається на ВСІ вікна-предки. Щоб перевірка щось
+     міряла, спершу вмикаємо режим у рамці напряму: живий обробник вийшов би з нього на Esc. */
+  await page.evaluate(() => { document.activeElement?.blur?.(); document.getElementById("frame").contentWindow.CommentLayer.setCommentMode(true); });
+  assert.equal((await frameState()).frameMode, true, "контроль: режим у рамці не ввімкнувся — перевірка порожня");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  assert.equal((await frameState()).frameMode, true, "прихований живий iframe відреагував на Esc з оболонки (вийшов із режиму)");
   await page.close();
 });
 
@@ -315,10 +321,16 @@ test("J: шапка панелі коментарів — під смугою о
     const x = document.querySelector('#cmt-panel [data-act="comments"]').getBoundingClientRect();
     const h = head.getBoundingClientRect();
     return { head: h.top, canvas: document.getElementById("canvas").getBoundingClientRect().top,
-             hit: !!document.elementFromPoint(x.left + x.width / 2, x.top + x.height / 2)?.closest('#cmt-panel [data-act="comments"]') };
+             hit: !!document.elementFromPoint(x.left + x.width / 2, x.top + x.height / 2)?.closest('#cmt-panel [data-act="comments"]'),
+             /* Перемикач каналу (коли є) — друга ціль шапки: його теж не мусить накривати смуга. */
+             segHit: [...document.querySelectorAll('#cmt-panel [data-act="cmtch"]')].map((b) => {
+               const q = b.getBoundingClientRect();
+               return !!document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)?.closest('#cmt-panel [data-act="cmtch"]');
+             }) };
   });
   assert.ok(r.head >= r.canvas - 0.5, `шапка панелі вище полотна: ${JSON.stringify(r)}`);
   assert.equal(r.hit, true, "✕ панелі накриває смуга оболонки");
+  assert.ok(r.segHit.every(Boolean), `перемикач каналу панелі накриває смуга оболонки: ${JSON.stringify(r.segHit)}`);
   await page.close();
 });
 

@@ -321,8 +321,8 @@ function waitChannel(page, ch) {
   }, ch, { timeout: 20000 });
 }
 
-const openPanel = (page) => page.evaluate(() => document.getElementById("frame").contentWindow.CommentLayer.open());
-const aud = (page, id) => page.frameLocator("#frame").locator(`[data-aud="${id}"]`);
+/** Сегмент каналу «Клод/Команда» — у панелі коментарів оболонки (власні вкладки коментатора в режимі хоста сховані). */
+const aud = (page, id) => page.locator(`#cmt-panel [data-act="cmtch"][data-val="${id}"]`);
 
 /** Піни «полотна» на «Огляді» з тіньового кореня: ключ, ідентифікатори, кластер, «поза кадром», підпис. */
 const overviewPins = (page) => page.evaluate(() => {
@@ -359,8 +359,9 @@ test("a: простір без інтеграцій із модулем коме
   /* Вкладка «Команда» є в просторі БЕЗ інтеграцій, бо є постачальник ролі (`capabilities.comments`), а не `integrations`. */
   const caps = (await spacesApi(url)).spaces.find((s) => s.id === SPACE).capabilities;
   assert.equal(caps.comments, MODULE, `capabilities простору: ${JSON.stringify(caps)}`);
-  await openPanel(page);
-  assert.equal(await aud(page, "project").count(), 1, "у просторі з модулем коментарів немає вкладки «Команда»");
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector('#cmt-panel [data-act="cmtch"][data-val="project"]', { timeout: 10000 });
+  assert.equal(await aud(page, "project").count(), 1, "у просторі з модулем коментарів немає кнопки «Команда» в панелі коментарів оболонки");
   await aud(page, "project").click();
   await waitChannel(page, "project").catch(async (e) => assert.fail(
     `сторінка каналу project не підняла шар коментатора: ${JSON.stringify(await frameState(page))}; `
