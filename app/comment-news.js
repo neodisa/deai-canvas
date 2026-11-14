@@ -17,7 +17,8 @@ export function readSeen(raw) {
     return v && v.v === 1 && Array.isArray(v.ids) ? new Set(v.ids.filter((x) => typeof x === "string")) : null;
   } catch { return null; }
 }
-/** `Set` → рядок для сховища: лише останні `SEEN_MAX` (порядок — додавання). */
+/** `Set` → рядок для сховища: лише останні `SEEN_MAX` (порядок — додавання). Обрізка йде за порядком вставки: на першому
+ *  погляді `baseline` вставляє id у порядку списку, тож відпадають перші зі списку, а не «найстарші» за часом. */
 export const writeSeen = (set) => JSON.stringify({ v: 1, ids: [...(set || [])].slice(-SEEN_MAX) });
 /** Перший погляд на задачу: усе, що вже є, — бачене (накопичене не вивалюється «новим»). */
 export const baseline = (items) => new Set((items || []).map((c) => c && c.id).filter((x) => typeof x === "string"));
@@ -37,7 +38,7 @@ export function arrived(prevIds, comments) {
   if (!prevIds) return [];
   return (comments || []).filter((c) => c && typeof c.id === "string" && !prevIds.has(c.id));
 }
-/** Нові за сторінками дерева: `{pageId: n}`; сторінку дає тег версії піна, як на «Огляді» (`pinTarget`). */
+/** Нові за сторінками дерева: `{pageId: n}`. Виклик передає ЛИШЕ вже відібраний список «нових» (`isNew`), не усі коментарі; сторінку дає тег версії піна, як на «Огляді» (`pinTarget`). */
 export function newsByPage(comments) {
   const out = {};
   for (const c of comments || []) {

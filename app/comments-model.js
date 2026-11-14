@@ -31,7 +31,8 @@ const passFilter = (c, f) => (f === "local" || f === "project" ? audOf(c) === f 
  *  відкриті попередніх ітерацій, закриті поточні. */
 export function commentSections(snapshot, { query = "", filter = "all", fresh = null } = {}) {
   const hit = (c) => matchQuery(c, query) && passFilter(c, filter);
-  const isFresh = (c) => !!(fresh && fresh.has(c.id)) && c.status === "open";
+  // «Нові від команди» — лише командні (захист: локальний id у `fresh` сюди не потрапляє).
+  const isFresh = (c) => !!(fresh && fresh.has(c.id)) && c.status === "open" && audOf(c) === "project";
   const all = list(snapshot);
   return {
     fresh: all.filter((c) => isFresh(c) && hit(c)).sort(byNewest),

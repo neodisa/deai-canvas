@@ -269,3 +269,27 @@ test("I-2: ворожі текст відмови, пошуковий запит
   const none = commentsPanelHTML(base({ query: H, snapshot: { iteration: H, comments: [] } }));
   noBreakout(none, "порожній пошук");
 });
+
+test("Б2 ревʼю I: збережений фільтр без командного постачальника не ховає піни (фільтр лише в dual)", () => {
+  const snapshot = { iteration: "3", comments: [D({ id: "a", n: 1 }), D({ id: "b", n: 2 })] };
+  for (const filter of ["project", "local"]) {
+    const html = commentsPanelHTML(base({ filter, snapshot }));
+    assert.match(html, /data-cid="a"/, filter);
+    assert.match(html, /data-cid="b"/, filter);
+    assert.doesNotMatch(html, /Нічого не знайдено|Коментарів ще немає/, filter);
+  }
+});
+
+test("Б2 ревʼю M7: фільтр «Команда» лишає командну свіжу картку", () => {
+  const html = dual([D({ id: "n1", n: 5, aud: "project" }), D({ id: "o1", n: 1 })], { fresh: new Set(["n1"]), filter: "project" });
+  assert.match(html, /cmt-sec--new/);
+  assert.match(html, /data-cid="n1"/);
+  assert.doesNotMatch(html, /data-cid="o1"/);
+});
+
+test("Б2 ревʼю M4: коментарі є, але фільтр сховав усі — «Нічого не знайдено», а не «ще немає»", () => {
+  const html = dual([D({ id: "o1", n: 1 })], { filter: "project" });
+  assert.match(html, /Нічого не знайдено/);
+  assert.doesNotMatch(html, /Коментарів ще немає/);
+  assert.match(dual([]), /Коментарів ще немає/);
+});

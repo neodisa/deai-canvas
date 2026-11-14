@@ -106,9 +106,11 @@ export function commentsPanelHTML(st) {
   if (!st.snapshot) {
     body = st.down ? `<p class="cmt-down" role="alert">${esc(t("cmtDown", st.down))}</p>` : `<p class="insp-hint">${esc(t("cmtLoading"))}</p>`;
   } else {
-    const s = commentSections(st.snapshot, { query: st.query, filter: st.filter, fresh: st.fresh });
+    const s = commentSections(st.snapshot, { query: st.query, filter: st.dual ? st.filter : "all", fresh: st.fresh });
     const none = !s.fresh.length && !s.open.length && !s.earlier.length && !s.closed.length;
-    const empty = none ? `<p class="insp-hint">${esc(t(st.query ? "cmtNoMatch" : "cmtEmpty"))}</p>` : "";
+    // Коментарі є, але запит чи активний фільтр адресата сховали всі — «нема збігів», а не «ще немає».
+    const hasAny = Array.isArray(st.snapshot.comments) && st.snapshot.comments.length > 0;
+    const empty = none ? `<p class="insp-hint">${esc(t(st.query || hasAny ? "cmtNoMatch" : "cmtEmpty"))}</p>` : "";
     const fresh = s.fresh.length
       ? `<section class="cmt-sec cmt-sec--new" aria-label="${esc(t("cmtNewTitle"))}"><h3 class="cmt-h cmt-h--new">${esc(t("cmtNewTitle"))}`
         + ` <span>${s.fresh.length}</span></h3>${s.fresh.map((c) => cardHTML(c, st, "open")).join("")}</section>` : "";

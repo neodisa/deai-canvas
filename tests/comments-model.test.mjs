@@ -96,3 +96,9 @@ test("commentSections: фільтр діє й на «нові»; openCount — �
   assert.deepEqual(s.fresh, []);
   assert.equal(openCount(MIX), 3);
 });
+
+test("Б2 ревʼю M5: локальний id у fresh не потрапляє в «Нові від команди»", () => {
+  const s = commentSections(MIX, { fresh: new Set(["l1", "l2"]) });
+  assert.deepEqual(s.fresh, []);
+  assert.deepEqual(s.open.map((c) => c.id).sort(), ["l1", "l2", "p1"]);
+});

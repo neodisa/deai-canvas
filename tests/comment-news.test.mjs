@@ -63,3 +63,14 @@ test("newsByPage: сторінка з тегу версії; «3» — main; б�
   ]);
   assert.deepEqual(r, { stattia: 2, main: 1 });
 });
+
+test("Б2 ревʼю M3: newsByPage рахує все, що отримала — відбір «нових» робить виклик (isNew)", () => {
+  const mixed = [
+    { id: "n", status: "open", author: "А", meta: { version: "3/stattia" } },
+    { id: "seen", status: "open", author: "А", meta: { version: "3/stattia" } },
+    { id: "mine", status: "open", author: "Я", meta: { version: "3/stattia" } },
+  ];
+  const seen = new Set(["seen"]);
+  assert.deepEqual(newsByPage(mixed), { stattia: 3 }, "без відбору — усі");
+  assert.deepEqual(newsByPage(mixed.filter((c) => isNew(c, seen, "Я"))), { stattia: 1 });
+});
