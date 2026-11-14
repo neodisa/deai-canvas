@@ -48,8 +48,13 @@ function cardHTML(c, st, kind) {
   const src = shotSrc(c);
   const shot = src ? `<button type="button" class="cmt-shot" data-act="cmtshot" data-val="${esc(c.id)}" aria-label="${esc(t("cmtShot"))}">`
     + `<img src="${esc(src)}" alt="${esc(t("cmtShot"))}"></button>` : "";
+  /* «Зроблено · Іт.N» — лише коли пін закрив Claude (`bin/inbox.py resolve` пише в `resolvedV` номер робочої ітерації).
+     Ручне закриття в коментаторі теж ставить `resolvedV`, але це його ВНУТРІШНІЙ лічильник версій, а не Іт.N
+     (див. `bin/inbox.py`, гілка «уже закритий») — «Зроблено · Іт.1» про пін Іт.6 було б неправдою; знайдено перевіркою
+     проти живого канвасу 0.26.0. */
+  const byClaude = c.resolvedV != null && c.resolveReason !== MANUAL_REASON;
   const done = c.status === "resolved"
-    ? `<p class="cmt-done">${esc(c.resolvedV != null ? t("cmtDone", c.resolvedV) : t("cmtClosedPlain"))}</p>`
+    ? `<p class="cmt-done">${esc(byClaude ? t("cmtDone", c.resolvedV) : t("cmtClosedPlain"))}</p>`
       + (c.resolveReason && c.resolveReason !== MANUAL_REASON ? `<p class="cmt-reason">${esc(c.resolveReason)}</p>` : "")
     : "";
   const iter = kind === "earlier" && c.iter != null ? `<p class="cmt-iter">${esc(t("cmtIter", c.iter))}</p>` : "";

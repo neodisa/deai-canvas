@@ -145,6 +145,19 @@ test("службова причина «resolved manually» не показує�
   assert.match(html, /Закрито/);
 });
 
+test("ручне закриття не видає себе за роботу Claude: внутрішній лічильник коментатора — не Іт.N", () => {
+  /* Перевірка проти живого канвасу 0.26.0: пін Іт.6, закритий вручну, показував «Зроблено · Іт.1» — коментатор пише в
+     `resolvedV` свій лічильник версій. «Зроблено · Іт.N» — лише для закритих Claude (`inbox.py resolve`). */
+  const manual = one(C({ id: "m", n: 1, status: "resolved", resolvedV: 1, resolveReason: "resolved manually" }),
+    { expanded: { earlier: false, closed: true } });
+  assert.doesNotMatch(manual, /Зроблено/);
+  assert.match(manual, /Закрито/);
+  const claude = one(C({ id: "k", n: 2, status: "resolved", resolvedV: 6, resolveReason: "Іт.6: заголовок 92 → 84" }),
+    { expanded: { earlier: false, closed: true } });
+  assert.match(claude, /Зроблено · Іт\.6/);
+  assert.match(claude, /заголовок 92 → 84/);
+});
+
 /* I-2: КОЖНЕ поле, що потрапляє в розмітку, екранується. Ворожий рядок закриває атрибут, тег і textarea; якщо хоч
    одне поле піде в HTML сирим, у виході зʼявиться живий `<img`/`<script` або розрив `</textarea><script`. */
 const H = '"><img src=x onerror=1></textarea><script>';
