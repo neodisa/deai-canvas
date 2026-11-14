@@ -606,7 +606,7 @@ class ProjectCommentsParity(_ChanStand):
         `task_anywhere`); піни читаються модулем, лічильник відкритих і `inbox list` рахують їх."""
         import state
         pin = {'id': 'abcdef12deadbeef', 'text': 'Alpha pin', 'status': 'open', 'author': 'Beta', 'ts': 'x', 'fp': 'a/b/c',
-               'meta': {}, 'bornV': 'it1'}
+               'meta': {'assignee': 'claude'}, 'bornV': 'it1'}      # доручений Claude (Б2.3): інакше лічильник його не рахує
         for compat, ch in ((LAYER, 'liga-shared'), (None, 'deai/legacy/a-1')):
             rig, space, cfg = self.stand(compat=compat)
             rec = self.mb.Rec({'list': [pin]})
@@ -616,7 +616,7 @@ class ProjectCommentsParity(_ChanStand):
                     n, tail = state._team_comments(cfg['tasks']['a-1'], 'a-1')
                 finally:
                     self.spaces.clear_request_space()
-            self.assertEqual((n, tail), (1, ' + 1 проєктних'), compat)
+            self.assertEqual((n, tail), (1, ' + 1 проєктних (доручено Claude)'), compat)
             self.assertEqual([(c[0], c[1]) for c in rec.calls], [(COMMENTS_ID, 'list')])
             self.assertEqual(rec.args[0], (ch,), compat)
 

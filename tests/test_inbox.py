@@ -196,7 +196,7 @@ class Anchor(InboxCase):
 
     def list_out(self, project=None):
         self.net.project = project or []
-        rc, out, _ = self.run_main([])
+        rc, out, _ = self.run_main(['--all'])
         self.assertEqual(rc, 0)
         return out
 
@@ -322,7 +322,7 @@ class AsOf(InboxCase):
                         _pin('aaaaaaaa-4', 'd', ts=None)])
         self.net.project = [_proj('bbbbbbbb-1', 'x', ts='01.09.2026 10:00'),
                             _proj('bbbbbbbb-2', 'y', ts='27.09.2026 01:59')]
-        rc, out, _ = self.run_main([])
+        rc, out, _ = self.run_main(['--all'])
         self.assertEqual(rc, 0)
         head = out.splitlines()[0]
         self.assertRegex(head, r'станом на \d\d:\d\d:\d\d')

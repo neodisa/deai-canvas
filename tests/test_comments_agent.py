@@ -86,6 +86,13 @@ def rest(cid, text, status='open', seq=1):
             'resolved_v': None, 'resolve_reason': None}
 
 
+def assigned(c):
+    """Той самий пін, доручений Claude (`meta.assignee`, спека Б-Р6)."""
+    c = dict(c)
+    c['meta'] = {**c['meta'], 'assignee': 'claude'}
+    return c
+
+
 class _Resp:
     def __init__(self, body=b'', status=200):
         self._body, self.status = body, status
@@ -247,12 +254,53 @@ class AgentEnv(tcr.CommentsEnv):
 
 # ------------------------------------------------------------------------------------ inbox: простір із модулем
 
+class ForAgentUnitTest(unittest.TestCase):
+    def test_local_pins_are_always_for_the_agent(self):
+        self.assertTrue(serve.for_agent({'id': 'a', 'meta': None}, 'local'))
+        self.assertTrue(serve.for_agent({'id': 'a'}, 'local'))
+
+    def test_a_team_pin_is_for_the_agent_only_when_assigned_to_claude(self):
+        self.assertTrue(serve.for_agent({'meta': {'assignee': 'claude'}}, 'project'))
+        for meta in (None, {}, {'assignee': 'Claude'}, {'assignee': 'olena'}, {'assignee': ['claude']}, 'claude'):
+            self.assertFalse(serve.for_agent({'meta': meta}, 'project'), meta)
+        self.assertFalse(serve.for_agent('not a pin', 'project'))
+
+
 class InboxModuleTest(AgentEnv):
+    def test_by_default_inbox_shows_only_team_pins_assigned_to_claude(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [assigned(cl('c0ffee01-aaaa', 'Доручене', seq=7)), cl('c0ffee02-bbbb', 'Чуже', seq=8)])
+        rc, out, err = self.inbox([])
+        self.assertEqual((rc, err), (0, ''), out)
+        self.assertIn('-- ПРОЄКТ · доручені Claude (модуль memo-comments) --', out)
+        self.assertIn('Доручене', out)
+        self.assertNotIn('Чуже', out)
+        self.assertIn('ще 1 відкритих командних без доручення Claude — усі: python3 bin/inbox.py --all', out)
+        self.assertIn('Разом до відпрацювання: 0 локальних + 1 проєктних', out)
+
+    def test_all_shows_every_team_pin_exactly_as_before(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [assigned(cl('c0ffee01-aaaa', 'Доручене', seq=7)), cl('c0ffee02-bbbb', 'Чуже', seq=8)])
+        rc, out, _ = self.inbox(['--all'])
+        self.assertEqual(rc, 0, out)
+        self.assertIn('-- ПРОЄКТ (колеги + історія, модуль memo-comments) --', out)
+        self.assertIn('Доручене', out)
+        self.assertIn('Чуже', out)
+        self.assertNotIn('без доручення', out)
+
+    def test_resolve_still_finds_an_unassigned_team_pin(self):
+        """`resolve` шукає серед УСІХ: агент, що бачив пін через `--all`, мусить уміти його закрити."""
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [cl('c0ffee02-bbbb', 'Чуже')])
+        rc, out, _ = self.inbox(['resolve', 'c0ffee02', '--reason', 'зроблено'])
+        self.assertEqual(rc, 0, out)
+        self.assertIn('✓ c0ffee02 закрито (проєкт)', out)
+
     def test_inbox_lists_the_project_pins_of_the_module_in_the_same_form_as_supabase_ones(self):
         self.enable_memo_in(self.plain)
         self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7),
                                      cl('c0ffee02-bbbb', 'Старе', status='resolved', seq=3, resolvedV=2)])
-        rc, out, err = self.inbox([])
+        rc, out, err = self.inbox(['--all'])
         self.assertEqual((rc, err), (0, ''), out)
         self.assertIn('-- ПРОЄКТ (колеги + історія, модуль memo-comments) --', out)
         self.assertIn('• P#7 [2/me--welcome] Кнопку вирівняти  [c0ffee01 · Олена]', out)
@@ -275,10 +323,10 @@ class InboxModuleTest(AgentEnv):
         """Той самий пін: з модуля (форма CommentLayer) і з REST ЛІГА (форма рядка) друкується ПОРЯД ТАК САМО."""
         self.enable_memo_in(self.plain)
         self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7)])
-        _, module_out, _ = self.inbox([])
+        _, module_out, _ = self.inbox(['--all'])
         self.use(self.liga)
         self.net.rows = [rest('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7)]
-        _, legacy_out, _ = self.inbox([])
+        _, legacy_out, _ = self.inbox(['--all'])
         self.assertEqual(len(self.net.calls), 1, 'контроль: ЛІГА питає свій Supabase')
         self.assertTrue(self.pin_lines(module_out))
         self.assertEqual(self.pin_lines(module_out), self.pin_lines(legacy_out))
@@ -298,7 +346,7 @@ class InboxModuleTest(AgentEnv):
         self.assertEqual([(c['id'], c['status']) for c in self.svc.comments[chan]],
                          [('c0ffee01-aaaa', 'resolved'), ('c0ffee02-bbbb', 'open')])
         self.assert_no_legacy()
-        _, out, _ = self.inbox([])
+        _, out, _ = self.inbox(['--all'])
         self.assertIn('проєкт — 1 відкритих', out)
         self.assertIn('проєкт: (+ 1 вирішених в історії)', out)
         self.assertNotIn('Кнопку вирівняти', out)
@@ -354,7 +402,7 @@ class InboxModuleTest(AgentEnv):
         self.enable_memo_in(self.plain)
         self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7)])
         self.use(self.liga)                                # поточний простір машини — ЛІГА (шлях Supabase)
-        rc, out, err = self.inbox(['--task', 'px'])
+        rc, out, err = self.inbox(['--all', '--task', 'px'])
         self.assertEqual((rc, err), (0, ''), out)
         self.assertIn('Кнопку вирівняти', out)
         self.assertIn('модуль memo-comments', out)
@@ -368,7 +416,7 @@ class InboxModuleTest(AgentEnv):
         self.enable_memo_in(self.liga)
         self.seed(self.liga, 'lx', [cl('c0ffee01-aaaa', 'Кнопку вирівняти')])
         self.use(self.liga)
-        rc, out, _ = self.inbox([])
+        rc, out, _ = self.inbox(['--all'])
         self.assertEqual(rc, 0, out)
         self.assertIn('модуль memo-comments', out)
         self.assertIn('Кнопку вирівняти', out)
@@ -456,7 +504,7 @@ class InboxOtherProvidersTest(AgentEnv):
     def test_the_league_path_goes_through_the_builtin_module_and_never_asks_a_memo_module(self):
         self.use(self.liga)
         self.net.rows = [rest('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7)]
-        rc, out, _ = self.inbox([])
+        rc, out, _ = self.inbox(['--all'])
         self.assertEqual(rc, 0, out)
         self.assertIn('-- ПРОЄКТ (колеги + історія, Supabase) --', out)
         self.assertIn('• P#7 [2/me--welcome] Кнопку вирівняти  [c0ffee01 · Олена]', out)
@@ -529,7 +577,7 @@ class InboxOtherProvidersTest(AgentEnv):
         dm.write_module_state(self.liga, 'supabase-comments', enabled=True)
         self.use(self.liga)
         self.net.rows = [rest('c0ffee01-aaaa', 'Кнопку вирівняти')]
-        rc, out, _ = self.inbox([])
+        rc, out, _ = self.inbox(['--all'])
         self.assertEqual(rc, 0, out)
         self.assertIn('(колеги + історія, Supabase)', out)
         self.assertEqual(len(self.net.calls), 1)
@@ -552,7 +600,7 @@ class InboxOtherProvidersTest(AgentEnv):
 class MalformedAnswerTest(AgentEnv):
     def run_list(self, obj=None, raw=None):
         self.answer(self.plain, obj, raw)
-        rc, out, err = self.inbox([])
+        rc, out, err = self.inbox(['--all'])
         self.assertEqual((rc, err), (0, ''), out)
         self.assertIsNone(CONTROL.search(out), 'керівний символ у виводі агента: ' + repr(CONTROL.search(out)))
         out.encode('utf-8')                                    # сурогат у виводі — `UnicodeEncodeError` у терміналі
@@ -931,7 +979,7 @@ class PinIdWhitelistTest(AgentEnv):
     def test_a_hostile_id_never_reaches_the_module_through_the_cli(self):
         self.enable_memo_in(self.plain)
         self.seed(self.plain, 'px', [cl('x&project_id=neq.y', 'Хитрий'), cl('c0ffee01-aaaa', 'Чесний')])
-        rc, out, _ = self.inbox([])
+        rc, out, _ = self.inbox(['--all'])
         self.assertEqual(rc, 0, out)
         self.assertIn('Чесний', out)
         self.assertNotIn('Хитрий', out)
@@ -954,7 +1002,7 @@ class ForgedLinesTest(AgentEnv):
                         'ctx': {'heading': 'Оплата' + self.FAKE, 'active': ['Крок' + self.FAKE]},
                         'viewport': {'w': '9' + self.FAKE, 'h': '<script>'}})
         self.seed(self.plain, 'px', [evil])
-        rc, out, _ = self.inbox([])
+        rc, out, _ = self.inbox(['--all'])
         self.assertEqual(rc, 0, out)
         bullets = [ln for ln in out.splitlines() if ln.startswith('      • ')]
         self.assertEqual(len(bullets), 1, out)
@@ -978,7 +1026,7 @@ class ForgedLinesTest(AgentEnv):
         self.enable_memo_in(self.plain)
         self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'Контекст', meta={
             'version': '1', 'ctx': {'heading': 'Н' * 5000, 'active': ['К' * 1000] * 1000}})])
-        rc, out, _ = self.inbox([])
+        rc, out, _ = self.inbox(['--all'])
         self.assertEqual(rc, 0, out)
         line = next(ln for ln in out.splitlines() if '↳ де:' in ln)
         self.assertLess(len(line), 4096)
@@ -1137,9 +1185,22 @@ class ServerEnv(AgentEnv):
 
 
 class CommentsRouteTest(ServerEnv):
-    def get(self, ch='internal'):
-        st, raw = self.fetch(f'/comments?it=it1&channel={ch}')
+    def get(self, ch='internal', extra='&all=1'):
+        st, raw = self.fetch(f'/comments?it=it1&channel={ch}{extra}')
         return st, json.loads(raw), raw
+
+    def test_by_default_only_assigned_pins_and_a_hidden_count_and_all_returns_everything(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [assigned(cl('c0ffee01-aaaa', 'Доручене', seq=7)), cl('c0ffee02-bbbb', 'Чуже', seq=8)])
+        st, body, raw = self.get('project', '')
+        self.assertEqual(st, 200, raw)
+        self.assertEqual([c['id'] for c in body['comments']], ['c0ffee01-aaaa'])
+        self.assertEqual((body['hidden'], body['all']), (1, False))
+        st, body, raw = self.get('project')
+        self.assertEqual(st, 200, raw)
+        self.assertEqual(sorted(c['id'] for c in body['comments']), ['c0ffee01-aaaa', 'c0ffee02-bbbb'])
+        self.assertIs(body['all'], True)
+        self.assertNotIn('hidden', body)
 
     def test_a_module_space_answers_with_the_module_pins_in_the_rest_shape(self):
         self.enable_memo_in(self.plain)
@@ -1162,7 +1223,7 @@ class CommentsRouteTest(ServerEnv):
         rows = [rest('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7)]
         self.net.rows = rows
         st, body, _ = self.get('project')
-        self.assertEqual((st, body), (200, {'project': 'dc/lx', 'comments': rows}))
+        self.assertEqual((st, body), (200, {'project': 'dc/lx', 'comments': rows, 'all': True}))
         self.assertEqual(len(self.net.calls), 1)
         self.assertEqual(self.svc.log, [])
         st, body, _ = self.get('internal')
@@ -1248,15 +1309,21 @@ class StateTest(AgentEnv):
 
     def test_the_open_counter_comes_from_the_module(self):
         self.enable_memo_in(self.plain)
-        self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'a'), cl('c0ffee02-bbbb', 'b'),
-                                     cl('c0ffee03-cccc', 'c', status='resolved')])
+        self.seed(self.plain, 'px', [assigned(cl('c0ffee01-aaaa', 'a')), assigned(cl('c0ffee02-bbbb', 'b')),
+                                     assigned(cl('c0ffee03-cccc', 'c', status='resolved'))])
         self.assertEqual(self.line(),
-                         'Відкриті коментарі: 0 локальних (мені) + 2 проєктних → python3 bin/inbox.py')
+                         'Відкриті коментарі: 0 локальних (мені) + 2 проєктних (доручено Claude) → python3 bin/inbox.py')
+        self.assert_no_legacy()
+
+    def test_only_assigned_team_pins_are_counted_and_the_rest_is_mentioned(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [assigned(cl('c0ffee01-aaaa', 'a')), cl('c0ffee02-bbbb', 'b')])
+        self.assertIn('+ 1 проєктних (доручено Claude); ще 1 командних без доручення', self.line())
         self.assert_no_legacy()
 
     def test_a_league_space_with_a_module_counts_from_the_module_not_the_shared_service(self):
         self.enable_memo_in(self.liga)
-        self.seed(self.liga, 'lx', [cl('c0ffee01-aaaa', 'a')])
+        self.seed(self.liga, 'lx', [assigned(cl('c0ffee01-aaaa', 'a'))])
         self.use(self.liga)
         self.assertIn('+ 1 проєктних', self.line())
         self.assert_no_legacy()
@@ -1268,13 +1335,14 @@ class StateTest(AgentEnv):
         self.assert_no_legacy()
 
     def test_what_did_not_make_it_into_the_count_is_said_in_the_same_line(self):
-        self.answer(self.plain, [cl('c0ffee01-aaaa', 'a'), 'сміття', {'id': 'a b'}])
-        self.assertEqual(self.line(), 'Відкриті коментарі: 0 локальних (мені) + 1 проєктних '
+        self.answer(self.plain, [assigned(cl('c0ffee01-aaaa', 'a')), 'сміття', {'id': 'a b'}])
+        self.assertEqual(self.line(), 'Відкриті коментарі: 0 локальних (мені) + 1 проєктних (доручено Claude) '
                                       '(⚠ відповідь модуля коментарів неповна: пропущено 2 зіпсованих елементів)'
                                       ' → python3 bin/inbox.py')
         with mock.patch.object(serve, 'MAX_AGENT_COMMENTS', 1):
-            self.answer(self.plain, [cl('c0ffee01-aaaa', 'a'), cl('c0ffee02-bbbb', 'b'), cl('c0ffee03-cccc', 'c')])
-            self.assertIn('+ 1 проєктних (⚠ відповідь модуля коментарів неповна: відкинуто 2 понад межу)', self.line())
+            self.answer(self.plain, [assigned(cl('c0ffee01-aaaa', 'a')), assigned(cl('c0ffee02-bbbb', 'b')),
+                                     assigned(cl('c0ffee03-cccc', 'c'))])
+            self.assertIn('+ 1 проєктних (доручено Claude) (⚠ відповідь модуля коментарів неповна: відкинуто 2 понад межу)', self.line())
 
     def test_a_module_that_fails_says_it_cannot_get_them(self):
         self.enable_memo_in(self.plain)
@@ -1291,7 +1359,7 @@ class StateTest(AgentEnv):
         self.assertIn(', проєктних нема', self.line())
         self.assert_no_legacy()
         self.use(self.liga)
-        self.net.rows = [rest('c0ffee01-aaaa', 'a'), rest('c0ffee02-bbbb', 'b', status='resolved')]
+        self.net.rows = [assigned(rest('c0ffee01-aaaa', 'a')), assigned(rest('c0ffee02-bbbb', 'b', status='resolved'))]
         self.assertIn('+ 1 проєктних', self.line())
         self.assertEqual(len(self.net.calls), 1)
 

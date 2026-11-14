@@ -1625,7 +1625,7 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
         chan = self.channel('px')
         self.api.rows = [row('c0ffee01-aaaa', chan, text='Кнопку вирівняти', meta={'version': '2/me--welcome', 'seq': 7}),
                          row('c0ffee02-bbbb', chan, text='Старе', status='resolved', resolved_v=2)]
-        rc, out, err = self.inbox([])
+        rc, out, err = self.inbox(['--all'])
         self.assertEqual((rc, err), (0, ''), out)
         self.assertIn('модуль supabase-comments', out)
         self.assertIn('• P#7 [2/me--welcome] Кнопку вирівняти  [c0ffee01 · Олена]', out)
@@ -1639,7 +1639,7 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
         self.assertEqual(json.loads(self.api.reqs('PATCH')[-1]['body']),
                          {'status': 'resolved', 'resolve_reason': 'кнопку вирівняно', 'resolved_v': 1})
         self.assertEqual(self.api.rows[0]['status'], 'resolved')
-        rc, out, _ = self.inbox([])
+        rc, out, _ = self.inbox(['--all'])
         self.assertIn('проєкт: (+ 2 вирішених в історії)', out)
         self.assertNotIn('Кнопку вирівняти', out)
         self.assert_no_legacy()
@@ -1647,7 +1647,7 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
     def test_the_comments_route_answers_with_the_service_pins(self):
         self.enable_via_api()
         self.api.rows = [row('c0ffee01-aaaa', self.channel('px'), text='Кнопку вирівняти')]
-        st, raw = self.fetch('/comments?it=it1&channel=project')
+        st, raw = self.fetch('/comments?it=it1&channel=project&all=1')
         self.assertEqual(st, 200, raw)
         body = json.loads(raw)
         self.assertEqual(body['project'], self.channel('px'))

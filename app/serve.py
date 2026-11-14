@@ -3349,6 +3349,20 @@ def agent_pins(raw):
     return out
 
 
+#: Хто бере командний коментар (Deai 0.27.0, спека Б-Р6): лише доручений Claude — `meta.assignee == 'claude'`.
+ASSIGNEE_CLAUDE = 'claude'
+
+
+def for_agent(c, store):
+    """Чи цей пін — робота Claude. `store`: `'local'` (локальний файл задачі — завжди так) чи `'project'` (командний канал —
+    лише доручений: `meta.assignee == 'claude'`). ОДНЕ правило для `bin/inbox.py`, `bin/state.py` і маршруту `/comments`
+    (спека Б2.3): три копії розійшлися б у числах. Приймає обидві форми піна (CommentLayer і рядок REST): `meta` в них однакове."""
+    if store == 'local':
+        return True
+    meta = c.get('meta') if isinstance(c, dict) else None
+    return isinstance(meta, dict) and meta.get('assignee') == ASSIGNEE_CLAUDE
+
+
 class ProjectComments:
     """Хто веде проєктні коментарі простору `space` для АГЕНТА (див. таблицю вище). Рішення береться ОДИН раз у
     конструкторі, з явного `space`; решта методів лише виконують його для задачі `(task, tid)`.
@@ -6856,7 +6870,8 @@ class Handler(SimpleHTTPRequestHandler):
             рішення не вдалось     центральна відповідь модулів (`{ok: false, code, error}`, 502/409) — НІКОЛИ не
                                    Supabase ЛІГИ і не порожній список
             виклик модуля не вдався  `{project, comments: [], error}` — як недоступна мережа колись у ЛІГИ (у ЛІГИ без конфігу
-                                   `comments-unconfigured`)"""
+                                   `comments-unconfigured`)
+        Типово — лише доручені Claude (`for_agent`, + `hidden`); `?all=1` — усі."""
         space = spaces.active_space()
         pc = ProjectComments(space)
         if pc.kind == 'off':
@@ -6869,13 +6884,18 @@ class Handler(SimpleHTTPRequestHandler):
         q = parse_qs(urlparse(self.path).query)
         it = q.get('it', [''])[0]
         channel = q.get('channel', ['internal'])[0]
+        show_all = q.get('all', ['0'])[0] == '1'
         tid, task = self._current_task()
         internal = (channel == 'internal')
         project = None
         try:
             project = pc.channel(task, tid, internal)
             pins = pc.pins(task, tid, internal)
-            body = {'project': project, 'comments': pins}
+            # Б2.3: агентові — лише доручені командні (`for_agent`); `?all=1` — усі, як до 0.27.0.
+            mine = pins if show_all else [p for p in pins if for_agent(p, 'project')]
+            body = {'project': project, 'comments': mine, 'all': show_all}
+            if not show_all:
+                body['hidden'] = len(pins) - len(mine)
             if isinstance(pins, ModulePins) and pins.note():
                 body['warning'] = pins.note()
             self._send_json(body)

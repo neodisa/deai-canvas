@@ -778,7 +778,8 @@ class LegacyAgentTest(_Env):
 
     def test_state_counts_open_league_pins_through_the_module(self):
         self.setUpState()
-        self.assertEqual(state._team_comments(self.TASK, 't1'), (1, ' + 1 проєктних'))
+        self.rows = [{**ROWS[0], 'meta': {**ROWS[0]['meta'], 'assignee': 'claude'}}, ROWS[1]]    # доручений Claude (Б2.3)
+        self.assertEqual(state._team_comments(self.TASK, 't1'), (1, ' + 1 проєктних (доручено Claude)'))
 
     def test_state_says_cannot_reach_instead_of_a_silent_zero(self):
         self.setUpState()

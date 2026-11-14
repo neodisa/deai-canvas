@@ -22,7 +22,7 @@ from serve import (registry_allowed, load_tasks, load_meta, task_iterations, ite
                    vcs_task, _mask_repo, gitlab_status,
                    machine_identity, iteration_is_mine, iteration_pages,
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
-                   SpaceUnavailable, ProjectComments)
+                   SpaceUnavailable, ProjectComments, for_agent)
 import spaces  # noqa: E402
 import tracks  # noqa: E402
 import registry  # noqa: E402
@@ -301,7 +301,9 @@ def _team_comments(task, tid):
     if pc.kind == 'module':                       # `kind` — внутрішній рядок `ProjectComments`, не значення постачальника
         try:
             pins = pc.pins(task, tid)
-            n = len([p for p in pins if p.get('status') != 'resolved'])
+            open_ = [p for p in pins if p.get('status') != 'resolved']
+            n = len([p for p in open_ if for_agent(p, 'project')])
+            k = len(open_) - n
         except spaces.RoleOff:      # ЛІГА без інтеграцій: командних коментарів нема, мережі не було
             return 0, ', проєктних нема'
         except Exception as e:  # noqa: BLE001 — модуль не відповів: «0» читалось би як «тихо», а це «не дістати»
@@ -313,7 +315,8 @@ def _team_comments(task, tid):
             return 0, f', проєктні: не дістати ({code})'
         # Те, що не ввійшло (зіпсовані елементи, понад межу), — у тому ж рядку: «N відкритих» без цього збрехало б.
         note = pins.note() if hasattr(pins, 'note') else ''
-        return n, f' + {n} проєктних' + (f' (⚠ {note})' if note else '')
+        return n, (f' + {n} проєктних (доручено Claude)' + (f'; ще {k} командних без доручення' if k else '')
+                   + (f' (⚠ {note})' if note else ''))
     if pc.kind == 'broken':
         return 0, f', проєктні: не дістати ({pc.err.code})'
     return 0, ', проєктних нема'

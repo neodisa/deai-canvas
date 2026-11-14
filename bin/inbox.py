@@ -13,6 +13,7 @@
     або з модуля ролі `comments` простору задачі (канал простору, `list`/`resolve` модуля).
     Хто саме — вирішує постачальник ролі `comments` ПРОСТОРУ ЗАДАЧІ (`ProjectComments`), а не
     «чи ввімкнені інтеграції»; зламаний модуль — лише локальні піни й повідомлення, а не Supabase.
+    Типово показано лише командні, доручені Claude (`meta.assignee`); `--all` — усі.
 Ітерацію кожного коментаря несе meta.version → показуємо тегом [itN].
 
 Чому тут argparse (fb-22092026-6aed32, 22.09.2026): до цього аргументів не
@@ -39,7 +40,7 @@ from serve import (load_tasks,  # noqa: E402
                    task_iterations, iter_num, machine_identity,
                    iteration_is_mine,
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
-                   SpaceUnavailable, ProjectComments, ModulePins, agent_line)
+                   SpaceUnavailable, ProjectComments, ModulePins, agent_line, for_agent)
 import spaces  # noqa: E402
 from atomic_io import atomic_write_json  # noqa: E402
 
@@ -362,7 +363,7 @@ def project_comments():
     return ProjectComments(spaces.active_space())
 
 
-def cmd_list(where=False, task_id=None):
+def cmd_list(where=False, task_id=None, show_all=False):
     got = resolve_task(task_id)
     if got is None:
         return 2
@@ -395,15 +396,23 @@ def cmd_list(where=False, task_id=None):
     total = show_pins(local, 'локальні', 'L', wmap)
     if not total:
         print('  (немає відкритих)')
-    print(f'\n-- ПРОЄКТ (колеги + історія, {source}) --')
+    print(f'\n-- ПРОЄКТ (колеги + історія, {source}) --' if show_all
+          else f'\n-- ПРОЄКТ · доручені Claude ({source}) --')
     if team_off:
         print('  командних коментарів у цьому просторі нема')
         ext = 0
     elif proj_err is None:
-        print(_newest_line(proj))
+        # Б2.3: типово — лише доручені Claude командні (`for_agent`); `--all` — усі, байт-у-байт як до 0.27.0.
+        mine = proj if show_all else [p for p in proj if for_agent(p, 'project')]
+        print(_newest_line(mine))
         if isinstance(proj, ModulePins) and proj.note():
             print(f'  ⚠ {proj.note()}')
-        ext = show_pins(proj, 'проєкт', 'P', wmap)
+        ext = show_pins(mine, 'проєкт', 'P', wmap)
+        if not show_all:
+            hidden = len([p for p in proj if p.get('status') != 'resolved' and not for_agent(p, 'project')])
+            if hidden:
+                flag = f' --task {shlex.quote(tid)}' if task_id is not None else ''
+                print(f'  ще {hidden} відкритих командних без доручення Claude — усі: python3 bin/inbox.py{flag} --all')
     else:
         print(f'  проєкт: (не дістати: {_say(proj_err)})')
         ext = 0
@@ -696,6 +705,8 @@ def build_parser():
     ap.add_argument('--where', action='store_true',
                     help='для кожного відкритого піна — віджет і скільки таких самих '
                          'елементів на сторінці (браузер; потрібен запущений канвас)')
+    ap.add_argument('--all', action='store_true',
+                    help='усі командні коментарі, а не лише доручені Claude (як до 0.27.0)')
     sub = ap.add_subparsers(dest='cmd', metavar='{resolve}')
     rp = sub.add_parser(
         'resolve', help='закрити пін(и) з причиною',
@@ -740,7 +751,7 @@ def _main(argv):
         # Короткий префікс відхиляє `cmd_resolve` — після того, як він знайшов простір задачі: лише в просторі з модулем
         # коментарів повний id коротший за `MIN_PREFIX` законний.
         return cmd_resolve(a, rp)
-    return cmd_list(where=a.where, task_id=a.task)
+    return cmd_list(where=a.where, task_id=a.task, show_all=a.all)
 
 
 if __name__ == '__main__':
