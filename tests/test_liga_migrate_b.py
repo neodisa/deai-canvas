@@ -633,7 +633,7 @@ class CommentsCompatSetting(unittest.TestCase):
             cls.man = json.load(f)
 
     def test_manifest_declares_compat_select(self):
-        self.assertEqual(self.man['version'], '1.2.0')
+        self.assertEqual(self.man['version'], '1.3.0')
         s = {x['key']: x for x in self.man['settings']}
         c = s['compat']
         self.assertEqual((c['type'], c['required'], c['default']), ('select', False, ''))
@@ -643,7 +643,7 @@ class CommentsCompatSetting(unittest.TestCase):
 
     def test_catalog_module_carries_it_and_rejects_unknown_values(self):
         m = self.dm.catalog()[COMMENTS_ID]
-        self.assertEqual(m.version, '1.2.0')
+        self.assertEqual(m.version, '1.3.0')
         space = {'id': 'sp1', 'path': '', 'integrations': False}
         ok = self.dm.resolve_settings(space, m, {'url': 'https://sb.example.com', 'compat': LAYER})
         self.assertEqual(ok['compat'], LAYER)
