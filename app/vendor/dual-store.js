@@ -32,12 +32,15 @@
       return o;
     }).sort(function (a, b) { return String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0; }));
   }
+  /* Синхронний кидок під-сховища → відмова проміса (а не виняток повз `Promise.all`); синхронність виклику зберігаємо. */
+  function call(fn) { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } }
   function has(list, id) { for (var i = 0; i < (list || []).length; i++) if (list[i] && list[i].id === id) return true; return false; }
 
   function DualStore(opts) {
     var local = opts.local;
     var team = opts.team || null;
     var subs = [];
+    var teamDirty = false;                   // командний запис відхилено: кеші вже мають список, а база — ні; повторити
     var shadow = null;                       // командна частина, щойно віддана в `team.save`, поки `team` не заговорить сам
     var store = { teamDown: team ? null : String(opts.teamDown || 'team comments unavailable') };
     function teamList() { return team ? (shadow || team.load()) : []; }
@@ -61,13 +64,19 @@
         mine[c._aud === 'project' ? 'project' : 'local'].push(strip(c));
       }
       var doLocal = sig(mine.local) !== sig(local.load());
-      var doTeam = !!team && sig(mine.project) !== sig(teamList());
+      var doTeam = !!team && (teamDirty || sig(mine.project) !== sig(teamList()));
       /* Тінь — ДО локального запису: локальний адаптер сповіщає синхронно всередині `save`, і обʼєднання в тому
          сповіщенні мусить уже бачити нову командну частину (поправка 7). */
       if (doTeam) shadow = mine.project;
+      /* `_aud` ставить лише коментатор при створенні піна, тож пін не мандрує між сховищами; якби міг — стару копію
+         довелося б видаляти. */
       var jobs = [];
-      if (doLocal) jobs.push(Promise.resolve(local.save(mine.local)));
-      if (doTeam) jobs.push(Promise.resolve(team.save(mine.project)));
+      if (doLocal) jobs.push(call(function () { return local.save(mine.local); }));
+      if (doTeam) {
+        jobs.push(call(function () { return team.save(mine.project); }).then(
+          function () { teamDirty = false; },
+          function (e) { teamDirty = true; throw e; }));
+      }
       else if (!team && mine.project.length) {
         jobs.push(Promise.reject(new Error('team comments unavailable: ' + store.teamDown)));
       }
@@ -76,6 +85,7 @@
     store.remove = function (ids) {
       ids = ids || [];
       var l = [], t = [];
+      /* id, що є в обох сховищах, видаляється з обох (id унікальні за генератором; суто теоретично). */
       for (var i = 0; i < ids.length; i++) {
         var inL = has(local.load(), ids[i]), inT = has(teamList(), ids[i]);
         if (inL || !inT) l.push(ids[i]);
@@ -83,8 +93,8 @@
       }
       if (shadow) shadow = shadow.filter(function (c) { return t.indexOf(c.id) < 0; });
       var jobs = [];
-      if (l.length && typeof local.remove === 'function') jobs.push(Promise.resolve(local.remove(l)));
-      if (t.length && typeof team.remove === 'function') jobs.push(Promise.resolve(team.remove(t)));
+      if (l.length && typeof local.remove === 'function') jobs.push(call(function () { return local.remove(l); }));
+      if (t.length && typeof team.remove === 'function') jobs.push(call(function () { return team.remove(t); }));
       return Promise.all(jobs).then(function () {});
     };
     store.subscribe = function (f) { if (typeof f === 'function') subs.push(f); };

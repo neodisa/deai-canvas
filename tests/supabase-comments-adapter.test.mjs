@@ -669,11 +669,11 @@ test("запис різницею: fetchAll скидає written до щойно
 });
 
 test("запис різницею: коментар без необовʼязкового поля (undefined) після fetchAll → save того ж списку — жодного upsert", async () => {
-  const w = world({ rows: [row("a", { resolved_v: null, resolve_reason: null })] });
+  const w = world({ rows: [row("a", { resolved_v: null, resolve_reason: null, fp: null, born_v: null, text: null })] });
   const s = w.create();
   await s.ready;
   const mine = pin("a");
-  delete mine.resolvedV; delete mine.resolveReason; delete mine.ts;      // у БД це null, у вікні — відсутнє поле
+  delete mine.resolvedV; delete mine.resolveReason; delete mine.ts; delete mine.fp; delete mine.bornV; delete mine.text;      // у БД це null, у вікні — відсутнє поле
   mine.ts = "19.10.2026 10:00";
   await s.save([mine]);
   assert.equal(upserts(w).length, 0, "undefined і null — одне й те саме для порівняння");

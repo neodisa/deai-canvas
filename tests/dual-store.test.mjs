@@ -122,3 +122,42 @@ test("сповіщення будь-якого під-сховища — сві�
   assert.deepEqual(plain([L.log.filter((e) => e[0] !== "save").map((e) => e[0]), T.log.map((e) => e[0])]),
     [["refresh", "refresh", "close"], ["refresh", "close"]]);
 });
+
+test("відхилений командний запис повторюється при наступному save, навіть без змін командної частини (teamDirty)", async () => {
+  const L = fake([P("l1")]), T = fake([P("t1")]);
+  let fail = true;
+  const orig = T.store.save;
+  T.store.save = (list) => (fail ? (T.log.push(["save-fail"]), Promise.reject(new Error("мережа"))) : orig(list));
+  const d = load()({ local: L.store, team: T.store });
+  await d.ready;
+  const list = d.load().map((c) => ({ ...c }));
+  list.push({ ...P("n1"), _aud: "project" });
+  await assert.rejects(d.save(list));
+  fail = false;
+  const next = d.load().map((c) => (c.id === "l1" ? { ...c, text: "інше" } : { ...c }));   // змінено лише локальне
+  await d.save(next);
+  assert.deepEqual(plain(T.log.at(-1)[1].map((c) => c.id)), ["t1", "n1"], "командний запис повторено");
+  const n = T.log.length;
+  await d.save(d.load().map((c) => ({ ...c })));
+  assert.equal(T.log.length, n, "після успіху повторів нема");
+});
+
+test("синхронний кидок під-сховища стає відмовою; прапорець повтору лишається", async () => {
+  const L = fake([P("l1")]), T = fake([P("t1")]);
+  let boom = true;
+  const orig = T.store.save;
+  T.store.save = (list) => { if (boom) throw new Error("синхронно"); return orig(list); };
+  const d = load()({ local: L.store, team: T.store });
+  await d.ready;
+  const list = d.load().map((c) => ({ ...c }));
+  list.push({ ...P("n1"), _aud: "project" });
+  await assert.rejects(d.save(list), /синхронно/);
+  boom = false;
+  await d.save(d.load().map((c) => ({ ...c })));
+  assert.deepEqual(plain(T.log.at(-1)[1].map((c) => c.id)), ["t1", "n1"]);
+  const L2 = fake([P("l1")]);
+  L2.store.save = () => { throw new Error("локальне впало"); };
+  const d2 = load()({ local: L2.store, team: null, teamDown: "x" });
+  await d2.ready;
+  await assert.rejects(d2.save([{ ...P("l1"), text: "z" }]), /локальне впало/);
+});
