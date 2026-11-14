@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 /* Файл — класичний скрипт (`window.DeaiDualStore`), як `local-adapter.js`: вантажимо у пісочницю з `window`. */
-function load() {
+function load(timers = { setTimeout, clearTimeout }) {
   const win = {};
-  vm.runInNewContext(readFileSync(new URL("../app/vendor/dual-store.js", import.meta.url), "utf8"), { window: win });
+  vm.runInNewContext(readFileSync(new URL("../app/vendor/dual-store.js", import.meta.url), "utf8"), { window: win, setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout });
   return win.DeaiDualStore;
 }
 /* Обʼєкти з `vm`-контексту мають СВІЙ прототип: `deepStrictEqual` їх не зрівняє зі звичайними — порівнюємо копії. */
@@ -182,4 +182,61 @@ test("teamDirty: пізній успіх СТАРОГО командного з�
   await d.save(next);
   assert.equal(T.log.length, n + 1, "запис B повторено");
   assert.deepEqual(plain(T.log.at(-1)[1].map((c) => c.id)), ["t1", "n1", "n2"]);
+});
+
+const never = () => new Promise(() => {});
+const closes = (T) => T.log.filter((e) => e[0] === "close").length;
+
+test("завислий ready командного не ховає локальних: тайм-аут → teamDown, команду закрито раз, load — лише локальне", { timeout: 2000 }, async () => {
+  const L = fake([P("l1")]), T = fake([P("t1")]);
+  T.store.ready = never();
+  const d = load()({ local: L.store, team: T.store, teamTimeoutMs: 20 });
+  await d.ready;
+  assert.match(d.teamDown, /did not answer/);
+  assert.equal(closes(T), 1);
+  assert.deepEqual(plain(d.load().map((c) => c.id)), ["l1"]);
+});
+
+test("команда відповіла ПІСЛЯ тайм-ауту: лишається вимкненою, close не вдруге, необроблених відмов нема", { timeout: 2000 }, async () => {
+  const bad = [];
+  const spy = (e) => bad.push(e);
+  process.on("unhandledRejection", spy);
+  try {
+    for (const late of ["resolve", "reject"]) {
+      const L = fake([P("l1")]), T = fake([P("t1")]);
+      let fin; T.store.ready = new Promise((res, rej) => { fin = late === "resolve" ? res : () => rej(new Error("пізно")); });
+      const d = load()({ local: L.store, team: T.store, teamTimeoutMs: 20 });
+      await d.ready;
+      fin();
+      await new Promise((r) => setTimeout(r, 30));
+      assert.match(d.teamDown, /did not answer/, late);
+      assert.equal(closes(T), 1, late);
+      assert.deepEqual(plain(d.load().map((c) => c.id)), ["l1"], late);
+    }
+    assert.deepEqual(bad, []);
+  } finally { process.off("unhandledRejection", spy); }
+});
+
+test("команда готова до тайм-ауту: не вимкнена, таймер знято", { timeout: 2000 }, async () => {
+  const L = fake([P("l1")]), T = fake([P("t1")]);
+  const live = new Set();                                                       // таймери, що ще чекають
+  const d = load({
+    setTimeout: (f, ms) => { const h = setTimeout(f, ms); live.add(h); return h; },
+    clearTimeout: (h) => { live.delete(h); clearTimeout(h); },
+  })({ local: L.store, team: T.store, teamTimeoutMs: 60000 });
+  await d.ready;
+  assert.equal(live.size, 0, "таймер тайм-ауту знято, коли команда відповіла першою");
+  assert.equal(d.teamDown, null);
+  assert.equal(closes(T), 0);
+  assert.deepEqual(plain(d.load().map((c) => c.id)), ["l1", "t1"]);
+});
+
+test("close(), потім пізня відмова готовності команди: team.close рівно раз", { timeout: 2000 }, async () => {
+  const L = fake([P("l1")]), T = fake([P("t1")]);
+  let rej; T.store.ready = new Promise((_, r) => { rej = r; });
+  const d = load()({ local: L.store, team: T.store, teamTimeoutMs: 60000 });
+  d.close();
+  rej(new Error("пізно"));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(closes(T), 1);
 });

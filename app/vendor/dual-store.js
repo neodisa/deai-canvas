@@ -36,6 +36,10 @@
   function call(fn) { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } }
   function has(list, id) { for (var i = 0; i < (list || []).length; i++) if (list[i] && list[i].id === id) return true; return false; }
 
+  /* Скільки чекати готовності командного сховища. Адаптер модуля не відхиляє `ready`, а запит, що не завершується
+     (напівживий VPN чи DNS), висів би вічно й ховав разом із собою локальні піни: рамка не викликала б init. */
+  var TEAM_READY_MS = 8000;
+
   function DualStore(opts) {
     var local = opts.local;
     var team = opts.team || null;
@@ -48,15 +52,30 @@
     function union() { return tag(local.load(), 'local').concat(tag(teamList(), 'project')); }
     function notify() { var u = union(); for (var i = 0; i < subs.length; i++) { try { subs[i](u); } catch (e) {} } }
     function dropTeam(why) {
-      if (team && typeof team.close === 'function') { try { team.close(); } catch (e) {} }
-      team = null; shadow = null; store.teamDown = String(why || 'team comments unavailable');
+      var t = team;
+      team = null; shadow = null;
+      if (t && typeof t.close === 'function') { try { t.close(); } catch (e) {} } store.teamDown = String(why || 'team comments unavailable');
     }
     if (typeof local.subscribe === 'function') local.subscribe(function () { notify(); });
     if (team && typeof team.subscribe === 'function') team.subscribe(function () { shadow = null; notify(); });
-    store.ready = Promise.all([
-      Promise.resolve(local.ready),
-      team ? Promise.resolve(team.ready).catch(function (e) { dropTeam((e && e.message) || 'team comments did not answer'); }) : null,
-    ]).then(function () {});
+    /* Готовність команди обмежена таймером; локальна — ні. Пізній підсумок після тайм-ауту (чи після close) ігноруємо:
+       без воскресіння, без подвійного close, без необробленої відмови. */
+    function teamReady() {
+      var t = team;
+      if (!t) return null;
+      if (typeof setTimeout !== 'function') return Promise.resolve(t.ready).catch(function (e) { if (team === t) dropTeam((e && e.message) || 'team comments did not answer'); });   // середовище без таймерів (пісочниця): без обмеження
+      var ms = typeof opts.teamTimeoutMs === 'number' ? opts.teamTimeoutMs : TEAM_READY_MS;
+      var timer = null;
+      var guard = new Promise(function (resolve) {
+        timer = setTimeout(function () { timer = null; if (team === t) dropTeam('team comments did not answer'); resolve(); }, ms);
+      });
+      var settled = Promise.resolve(t.ready).then(
+        function () {},
+        function (e) { if (team === t) dropTeam((e && e.message) || 'team comments did not answer'); }
+      ).then(function () { if (timer !== null) { clearTimeout(timer); timer = null; } });
+      return Promise.race([settled, guard]);
+    }
+    store.ready = Promise.all([Promise.resolve(local.ready), teamReady()]).then(function () {});
     store.load = function () { return union(); };
     store.save = function (list) {
       var mine = { local: [], project: [] };
@@ -116,7 +135,9 @@
     store.close = function () {
       subs.length = 0;
       if (typeof local.close === 'function') { try { local.close(); } catch (e) {} }
-      if (team && typeof team.close === 'function') { try { team.close(); } catch (e) {} }
+      var t = team;
+      team = null; shadow = null;            // пізня готовність команди нічого не закриє вдруге
+      if (t && typeof t.close === 'function') { try { t.close(); } catch (e) {} }
     };
     store.uploadShot = function (id, dataUrl, c) {
       if (!team || typeof team.uploadShot !== 'function' || !c || c._aud !== 'project') return Promise.resolve(null);
