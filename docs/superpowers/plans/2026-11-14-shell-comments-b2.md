@@ -10,7 +10,7 @@
 
 **Спека:** `docs/superpowers/specs/2026-11-13-shell-comments-design.md`, розділ «Б2» (погоджено власником 13.11.2026). Принципи: `PRODUCT.md` (принцип 6 — коментатор окремий продукт). **ПОПРАВКИ НИЖЧЕ мають перевагу над текстом спеки й задач.**
 
-**Рівень строгості — повний:** на кожну задачу — виконавець і ревʼюер (спершу відповідність задачі, потім якість); кожна нова перевірка доводиться мутацією (один рядок → червоніє → відновлено; у звіті — що саме мутовано); після T12 — фінальне ревʼю всієї гілки, релізний прогін, перевірка проти живого канвасу (T13, контролер). Пуш — лише з дозволу власника.
+**Рівень строгості — повний:** на кожну задачу — виконавець і ревʼюер (спершу відповідність задачі, потім якість); кожна нова перевірка доводиться мутацією (один рядок → червоніє → відновлено; у звіті — що саме мутовано); після T13 — фінальне ревʼю всієї гілки, релізний прогін, перевірка проти живого канвасу (T14, контролер). Пуш — лише з дозволу власника.
 
 Базова лінія на `8cdf802` (= 0.26.0): JS 2113 pass; Python 5084 / bin OK / app 170; живі 537. T1 записує числа першого прогону у звіт.
 
@@ -58,7 +58,7 @@
 7. **Тінь командної частини.** `supabase-comments` після запису не сповіщає підписників (лише realtime згодом). Локальний адаптер сповіщає синхронно ПІД ЧАС `save`, і обʼєднання тоді взяло б СТАРИЙ командний кеш — доручення «відкочувалось» би на екрані до realtime. Тому комбіноване сховище тримає тінь щойно відданої командної частини, поки командне сховище не заговорить само.
 8. **`supabase-comments`: запис різницею + realtime лише свого каналу.** (а) `save` шле upsert лише рядків, що відрізняються від останнього прочитаного/записаного знімка; порівняння — канонічним JSON із сортованими ключами (Postgres `jsonb` переставляє ключі `meta`, і наївне порівняння вважало б зміненим кожен рядок); нема змін — нема запиту. (б) Подія realtime перечитує канал лише коли стосується його: INSERT/UPDATE — `payload.new.project_id === channel`; DELETE (несе лише ключ) — id є в нашому кеші; незнайома форма — перечитати. Причина: з Б2 кожна сторінка задачі ЛІГИ підписана на командний канал, а підписка — на всю таблицю; без фільтра кожен коментар будь-де давав би `select *` (зі знімками HTML) у кожному відкритому вікні — урок квоти трафіку 21.10.2026. Версія модуля → 1.3.0.
 9. **Нумерація.** У комбінованому режимі коментатор без `local:true`: номери на всіх пінах. Новий пін бере `max(seq)` по обох сховищах + 1, тож нові номери унікальні; старі номери локальних і командних незалежні (L#3 і P#3 можуть співіснувати) — картка показує адресата, `#N` знаходить обидва. Колір піна — `audiences[i].color` (локальний — `#7C6CF0`, як був); командний — колір коментатора за замовчуванням.
-10. **Перемикання каналу в робочому місці зникає повністю:** `commentMode`, `effMode`, `setAudience`, приймач `dc-audience`, `BAR_ACTIONS.aud`/`cmtch`, пункти палітри `aud-local`/`aud-project` (і `effectiveCommentMode`, якщо більше ніким не вживається), `&ch=` у `frame.src`. Аварійний вихід палітри «до локального» зайвий: падіння командного більше не валить коментатора (поправка 4). Живий `tests/live/comment-audience.test.mjs` видаляється в T11 з переліком, де тепер кожна його охорона.
+10. **Перемикання каналу в робочому місці зникає повністю:** `commentMode`, `effMode`, `setAudience`, приймач `dc-audience`, `BAR_ACTIONS.aud`/`cmtch`, пункти палітри `aud-local`/`aud-project` (і `effectiveCommentMode`, якщо більше ніким не вживається), `&ch=` у `frame.src`. Аварійний вихід палітри «до локального» зайвий: падіння командного більше не валить коментатора (поправка 4). Живий `tests/live/comment-audience.test.mjs` видаляється в T12 з переліком, де тепер кожна його охорона.
 11. **«Огляд»** бере дві конфігурації наявного `/api/comment-config` (`ch=local` і, коли є командний постачальник, `ch=project`) і складає те саме `DeaiDualStore` на клієнті; сервер `/api/comment-config` не змінюється. `env.channel()` → `'dual'`/`'local'` (ключ інстансу); `projectId` — локальний ключ (`<задача>/local`).
 12. **Пам'ять вибору адресата:** ключ `localStorage['dc-cmt-aud']` (спільний для рамки й оболонки — той самий origin). Коментатор отримує `host.defaultAudience()` і `host.onAudiencePick(id)`; рамці їх дає `HOST_ARG` (`serve.py`), «Огляду» — оболонка. Пару «ключ у Python ↔ ключ у `app.js`» приколює тест.
 13. **Розділ «Нові від команди»** — набір `cmtFresh` поточного відкриття панелі: нові на момент відкриття + ті, що прийшли, поки вона відкрита. Маркер «бачив» посувається одразу (і на відкриття, і на прихід при відкритій панелі); `cmtFresh` чиститься при закритті панелі, зміні задачі чи виду. Нові картки не дублюються в «Відкритих».
@@ -67,6 +67,7 @@
 16. **Число в дереві** — нове поле рядка `news` (бурштинове), а не наявне `count` (воно про склад теки). Сторінку піна дає `pinTarget(c).page` з `app/overview-pins.js` (та сама логіка, що на «Огляді»).
 17. **Вкладки:** опит `GET /api/comment-news` для відкритих вкладок, крім активної (активна — острівець), лише вкладок поточного простору, лише коли вікно видиме; одразу при зміні складу вкладок і на `focus` вікна, далі раз на 90 с. Вкладки інших просторів — без числа (маршрут бачить лише задачі простору запиту).
 18. **Урок Б1 «ітерацію закриття — окремим полем» розглянуто й НЕ беремо в Б2:** для командних пінів окреме поле вимагало б PATCH усього `meta` (урок `patch_project_pin`: PostgREST міняє `jsonb` цілком, ризик затерти `shot`/`shotUrl`) або колонки (не-ціль спеки). Лишається правило Б1 для обох сховищ (`byClaude = resolvedV != null && resolveReason !== 'resolved manually'`); T8 додає тест на командний пін, закритий агентом і вручну.
+19. **Режими коментування — в острівці, одна панель** (рішення власника 14.11.2026 зі скріншота: «острівець і смужка режимів — дві панелі в різних дизайнах; має бути одна»). У режимі хоста коментатор ховає свою смужку режимів (`.modes`), як у Б1 сховав ручку й панель, і віддає хосту `tool()` / `setMode(m)` / `setFreeze(on)`; острівець, поки коментування ввімкнено в «Макеті», показує режими Елемент / Текст / Кілька / Область і «Заморозити» своїми іконками й мовою оболонки. На «Огляді» режим один (елемент) — кнопок режимів нема. Підйом острівця над смужкою (`claude-lift`, опит раз на 500 мс) прибирається. Композер і форма «Кілька» не опускаються нижче острівця (`host.bottomInset()`). Задача T11.
 
 ---
 
@@ -84,8 +85,9 @@
 | `app/comments-model.js`, `app/comment-news.js` (новий), `app/comments-view.js`, `app/island.js`, `app/tabs-model.js`, `app/tabs-view.js`, `app/shell-panel.js`, `app/i18n.js`, `tests/comments-model.test.mjs`, `tests/comment-news.test.mjs` (новий), `tests/comments-view.test.mjs`, `tests/island.test.mjs`, `tests/tabs-*.test.mjs`, `tests/shell-panel*.test.mjs` | чисті модулі | T8 |
 | `app/app.js`, `app/shell-palette.js`, `app/styles.css`, `app/spaces-model.js`, тести палітри й еталони | проводка в оболонці | T9 |
 | `app/app.js` | числа на вкладках | T10 |
-| `tests/live/_memo.mjs` (новий), `tests/live/comments.test.mjs`, `tests/live/comments-team.test.mjs` (новий), `tests/live/comment-audience.test.mjs` (видалити), інші `tests/live/*.test.mjs` | живі сценарії й міграція | T11 |
-| `CHANGELOG.md`, `package.json`, `README.md`, `commenter/README.md`, `docs/modules/comments.md`, `app/modules/supabase-comments/README.md` | реліз 0.27.0 | T12 |
+| `commenter/src/comment-layer.js` (+ збірка), `app/island.js`, `app/icons.js`, `app/i18n.js`, `app/app.js`, `app/styles.css`, `tests/island.test.mjs`, `tests/live/commenter-host.test.mjs`, `tests/live/comments-panel.test.mjs` | режими коментування в острівці | T11 |
+| `tests/live/_memo.mjs` (новий), `tests/live/comments.test.mjs`, `tests/live/comments-team.test.mjs` (новий), `tests/live/comment-audience.test.mjs` (видалити), інші `tests/live/*.test.mjs` | живі сценарії й міграція | T12 |
+| `CHANGELOG.md`, `package.json`, `README.md`, `commenter/README.md`, `docs/modules/comments.md`, `app/modules/supabase-comments/README.md` | реліз 0.27.0 | T13 |
 
 ---
 
@@ -418,7 +420,7 @@
 - Modify: `app/serve.py` (`_local_comments_post`)
 - Test: `tests/test_serve.py`, `tests/live/commenter-host.test.mjs`
 
-Контракт (для `commenter/README.md` у T12): `audiences[i]` може мати `color` (лише `#rgb`…`#rrggbbaa`) і `note` (рядок під чипом); `host.defaultAudience` (функція чи рядок) і `host.onAudiencePick(id)`. Чипи у формі — ЛИШЕ з `host` і ≥ 2 аудиторіями; без `host` форма байт-у-байт як була.
+Контракт (для `commenter/README.md` у T13): `audiences[i]` може мати `color` (лише `#rgb`…`#rrggbbaa`) і `note` (рядок під чипом); `host.defaultAudience` (функція чи рядок) і `host.onAudiencePick(id)`. Чипи у формі — ЛИШЕ з `host` і ≥ 2 аудиторіями; без `host` форма байт-у-байт як була.
 
 - [ ] **Step 1: Тест сервера (червоний)** у `tests/test_serve.py` — за зразком наявного тесту, що ловить вичищення `_el`/`_pending` у `POST /api/local-comments` (пошук `_pending`): той самий запис із `_aud: 'project'` → у файлі задачі ключа `_aud` нема. Мутація потім — прибрати `'_aud'` із кортежу.
 
@@ -1180,9 +1182,9 @@
   ```
   (Назви токенів радіуса/ліній звірити з наявними правилами `.cmt-*` у цьому файлі; невідомий токен — охоронець червоніє.)
 
-- [ ] **Step 7: Тести.** `tests/shell-palette.test.mjs` — пункти `aud-*` зникли (тест на їх відсутність замість старих); пара ключа `dc-cmt-aud` і кольору в `tests/test_comments_role.py`; живі `comments-panel.test.mjs` і `overview-comments.test.mjs` — прогнати; що зламалось через зниклий сегмент каналу — мігрувати (селектори `cmtch` → `cmtfilter` лише там, де тест був про форму сегмента; тести про ПЕРЕМИКАННЯ каналу — видалити з переліком у звіті й посиланням на T11, де їх замінять сценарії адресата).
+- [ ] **Step 7: Тести.** `tests/shell-palette.test.mjs` — пункти `aud-*` зникли (тест на їх відсутність замість старих); пара ключа `dc-cmt-aud` і кольору в `tests/test_comments_role.py`; живі `comments-panel.test.mjs` і `overview-comments.test.mjs` — прогнати; що зламалось через зниклий сегмент каналу — мігрувати (селектори `cmtch` → `cmtfilter` лише там, де тест був про форму сегмента; тести про ПЕРЕМИКАННЯ каналу — видалити з переліком у звіті й посиланням на T12, де їх замінять сценарії адресата).
 
-- [ ] **Step 8: Прогін і мутації.** JS, Python, два живі файли — зелені. Мутації: (1) `setCommentsOpen(true)` не посуває маркер (свіжі лишаються «новими» після відкриття — тест T11 червоніє; тут — юніт-рівнем недоступно, тому мутацію довести в T11 і записати у звіт T9 як відкладену); (2) `cmtfilter` без перевірки `FILTERS.includes`; (3) `newsToast` при відкритій панелі (прибрати `return` у гілці `cmtOpen`).
+- [ ] **Step 8: Прогін і мутації.** JS, Python, два живі файли — зелені. Мутації: (1) `setCommentsOpen(true)` не посуває маркер (свіжі лишаються «новими» після відкриття — живий тест T12 червоніє; тут — юніт-рівнем недоступно, тому мутацію довести в T12 і записати у звіт T9 як відкладену); (2) `cmtfilter` без перевірки `FILTERS.includes`; (3) `newsToast` при відкритій панелі (прибрати `return` у гілці `cmtOpen`).
 
 - [ ] **Step 9: Commit** — `feat(shell): адресат і доручення в панелі, нові від команди (острівець, тост, дерево), без перемикача каналу`.
 
@@ -1236,7 +1238,162 @@
 
 ---
 
-### Task 11: Живі сценарії Б2 і міграція живих тестів
+### Task 11: Режими коментування в острівці — одна панель (поправка 19)
+
+**Files:**
+- Modify: `commenter/src/comment-layer.js` (+ збірка: `app/vendor/comment-layer.min.js`, `app/vendor/anchor.min.js`, `commenter/build-stamp.json`)
+- Modify: `app/serve.py` (`HOST_ARG`: `bottomInset`)
+- Modify: `app/island.js`, `app/icons.js`, `app/i18n.js`, `app/app.js`, `app/styles.css`
+- Test: `tests/island.test.mjs`, `tests/icons.test.mjs` (якщо приколює склад), `tests/test_comments_role.py`, `tests/live/commenter-host.test.mjs`, `tests/live/comments-panel.test.mjs`
+
+Чому: власник 14.11.2026 зі скріншота — острівець (оболонка) і смужка режимів коментатора (Element / Text / Multi / Area / Freeze) стоять одна над одною двома панелями в різних дизайнах; має бути ОДНА панель. Режими — інструмент коментування, їх дім — острівець (рішення 13.11: острівець = іконки).
+
+- [ ] **Step 1: Живі тести коментатора (червоні)** — у `tests/live/commenter-host.test.mjs`:
+  - з `host`: після `setCommentMode(true)` смужка `.modes` у тіньовому DOM НЕ видима (`getComputedStyle(...).display === 'none'`) і НЕ має класу `show`; без `host` — `.modes.show` видима, як було;
+  - `CommentLayer.tool()` → `{ mode: 'element', freeze: true, armed: <bool>, modes: ['element','text','multi','area'], canFreeze: true }` (на сторінці з `freeze` за замовчуванням);
+  - `setMode('text')` → `true`, `tool().mode === 'text'`, `tool().armed === true`; `setMode('bogus')` → `false`; `setMode('multi')` показує форму «Кілька» (`.mcompose.show`);
+  - `setFreeze(false)` при ввімкненому коментуванні → у `document.documentElement` нема класу `cl-freeze`; `setFreeze(true)` → є;
+  - коментатор полотна (якщо в цьому файлі є сторінка з `anchors`; інакше — у `tests/live/overview-comments.test.mjs`): `tool().modes` = `['element']`, `canFreeze: false`, `setMode('text')` → `false`;
+  - `host.bottomInset: () => 200` → відкрита форма піна (`.compose`) має `getBoundingClientRect().bottom <= innerHeight - 200` навіть для елемента біля низу сторінки; форма «Кілька» — `bottom` теж не нижче за `innerHeight - 200`.
+  Run → FAIL.
+
+- [ ] **Step 2: Коментатор.**
+  - CSS: до правила Б1, що ховає `.handle`, `.panel`, `.sheetscrim`, `.sheetpeek` під `.root.hosted`, додати `.modes` (той самий `display:none !important`).
+  - `_armComment`: `if (this._modesBar && !this._hostOpts) this._modesBar.classList.toggle('show', on);` (у режимі хоста смужки нема — і класу теж, щоб ніхто не прочитав «вона показана»).
+  - Тіло обробника кнопки режиму винести в метод і кликати його з кнопок:
+    ```js
+    /** Вибір режиму — і кнопкою смужки (без хоста), і хостом (`setMode`). */
+    _pickMode(m) {
+      this._clearMulti(); this._clearArea(); this._setHover(false);
+      this._mode = m;
+      this._sh.querySelectorAll('.mode:not(.mstop):not(.mfreeze)').forEach((x) => x.classList.toggle('active', x.getAttribute('data-mode') === m));
+      this._mcompose.classList.toggle('show', m === 'multi');
+      if (m === 'multi' && this._hostOpts) this._placeHostMulti();
+      this._armComment(true);
+    },
+    ```
+    (Обробник кнопки: `b.onclick = () => this._pickMode(b.getAttribute('data-mode'));`.)
+  - API хоста (поруч із `togglePins`):
+    ```js
+    /** Інструмент коментування для хоста (Deai 0.27.0, поправка 19): режим, заморозка, увімкнено, доступні режими
+     *  (полотно — лише `element`, заморозки там нема: це не сторінка). */
+    tool() {
+      return { mode: this._mode, freeze: !!this.freeze, armed: !!this.commentMode,
+        modes: this.anchors ? ['element'] : ['element', 'text', 'multi', 'area'], canFreeze: !this.anchors };
+    },
+    /** Вибрати режим (= кнопка смужки): вмикає коментування. Недоступний чи невідомий — `false`. */
+    setMode(m) {
+      if (!this._inited || this.tool().modes.indexOf(m) < 0) return false;
+      this._pickMode(m);
+      return true;
+    },
+    setFreeze(on) {
+      if (!this._inited || this.anchors) return false;
+      this._setFreeze(!!on);
+      return true;
+    },
+    ```
+  - Нижня межа від хоста (поруч із `_hostInset`):
+    ```js
+    /** Скільки px знизу вікна коментатора займає ХОСТ (острівець): форми не лягають під нього. Без колбека, нечисло, виняток — 0. */
+    _hostBottomInset() {
+      const h = this._hostOpts;
+      if (!h || typeof h.bottomInset !== 'function') return 0;
+      try { const n = +h.bottomInset(); return Number.isFinite(n) && n > 0 ? n : 0; } catch (e) { return 0; }
+    },
+    /** Форма «Кілька» в режимі хоста: правий край — від панелі хоста, низ — над острівцем. */
+    _placeHostMulti() {
+      this._mcompose.style.right = (this._hostInset() + 20) + 'px';
+      this._mcompose.style.bottom = (this._hostBottomInset() + 12) + 'px';
+    },
+    ```
+    `_composeFloor()`: першим рядком — `if (this._hostOpts) { const b = this._hostBottomInset(); return b > 0 ? window.innerHeight - b - 8 : Infinity; }`.
+  - Збірка: `cd commenter && npm ci && npm run build && cd ..`.
+
+- [ ] **Step 3: `HOST_ARG`** (`app/serve.py`) — ще один член (кома після `onAudiencePick`):
+  ```js
+            bottomInset: function () { try { var f = window.parent && window.parent.__dcIslandInset; return typeof f === 'function' ? f() : 0; } catch (e) { return 0; } }
+  ```
+  Тест у `tests/test_comments_role.py`: `HOST_ARG` містить `__dcIslandInset`, і `app/app.js` теж (пара).
+
+- [ ] **Step 4: Іконки** (`app/icons.js`, той самий вигляд `<symbol>` 24×24, `stroke-width="1.7"`; шляхи — з набору коментатора, щоб острівець і форма говорили однією мовою):
+  - `element`: `<rect x="4.5" y="4.5" width="15" height="15" rx="3.5"/>`
+  - `text`: `<path d="M5 6h14M12 6v12M9 19h6"/>`
+  - `layers`: `<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/>`
+  - `area`: `<path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/>`
+  - `freeze`: `<path d="M12 2v20M4.5 6.5l15 11M19.5 6.5l-15 11"/><path d="M12 6.5l2.5-2M12 6.5L9.5 4.5M12 17.5l2.5 2M12 17.5l-2.5 2"/>`
+
+- [ ] **Step 5: i18n** (uk / en):
+  - `islModes`: `Режим коментування` / `Comment mode`
+  - `islMode_element`: `Елемент — коментар до одного елемента` / `Element — comment on one element`
+  - `islMode_text`: `Текст — виділіть текст і прокоментуйте` / `Text — select text and comment on it`
+  - `islMode_multi`: `Кілька — кілька елементів в одному коментарі` / `Multi — several elements in one comment`
+  - `islMode_area`: `Область — обведіть ділянку` / `Area — drag a region`
+  - `islFreeze`: `Заморозити сторінку — меню й підказки не закриваються, поки коментуєте` / `Freeze the page — menus and tooltips stay open while you comment`
+
+- [ ] **Step 6: `app/island.js`** — параметр `commentTool = null` (`{mode, freeze, modes, canFreeze}`). Після кнопки коментарів, коли `screen === "task" && commentsOn && commentTool && commentTool.modes.length > 1`:
+  ```js
+  const MODE_ICON = { element: "element", text: "text", multi: "layers", area: "area" };
+  …
+      const modes = commentTool.modes.filter((m) => MODE_ICON[m]);
+      parts.push('<span class="isl-sep" aria-hidden="true"></span>');
+      parts.push(`<div class="isl-modes" role="group" aria-label="${esc(t("islModes"))}">`
+        + modes.map((m) => {
+          const on = commentTool.mode === m;
+          const tip = esc(t(`islMode_${m}`));
+          return `<button class="isl-btn${on ? " isl-btn--on" : ""}" data-act="cmtmode" data-val="${m}" aria-pressed="${on}"`
+            + ` aria-label="${tip}" title="${tip}">${ico(MODE_ICON[m])}</button>`;
+        }).join("") + "</div>");
+      if (commentTool.canFreeze) {
+        const tip = esc(t("islFreeze"));
+        parts.push(`<button class="isl-btn isl-freeze${commentTool.freeze ? " isl-freeze--on" : ""}" data-act="cmtfreeze"`
+          + ` aria-pressed="${!!commentTool.freeze}" aria-label="${tip}" title="${tip}">${ico("freeze")}</button>`);
+      }
+      parts.push('<span class="isl-sep" aria-hidden="true"></span>');
+  ```
+  Тести `tests/island.test.mjs`: режимів нема без `commentsOn`, без `commentTool`, на «Огляді» (`modes: ['element']`), на екрані «Задачі»; з ними — 4 кнопки `data-act="cmtmode"` у порядку element/text/multi/area, натиснута — за `mode`; невідомий режим у `modes` відкидається; `freeze: true` → `isl-freeze--on` і `aria-pressed="true"`; `canFreeze: false` → кнопки заморозки нема.
+
+- [ ] **Step 7: `app/app.js`.**
+  - `let cmtTool = null;` і
+    ```js
+    /** Інструмент коментатора поточного виду (`CommentLayer.tool()`, поправка 19) або `null`. */
+    function readTool(L) {
+      try {
+        const v = L && typeof L.tool === 'function' ? L.tool() : null;
+        return v && Array.isArray(v.modes) ? { mode: String(v.mode), freeze: !!v.freeze, modes: v.modes.slice(), canFreeze: !!v.canFreeze } : null;
+      } catch (e) { return null; }
+    }
+    ```
+    Оновлювати `cmtTool = readTool(cmtLayer())` в `onCommentsEvent` на `ready` і `mode`, у `cmtViewSwitch`, `setCommentsOpen`, `dropFrameCmt` (там — `null`); `paintIsland` передає `commentTool: cmtTool`.
+  - `BAR_ACTIONS`:
+    ```js
+      cmtmode: (m) => { const L = cmtLayer(); if (L && typeof L.setMode === 'function' && L.setMode(m)) { cmtTool = readTool(L); paintIsland(); } },
+      cmtfreeze: () => { const L = cmtLayer(); if (cmtTool && L && typeof L.setFreeze === 'function' && L.setFreeze(!cmtTool.freeze)) { cmtTool = readTool(L); paintIsland(); } },
+    ```
+    (делегація з `#hud` уже веде `data-act` в `BAR_ACTIONS` — перевірити, що `data-val` передається, як для `comments`/`inspector`).
+  - Нижня межа для коментатора:
+    ```js
+    /** Скільки px знизу перекриває острівець над прямокутником `r` (рамка чи полотно) — для `host.bottomInset` коментатора. */
+    function islandInsetOver(r) {
+      const isl = islandEl.getBoundingClientRect();
+      return isl.height && r ? Math.max(0, Math.round(r.bottom - isl.top + 8)) : 0;
+    }
+    /* Рамка питає це через `HOST_ARG.bottomInset` (`serve.py`; пару приколює `test_comments_role`). */
+    window.__dcIslandInset = () => islandInsetOver(frame.getBoundingClientRect());
+    ```
+    і в `host` для «Огляду» (поруч із `rightInset`): `bottomInset: () => islandInsetOver(canvasEl.getBoundingClientRect())`.
+  - Прибрати `layerModesShown()`, її `setInterval` (500 мс) і коментар над ними; у `app/styles.css` — правила `body.claude-lift .island{…}`, `body.claude-lift #canvas-hint{…}` і коментарі над ними (смужки режимів в оболонці більше нема — піднімати нема над чим). `grep -rn "claude-lift\|layerModesShown" app tests` після — порожньо (тести, що їх згадують, — мігрувати з одним рядком у звіті).
+  - Стилі (`app/styles.css`, поруч із `.isl-sep`): `.isl-modes{display:inline-flex;align-items:center;gap:2px}` і `.isl-freeze--on{color:var(--open)}`.
+
+- [ ] **Step 8: Живий тест оболонки** — `tests/live/comments-panel.test.mjs`: панель відкрита (C) → в острівці 4 кнопки `[data-act="cmtmode"]` і `[data-act="cmtfreeze"]` (`aria-pressed="true"` — заморозка ввімкнена за замовчуванням); смужка `.modes` коментатора в рамці не видима; клік «Текст» → `frame.contentWindow.CommentLayer.tool().mode === 'text'` і кнопка `aria-pressed="true"`; клік «Заморозити» → у рамці `document.documentElement` без `cl-freeze`, кнопка `aria-pressed="false"`; `#hud .island` має той самий `getBoundingClientRect().bottom` при панелі закритій і відкритій (підйому нема); перехід в «Огляд» з відкритою панеллю → `[data-act="cmtmode"]` нема; панель закрито → кнопок режимів нема.
+
+- [ ] **Step 9: Прогони й мутації.** JS (усі три набори + штамп), Python (`test_comments_role`), живі `commenter-host`, `comments-panel`, `overview-comments`, `tabs` — зелені. Мутації: (1) у правилі `.root.hosted …` прибрати `.modes` (збірка) → живий червоний; (2) `setMode` без перевірки `tool().modes` → червоний тест полотна; (3) `_composeFloor` без гілки хоста → червоний тест форми; (4) в `island.js` прибрати умову `commentsOn` → юніт червоний. Після кожної мутації коментатора — відновити й перезібрати; `git diff --exit-code app/vendor commenter/build-stamp.json`.
+
+- [ ] **Step 10: Commit** — `feat(shell): режими коментування в острівці — одна панель замість двох`.
+
+---
+
+### Task 12: Живі сценарії Б2 і міграція живих тестів
 
 **Files:**
 - Create: `tests/live/_memo.mjs` (не `*.test.mjs` — допоміжний)
@@ -1266,13 +1423,13 @@
 
 ---
 
-### Task 12: Документація й версія 0.27.0
+### Task 13: Документація й версія 0.27.0
 
 **Files:** `CHANGELOG.md`, `package.json`, `README.md`, `commenter/README.md`, `docs/modules/comments.md`, `app/modules/supabase-comments/README.md`
 
 - [ ] **Step 1: `CHANGELOG.md`** — розділ `## [0.27.0] — <DD.MM.YYYY дня релізу>` над `[0.26.0]`, вступ англійською одним реченням, далі за зразком 0.26.0:
   - **Додано:** адресат піна у формі (Claude / Команді, примітка про видимість, памʼять вибору); фільтр панелі «Усі / Для Claude / Команда»; «Доручити Claude» / «Забрати в Claude» і бейдж; «Нові від команди» — розділ, бурштиновий бейдж острівця, плашка «Показати», число в дереві й на вкладках; смуга «Командні коментарі недоступні: …» замість банера; `inbox.py --all`; необовʼязкова функція ролі `recent` і `GET /api/comment-news`.
-  - **Змінено (поведінка агента — окремим жирним пунктом першим):** «**Claude бачить лише доручені командні коментарі.** `bin/inbox.py`, `bin/state.py` і `/comments` показують локальні й доручені (`meta.assignee = "claude"`); усі — `inbox.py --all` / `/comments?all=1`.» Далі: у робочому місці один шар на обидва канали — перемикача «Claude / Команда» і параметра `ch` більше нема; номери на всіх пінах, локальні — фіолетові; `supabase-comments` 1.3.0 пише лише змінені рядки й реагує лише на події свого каналу.
+  - **Змінено (поведінка агента — окремим жирним пунктом першим):** «**Claude бачить лише доручені командні коментарі.** `bin/inbox.py`, `bin/state.py` і `/comments` показують локальні й доручені (`meta.assignee = "claude"`); усі — `inbox.py --all` / `/comments?all=1`.» Далі: режими коментування (Елемент / Текст / Кілька / Область, «Заморозити») — в острівці, а не окремою смужкою коментатора (одна панель, мова оболонки); у робочому місці один шар на обидва канали — перемикача «Claude / Команда» і параметра `ch` більше нема; номери на всіх пінах, локальні — фіолетові; `supabase-comments` 1.3.0 пише лише змінені рядки й реагує лише на події свого каналу.
   - **Не змінено:** опубліковані превʼю, `/commented` без `host=1`, дані (міграції нема, `schema.sql` той самий).
   (Розділ CHANGELOG — те саме джерело, з якого діалог оновлення показує «Що нового»: окремого тексту для діалогу не треба.)
 - [ ] **Step 2: `package.json`** — `"version": "0.27.0"`.
@@ -1283,7 +1440,7 @@
 
 ---
 
-### Task 13: Фінальне ревʼю, релізний прогін, перевірка проти живого (контролер)
+### Task 14: Фінальне ревʼю, релізний прогін, перевірка проти живого (контролер)
 
 - [ ] **Step 1: Фінальне ревʼю** (один ревʼюер, Sonnet, англійський бриф) усієї гілки `main..feat/shell-comments-b2` проти спеки (Б2 + поправки цього плану): приватність (скрін і локальний фідбек не їдуть у командне; `_aud` не на диску й не в базі), трафік Supabase (запис різницею, realtime свого каналу, `recent` без важких полів), шлях без `host` байт-у-байт, публікація без комбінованого сховища, безпека розмітки (тексти лише через `esc`), охоронці доведені мутаціями. Ревʼюер працює з копією-архівом гілки, не з деревом. Знахідки → виправлення окремими комітами → повторне ревʼю.
 - [ ] **Step 2: Релізний прогін:** JS (усі три набори), Python (3 discover, тимчасовий `HOME`), живі — усі ПОСЛІДОВНО. Детермінізм збірки: `cd commenter && npm ci && npm run build && cd .. && git diff --exit-code app/vendor commenter/build-stamp.json`. Охоронець забороненого списку (`DEAI_FORBIDDEN_LIST=<forbidden-list> DEAI_REQUIRE_FORBIDDEN_LIST=1`) — зелений.
