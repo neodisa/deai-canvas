@@ -330,6 +330,18 @@ class AsOf(InboxCase):
         self.assertIn('найновіший пін: 02.10.2026 08:00', local)
         self.assertIn('найновіший пін: 27.09.2026 01:59', project)
 
+    def test_default_newest_pin_line_counts_only_pins_assigned_to_claude(self):
+        """Без `--all` рядок «найновіший пін» проєкту рахується за ВІДФІЛЬТРОВАНИМ списком: найновіший командний пін
+        без доручення його не рухає."""
+        self.net.project = [_proj('bbbbbbbb-1', 'доручений', ts='01.09.2026 10:00',
+                                  meta={'version': '3', 'assignee': 'claude'}),
+                            _proj('bbbbbbbb-2', 'чужий', ts='27.09.2026 01:59')]
+        rc, out, _ = self.run_main([])
+        self.assertEqual(rc, 0)
+        project = out.split('-- ПРОЄКТ', 1)[1]
+        self.assertIn('найновіший пін: 01.09.2026 10:00', project)
+        self.assertNotIn('27.09.2026', project)
+
     def test_no_timestamps_says_so(self):
         self.set_local([_pin('aaaaaaaa-1', 'a', ts='')])
         rc, out, _ = self.run_main([])

@@ -6895,7 +6895,7 @@ class Handler(SimpleHTTPRequestHandler):
             mine = pins if show_all else [p for p in pins if for_agent(p, 'project')]
             body = {'project': project, 'comments': mine, 'all': show_all}
             if not show_all:
-                body['hidden'] = len(pins) - len(mine)
+                body['hidden'] = len(pins) - len(mine)  # усі сховані з цього списку, закриті теж (на відміну від підказки inbox — вона рахує лише відкриті)
             if isinstance(pins, ModulePins) and pins.note():
                 body['warning'] = pins.note()
             self._send_json(body)

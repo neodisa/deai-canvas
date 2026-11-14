@@ -278,6 +278,21 @@ class InboxModuleTest(AgentEnv):
         self.assertIn('ще 1 відкритих командних без доручення Claude — усі: python3 bin/inbox.py --all', out)
         self.assertIn('Разом до відпрацювання: 0 локальних + 1 проєктних', out)
 
+    def test_the_hint_repeats_the_task_flag(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [cl('c0ffee02-bbbb', 'Чуже', seq=8)])
+        rc, out, _ = self.inbox(['--task', 'px'])
+        self.assertEqual(rc, 0, out)
+        self.assertIn('bin/inbox.py --task px --all', out)
+
+    def test_the_hint_counts_only_open_unassigned_pins(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [cl('c0ffee02-bbbb', 'Відкрите чуже', seq=8),
+                                     cl('c0ffee03-cccc', 'Закрите чуже', status='resolved', seq=9)])
+        rc, out, _ = self.inbox([])
+        self.assertEqual(rc, 0, out)
+        self.assertIn('ще 1 відкритих командних без доручення Claude', out)
+
     def test_all_shows_every_team_pin_exactly_as_before(self):
         self.enable_memo_in(self.plain)
         self.seed(self.plain, 'px', [assigned(cl('c0ffee01-aaaa', 'Доручене', seq=7)), cl('c0ffee02-bbbb', 'Чуже', seq=8)])
