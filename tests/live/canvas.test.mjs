@@ -132,7 +132,7 @@ async function press(page, locator) {
    вернутись» — це клік по РІЗНИХ елементах, а не той самий елемент двічі.
    Перемикач режиму коментарів (`[data-cmode="…"]`,
    пізніше `[data-act="cmode"]` у дропдаунах смуги) зі смуги пішов зовсім —
-   див. `setCommentMode` нижче. */
+   у 0.27.0 канали коментарів зникли зовсім (див. `forceRender` нижче). */
 const toOverview = (page) => page.locator('[data-act="mode"][data-val="overview"]');
 const toLayout = (page) => page.locator('[data-act="mode"][data-val="layout"]');
 
@@ -149,31 +149,18 @@ async function zoomWheel(page, dx, dy) {
   try { await page.mouse.wheel(dx, dy); } finally { await page.keyboard.up("Meta"); }
 }
 
-/** Запити сторінок, що перейшли в канал «Команда» (`setCommentMode`): `outside` мусить лишитись порожнім. */
-const TEAM_NET = { outside: [], supabase: [], sockets: [], cdn: [] };
-const HERMETIC = new WeakSet();
-
-async function setCommentMode(page, mode) {
-  /* Канал «Команда» ЛІГИ — адаптер модуля з вигаданим Supabase із `tasks.json` (4b-2): перехоплюємо його хост ДО переходу,
-     щоб справжньої мережі не було (див. `hermeticLiga`). Один раз на сторінку. */
-  if (mode !== "local" && !HERMETIC.has(page)) {
-    HERMETIC.add(page);
-    await hermeticLiga(page, { seen: TEAM_NET });
-  }
-  /* Через ⌘K, і це не смак. Дім аудиторії — вкладки в панелі САМОГО
-     коментатора (принцип 6 PRODUCT.md), але обидва місця, звідки цей хелпер
-     кличуть, — режим «Огляд», а там рамки макета на екрані НЕМА ЗОВСІМ
-     (полотно показує кадри), тобто й вкладок. Палітра — єдиний шлях
-     користувача до каналу в цьому режимі; другий її сенс — аварійний вихід,
-     коли коментатор не піднявся (коментар над `gSet` у `shell-palette.js`).
-
-     Попередні доми, обидва в смузі й обидва прибрані: меню «⋯» (CSS ховав
-     його на ширині понад 1060px — контрол недосяжний, і саме цей тест те
-     падіння й зловив) і дропдаун крошки ітерації. */
-  await page.keyboard.press("Control+k");
-  await page.locator("#palq").waitFor({ state: "visible", timeout: 5000 });
-  await page.fill("#palq", "аудитор");
-  await press(page, page.locator(".pal-it", { hasText: mode === "local" ? "Клод" : "Команда" }));
+/** Побічний `render()` оболонки без жодної зміни стану. З 0.27.0 канал коментарів («Клод/Команда») не перемикається
+ *  (комбіноване сховище, без `commentMode`), тож перемикач, який цей тест тиснув заради перебудови, зник. Лишився той
+ *  самий шлях, яким оболонка перебудовує полотно, — дія смуги `retry` (`BAR_ACTIONS.retry` → `render()`): кнопку, що її
+ *  малює лише смуга помилки, імітуємо елементом із `data-act` усередині `#bar` (делегація слухає саме його). */
+async function forceRender(page) {
+  await page.evaluate(() => {
+    const b = document.createElement("button");
+    b.dataset.act = "retry";
+    document.getElementById("bar").appendChild(b);
+    b.click();
+    b.remove();
+  });
 }
 
 /** Чекати, поки в режимі однієї ітерації iframe візьме саме цю сторінку. */
@@ -187,20 +174,18 @@ const transform = (page) => page.evaluate(() =>
 
 test("холст «Огляд»: кадри, кнопка і камера", async (t) => {
   const { dir, it1 } = taskFixture({ html: PAGE });
-  /* `supabase: true` — канал «Команда» ЛІГИ (4b-2) існує лише з конфігом Supabase у `tasks.json`; без нього в палітрі нема
-     вкладки «Команда», і `setCommentMode(…, "project")` нічого б не знайшов. Сторінка, що переходить у канал «Команда»,
-     стає герметичною лише в цю мить (`setCommentMode`): вигаданий хост Supabase відповідає порожньо, усе інше за межі
-     машини `abort`-иться.
-     ⛔ Не на кожній сторінці файла: будь-який `page.route` вимикає HTTP-кеш Chromium, а K1 саме його й міряє
+  /* Без `supabase: true` (до 0.27.0 він був потрібен, щоб у палітрі зʼявився канал «Команда»): тепер ЛІГА з конфігом Supabase
+     піднімає командне сховище в КОЖНІЙ рамці робочого місця, і сторінка без `hermeticLiga` пішла б по вигаданий хост у
+     справжню мережу. Тест про полотно, а не про канали, — тож просто простір без команди.
+     ⛔ Не `page.route` на кожній сторінці файла: він вимикає HTTP-кеш Chromium, а K1 саме його й міряє
      («незмінний кадр бере з кешу»). */
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE, supabase: true });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE });
   t.after(() => child.kill());
   await runShoot({ dir: it1, it: "it1", url, all: true, now: "24.08.2026 12:00",
                    launch: () => chromium.launch() });
 
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  t.after(() => assert.deepEqual(TEAM_NET.outside, [], `запити за межі машини:\n${TEAM_NET.outside.join("\n")}`));
 
   await t.test("A. «Відкрити» справжнім натисканням мишею", async () => {
     const page = await overview(browser, url);
@@ -381,10 +366,8 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
 
     const fromNet = [];
     page.on("response", (r) => { if (r.url().includes("/shot?")) fromNet.push(r.url()); });
-    /* `project`, а не `local`: свіжа сторінка стартує з `local` за умовчанням
-       (`commentMode` в app.js), а клік по вже активному режиму має раннє `return`
-       і взагалі не кличе `render()` — перевірка мовчки нічого не зробила б. */
-    await setCommentMode(page, "project");
+    /* Побічний `render()` (див. `forceRender`): колись його давав перемикач каналу коментарів. */
+    await forceRender(page);
     /* Явне очікування замість `waitForTimeout` навмання: чекаємо на ФАКТ, що
        зʼявився САМЕ НОВИЙ `src` (не старий, який і так `complete` від першого
        завантаження — без порівняння з `before` умова була б істинною ще ДО
@@ -2295,7 +2278,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
     });
     assert.ok(marked >= 2, `кадрів для мітки замало: ${marked}`);
 
-    await setCommentMode(page, "project");
+    await forceRender(page);
     await rebuilt(page);
     await page.waitForTimeout(400);   // хай камера ОСЯДЕ, а не щойно зрушить
 

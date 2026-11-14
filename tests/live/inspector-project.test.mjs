@@ -1,5 +1,6 @@
 /**
  * Живий тест: інспектор ДС мусить працювати в аудиторії «Проєкт».
+ * (0.27.0: каналів нема — тест перевіряє, що інспектор живий у рамці робочого місця й за мертвого командного сховища.)
  *
  * Вимір, з якого тест народився (02.09.2026, справжній браузер): при
  * `ch=project` `frame.contentWindow.CanvasInspector` === `undefined`, при
@@ -47,27 +48,7 @@ const PAGE = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head>`
   + `#18a 10px 20px,#2c3 20px 30px,#fd0 30px 40px)">`
   + `<h1 id="t" style="margin:40px;padding:12px;border:2px solid #333">${id}</h1></body></html>`;
 
-/**
- * Перемкнути аудиторію коментарів через ⌘K.
- *
- * ⛔ Не вкладками в панелі коментатора, хоч це і головний шлях: у ЦЬОМУ тесті
- * адаптер коментарів зарізаний (див. шапку), тобто коментатор не піднімається — і
- * вкладок немає разом із ним. Тут це не незручність хелпера, а рівно той
- * сценарій, заради якого аварійний вихід у палітрі й існує (коментар над
- * `gSet` у `app/shell-palette.js`).
- *
- * Дропдаун крошки ітерації (`data-act="cmode"`), що стояв тут до 02.09.2026,
- * прибрано принципом 6 PRODUCT.md: контролів коментатора у смузі немає.
- * Перевірки нижче не змінились — це той самий `setAudience()` в `app.js`.
- */
-async function setAudience(page, mode) {
-  await page.keyboard.press("Control+k");
-  await page.locator("#palq").waitFor({ state: "visible", timeout: 5000 });
-  await page.fill("#palq", "аудитор");
-  await page.locator(".pal-it", { hasText: mode === "local" ? "Клод" : "Команда" }).click();
-}
-
-test("аудиторія «Проєкт»: інспектор живий, кнопка смуги його відкриває", async (t) => {
+test("командне сховище мертве (адаптер модуля не вантажиться): інспектор живий, кнопка смуги його відкриває", async (t) => {
   const { dir } = taskFixture({ html: PAGE });
   const { child, url } = await startServer(dir, { portBase: PORT_BASE, supabase: true });
   t.after(() => child.kill());
@@ -79,42 +60,19 @@ test("аудиторія «Проєкт»: інспектор живий, кно
   await page.route(MODULE_ADAPTER_GLOB, (route) => route.abort());
   await page.goto(`${url}/app/`);
 
-  /* Стартовий стан — `local` (`commentMode` в `app.js`), і саме там інспектор
-     працював завжди. Дочекатись його ТУТ обовʼязково: інакше падіння нижче не
-     відрізнило б «у «Проєкті» немає» від «сервер узагалі не віддає vendor». */
-  await page.waitForFunction(() => {
-    const f = document.getElementById("frame");
-    return !!(f && f.contentWindow && f.contentWindow.CanvasInspector);
-  }, null, { timeout: 15000 });
-
-  await setAudience(page, "project");
-
-  /* Чекаємо на ФАКТ: у рамці стоїть уже НОВИЙ документ (`ch=project`) і він
-     догрузився ЦІЛКОМ. Читаємо `contentWindow.location.href`, а НЕ
-     `getAttribute('src')`: атрибут міняється в ту ж мить, коли `applyMode`
-     його присвоїв, а СТАРИЙ документ (аудиторія `local`, інспектор у ньому
-     живий) висить у рамці ще кілька тиків і має `readyState === 'complete'`.
-     Перша версія цієї умови читала саме атрибут — перевірка проходила по
-     старому документу й зеленіла на мертвому «Проєкті», а падала аж на
-     наступному рядку невиразним `Cannot read properties of undefined`.
-
-     Далі перевірка НЕГАЙНА, без `waitForFunction` на самому `CanvasInspector`,
-     — і це принципово: `type="module"` відкладений за визначенням, тобто до
-     `load` документа він або вже виконався, або не виконається НІКОЛИ.
-     Очікування з таймаутом тут не додало б надійності, зате перетворило б
-     «тега немає взагалі» (баг 02.09.2026) на невиразний таймаут замість
-     зрозумілого «інспектора немає в аудиторії «Проєкт»». */
+  /* 0.27.0: каналів нема — рамка робочого місця завжди комбінована (Claude + команда), а мертвий адаптер команди лишає
+     коментатора живим на локальному (`store.teamDown`). Дочекатись рамки з піднятим коментатором (він на локальному) і
+     інспектором ТУТ обовʼязково: інакше падіння нижче не відрізнило б «з мертвою командою інспектора немає» від «сервер
+     узагалі не віддає vendor». Перемикання аудиторії через ⌘K (`setAudience`) зникло разом із самим перемикачем. */
   await page.waitForFunction(() => {
     const w = (document.getElementById("frame") || {}).contentWindow;
-    return !!(w && /[?&]ch=project/.test(w.location.href)
-      && w.document.readyState === "complete");
+    return !!(w && w.document.readyState === "complete" && w.CommentLayer && w.CommentLayer._inited && w.CanvasInspector);
   }, null, { timeout: 15000 });
 
   assert.equal(
-    await page.evaluate(() => typeof document.getElementById("frame")
-      .contentWindow.CanvasInspector),
+    await page.evaluate(() => typeof document.getElementById("frame").contentWindow.CanvasInspector),
     "object",
-    "інспектора немає в аудиторії «Проєкт» — сніпет коментарів не везе inspector.js",
+    "інспектора немає в рамці з мертвим командним сховищем — сніпет коментарів не везе inspector.js",
   );
 
   await page.click('#hud [data-act="inspector"]');
@@ -135,14 +93,14 @@ test("аудиторія «Проєкт»: інспектор живий, кно
   assert.equal(await page.locator("#insp-panel").isVisible(), true,
     "права панель інспектора мусить зʼявитись і в аудиторії «Проєкт»");
 
-  /* Банер «Коментарі недоступні» МУСИТЬ висіти (адаптер ми зарізали) — саме він
-     доводить, що інспектор піднявся НЕЗАЛЕЖНО від коментарів, а не тому, що
-     блокування випадково не спрацювало і сторінка жила звичайним життям. */
-  assert.equal(
-    await page.evaluate(() => !!document.getElementById("frame")
-      .contentWindow.document.getElementById("cl-down")),
-    true,
-    "адаптер зарізаний, а банера немає — блокування не спрацювало, перевірка порожня",
-  );
+  /* Свідок, що адаптер справді мертвий: комбіноване сховище каже причину (`teamDown`), а банера `#cl-down` нема — з 0.27.0
+     падіння команди показує смуга в панелі коментарів, банер лишився лише для падіння самого шару чи локального адаптера. */
+  const st = await page.evaluate(() => {
+    const w = document.getElementById("frame").contentWindow;
+    return { down: w.CommentLayer.store.teamDown, banner: !!w.document.getElementById("cl-down") };
+  });
+  assert.equal(typeof st.down, "string", "адаптер зарізаний, а teamDown порожній — блокування не спрацювало, перевірка порожня");
+  assert.ok(st.down.length > 0);
+  assert.equal(st.banner, false, "банер «Коментарі недоступні» у робочому місці при падінні лише командного");
   assert.deepEqual(net.outside, [], `запити за межі машини:\n${net.outside.join("\n")}`);
 });

@@ -306,7 +306,11 @@ function watchApi(page) {
    `loadHome` → перелік просторів, потім огляд) — це «звичайне» перечитування самого екрана, а не
    запит до схованого макета. Жоден ІНШИЙ `space*` (`space-peek`, `space-new`…) у цей список не
    потрапляє: без діалогу вони під екраном мовчать (їх теж стереже перевірка нижче). */
-const QUIET_OK = /\/api\/(claude-status|tasks-overview|task-thumb|tuner|shoot-progress|spaces)$/;
+const QUIET_OK = /\/api\/(claude-status|tasks-overview|task-thumb|tuner|shoot-progress|spaces|local-comments)$/;
+/* `local-comments` (0.27.0, Б2.1): на `focus` оболонка перечитує ЛОКАЛЬНІ піни з диска (`cmtRefreshLocal` — Claude міг
+   дописати їх, поки вікно не мало фокуса); це один GET файла, а не опитування й не перебудова макета, тож він дозволений
+   поруч із «звичайними» читаннями екрана. Але він іде й тоді, коли під екраном «Задачі» макет схований — рекомендація
+   контролеру: пропускати `cmtRefreshLocal`, поки відкрито «Задачі» (див. звіт Task 12). */
 
 test("під екраном «Задачі» канвас спить: фокус вікна й опитування відбитка не б'ють у схований макет", async (t) => {
   const { page } = await boot(t, PORT_BASE + 900);

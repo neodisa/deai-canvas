@@ -35,6 +35,7 @@ import test from "node:test";
 import { chromium } from "playwright";
 import { REAL_DEAI, VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, text, waitText, waitBarReady } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
+import { LIGA_SB_HOST, hermeticLiga } from "./_liga-supabase.mjs";
 
 /* Своя смуга: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що жодна база не
    збігається з чужою). Тести ЦЬОГО файла йдуть послідовно, тож одна база на всіх. */
@@ -89,9 +90,11 @@ async function boot(t, { spaces, beforeOpen = null, supabase = false } = {}) {
   const outside = [];
   context.on("request", (r) => {
     requests.push(r.url());
-    if (!isLocal(r.url())) { outside.push(r.url()); OUTSIDE_ALL.push(r.url()); }
+    /* 0.27.0: рамка ЛІГИ з конфігом Supabase питає вигаданий хост завжди (командне сховище в кожній рамці); `hermeticLiga`
+       відповідає за нього порожньо, тож це не «втеча» — рахуємо лише справжні запити за межі машини. */
+    if (!isLocal(r.url()) && new URL(r.url()).hostname !== LIGA_SB_HOST) { outside.push(r.url()); OUTSIDE_ALL.push(r.url()); }
   });
-  await context.route((u) => !isLocal(u.href), (route) => route.abort("blockedbyclient"));
+  await hermeticLiga(context);
 
   const logs = { canvas: [], popups: [], failed: [], errors: [] };
   const watch = (page, bucket) => {

@@ -64,6 +64,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { guardRealDeai, sleep, stop, goTasks } from "./_spaces-kit.mjs";
 import { LIGA_SUPABASE_ORIGINALS, startServer, taskFixture } from "./fixture.mjs";
+import { hermeticLiga } from "./_liga-supabase.mjs";
 
 /* Своя смуга (`tests/live-ports.test.mjs`): тести ЦЬОГО файла йдуть послідовно, тож одна база на всі. */
 const PORT_BASE = 23100;
@@ -113,11 +114,11 @@ const S = {};
 async function newPage(t, url) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   t.after(() => context.close());
-  const outside = [];
-  await context.route((u) => !["127.0.0.1", "localhost"].includes(new URL(u.href).hostname) && !/^(data|blob|about):/.test(u.protocol), (route) => {
-    outside.push(route.request().url());
-    return route.abort("blockedbyclient");
-  });
+  /* 0.27.0: рамка ЛІГИ з конфігом Supabase піднімає командне сховище одразу (не лише в «Проєкті»), тож вигаданий хост
+     Supabase питають завжди. `hermeticLiga` відповідає за нього порожньо й не пускає нічого іншого за межі машини:
+     `outside` — це лише справжні втечі (як і було), а не очікуване читання коментарів. */
+  const seen = await hermeticLiga(context);
+  const outside = seen.outside;
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));

@@ -44,7 +44,6 @@
  * сценарій c червонів би з причини, що до коду не стосується.
  */
 import assert from "node:assert/strict";
-import http from "node:http";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { userInfo } from "node:os";
 import path from "node:path";
@@ -54,6 +53,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 import { LIGA_SB_HOST, hermeticLiga } from "./_liga-supabase.mjs";
+import { startMemo } from "./_memo.mjs";
 import { ANCHOR, shootAll, t45Task } from "./_t45-fixture.mjs";
 import { REAL_DEAI, VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, goTasks } from "./_spaces-kit.mjs";
 import { startServer } from "./fixture.mjs";
@@ -107,64 +107,6 @@ let REQUESTS_TOTAL = 0;
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
-
-/* ── найменший сервіс коментарів ───────────────────────────────────────────────────────────────────── */
-
-/**
- * `memo` — протокол фікстури `memo-comments`. `allowOrigin` — що віддається в `Access-Control-Allow-Origin` (типово `*`,
- * як вимагає документ для авторів: пісочниця `/published` шле `Origin: null`); `log` — кожен запит із його `Origin`.
- */
-async function startMemo() {
-  const store = new Map();
-  const log = [];
-  const memo = { store, log, allowOrigin: "*", url: "" };
-  const server = http.createServer((req, res) => {
-    const u = new URL(req.url, "http://memo.local");
-    log.push({ method: req.method, path: u.pathname, origin: req.headers.origin ?? null });
-    res.setHeader("Access-Control-Allow-Origin", memo.allowOrigin);
-    res.setHeader("Cache-Control", "no-store");
-    if (req.method === "OPTIONS") {
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-      res.writeHead(204).end();
-      return;
-    }
-    const m = /^\/c\/([^/]+)(\/remove|\/resolve)?$/.exec(u.pathname);
-    if (!m) { res.writeHead(404).end("not found"); return; }
-    const channel = decodeURIComponent(m[1]);
-    const rows = store.get(channel) ?? [];
-    let body = "";
-    req.on("data", (d) => { body += d; });
-    req.on("end", () => {
-      let data = {};
-      try { data = body ? JSON.parse(body) : {}; } catch { res.writeHead(400).end("bad json"); return; }
-      if (req.method === "GET" && !m[2]) {
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify(rows));
-        return;
-      }
-      if (req.method !== "POST") { res.writeHead(405).end("method"); return; }
-      if (!m[2]) {
-        for (const c of data.comments ?? []) {
-          const i = rows.findIndex((r) => r.id === c.id);
-          if (i >= 0) rows[i] = c; else rows.push(c);
-        }
-      } else if (m[2] === "/remove") {
-        store.set(channel, rows.filter((r) => !(data.ids ?? []).includes(r.id)));
-      } else {
-        const row = rows.find((r) => r.id === data.id);
-        if (row) Object.assign(row, { status: "resolved", resolveReason: data.reason ?? "" });
-      }
-      if (!store.has(channel)) store.set(channel, rows);
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ ok: true }));
-    });
-  });
-  await new Promise((done) => server.listen(0, "127.0.0.1", done));
-  memo.url = `http://127.0.0.1:${server.address().port}`;
-  memo.close = () => new Promise((done) => { server.closeAllConnections?.(); server.close(done); });
-  return memo;
-}
 
 /* ── прилади ───────────────────────────────────────────────────────────────────────────────────────── */
 
@@ -310,19 +252,16 @@ const docState = (frame) => frame.evaluate(() => {
   };
 });
 
-/** Дочекатись, поки в рамці стоїть НОВИЙ документ потрібного каналу з піднятою панеллю коментатора
- *  (той самий прийом, що в `comment-audience.test.mjs`: читаємо `location` рамки, а не атрибут `src`). */
-function waitChannel(page, ch) {
-  return page.waitForFunction((want) => {
+/** Дочекатись, поки в рамці стоїть завершений документ із піднятою панеллю коментатора. З 0.27.0 канал не вибирається:
+ *  рамка робочого місця (`host=1`) завжди несе комбіноване сховище (Claude + команда), а `ch=` у її адресі більше нема. */
+function waitFrame(page) {
+  return page.waitForFunction(() => {
     const w = (document.getElementById("frame") || {}).contentWindow;
-    if (!(w && new RegExp(`[?&]ch=${want}(&|$)`).test(w.location.href) && w.document.readyState === "complete")) return false;
+    if (!(w && w.document.readyState === "complete")) return false;
     const host = w.document.querySelector("[data-comment-layer]");
     return !!(host && host.shadowRoot && host.shadowRoot.querySelector(".panel"));
-  }, ch, { timeout: 20000 });
+  }, null, { timeout: 20000 });
 }
-
-/** Сегмент каналу «Клод/Команда» — у панелі коментарів оболонки (власні вкладки коментатора в режимі хоста сховані). */
-const aud = (page, id) => page.locator(`#cmt-panel [data-act="cmtch"][data-val="${id}"]`);
 
 /** Піни «полотна» на «Огляді» з тіньового кореня: ключ, ідентифікатори, кластер, «поза кадром», підпис. */
 const overviewPins = (page) => page.evaluate(() => {
@@ -344,28 +283,27 @@ function walk(dir) {
 
 /* ── a: «Команда» у сторінці канваса ───────────────────────────────────────────────────────────────── */
 
-test("a: простір без інтеграцій із модулем коментарів — вкладка «Команда», адаптер модуля вантажиться, посіяний пін видно", async (t) => {
+test("a: простір без інтеграцій із модулем коментарів — рамка несе командне сховище (адаптер модуля вантажиться), посіяний пін видно", async (t) => {
   const env = await boot(t);
   const { page, url, memo, requests, responses, outside } = env;
   const seed = await seedPin(env);
 
   await page.goto(`${url}/app/`);
-  await waitChannel(page, "local");
-  /* Локальний канал адаптера модуля не вантажить: спільна поверхня одна, а фабрика зʼявляється лише з «Командою». */
+  await waitFrame(page).catch(async (e) => assert.fail(
+    `рамка не підняла шар коментатора: ${JSON.stringify(await frameState(page))}; `
+    + `відповіді адаптера: ${JSON.stringify(responses.filter((r) => r.url.includes("/api/module-client/")))}\n${e.message}`));
+  /* 0.27.0: вибору каналу нема — командний постачальник є, тож рамка (`host=1`) одразу комбінована: адаптер модуля
+     вантажиться разом зі сторінкою, а в адресі рамки немає `ch=`. */
   let st = await frameState(page);
-  assert.equal(st.factory, "undefined", "у локальному каналі вже є window.DeaiComments");
-  assert.equal(requests.some((u) => u.includes("/api/module-client/")), false, "адаптер завантажено до вибору «Команди»");
+  assert.match(st.href, /host=1/);
+  assert.doesNotMatch(st.href, /[?&]ch=/, "рамка робочого місця ще несе ch=");
 
-  /* Вкладка «Команда» є в просторі БЕЗ інтеграцій, бо є постачальник ролі (`capabilities.comments`), а не `integrations`. */
+  /* Постачальник ролі (`capabilities.comments`), а не `integrations`, робить панель подвійною: сегмент «Кому» з'являється. */
   const caps = (await spacesApi(url)).spaces.find((s) => s.id === SPACE).capabilities;
   assert.equal(caps.comments, MODULE, `capabilities простору: ${JSON.stringify(caps)}`);
   await page.click('#hud [data-act="comments"]');
-  await page.waitForSelector('#cmt-panel [data-act="cmtch"][data-val="project"]', { timeout: 10000 });
-  assert.equal(await aud(page, "project").count(), 1, "у просторі з модулем коментарів немає кнопки «Команда» в панелі коментарів оболонки");
-  await aud(page, "project").click();
-  await waitChannel(page, "project").catch(async (e) => assert.fail(
-    `сторінка каналу project не підняла шар коментатора: ${JSON.stringify(await frameState(page))}; `
-    + `відповіді адаптера: ${JSON.stringify(responses.filter((r) => r.url.includes("/api/module-client/")))}\n${e.message}`));
+  await page.waitForSelector('#cmt-panel [data-act="cmtfilter"][data-val="project"]', { timeout: 10000 });
+  assert.equal(await page.locator('#cmt-panel [data-act="cmtfilter"]').count(), 3, "у просторі з модулем коментарів нема сегмента «Кому» (Усі/Claude/Команда)");
 
   st = await until(async () => { const s = await frameState(page); return s.pins >= 1 ? s : null; }, "пін у тіньовому корені шару коментатора");
   assert.equal(st.factory, "object", "сторінка каналу project не має window.DeaiComments");
@@ -413,14 +351,8 @@ test("b: «Огляд» показує той самий пін — адапте
   const shot = await shootAll(url);
   assert.ok(shot.ok, `знімки «Огляду»: ${JSON.stringify(shot).slice(0, 300)}`);
 
-  /* Канал «Команда» запамʼятовує оболонка; кладемо вибір до першого скрипта СТОРІНКИ — лише в оболонці
-     (рамка того самого походження, `addInitScript` виконується і в ній). */
-  await page.addInitScript(() => {
-    if (window !== window.top) return;
-    try { localStorage.setItem("dc-comment-mode", "project"); } catch { /* приватний режим */ }
-  });
   await page.goto(`${url}/app/`);
-  await waitChannel(page, "project");
+  await waitFrame(page);
   await page.getByRole("button", { name: /Огляд/ }).click();
   await page.locator(".cv-card img").first().waitFor();
   const pins = await until(async () => {
@@ -695,12 +627,8 @@ test("e2: адресу сервісу коментарів змінили на �
     }
   });
 
-  await page.addInitScript(() => {
-    if (window !== window.top) return;
-    try { localStorage.setItem("dc-comment-mode", "project"); } catch { /* приватний режим */ }
-  });
   await page.goto(`${url}/app/`);
-  await waitChannel(page, "project");
+  await waitFrame(page);
   await page.getByRole("button", { name: /Огляд/ }).click();
   await page.locator(".cv-card img").first().waitFor();
   const idsOnCanvas = async () => {
