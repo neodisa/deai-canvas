@@ -78,7 +78,7 @@ export function pruneTabs(tabs, spaceId, liveIds) {
 }
 
 /** Модель рядка вкладок для `tabs-view.js`. `claude` — `{ключ: {state}}` з `/api/claude-statuses` або `null`. */
-export function tabsModel({ tabs, activeId, homeOpen = false, homePage = "tasks", claude = null, update = null }) {
+export function tabsModel({ tabs, activeId, homeOpen = false, homePage = "tasks", claude = null, update = null, news = null }) {
   const stateOf = (t) => {
     const v = claude && (claude[t.id] || (t.jira && claude[t.jira]));
     return v && CLAUDE_STATES.includes(v.state) ? v.state : null;
@@ -91,6 +91,7 @@ export function tabsModel({ tabs, activeId, homeOpen = false, homePage = "tasks"
       id: t.id, title: t.title, color: t.color,
       active: !homeOpen && t.id === activeId,
       claude: stateOf(t),
+      news: news && Number(news[t.id]) > 0 ? Number(news[t.id]) : 0,
     })),
   };
 }

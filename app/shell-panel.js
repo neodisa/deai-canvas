@@ -88,6 +88,9 @@ function rowHTML(row, readonly, tabbable = false, filtering = false) {
     ? `<span class="row-deep" title="${esc(t("levelBadge", depth + 1))}">${depth + 1}</span>` : "";
   const cnt = row.count
     ? `<span class="row-cnt"${row.countTitle ? ` title="${esc(row.countTitle)}"` : ""}>${esc(row.count)}</span>` : "";
+  /* Нові командні коментарі сторінки — бурштиновий лічильник; окреме поле, не `count` (той про склад теки). */
+  const news = row.news
+    ? `<span class="row-news" title="${esc(t("rowNews", row.news))}">${row.news > 99 ? "99+" : row.news}</span>` : "";
   /* «⋯» — єдине в рядку, що МІНЯЄ дані (перейменувати / прибрати з превʼю /
      видалити). У статиці за ним нікуди йти, тож кнопка була б обіцянкою, яку
      нічим виконати. Решта рядка лишається байт у байт. */
@@ -111,7 +114,7 @@ function rowHTML(row, readonly, tabbable = false, filtering = false) {
   return `<div class="${cls}" style="--d:${d}" data-page="${esc(row.id)}" data-kind="${esc(kind)}"
       ${aria}${tab} data-act="page" data-val="${esc(row.id)}">
     ${caret}${ico(icon, 16, "ico row-ic")}
-    <span class="row-name">${esc(row.name)}</span>${deep}${cnt}${recent}${mark}
+    <span class="row-name">${esc(row.name)}</span>${deep}${cnt}${news}${recent}${mark}
     ${more}
   </div>`;
 }

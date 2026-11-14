@@ -9,7 +9,7 @@ const C = (o) => ({ id: o.id, n: o.n, text: o.text || "т", author: o.author || 
   status: o.status || "open", scope: o.scope || "current", where: o.where || "here", iter: o.iter || "3",
   resolvedV: o.resolvedV ?? null, resolveReason: o.resolveReason ?? null, meta: o.meta || {} });
 const base = (over = {}) => ({ snapshot: { version: "3", iteration: "3", comments: [] }, query: "", selectedId: null,
-  editingId: null, expanded: { earlier: false, closed: false }, channel: "local", team: false, down: null, ...over });
+  editingId: null, expanded: { earlier: false, closed: false }, filter: "all", dual: false, teamDown: null, fresh: null, down: null, ...over });
 
 test("порожньо — запрошення; немає знімка — завантаження; є відмова — її текст", () => {
   assert.match(commentsPanelHTML(base()), /Коментарів ще немає/);
@@ -61,11 +61,71 @@ test("попередні й закриті згорнуті: заголовок 
   assert.match(open, /Іт\.2/);
 });
 
-test("перемикач каналу — лише коли є командний модуль; активний — aria-pressed", () => {
+test("фільтр адресата — лише коли є командний постачальник (dual); активний — aria-pressed", () => {
+  assert.equal(commentsPanelHTML(base()).includes('data-act="cmtfilter"'), false);
   assert.equal(commentsPanelHTML(base()).includes('data-act="cmtch"'), false);
-  const html = commentsPanelHTML(base({ team: true, channel: "project" }));
-  assert.match(html, /data-act="cmtch" data-val="local" aria-pressed="false"/);
-  assert.match(html, /data-act="cmtch" data-val="project" aria-pressed="true"/);
+  const html = commentsPanelHTML(base({ dual: true, filter: "project" }));
+  assert.match(html, /data-act="cmtfilter" data-val="all" aria-pressed="false"/);
+  assert.match(html, /data-act="cmtfilter" data-val="local" aria-pressed="false"/);
+  assert.match(html, /data-act="cmtfilter" data-val="project" aria-pressed="true"/);
+  assert.match(html, /aria-label="Кому"/);
+  assert.equal(html.includes('data-act="cmtch"'), false, "перемикача каналу більше нема (поправка 10)");
+});
+
+test("смуга падіння командного: причина екранована; без причини смуги нема", () => {
+  const html = commentsPanelHTML(base({ teamDown: "<b>збій</b>" }));
+  assert.match(html, /<p class="cmt-teamdown" role="alert">Командні коментарі недоступні: &lt;b&gt;збій&lt;\/b&gt;<\/p>/);
+  assert.equal(html.includes("<b>збій"), false);
+  assert.equal(commentsPanelHTML(base()).includes("cmt-teamdown"), false);
+});
+
+const D = (o) => ({ ...C(o), ...(o.aud ? { _aud: o.aud } : {}) });
+const dual = (comments, over = {}) => commentsPanelHTML(base({ dual: true, snapshot: { iteration: "3", comments }, ...over }));
+
+test("адресат і бейдж доручення — лише в dual", () => {
+  const cs = [D({ id: "a", n: 1, aud: "project", meta: { assignee: "claude" } }), D({ id: "b", n: 2 })];
+  const html = dual(cs);
+  assert.match(html, /<span class="cmt-aud cmt-aud--project">Команда<\/span>/);
+  assert.match(html, /<span class="cmt-aud cmt-aud--local">Claude<\/span>/);
+  assert.equal((html.match(/class="cmt-badge"/g) || []).length, 1);
+  const single = commentsPanelHTML(base({ snapshot: { iteration: "3", comments: cs } }));
+  assert.equal(single.includes("cmt-aud"), false);
+  assert.equal(single.includes("cmt-badge"), false);
+  assert.equal(single.includes("cmtassign"), false);
+});
+
+test("«Доручити» / «Забрати» — лише на відкритих командних; не на локальних і не на закритих", () => {
+  const html = dual([D({ id: "a", n: 1, aud: "project" }), D({ id: "b", n: 2, aud: "project", meta: { assignee: "claude" } }),
+    D({ id: "c", n: 3 }), D({ id: "z", n: 4, aud: "project", status: "resolved" })], { expanded: { earlier: false, closed: true } });
+  assert.match(html, /data-act="cmtassign" data-val="a"[^>]*>Доручити Claude</);
+  assert.match(html, /data-act="cmtunassign" data-val="b"[^>]*>Забрати в Claude</);
+  assert.equal(/data-act="cmt(un)?assign" data-val="c"/.test(html), false, "локальний");
+  assert.equal(/data-act="cmt(un)?assign" data-val="z"/.test(html), false, "закритий");
+  assert.ok(html.indexOf('data-act="cmtassign" data-val="a"') < html.indexOf('data-act="cmtedit" data-val="a"'), "перед «Редагувати»");
+});
+
+test("розділ «Нові від команди»: з числом, над «Відкритими», без дубля там", () => {
+  const html = dual([D({ id: "n1", n: 5, aud: "project" }), D({ id: "o1", n: 1 })], { fresh: new Set(["n1"]) });
+  assert.match(html, /<h3 class="cmt-h cmt-h--new">Нові від команди <span>1<\/span><\/h3>/);
+  assert.ok(html.indexOf("cmt-sec--new") < html.indexOf('aria-label="Відкриті"'));
+  assert.equal((html.match(/data-cid="n1"/g) || []).length, 1);
+  assert.equal(commentsPanelHTML(base({ dual: true, snapshot: { iteration: "3", comments: [D({ id: "o1", n: 1 })] } })).includes("cmt-sec--new"), false);
+});
+
+test("лише «нові» — не «порожньо»", () => {
+  assert.doesNotMatch(dual([D({ id: "n1", n: 5, aud: "project" })], { fresh: new Set(["n1"]) }), /Коментарів ще немає/);
+});
+
+test("поправка 18: командний пін, закритий агентом → «Зроблено · Іт.4»; закритий вручну → «Закрито» без Іт.", () => {
+  const html = dual([
+    D({ id: "k", n: 1, aud: "project", status: "resolved", resolvedV: 4, resolveReason: "кнопку перенесено" }),
+    D({ id: "m", n: 2, aud: "project", status: "resolved", resolvedV: 1, resolveReason: "resolved manually" }),
+  ], { expanded: { earlier: false, closed: true } });
+  const card = (id) => html.slice(html.indexOf(`data-cid="${id}"`)).split("</article>")[0];
+  assert.match(card("k"), /Зроблено · Іт\.4/);
+  assert.match(card("m"), /Закрито/);
+  assert.doesNotMatch(card("m"), /Іт\./);
+  assert.doesNotMatch(card("m"), /Зроблено/);
 });
 
 test("інша сторінка й елемент поза екраном — підписані", () => {

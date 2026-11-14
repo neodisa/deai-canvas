@@ -19,10 +19,12 @@ function tabHTML(x) {
   const claude = x.claude
     ? `<span class="tab-claude tab-claude--${x.claude}" role="img" aria-label="${esc(t(`claudeTab_${x.claude}`))}"></span>`
     : "";
+  const news = x.news
+    ? `<span class="tab-news" role="img" aria-label="${esc(t("tabNews", x.news))}">${x.news > 99 ? "99+" : x.news}</span>` : "";
   const tip = esc(t("tabTitle", x.id, x.title));
   return `<div class="tab${x.active ? " tab--on" : ""}">`
     + `<button class="tab-main" data-act="tab" data-val="${esc(x.id)}" title="${tip}"${cur(x.active)}>`
-    + `${dot}<span class="tab-id">${esc(x.id)}</span>${claude}</button>`
+    + `${dot}<span class="tab-id">${esc(x.id)}</span>${claude}${news}</button>`
     + `<button class="tab-x" data-act="tabclose" data-val="${esc(x.id)}" aria-label="${esc(t("tabClose", x.id))}">`
     + `${ico("x", 12)}</button></div>`;
 }

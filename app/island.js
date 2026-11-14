@@ -8,13 +8,17 @@ import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 
-export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn = false, commentsOn = false, commentsCount = 0 } = {}) {
+export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn = false, commentsOn = false, commentsCount = 0, commentsNew = 0 } = {}) {
   const parts = [];
   if (screen === "task") {
-    const n = commentsCount > 0
-      ? `<span class="isl-count" aria-hidden="true">${commentsCount > 99 ? "99+" : commentsCount}</span>` : "";
+    /* Нові від команди (амбер, `isl-count--new`) важливіші за «відкритих усього» — число одне, не два. */
+    const n = commentsNew > 0
+      ? `<span class="isl-count isl-count--new" aria-hidden="true">${commentsNew > 99 ? "99+" : commentsNew}</span>`
+      : commentsCount > 0
+        ? `<span class="isl-count" aria-hidden="true">${commentsCount > 99 ? "99+" : commentsCount}</span>` : "";
+    const label = commentsNew > 0 ? t("cmtIslandNew", commentsNew) : t("cmtIsland", commentsCount);
     parts.push(`<button class="isl-btn${commentsOn ? " isl-btn--on" : ""}" data-act="comments" aria-pressed="${commentsOn}"`
-      + ` aria-label="${esc(t("cmtIsland", commentsCount))}" title="${esc(t("cmtKey"))}">${ico("comment")}${n}</button>`);
+      + ` aria-label="${esc(label)}" title="${esc(t("cmtKey"))}">${ico("comment")}${n}</button>`);
     if (mode === "layout") {
       parts.push(`<button class="isl-btn${inspectorOn ? " isl-btn--on" : ""}" data-act="inspector" aria-pressed="${inspectorOn}"`
         + ` aria-label="${esc(t("inspector"))}" title="${esc(t("inspectorKey"))}">${ico("inspect")}</button>`);

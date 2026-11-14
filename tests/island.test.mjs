@@ -39,3 +39,14 @@ test("кнопка «Коментарі» — у задачі в обох вид
   assert.equal(islandToolsHTML({ screen: "home" }).includes('data-act="comments"'), false);
   assert.match(islandToolsHTML({ screen: "task", mode: "layout", commentsCount: 120 }), />99\+</);
 });
+
+test("нові від команди: isl-count--new із числом нових і своїм aria-label; без нових — як було", () => {
+  const h = islandToolsHTML({ screen: "task", mode: "layout", commentsCount: 5, commentsNew: 2 });
+  assert.match(h, /<span class="isl-count isl-count--new" aria-hidden="true">2<\/span>/);
+  assert.match(h, /aria-label="Коментарі: нових від команди — 2"/);
+  assert.equal(/class="isl-count"/.test(h), false);
+  const none = islandToolsHTML({ screen: "task", mode: "layout", commentsCount: 5, commentsNew: 0 });
+  assert.match(none, /<span class="isl-count" aria-hidden="true">5<\/span>/);
+  assert.equal(none.includes("isl-count--new"), false);
+  assert.match(islandToolsHTML({ screen: "task", mode: "layout", commentsNew: 150 }), /isl-count--new" aria-hidden="true">99\+</);
+});

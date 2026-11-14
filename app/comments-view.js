@@ -3,7 +3,7 @@
  * `BAR_ACTIONS` (делегація з `#cmt-panel` в `app.js`). Класи — лише `cmt-*`: `pin`/`cp`/`cbadge` належать коментатору
  * (`tests/principle6.test.mjs`). Тексти людей — лише через `esc()`; мініатюра — лише з `shotSrc`.
  */
-import { commentSections, openCount, shotSrc } from "./comments-model.js";
+import { FILTERS, assignedToClaude, audOf, commentSections, openCount, shotSrc } from "./comments-model.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
@@ -33,8 +33,11 @@ function cardHTML(c, st, kind) {
   const m = c.meta || {};
   const sel = c.id === st.selectedId ? " cmt-card--sel" : "";
   const closed = c.status === "resolved" ? " cmt-card--closed" : "";
+  const aud = st.dual
+    ? `<span class="cmt-aud cmt-aud--${audOf(c)}">${esc(t(audOf(c) === "project" ? "cmtAudTeam" : "cmtAudLocal"))}</span>` : "";
+  const badge = st.dual && assignedToClaude(c) ? `<span class="cmt-badge">${esc(t("cmtAssignedBadge"))}</span>` : "";
   const head = `<header class="cmt-head"><span class="cmt-n">${esc(c.n)}</span><span class="cmt-who">${esc(c.author || "")}</span>`
-    + `${modeTag(m)}<span class="cmt-when">${esc(c.ts || t("cmtNoTime"))}</span></header>`;
+    + `${aud}${badge}${modeTag(m)}<span class="cmt-when">${esc(c.ts || t("cmtNoTime"))}</span></header>`;
   const body = c.id === st.editingId
     ? `<textarea class="cmt-edit" data-val="${esc(c.id)}" aria-label="${esc(t("cmtEdit"))}">${esc(c.text || "")}</textarea>`
       + `<div class="cmt-acts">${btn("cmteditsave", c.id, t("cmtSave"))}${btn("cmteditcancel", c.id, t("cmtCancel"))}</div>`
@@ -60,7 +63,10 @@ function cardHTML(c, st, kind) {
   const iter = kind === "earlier" && c.iter != null ? `<p class="cmt-iter">${esc(t("cmtIter", c.iter))}</p>` : "";
   let acts = "";
   if (c.id !== st.editingId) {
-    if (kind === "open") acts = btn("cmtshow", c.id, t("cmtShow")) + btn("cmtedit", c.id, t("cmtEdit"), "pencil")
+    if (kind === "open") acts = btn("cmtshow", c.id, t("cmtShow"))
+      + (st.dual && audOf(c) === "project"
+        ? btn(assignedToClaude(c) ? "cmtunassign" : "cmtassign", c.id, t(assignedToClaude(c) ? "cmtUnassign" : "cmtAssign")) : "")
+      + btn("cmtedit", c.id, t("cmtEdit"), "pencil")
       + btn("cmtres", c.id, t("cmtResolve"), "check") + btn("cmtdel", c.id, t("cmtDelete"), "trash");
     else if (kind === "earlier") acts = btn("cmtcarry", c.id, t("cmtCarry", st.snapshot.iteration))
       + btn("cmtdel", c.id, t("cmtDelete"), "trash");
@@ -78,13 +84,14 @@ function foldHTML(key, title, items, st, kind) {
     + (open ? items.map((c) => cardHTML(c, st, kind)).join("") : "") + "</section>";
 }
 
-/** st: {snapshot, query, selectedId, editingId, expanded:{earlier,closed}, channel:'local'|'project', team, down} */
+/** st: {snapshot, query, selectedId, editingId, expanded:{earlier,closed}, filter:'all'|'local'|'project', dual, teamDown, fresh:Set|null, down} */
 export function commentsPanelHTML(st) {
   const total = openCount(st.snapshot);
-  const seg = st.team
-    ? `<div class="cmt-ch" role="group" aria-label="${esc(t("cmtChannel"))}">`
-      + ["local", "project"].map((ch) => `<button type="button" data-act="cmtch" data-val="${ch}" aria-pressed="${st.channel === ch}">`
-        + `${esc(t(ch === "local" ? "cmtChLocal" : "cmtChTeam"))}</button>`).join("") + "</div>"
+  const FILTER_KEY = { all: "cmtFAll", local: "cmtFLocal", project: "cmtFTeam" };
+  const seg = st.dual
+    ? `<div class="cmt-ch" role="group" aria-label="${esc(t("cmtFilter"))}">`
+      + FILTERS.map((f) => `<button type="button" data-act="cmtfilter" data-val="${f}" aria-pressed="${(st.filter || "all") === f}">`
+        + `${esc(t(FILTER_KEY[f]))}</button>`).join("") + "</div>"
     : "";
   const hidden = !!(st.snapshot && st.snapshot.pinsHidden);
   const pins = `<button type="button" class="icon-btn" data-act="cmtpins" aria-pressed="${hidden}"`
@@ -94,17 +101,21 @@ export function commentsPanelHTML(st) {
     + `<button type="button" class="icon-btn" data-act="comments" aria-label="${esc(t("cmtClose"))}" title="${esc(t("cmtClose"))}">${ico("x")}</button></div>`;
   const search = `<div class="cmt-search"><input type="search" id="cmt-q" value="${esc(st.query || "")}"`
     + ` placeholder="${esc(t("cmtSearch"))}" aria-label="${esc(t("cmtSearch"))}"></div>`;
+  const down = st.teamDown ? `<p class="cmt-teamdown" role="alert">${esc(t("cmtTeamDown", st.teamDown))}</p>` : "";
   let body;
   if (!st.snapshot) {
     body = st.down ? `<p class="cmt-down" role="alert">${esc(t("cmtDown", st.down))}</p>` : `<p class="insp-hint">${esc(t("cmtLoading"))}</p>`;
   } else {
-    const s = commentSections(st.snapshot, { query: st.query });
-    const none = !s.open.length && !s.earlier.length && !s.closed.length;
+    const s = commentSections(st.snapshot, { query: st.query, filter: st.filter, fresh: st.fresh });
+    const none = !s.fresh.length && !s.open.length && !s.earlier.length && !s.closed.length;
     const empty = none ? `<p class="insp-hint">${esc(t(st.query ? "cmtNoMatch" : "cmtEmpty"))}</p>` : "";
+    const fresh = s.fresh.length
+      ? `<section class="cmt-sec cmt-sec--new" aria-label="${esc(t("cmtNewTitle"))}"><h3 class="cmt-h cmt-h--new">${esc(t("cmtNewTitle"))}`
+        + ` <span>${s.fresh.length}</span></h3>${s.fresh.map((c) => cardHTML(c, st, "open")).join("")}</section>` : "";
     const open = `<section class="cmt-sec" aria-label="${esc(t("cmtOpen"))}"><h3 class="cmt-h">${esc(t("cmtOpen"))}`
       + ` <span>${s.open.length}</span></h3>${s.open.map((c) => cardHTML(c, st, "open")).join("")}</section>`;
-    body = empty + open + foldHTML("earlier", t("cmtEarlier"), s.earlier, st, "earlier")
+    body = empty + fresh + open + foldHTML("earlier", t("cmtEarlier"), s.earlier, st, "earlier")
       + foldHTML("closed", t("cmtClosed"), s.closed, st, "closed");
   }
-  return `${top}${search}<div class="insp-body cmt-body">${body}</div>`;
+  return `${top}${search}${down}<div class="insp-body cmt-body">${body}</div>`;
 }

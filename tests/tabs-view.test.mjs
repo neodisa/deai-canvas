@@ -53,3 +53,14 @@ test("пігулка оновлення — лише коли є, перед ш�
   const h = tabsHTML(vm({ update: { version: "0.26.0", restart: false } }));
   assert.ok(h.indexOf('data-act="update"') < h.indexOf('data-act="settings"'));
 });
+
+test("вкладка з news: tab-news із числом і aria-label; без news — нема; 99+", () => {
+  const h = tabsHTML(vm({ items: [
+    { id: "LIGA-1", title: "", color: null, active: false, claude: null, news: 4 },
+    { id: "LIGA-2", title: "", color: null, active: false, claude: null, news: 0 },
+    { id: "LIGA-3", title: "", color: null, active: false, claude: null, news: 120 },
+  ] }));
+  assert.equal((h.match(/class="tab-news"/g) || []).length, 2);
+  assert.match(h, /<span class="tab-news" role="img" aria-label="Нових командних коментарів: 4">4<\/span>/);
+  assert.match(h, />99\+<\/span>/);
+});

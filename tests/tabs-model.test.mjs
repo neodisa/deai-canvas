@@ -76,3 +76,10 @@ test("tabsModel: невідомий стан Claude — без крапки, а 
   const m = tabsModel({ tabs: [T("A")], activeId: "A", claude: { A: { state: "weird" } } });
   assert.equal(m.items[0].claude, null);
 });
+
+test("tabsModel: news — число за id, нуль без запису або без news", () => {
+  const tabs = [T("A"), T("B"), T("C")];
+  const m = tabsModel({ tabs, activeId: "A", news: { B: 3, C: 0, A: "x" } });
+  assert.deepEqual(m.items.map((x) => x.news), [0, 3, 0]);
+  assert.deepEqual(tabsModel({ tabs, activeId: "A" }).items.map((x) => x.news), [0, 0, 0]);
+});

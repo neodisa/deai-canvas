@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { commentSections, matchQuery, openCount, shotSrc } from "../app/comments-model.js";
+import { FILTERS, assignedToClaude, audOf, commentSections, matchQuery, openCount, shotSrc } from "../app/comments-model.js";
 
 const C = (o) => ({ id: o.id, n: o.n, text: o.text || "", author: o.author || "Автор А", ts: o.ts || "",
   status: o.status || "open", scope: o.scope || "current", where: "here", meta: o.meta || {} });
@@ -60,4 +60,39 @@ test("мініатюра: shotUrl без shot; svg, //host і javascript: від
   assert.equal(shotSrc({ meta: { shot: "data:image/svg+xml;base64,AAA" } }), null);
   assert.equal(shotSrc({ meta: { shotUrl: "//host/x" } }), null);
   assert.equal(shotSrc({ meta: { shotUrl: "javascript:alert(1)" } }), null);
+});
+
+const A = (id, n, aud, o = {}) => ({ ...C({ id, n, ...o }), ...(aud ? { _aud: aud } : {}) });
+const MIX = { comments: [A("l1", 1), A("l2", 2, "local"), A("p1", 3, "project"), A("p2", 4, "project", { status: "resolved" })] };
+
+test("audOf: без _aud — локальний; assignedToClaude — лише meta.assignee === claude", () => {
+  assert.equal(audOf({}), "local");
+  assert.equal(audOf(null), "local");
+  assert.equal(audOf({ _aud: "project" }), "project");
+  assert.equal(audOf({ _aud: "чужий" }), "local");
+  assert.equal(assignedToClaude({ meta: { assignee: "claude" } }), true);
+  assert.equal(assignedToClaude({ meta: { assignee: "ann" } }), false);
+  assert.equal(assignedToClaude({}), false);
+  assert.deepEqual(FILTERS, ["all", "local", "project"]);
+});
+
+test("commentSections: фільтр адресата local / project / all", () => {
+  const ids = (f) => { const s = commentSections(MIX, { filter: f }); return [...s.open, ...s.closed].map((c) => c.id).sort(); };
+  assert.deepEqual(ids("all"), ["l1", "l2", "p1", "p2"]);
+  assert.deepEqual(ids("local"), ["l1", "l2"]);
+  assert.deepEqual(ids("project"), ["p1", "p2"]);
+});
+
+test("commentSections: «нові» не дублюються у «Відкритих»; закритий у fresh не потрапляє", () => {
+  const s = commentSections(MIX, { fresh: new Set(["p1", "p2"]) });
+  assert.deepEqual(s.fresh.map((c) => c.id), ["p1"]);
+  assert.deepEqual(s.open.map((c) => c.id).sort(), ["l1", "l2"]);
+  assert.deepEqual(s.closed.map((c) => c.id), ["p2"]);
+  assert.deepEqual(commentSections(MIX).fresh, []);
+});
+
+test("commentSections: фільтр діє й на «нові»; openCount — усі адресати", () => {
+  const s = commentSections(MIX, { fresh: new Set(["p1"]), filter: "local" });
+  assert.deepEqual(s.fresh, []);
+  assert.equal(openCount(MIX), 3);
 });

@@ -852,3 +852,10 @@ test("рядок сторінки, змінений щойно, має позн�
   assert.match(hot, /class="row-recent-dot"/);
   assert.doesNotMatch(panelHTML(st(false)), /row-recent-dot/);
 });
+
+test("рядок із news: бурштиновий лічильник row-news з підписом; без news — нема", () => {
+  const html = panelHTML(S({ rows: [deepRow({ news: 2 })] }));
+  assert.match(html, /<span class="row-news" title="Нових коментарів від команди: 2">2<\/span>/);
+  assert.equal(panelHTML(S({ rows: [deepRow({})] })).includes("row-news"), false);
+  assert.match(panelHTML(S({ rows: [deepRow({ news: 250 })] })), />99\+<\/span>/);
+});
