@@ -1172,6 +1172,31 @@ class ErrorTextsTest(AgentEnv):
         self.assertIn('проєктні: не дістати (module-error)', out)
 
 
+class AgentNewsUnitTest(unittest.TestCase):
+    def good(self, **kw):
+        c = {'id': 'c0ffee01-aaaa', 'ts': '19.10.2026 10:00', 'author': 'Олена', 'status': 'open', 'version': '2'}
+        c.update(kw)
+        return c
+
+    def test_foreign_resolved_duplicate_and_junk_elements_are_skipped(self):
+        raw = [self.good(), self.good(), self.good(id='a/b'), self.good(id='c0ffee02-bbbb', status='resolved'),
+               'junk', 5, None, self.good(id=7), self.good(id='c0ffee03-cccc')]
+        self.assertEqual([c['id'] for c in serve.agent_news(raw)], ['c0ffee01-aaaa', 'c0ffee03-cccc'])
+
+    def test_text_fields_are_one_clean_line_and_the_status_is_always_open(self):
+        [c] = serve.agent_news([self.good(ts='19.10\n10:00\x1b[31m', author='О\x07лена\nX', version=3)])
+        self.assertEqual((c['ts'], c['author'], c['version'], c['status']), ('19.10 10:00[31m', 'Олена X', '3', 'open'))
+
+    def test_the_answer_is_capped(self):
+        raw = [self.good(id=f'c{i:07d}-aaaa') for i in range(serve.MAX_NEWS + 50)]
+        self.assertEqual(len(serve.agent_news(raw)), serve.MAX_NEWS)
+
+    def test_not_a_list_is_a_module_error(self):
+        for raw in ({'a': 1}, 'x', None, 5):
+            with self.assertRaises(dm.ModuleError, msg=repr(raw)):
+                serve.agent_news(raw)
+
+
 class ServerEnv(AgentEnv):
     """`AgentEnv` + справжній сервер у процесі (для маршруту `/comments`)."""
 
@@ -1377,6 +1402,38 @@ class StateTest(AgentEnv):
         self.net.rows = [assigned(rest('c0ffee01-aaaa', 'a')), assigned(rest('c0ffee02-bbbb', 'b', status='resolved'))]
         self.assertIn('+ 1 проєктних', self.line())
         self.assertEqual(len(self.net.calls), 1)
+
+
+class CommentNewsRouteTest(ServerEnv):
+    """`GET /api/comment-news?task=<id>` (Deai 0.27.0): легкі відкриті командні коментарі для числа на вкладці."""
+
+    def news(self, tid='px'):
+        st, raw = self.fetch(f'/api/comment-news?task={tid}')
+        return st, raw
+
+    def test_the_open_light_items_of_the_task_channel(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'Новий'), cl('c0ffee02-bbbb', 'Старе', status='resolved')])
+        st, raw = self.news()
+        self.assertEqual(st, 200, raw)
+        self.assertEqual(json.loads(raw), {'supported': True, 'items': [
+            {'id': 'c0ffee01-aaaa', 'ts': '19.10.2026 10:00', 'author': 'Олена', 'status': 'open', 'version': '2/me--welcome'}]})
+        self.assertNotIn('AAAA', raw)
+
+    def test_a_space_without_a_provider_is_unsupported_not_an_error(self):
+        st, raw = self.news()
+        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'items': []}))
+
+    def test_an_unknown_task_is_404_and_a_bad_name_is_400(self):
+        self.enable_memo_in(self.plain)
+        self.assertEqual(self.news('nope')[0], 404)
+        self.assertEqual(self.news('..%2Fx')[0], 400)
+        self.assertEqual(self.news('')[0], 400)
+
+    def test_a_module_without_recent_is_unsupported(self):
+        self.answer(self.plain, [])
+        st, raw = self.news()
+        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'items': []}), 'модуль `answer` не має `recent`')
 
 
 if __name__ == '__main__':

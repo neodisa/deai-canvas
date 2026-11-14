@@ -58,6 +58,13 @@ def list(ctx, channel):  # noqa: A001 — імʼя функції ролі
     return data if isinstance(data, type([])) else []
 
 
+def recent(ctx, channel):
+    """Необовʼязкова функція ролі (Deai 0.27.0): відкриті коментарі без важких полів."""
+    return [{'id': c.get('id'), 'ts': c.get('ts'), 'author': c.get('author'), 'status': c.get('status'),
+             'version': (c.get('meta') or {}).get('version')}
+            for c in list(ctx, channel) if isinstance(c, dict) and c.get('status') != 'resolved']
+
+
 def resolve(ctx, channel, id, reason):  # noqa: A002 — імена аргументів ролі
     _request(ctx, 'POST', _url(ctx, channel, '/resolve'), {'id': id, 'reason': reason})
 

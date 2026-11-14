@@ -362,7 +362,8 @@ class ModuleErrorTest(unittest.TestCase):
         # 4d-4b: `IMPLICIT_ROLES`/`IMPLICIT_ON_ERROR_ROLES` зникли разом із запасним постачальником (`test_originals_gone.ProviderWithoutImplicit`)
         for gone in ('IMPLICIT_ROLES', 'IMPLICIT_ON_ERROR_ROLES', 'STRICT_IMPLICIT_ROLES'):
             self.assertFalse(hasattr(dm, gone), gone)
-        self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS, {'vcs': ('validate', 'mirror_dir'), 'dashboard': ('open_comments',)})
+        self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS, {'vcs': ('validate', 'mirror_dir'), 'dashboard': ('open_comments',),
+                                                      'comments': ('recent',)})
 
 
 # ------------------------------------------------------------------------------------------ маніфест

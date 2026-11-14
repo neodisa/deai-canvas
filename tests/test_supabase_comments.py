@@ -413,7 +413,7 @@ class CatalogTest(Base):
     def test_the_real_catalog_loads_the_module_as_a_comments_provider(self):
         m = dm.catalog()[MID]
         self.assertEqual((m.status, m.error), ('ok', None))
-        self.assertEqual((m.roles, m.name, m.version, m.api, m.dir), (['comments'], 'Supabase', '1.2.0', 1, MODULE_DIR))
+        self.assertEqual((m.roles, m.name, m.version, m.api, m.dir), (['comments'], 'Supabase', '1.3.0', 1, MODULE_DIR))
         self.assertEqual(m.client, ('supabase.min.js', 'adapter.js'))
         self.assertEqual(m.secret_keys(), ['key'])
         self.assertEqual(m.private_secret_keys(), [], 'публічний ключ — єдиний секрет модуля, і він public')
@@ -426,7 +426,7 @@ class CatalogTest(Base):
         with open(os.path.join(MODULE_DIR, 'module.json'), encoding='utf-8') as f:
             man = json.load(f)
         self.assertEqual(man, {
-            'api': 1, 'id': 'supabase-comments', 'name': 'Supabase', 'version': '1.2.0', 'roles': ['comments'],
+            'api': 1, 'id': 'supabase-comments', 'name': 'Supabase', 'version': '1.3.0', 'roles': ['comments'],
             'client': ['supabase.min.js', 'adapter.js'],
             'settings': [
                 {'key': 'url', 'type': 'text', 'label': 'Адреса проєкту (https://<ref>.supabase.co)', 'required': True},
@@ -792,6 +792,37 @@ class ListTest(Base):
         ctx = self.ctx()
         got = dm.call(self.m, 'list', ctx, chan, timeout=dm.COMMENTS_TIMEOUT)
         self.assertEqual([c['id'] for c in got], ['a'])
+
+
+class RecentTest(Base):
+    """`recent` (Deai 0.27.0, необовʼязкова функція ролі): легкий опит відкритих для числа «нових» на вкладках."""
+
+    def test_the_request_is_one_light_get_without_snapshots(self):
+        chan = self.chan('x')
+        self.api.override('GET', 200, [{'id': 'a', 'ts': 't', 'author': 'o', 'status': 'open', 'version': '2'}])
+        got = self.fn('recent')(self.ctx(), chan)
+        self.assertEqual(got, [{'id': 'a', 'ts': 't', 'author': 'o', 'status': 'open', 'version': '2'}])
+        (rec,) = self.api.requests
+        self.assertEqual(rec['method'], 'GET')
+        self.assertEqual(rec['query']['project_id'], ['eq.' + chan])
+        self.assertEqual(rec['query']['status'], ['eq.open'])
+        self.assertEqual(rec['query']['select'], ['id,ts,author,status,version:meta->>version'])
+        self.assertEqual(rec['query']['order'], ['created_at.desc'])
+        self.assertEqual(rec['query']['limit'], ['200'])
+        for heavy in ('html_snapshot', 'meta,', '*'):
+            self.assertNotIn(heavy, rec['query']['select'][0])
+        self.assertIn('project_id=eq.deai%2F', rec['raw_path'])
+
+    def test_a_reply_that_is_not_a_list_is_a_module_error(self):
+        for body in ({'message': 'x'}, 'not json', None, b'5'):
+            self.api.overrides.clear()
+            self.api.override('GET', 200, body)
+            e = self.fails('recent', self.chan('x'))
+            self.assertIsInstance(e, dm.ModuleError, repr(body))
+            self.assertEqual(e.code, 'module-error', repr(body))
+
+    def test_the_module_declares_recent_as_an_optional_role_function(self):
+        self.assertTrue(callable(self.m.fn('recent')))
 
 
 # --------------------------------------------------------------------------------------------- resolve

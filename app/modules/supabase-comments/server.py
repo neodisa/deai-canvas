@@ -337,6 +337,28 @@ def list(ctx, channel):  # noqa: A001 — імʼя функції ролі
     return [_row_to_comment(r) for r in rows]
 
 
+RECENT_ROWS = 200        # «нових» на вкладці більше не покажемо; найновіші — за `created_at`
+
+
+def recent(ctx, channel):
+    """Відкриті коментарі каналу для лічильника «нових» (Deai 0.27.0, роль `comments`, необовʼязкова): лише `id, ts, author,
+    status, version` — БЕЗ знімків HTML, скріншотів і `fp` (урок квоти трафіку 21.10.2026: опит вкладок іде раз на 90 с)."""
+    channel = _need_text(ctx, channel, 'канал коментарів')
+    query = (f'project_id=eq.{_quote(channel)}&status=eq.open'
+             f'&select=id,ts,author,status,version:meta->>version&order=created_at.desc&limit={RECENT_ROWS}')
+    try:
+        status, payload = _request(ctx, 'GET', query, timeout=CALL_TIMEOUT_S, limit=MAX_SMALL)
+    except _ResponseError as e:
+        raise _error(ctx, 'module-error', _clean(e, _key(ctx))) from None
+    if not 200 <= status < 300:
+        raise _fail(ctx, status, payload)
+    rows = _json(payload)
+    if not isinstance(rows, type([])):
+        raise _error(ctx, 'module-error', 'Supabase повернув відповідь, що не є списком коментарів')
+    return [{'id': r.get('id'), 'ts': r.get('ts'), 'author': r.get('author'), 'status': r.get('status'),
+             'version': r.get('version')} for r in rows if isinstance(r, dict)]
+
+
 def resolve(ctx, channel, id, reason, iteration=None):  # noqa: A002 — імена аргументів ролі
     channel = _need_text(ctx, channel, 'канал коментарів')
     id = _need_text(ctx, id, 'id коментаря')

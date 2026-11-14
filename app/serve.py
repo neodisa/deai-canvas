@@ -3349,6 +3349,32 @@ def agent_pins(raw):
     return out
 
 
+#: Скільки «нових» віддає `/api/comment-news` (і чекає від `recent` модуля).
+MAX_NEWS = 200
+
+
+def agent_news(raw):
+    """Відповідь `recent` модуля → `[{id, ts, author, status: 'open', version}]` лише відкритих, ≤ `MAX_NEWS`. Не список —
+    `ModuleError`. Поля — як у `agent_pin`: `id` за `_AGENT_ID` (інакше пропуск), однорядкові тексти без керівних символів."""
+    if not isinstance(raw, list):
+        raise deai_modules.ModuleError('module-error', message='the comments module must answer recent() with a list')
+    out, seen = [], set()
+    for c in raw[:MAX_NEWS * 4]:
+        if not isinstance(c, dict) or c.get('status') == 'resolved':
+            continue
+        pid = c.get('id')
+        if not isinstance(pid, str) or not _AGENT_ID.fullmatch(pid) or pid in seen:
+            continue
+        seen.add(pid)
+        v = c.get('version')
+        ver = str(v) if isinstance(v, int) and not isinstance(v, bool) else agent_line(v, 200)
+        out.append({'id': pid, 'ts': agent_line(c.get('ts'), 40), 'author': agent_line(c.get('author'), 200),
+                    'status': 'open', 'version': ver or None})
+        if len(out) >= MAX_NEWS:
+            break
+    return out
+
+
 #: Хто бере командний коментар (Deai 0.27.0, спека Б-Р6): лише доручений Claude — `meta.assignee == 'claude'`.
 ASSIGNEE_CLAUDE = 'claude'
 
@@ -3453,6 +3479,15 @@ class ProjectComments:
         `comments-isolated`)."""
         self._check()
         return agent_pins(self._module('list', task, tid, internal))
+
+    def recent(self, task, tid):
+        """Відкриті командні коментарі каналу задачі для лічильника «нових» (`agent_news` відповіді необовʼязкової
+        `recent(ctx, channel)` модуля); модуль без неї — `None` (вкладка просто без числа). Канал — той, у який пише рамка
+        (`internal=False`)."""
+        self._check()
+        if self.prov.fn('recent') is None:
+            return None
+        return agent_news(self._module('recent', task, tid, False))
 
     def resolve(self, task, tid, pin_id, reason, iteration=None, internal=False):
         """Закрити пін модулем (`resolve(ctx, channel, id, reason[, iteration])`); номер ітерації — лише коли
@@ -6241,6 +6276,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.split('?')[0] == '/api/comment-config':
             self._comment_config()
             return
+        if self.path.split('?')[0] == '/api/comment-news':
+            self._comment_news()
+            return
         if self.path.split('?')[0] == '/api/shots':
             self._shots_manifest()
             return
@@ -6901,6 +6939,30 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json(body)
         except (OSError, json.JSONDecodeError, deai_modules.ModuleError) as e:
             self._send_json({'project': project, 'comments': [], 'error': str(e)})
+
+    def _comment_news(self):
+        """`GET /api/comment-news?task=<id>` — легкі відкриті командні коментарі задачі для числа на вкладці (Deai 0.27.0,
+        поправка 2 плану Б2: «нові» рахує клієнт за набором побачених id). Лише задачі простору запиту; модуль без `recent`
+        чи простір без постачальника — `supported: false`, а не помилка."""
+        q = parse_qs(urlparse(self.path).query)
+        tid = q.get('task', [''])[0]
+        if not NAME_RE.fullmatch(tid):
+            self.send_error(400, 'bad task')
+            return
+        task = load_tasks().get('tasks', {}).get(tid)
+        if not isinstance(task, dict):
+            self._send_json({'ok': False, 'error': 'unknown task'}, status=404)
+            return
+        pc = ProjectComments(spaces.active_space())
+        if pc.kind != 'module':
+            self._send_json({'supported': False, 'items': []})
+            return
+        try:
+            items = pc.recent(task, tid)
+        except (OSError, deai_modules.ModuleError) as e:
+            self._send_json({'supported': True, 'items': [], 'error': agent_line(str(e), 300)})
+            return
+        self._send_json({'supported': items is not None, 'items': items or []})
 
     # ---------- Локальні коментарі (фідбек Claude, НЕ в Supabase, у файлі) ----------
     def _local_file(self, task):
