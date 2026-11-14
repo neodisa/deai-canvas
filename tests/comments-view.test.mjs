@@ -75,6 +75,15 @@ test("інша сторінка й елемент поза екраном — п
   assert.match(html, /Елемента зараз немає на екрані/);
 });
 
+test("пін поза екраном несе, де був елемент (`meta.ctx`, як у картці коментатора), екранований", () => {
+  const html = commentsPanelHTML(base({ snapshot: { iteration: "3", comments: [
+    C({ id: "b", n: 2, where: "offscreen", meta: { ctx: { active: ["Крок 2", "<b>x</b>"], heading: "Ваш партнер" } } }),
+    C({ id: "c", n: 3, where: "here", meta: { ctx: { heading: "Не показувати" } } })] } }));
+  assert.match(html, /«Крок 2» · «&lt;b&gt;x&lt;\/b&gt;» · розділ «Ваш партнер»/);
+  assert.doesNotMatch(html, /<b>x<\/b>/);
+  assert.doesNotMatch(html, /Не показувати/);   // контекст — лише коли елемента нема на екрані
+});
+
 test("пошук без збігів — «Нічого не знайдено.»; поле пошуку несе запит", () => {
   const html = commentsPanelHTML(base({ query: "\"><x", snapshot: { iteration: "3", comments: [C({ id: "a", n: 1 })] } }));
   assert.match(html, /Нічого не знайдено/);

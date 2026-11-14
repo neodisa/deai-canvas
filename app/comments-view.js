@@ -14,6 +14,15 @@ const MANUAL_REASON = "resolved manually";
 const btn = (act, val, label, icon) => `<button type="button" class="cmt-act" data-act="${act}" data-val="${esc(val)}"`
   + ` aria-label="${esc(label)}" title="${esc(label)}">${icon ? ico(icon) : esc(label)}</button>`;
 
+/** Де був елемент (`meta.ctx` коментатора: `{ active: [кроки/вкладки], heading }`) — для піна, якого зараз нема на екрані;
+ *  той самий рядок, що й у картці коментатора (`ctxLine` у `commenter/src/comment-layer.js`). */
+function ctxLine(ctx) {
+  if (!ctx || typeof ctx !== "object") return "";
+  const parts = (Array.isArray(ctx.active) ? ctx.active : []).map((a) => t("cmtCtxStep", String(a)));
+  if (ctx.heading) parts.push(t("cmtCtxSection", String(ctx.heading)));
+  return parts.join(" · ");
+}
+
 function modeTag(m) {
   if (!m || !m.mode || m.mode === "element") return "";
   const txt = m.mode === "multi" ? (m.count > 0 ? t("cmtModeMulti", m.count) : t("cmtModeMultiBare")) : m.mode === "area" ? t("cmtModeArea") : t("cmtModeText");
@@ -32,8 +41,10 @@ function cardHTML(c, st, kind) {
     : `<p class="cmt-text">${esc(c.text || "")}</p>`;
   const quote = m.sel ? `<p class="cmt-sel">“${esc(String(m.sel).slice(0, 120))}”</p>` : "";
   const vp = m.viewport && m.viewport.w ? `<p class="cmt-vp">${esc(`${m.viewport.w}×${m.viewport.h || "?"}`)}</p>` : "";
+  const ctx = ctxLine(m.ctx);
   const where = c.where === "elsewhere" ? `<p class="cmt-note">${esc(t("cmtElsewhere"))}</p>`
-    : c.where === "offscreen" ? `<p class="cmt-note">${esc(t("cmtOffscreen"))}</p>` : "";
+    : c.where === "offscreen" ? `<p class="cmt-note">${esc(t("cmtOffscreen"))}</p>`
+      + (ctx ? `<p class="cmt-note cmt-ctx">${esc(ctx)}</p>` : "") : "";
   const src = shotSrc(c);
   const shot = src ? `<button type="button" class="cmt-shot" data-act="cmtshot" data-val="${esc(c.id)}" aria-label="${esc(t("cmtShot"))}">`
     + `<img src="${esc(src)}" alt="${esc(t("cmtShot"))}"></button>` : "";

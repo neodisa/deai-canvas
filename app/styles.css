@@ -1855,7 +1855,7 @@ body:not(.home-open) .cn-drawer{display:none}
 /* Панель «Коментарі» (0.26.0): та сама права панель, що й інспектор (`.insp`); вони взаємно виключні. */
 .cmt-top .cmt-total{font-size:11px;color:var(--dim);margin-right:auto}
 .cmt-ch{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
-.cmt-ch button{border:0;background:none;color:var(--dim);cursor:pointer;font-size:11px;padding:3px 8px}
+.cmt-ch button{border:0;background:none;color:var(--dim);cursor:pointer;font-size:11px;min-height:var(--h-sm);padding:0 10px}
 .cmt-ch button[aria-pressed="true"]{background:var(--sel-tint-2);color:var(--hi)}
 .cmt-search{padding:8px 10px 0}
 .cmt-search input{width:100%;box-sizing:border-box;background:var(--s1);color:var(--hi);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;font-size:12px}
