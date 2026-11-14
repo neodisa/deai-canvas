@@ -399,6 +399,11 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     .compose .caud-b[aria-pressed="true"]{border-color:var(--line2);color:var(--hi)}
     .compose .caud-note{min-height:0;margin-top:4px;font-size:11px;color:var(--lo)}
     .compose .caud-note:empty{display:none}
+    .mcompose .caud{display:flex;gap:6px;margin-top:8px}
+    .mcompose .caud-b{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:0 10px;border-radius:var(--rsm);border:1px solid var(--line);background:var(--s2);color:var(--lo);font:12px/1 inherit;cursor:pointer}
+    .mcompose .caud-b[aria-pressed="true"]{border-color:var(--line2);color:var(--hi)}
+    .mcompose .caud-note{min-height:0;margin-top:4px;font-size:11px;color:var(--lo)}
+    .mcompose .caud-note:empty{display:none}
     .compose button{font:600 13px/1 inherit;border-radius:var(--rsm);padding:9px 13px;cursor:pointer;border:1px solid var(--line2);background:transparent;color:var(--mid);display:inline-flex;align-items:center;gap:7px}
     .compose button:hover{background:var(--s3);color:var(--hi)}
     .compose button svg{width:14px;height:14px}
@@ -606,6 +611,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         <div class="mcompose">
           <div class="mchead">${icon('multi', 14)}Comment on <b class="mccount">0</b> element(s)</div>
           <textarea class="mcta" placeholder="Leave a change request…"></textarea>
+          <div class="mcaud"></div>
           <div class="row"><button class="mccancel">Clear</button><button class="primary mcsave">${icon('check')}Comment</button></div>
         </div>
         <button class="handle" title="Comment — open the panel">
@@ -660,7 +666,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
          host does with the choice (Design Canvas reloads the frame in the other
          channel) rebuilds this panel from scratch, so `active` comes back from
          the host's own truth instead of a copy we would have to keep in step. */
-      root.querySelectorAll('[data-aud]').forEach((b) => {
+      root.querySelectorAll('.auds [data-aud]').forEach((b) => {
         b.onclick = () => notifyAudience(this.opts.onAudience, b.getAttribute('data-aud'));
       });
       // Search + sort toolbar.
@@ -699,6 +705,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
           this._mode = b.getAttribute('data-mode');
           root.querySelectorAll('.mode:not(.mstop):not(.mfreeze)').forEach((x) => x.classList.toggle('active', x === b));
           this._mcompose.classList.toggle('show', this._mode === 'multi'); // multi uses a modal
+          if (this._mode === 'multi') this._refreshMultiAuds();
           this._armComment(true); // picking a mode readies commenting
         };
       });
@@ -1065,8 +1072,17 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       // context, and the element render path is the only reliable one.
       let anc = els[0];
       while (anc && anc !== this.target && !els.every((e) => anc.contains(e))) anc = anc.parentElement;
+      const aud = this._pickedAud(this._mcompose);
+      if (aud) this._emit('onAudiencePick', aud);
       this._clearMulti();
-      this._addComment(els[0], text, '', { mode: 'multi', fps, count: els.length, rect, shotEl: anc || els[0] });
+      this._addComment(els[0], text, '', { mode: 'multi', fps, count: els.length, rect, shotEl: anc || els[0] }, aud);
+    },
+    /** Чипи адресата у формі «Кілька» (як у `_openCompose`): перемальовуємо при кожному показі — типовий вибір міг змінитись. */
+    _refreshMultiAuds() {
+      const h = this._mcompose && this._mcompose.querySelector('.mcaud');
+      if (!h) return;
+      h.innerHTML = this._audChipsHTML();
+      this._wireAudChips(this._mcompose);
     },
     _clearArea() { if (this._areaBox) { this._areaBox.remove(); this._areaBox = null; } this._area = null; },
     _elementAt(x, y) {
@@ -1394,7 +1410,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         const label = it.off ? String(it.label || it.ids.length)
           : it.cluster ? String(it.ids.length) : (this.appLocal || !c ? '' : String(this._seqOf(c)));
         if (w.firstChild.textContent !== label) w.firstChild.textContent = label;
-        const col = c ? this._audColor(c) : null; w.firstChild.style.background = col || '';
+        const col = c ? this._audColor(c) : null;
+        if (col) w.firstChild.style.background = col; else if (w.firstChild.style.background) w.firstChild.style.background = '';
         if (c && c._aud) w.firstChild.dataset.aud = c._aud; else delete w.firstChild.dataset.aud;
         w.firstChild.classList.toggle('cluster', !!it.cluster);
         w.firstChild.classList.toggle('off', !!it.off);
@@ -1793,7 +1810,10 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const c = this._inited && this.comments.find((x) => x.id === id);
       if (!c || !patch || typeof patch !== 'object') return false;
       c.meta = Object.assign({}, c.meta || {});
-      for (const k of Object.keys(patch)) { if (patch[k] == null) delete c.meta[k]; else c.meta[k] = patch[k]; }
+      for (const k of Object.keys(patch)) {
+        if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+        if (patch[k] == null) delete c.meta[k]; else c.meta[k] = patch[k];
+      }
       c._pending = true;
       this._persist(); this._render();
       return true;

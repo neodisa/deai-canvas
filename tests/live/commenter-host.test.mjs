@@ -403,3 +403,77 @@ test("TD-36: заголовок розділу в meta.ctx — лише для �
   assert.equal(await headingFor(priv, "project"), "");
   assert.equal(await headingFor([{ id: "local", label: "L", private: "yes" }, { id: "project", label: "P" }], "local"), "");
 });
+
+/* ---- Deai 0.27.0, T11 / Step 0: дрібні борги коментатора ---- */
+const SHOT = "document.querySelector('[data-comment-layer]').shadowRoot";
+
+test("S0-1: DOM-пін без _aud — без інлайн-фону й data-aud", async () => {
+  const page = await bootAud({ withHost: false, audiences: [{ id: "local", label: "L" }, { id: "project", label: "P" }] });
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  await page.click("#p");
+  await page.waitForFunction(`!!${SHOT}.querySelector('.compose textarea')`);
+  await page.evaluate(`(() => { ${SHOT}.querySelector('.compose textarea').value = 'z'; ${SHOT}.querySelector('.compose .save').click(); })()`);
+  await page.waitForFunction(() => window.__mem.some((c) => c.text === "z"));
+  await page.waitForFunction(`${SHOT}.querySelectorAll('.pin').length === 1`);
+  const [bg, hasAud] = await page.evaluate(`(() => { const p = ${SHOT}.querySelector('.pin'); return [p.style.background, p.hasAttribute('data-aud')]; })()`);
+  assert.equal(bg, ""); assert.equal(hasAud, false);
+  await page.close();
+});
+
+test("S0-2: полотно — пін без кольору й _aud не отримує жодної зміни атрибутів style/data-aud від _placeCanvasPins", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.setContent(PAGE);
+  await page.addScriptTag({ content: BUNDLE });
+  await page.evaluate(() => {
+    const mem = [{ id: "a1", author: "Т", text: "c", status: "open", fp: { tag: "p" }, meta: { seq: 1, iteration: "2", version: "2" }, ts: "13.11.2026 10:00" }];
+    window.__muts = [];
+    const anchors = { place: (pins) => pins.map((c) => ({ key: c.id, ids: [c.id], x: 100, y: 100 })),
+      subscribe: () => {}, active: () => true, armed: () => {} };
+    window.CommentLayer.init({ projectId: "t", storage: { load: () => mem.slice(), save: () => {} }, version: "2",
+      user: { name: "Тест" }, anchors, host: {} });
+  });
+  await page.waitForFunction(`!!${SHOT}.querySelector('.cp .pin')`);
+  await page.evaluate(`(() => { const p = ${SHOT}.querySelector('.cp .pin');
+    new MutationObserver((l) => l.forEach((m) => window.__muts.push(m.attributeName))).observe(p, { attributes: true });
+    window.CommentLayer._placeCanvasPins(); window.CommentLayer._placeCanvasPins(); })()`);
+  await page.waitForTimeout(50);
+  assert.deepEqual(await page.evaluate(() => window.__muts), [], "перемальовка піна без кольору чіпала атрибути");
+  assert.equal(await page.evaluate(`${SHOT}.querySelector('.cp .pin').hasAttribute('style')`), false);
+  await page.close();
+});
+
+test("S0-3: setMeta не пише __proto__ (і constructor/prototype) у meta", async () => {
+  const seed = [{ id: "a1", author: "Т", text: "l", status: "open", meta: { seq: 1, iteration: "2", version: "2" }, ts: "13.11.2026 10:00" }];
+  const page = await bootAud({ seed });
+  const r = await page.evaluate(() => {
+    const L = window.CommentLayer;
+    L.setMeta("a1", JSON.parse('{"__proto__":{"polluted":1},"constructor":"x","prototype":"y","ok":"1"}'));
+    const m = L.comments.find((c) => c.id === "a1").meta;
+    return { proto: Object.getPrototypeOf(m) === Object.prototype, polluted: m.polluted, ok: m.ok,
+      own: Object.keys(m).filter((k) => ["constructor", "prototype"].includes(k)), global: ({}).polluted };
+  });
+  assert.deepEqual(r, { proto: true, polluted: undefined, ok: "1", own: [], global: undefined });
+  await page.close();
+});
+
+test("S0-4: форма «Кілька» має чипи адресата; вибір іде в _aud піна (і в onAudiencePick)", async () => {
+  const page = await bootAud();
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  const multi = async (text, pick) => {
+    await page.evaluate(`${SHOT}.querySelector('.mode[data-mode="multi"]').click()`);
+    await page.click("#t"); await page.click("#p");
+    await page.waitForFunction(`${SHOT}.querySelector('.mccount').textContent === '2'`);
+    assert.equal(await page.evaluate(`!!${SHOT}.querySelector('.mcompose .caud-b')`), true, "у формі «Кілька» нема чипів");
+    if (pick) await page.evaluate(`${SHOT}.querySelector('.mcompose .caud-b[data-pick="${pick}"]').click()`);
+    await page.evaluate(`(() => { ${SHOT}.querySelector('.mcta').value = '${text}'; ${SHOT}.querySelector('.mcsave').click(); })()`);
+    await page.waitForFunction((t) => window.__mem.some((c) => c.text === t), text);
+  };
+  await multi("m1", null);                    // типово — команда (defaultAudience = project)
+  assert.equal(await page.evaluate(() => window.__mem.find((c) => c.text === "m1")._aud), "project");
+  await multi("m2", "local");
+  assert.equal(await page.evaluate(() => window.__mem.find((c) => c.text === "m2")._aud), "local");
+  await multi("m3", "project");
+  assert.equal(await page.evaluate(() => window.__mem.find((c) => c.text === "m3")._aud), "project");
+  assert.deepEqual(await page.evaluate(() => window.__picked), ["project", "local", "project"]);
+  await page.close();
+});
