@@ -391,7 +391,7 @@ test("TD-36: заголовок розділу в meta.ctx — лише для �
     await page.evaluate(() => window.CommentLayer.setCommentMode(true));
     await page.click("#p");
     await page.waitForFunction(`!!${SH}.querySelector('.compose textarea')`);
-    await page.evaluate(`(() => { ${SH}.querySelector('.compose .caud-b[data-pick="${aud}"]').click();
+    await page.evaluate(`(() => { ${aud ? `${SH}.querySelector('.compose .caud-b[data-pick="${aud}"]').click();` : ""}
       ${SH}.querySelector('.compose textarea').value = 'h'; ${SH}.querySelector('.compose .save').click(); })()`);
     await page.waitForFunction(() => window.__mem.some((c) => c.text === "h"));
     const h = await page.evaluate(() => window.__mem.find((c) => c.text === "h").meta.ctx?.heading || "");
@@ -402,6 +402,10 @@ test("TD-36: заголовок розділу в meta.ctx — лише для �
   assert.equal(await headingFor(priv, "local"), "Заголовок");
   assert.equal(await headingFor(priv, "project"), "");
   assert.equal(await headingFor([{ id: "local", label: "L", private: "yes" }, { id: "project", label: "P" }], "local"), "");
+  /* Командний канал впав: хост віддає ОДНУ приватну аудиторію, чипів нема (aud = null) — заголовок є. Одна НЕ приватна — ні. */
+  assert.equal(await headingFor([{ id: "local", label: "L", private: true }], null), "Заголовок");
+  assert.equal(await headingFor([{ id: "project", label: "P" }], null), "");
+  assert.equal(await headingFor([{ id: "local", label: "L", private: "yes" }], null), "");
 });
 
 /* ---- Deai 0.27.0, T11 / Step 0: дрібні борги коментатора ---- */

@@ -453,7 +453,7 @@ test("8: адаптер модуля не вантажиться → у рамц
   await page.waitForSelector("#cmt-panel .cmt-teamdown", { timeout: 8000 });
   assert.ok((await page.textContent("#cmt-panel .cmt-teamdown")).length > 20);
 
-  await frame.click("h1");
+  await frame.click(".card:nth-child(5) p");                            // під заголовком «Матеріал 5»: є що писати в «де: розділ»
   await frame.waitForFunction(`!!${SHADOW}.querySelector('.compose textarea')`);
   assert.deepEqual(await chips(frame), [], "у формі лишились чипи адресата при падінні командного");
   await frame.evaluate(() => {
@@ -464,6 +464,9 @@ test("8: адаптер модуля не вантажиться → у рамц
   });
   await until(() => localList(env).some((c) => c.text === "Локальний при падінні"), "локальний пін у файлі задачі");
   assert.equal(localList(env).some((c) => "_aud" in c), false);
+  /* Єдина аудиторія — приватна локальна (`private: true`), чипів нема: заголовок розділу все одно пишемо (підказка «де: розділ» для Claude). */
+  const mine = localList(env).find((c) => c.text === "Локальний при падінні");
+  assert.ok(mine.meta?.ctx?.heading, "локальний пін при падінні командного втратив заголовок розділу");
 });
 
 /* ── 9: без host — як у 0.26.0 ───────────────────────────────────────────────────────────────────── */

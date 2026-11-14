@@ -1839,7 +1839,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     /** `private` аудиторії = фідбек лишається на цій машині, тож заголовок розділу можна писати в контекст піна.
      *  Лише строге `true`; без прапора заголовка нема (безпечне типове, TD-36). Коментатор не знає id каналів хоста. */
     _audPrivate(aud) {
-      const a = aud && this._formAuds().find((x) => x.id === aud);
+      if (aud == null) {
+        /* Чипів нема (`_formAuds` порожній), але хост міг передати ОДНУ аудиторію: так буває, коли командний канал впав і лишився
+           лише приватний локальний. Тоді пін іде саме туди — заголовок можна. Дві й більше аудиторій без вибору — невідомо: без заголовка. */
+        const raw = this.opts && this._hostOpts && Array.isArray(this.opts.audiences) ? this.opts.audiences.filter((x) => x && typeof x.id === 'string' && x.id) : [];
+        return raw.length === 1 && raw[0].private === true;
+      }
+      const a = this._formAuds().find((x) => x.id === aud);
       return !!a && a.private === true;
     },
     /** Змінити поля `meta` піна (Deai 0.27.0: доручення `assignee`): `null`/`undefined` прибирає ключ. Звичайний `_persist`. */
