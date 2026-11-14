@@ -115,10 +115,10 @@ function closeQuietly(store) {
 /**
  * @param env {{
  *   canvasEl: Element, cam: () => {x,y,scale}, cards: () => Array, cardW: () => number,
- *   picked: () => string|null, channel: () => 'local'|'project',
+ *   picked: () => string|null, channel: () => 'dual'|'local',
  *   frameKeyOf: (card) => string, shotOf: (card) => object|null,
  *   camTo: (target) => void, focusCard: (card) => void,
- *   audiences: () => Array, onAudience: (ch) => void, fail: (err) => void,
+ *   audiences: () => Array, fail: (err) => void,
  *   host?: {rightInset?, onReady, onChange, onSelect, onMode},
  * }} env
  */
@@ -343,15 +343,23 @@ export function overviewComments(env) {
     const gen = epoch;
     const stale = () => cfgKey !== key || gen !== epoch;
     const [it, ch] = key.split("|");
-    const cfg = await fetch(`/api/comment-config?ch=${encodeURIComponent(ch)}&it=${encodeURIComponent(it)}`)
+    const cfgOf = (c) => fetch(`/api/comment-config?ch=${encodeURIComponent(c)}&it=${encodeURIComponent(it)}`)
       .then(async (r) => { if (!r.ok) throw await configError(r); return r.json(); });
-    if (stale()) return;   // поки чекали — перемкнули канал чи ітерацію, або `invalidate()` змінив модулі
+    const cfg = await cfgOf("local");
+    if (stale()) return;   // поки чекали — перемкнули простір чи ітерацію, або `invalidate()` змінив модулі
     let store;
-    if (cfg.module) {
-      // Командний канал веде модуль ролі `comments` (у ЛІГИ — вбудований `supabase-comments`): його адаптер.
-      store = await moduleStore(cfg);
+    const local = window.CommentLayerLocal({ endpoint: cfg.endpoint });
+    if (ch === "dual") {
+      // Б2 (0.27.0): локальні + командні в одному шарі (те саме `DeaiDualStore`, що в рамці «Макета»). Командне не
+      // піднялось (нема постачальника, адаптер не завантажився, сервіс мовчить) — «Огляд» живе на локальних, а
+      // причина лежить у `teamDown`; `env.fail` — лише для падіння локальної частини.
+      let team = null, why = null;
+      try { team = await moduleStore(await cfgOf("project")); }
+      catch (e) { why = (e && e.message) || String(e); }
+      if (stale()) { closeQuietly(team); closeQuietly(local); return; }
+      store = window.DeaiDualStore({ local, team, teamDown: why });
     } else {
-      store = window.CommentLayerLocal({ endpoint: cfg.endpoint });
+      store = local;
     }
     try { await store.ready; }
     catch (e) {
@@ -364,8 +372,8 @@ export function overviewComments(env) {
     if (cl) { cl.destroy(); cl = null; subs.length = 0; }   // друга лінія: інстанс завжди ОДИН
     iterNum = cfg.version;
     cl = window.CommentLayer.create().init({
-      projectId: cfg.module ? cfg.channel : cfg.project, storage: store, version: cfg.version, local: cfg.ch === "local",
-      anchors: provider, audiences: env.audiences(), onAudience: env.onAudience,
+      projectId: cfg.project, storage: store, version: cfg.version, local: ch !== "dual",
+      anchors: provider, audiences: ch === "dual" ? env.audiences() : [],
       // особа машини — запасне імʼя автора, коли браузер не показує діалог імені (вбудований)
       defaultUser: cfg.user || null,
       // колбеки панелі оболонки (0.26.0); ручку й панель полотна тримає оболонка

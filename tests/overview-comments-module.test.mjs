@@ -24,9 +24,18 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
 import { DICT } from "../app/i18n.js";
 import { moduleStore, overviewComments } from "../app/overview-comments.js";
+
+/* Справжнє `DeaiDualStore` (класичний скрипт `window.*`) — у пісочниці, як у `tests/dual-store.test.mjs`. */
+const DUAL_SRC = fs.readFileSync(new URL("../app/vendor/dual-store.js", import.meta.url), "utf8");
+function loadDual() {
+  const win = {};
+  vm.runInNewContext(DUAL_SRC, { window: win });
+  return win.DeaiDualStore;
+}
 
 const SRC = fs.readFileSync(new URL("../app/overview-comments.js", import.meta.url), "utf8");
 
@@ -131,10 +140,11 @@ test("F3: ключ errCommentsAdapter є в обох словниках", () => 
   assert.notEqual(DICT.uk.errCommentsAdapter, DICT.en.errCommentsAdapter);
 });
 
-test("G: старого шляху ЛІГИ (CDN Supabase, CommentLayerSupabase) нема: відповідь без `module` — лише локальний канал", () => {
+test("G: старого шляху ЛІГИ (CDN Supabase, CommentLayerSupabase) нема: командний канал — лише модулем, ключ коментатора локальний (Б2)", () => {
   const start = SRC.slice(SRC.indexOf("async function start(key)"), SRC.indexOf("const fail = (e)"));
-  assert.match(start, /if \(cfg\.module\) \{\n(?:\s*\/\/[^\n]*\n)?\s*store = await moduleStore\(cfg\);\n\s*\} else \{\n\s*store = window\.CommentLayerLocal\(\{ endpoint: cfg\.endpoint \}\);/);
-  assert.match(start, /projectId: cfg\.module \? cfg\.channel : cfg\.project,/, "канал модуля — ключ коментатора");
+  assert.match(start, /const local = window\.CommentLayerLocal\(\{ endpoint: cfg\.endpoint \}\);/, "локальна частина — завжди");
+  assert.match(start, /try \{ team = await moduleStore\(await cfgOf\("project"\)\); \}\n\s*catch \(e\) \{ why = /, "командне — модулем ролі, збій → teamDown");
+  assert.match(start, /projectId: cfg\.project,/, "ключ коментатора — локальний (Б2)");
   for (const gone of ["SB_JS", "CommentLayerSupabase", "supabase-js", "sbUrl", "sbKey", "cdn.jsdelivr.net"]) {
     assert.equal(SRC.includes(gone), false, `${gone} у overview-comments.js`);
   }
@@ -154,7 +164,7 @@ test("F4: адаптер, що не зареєстрував фабрику, н�
 /** Підставний браузер на `globalThis`; повертає журнали й `restore()`. `scripts[src]` — що робить завантаження файла. */
 function browser({ resp: response, scripts = {} }) {
   const saved = {};
-  const names = ["window", "document", "fetch", "addEventListener", "CommentLayer", "CommentLayerLocal", "DeaiComments"];
+  const names = ["window", "document", "fetch", "addEventListener", "CommentLayer", "CommentLayerLocal", "DeaiComments", "DeaiDualStore"];
   for (const n of names) saved[n] = Object.getOwnPropertyDescriptor(globalThis, n);
   const out = { appended: [], created: [], inits: [], fetched: [], errors: [], destroyed: 0 };
   globalThis.window = globalThis;
@@ -170,8 +180,11 @@ function browser({ resp: response, scripts = {} }) {
   // `response` — тіло (200) або функція `(url) => відповідь fetch` для сценаріїв із помилками й різними каналами
   globalThis.fetch = async (url) => {
     out.fetched.push(url);
-    return typeof response === "function" ? response(url) : { ok: true, json: async () => response };
+    if (typeof response === "function") return response(url);
+    // Б2: локальна конфігурація — окремий запит; тіло `response` — відповідь КОМАНДНОГО каналу (`ch=project`)
+    return { ok: true, json: async () => (url.includes("ch=local") ? LOCAL_CFG : response) };
   };
+  globalThis.DeaiDualStore = loadDual();
   globalThis.CommentLayerLocal = () => ({ ready: Promise.resolve(), load: () => [], save() {} });
   globalThis.CommentLayer = { create: () => ({
     init: (o) => { out.inits.push(o); return { destroy() { out.destroyed += 1; }, store: o.storage }; },
@@ -183,9 +196,9 @@ function browser({ resp: response, scripts = {} }) {
   };
   return out;
 }
-const envFor = (b, channel = "project") => ({
+const envFor = (b, channel = "dual") => ({
   canvasEl: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) },
-  picked: () => "it1", channel: () => channel, audiences: () => [], onAudience() {},
+  picked: () => "it1", channel: () => channel, audiences: () => [],
   fail: (e) => b.errors.push(e && e.message),
 });
 const settle = () => new Promise((r) => setTimeout(r, 30));
@@ -201,13 +214,13 @@ test("H: «Огляд» із відповіддю модуля вантажит�
     oc.enter();
     await settle();
     assert.deepEqual(b.errors, []);
-    assert.deepEqual(b.fetched, ["/api/comment-config?ch=project&it=it1"]);
+    assert.deepEqual(b.fetched, ["/api/comment-config?ch=local&it=it1", "/api/comment-config?ch=project&it=it1"]);
     assert.deepEqual(b.appended, ["/api/module-client/m-h/adapter.js"], "жодного CDN Supabase");
     assert.equal(b.created.length, 1);
     assert.equal(b.created[0].endpoint, "http://127.0.0.1:4000");
     assert.equal(b.created[0].channel, "deai/liga/t-1");
     assert.equal(b.inits.length, 1);
-    assert.equal(b.inits[0].projectId, "deai/liga/t-1", "ключ коментатора — канал модуля");
+    assert.equal(b.inits[0].projectId, LOCAL_CFG.project, "ключ коментатора — локальний; канал модуля йде лише в адаптер");
     assert.equal(b.inits[0].local, false);
     assert.equal(b.inits[0].version, "3");
     assert.equal(typeof b.inits[0].storage.load, "function");
@@ -238,19 +251,17 @@ test("H1: host оболонки (0.26.0) долітає в init коментат
   } finally { b.restore(); }
 });
 
-test("H2: адаптер не завантажився — без винятку назовні: помилка в fail(), шар не піднято, наступний вхід пробує знову", async () => {
-  const R = resp({ module: "m-h2", client: ["/api/module-client/m-h2/adapter.js"] });
-  const b = browser({ resp: R });             // scripts порожні → onerror
+test("H2: локальна конфігурація відмовила — без винятку назовні: помилка в fail(), шар не піднято, наступний вхід пробує знову", async () => {
+  const b = browser({ resp: () => ({ ok: false, status: 502, json: async () => ({ code: "module-error" }) }) });
   try {
     const oc = overviewComments(envFor(b));
     oc.enter();
     await settle();
-    assert.equal(b.errors.length, 1);
-    assert.match(b.errors[0], /\/api\/module-client\/m-h2\/adapter\.js/);
-    assert.equal(b.inits.length, 0, "без сховища коментатор не піднімається");
+    assert.deepEqual(b.errors, [DICT.uk.errCommentConfig(502, "module-error")]);
+    assert.equal(b.inits.length, 0, "без локального сховища коментатор не піднімається");
     oc.rebuild();
     await settle();
-    assert.equal(b.appended.length, 2, "невдачу не закешовано — повторна спроба");
+    assert.equal(b.fetched.length, 2, "невдачу не закешовано — повторна спроба");
   } finally { b.restore(); }
 });
 
@@ -273,7 +284,8 @@ test("H3: ЛІГА (4b-2) — відповідь `supabase-comments` ванта�
     assert.equal(b.created[0].url, "https://x.supabase.co");
     assert.equal(b.created[0].shotsBucket, "overview-thumbs");
     assert.equal(b.created[0].channel, "dc/t");
-    assert.equal(b.inits[0].projectId, "dc/t", "ключ коментатора — канал ЛІГИ");
+    assert.equal(b.inits[0].projectId, LOCAL_CFG.project, "ключ коментатора — локальний; канал ЛІГИ — лише в адаптері");
+    assert.equal(b.inits[0].storage.teamDown, null);
   } finally { delete globalThis.supabase; b.restore(); }
 });
 
@@ -323,7 +335,7 @@ test("K: застарілий запуск (канал перемкнули, п�
       el.onload();
     } },
   });
-  let channel = "project";
+  let channel = "dual";
   try {
     const oc = overviewComments({ ...envFor(b), channel: () => channel });
     oc.enter();
@@ -373,7 +385,7 @@ test("L3: ключ errCommentsStore є в обох словниках", () => {
   assert.notEqual(DICT.uk.errCommentsStore, DICT.en.errCommentsStore);
 });
 
-test("M: `ready` відхилився — сховище закрито ДО відмови (інакше опитування/сокет тече), причина долітає в fail() як є", async () => {
+test("M: `ready` командного відхилився — сховище закрито (інакше опитування/сокет тече), причина долітає в teamDown як є, «Огляд» живий", async () => {
   for (const closeThrows of [false, true]) {
     const closes = [];
     const R = resp({ module: `m-m${closeThrows}`, client: [`/api/module-client/m-m${closeThrows}/adapter.js`] });
@@ -388,8 +400,9 @@ test("M: `ready` відхилився — сховище закрито ДО в�
       overviewComments(envFor(b)).enter();
       await settle();
       assert.deepEqual(closes, ["closed"], `closeThrows=${closeThrows}`);
-      assert.deepEqual(b.errors, ["сервіс не відповів"], "причина — відхилення `ready`, а не збій закриття");
-      assert.equal(b.inits.length, 0, "без готового сховища коментатор не піднімається");
+      assert.deepEqual(b.errors, [], "Б2: падіння командного не валить «Огляд»");
+      assert.equal(b.inits.length, 1, "шар піднявся на локальних");
+      assert.equal(b.inits[0].storage.teamDown, "сервіс не відповів", "причина — відхилення `ready`, а не збій закриття");
     } finally { b.restore(); }
   }
 });
@@ -403,7 +416,25 @@ test("M2: сховище без `close` і з відхиленим `ready` — �
   try {
     overviewComments(envFor(b)).enter();
     await settle();
-    assert.deepEqual(b.errors, ["впало"]);
+    assert.deepEqual(b.errors, []);
+    assert.equal(b.inits[0].storage.teamDown, "впало");
+  } finally { b.restore(); }
+});
+
+test("M3: `ready` ЛОКАЛЬНОГО сховища відхилився — це вже падіння «Огляду»: обидва сховища закрито, причина — у fail()", async () => {
+  const closes = [];
+  const R = resp({ module: "m-m3", client: ["/api/module-client/m-m3/adapter.js"] });
+  const b = browser({ resp: R, scripts: { "/api/module-client/m-m3/adapter.js": (el) => {
+    globalThis.DeaiComments = { create: () => ({ ready: Promise.resolve(), load: () => [], save() {}, close: () => closes.push("team") }) };
+    el.onload();
+  } } });
+  globalThis.CommentLayerLocal = () => ({ ready: Promise.reject(new Error("локальний не відповів")), load: () => [], save() {}, close: () => closes.push("local") });
+  try {
+    overviewComments(envFor(b)).enter();
+    await settle();
+    assert.deepEqual(b.errors, ["локальний не відповів"]);
+    assert.equal(b.inits.length, 0);
+    assert.deepEqual([...closes].sort(), ["local", "team"], "комбіноване закриває обидва");
   } finally { b.restore(); }
 });
 
@@ -420,7 +451,7 @@ function twoServices(mod, { gates = {} } = {}) {
     scripts: { [`/api/module-client/${mod}/adapter.js`]: (el) => {
       globalThis.DeaiComments = { create: (cfg) => {
         state.made.push(cfg.endpoint);
-        return { endpoint: cfg.endpoint, ready: gates[cfg.endpoint] ?? Promise.resolve(), load: () => [], save() {}, close: () => state.closes.push(cfg.endpoint) };
+        return { endpoint: cfg.endpoint, ready: gates[cfg.endpoint] ?? Promise.resolve(), load: () => [{ id: cfg.endpoint }], save() {}, close: () => state.closes.push(cfg.endpoint) };
       } };
       el.onload();
     } },
@@ -441,7 +472,7 @@ test("N: invalidate() забуває інстанс — наступний вх�
     state.which = "http://b";
     oc.rebuild();
     await settle();
-    assert.equal(b.fetched.length, 1, "свідок: ключ той самий — ensure() нічого не перечитує");
+    assert.equal(b.fetched.length, 2, "свідок: ключ той самий — ensure() нічого не перечитує");
     assert.deepEqual(state.made, ["http://a"]);
 
     oc.invalidate();
@@ -449,10 +480,10 @@ test("N: invalidate() забуває інстанс — наступний вх�
     assert.equal(oc.layer, null, "інстанса нема до наступного входу");
     oc.rebuild();
     await settle();
-    assert.equal(b.fetched.length, 2, "comment-config прочитано заново");
+    assert.equal(b.fetched.length, 4, "comment-config (обидва) прочитано заново");
     assert.deepEqual(state.made, ["http://a", "http://b"], "нове сховище — на новій адресі");
     assert.equal(b.inits.length, 2);
-    assert.equal(b.inits[1].storage.endpoint, "http://b", "живий шар сидить на новому сховищі");
+    assert.deepEqual([...b.inits[1].storage.load()].map((c) => c.id), ["http://b"], "живий шар сидить на новому сховищі");
     assert.equal(b.appended.length, 1, "фабрика модуля в кеші: файли адаптера вдруге не вантажаться");
     assert.deepEqual(b.errors, []);
   } finally { b.restore(); }
@@ -495,7 +526,7 @@ test("N3: запуск, що летів ПІД ЧАС invalidate(), не під�
     await settle();                       // застарілий запуск дочекався ready
     assert.deepEqual(state.closes, ["http://a"], "сховище застарілого запуску закрито");
     assert.equal(b.inits.length, 1, "застарілий запуск не підняв другий шар (і не затер новий)");
-    assert.equal(b.inits[0].storage.endpoint, "http://b", "живий шар сидить на НОВОМУ сховищі");
+    assert.deepEqual([...b.inits[0].storage.load()].map((c) => c.id), ["http://b"], "живий шар сидить на НОВОМУ сховищі");
     assert.deepEqual(b.errors, []);
   } finally { b.restore(); }
 });
@@ -522,5 +553,80 @@ test("N4: застарілий запуск, що ВПАВ після invalidate
     await settle();
     assert.equal(b.fetched.length, fetched, "ключ нового запуску цілий: ensure() нічого не перечитує");
     assert.equal(b.inits.length, 1, "другого шару нема");
+  } finally { b.restore(); }
+});
+
+/* ── Б2 (0.27.0), T7: «Огляд» на комбінованому сховищі ───────────────────────────────────────────────── */
+
+const LOCAL_CFG = { ch: "local", project: "deai/liga/it1/local", version: "3", endpoint: "/api/local-comments" };
+const AUDS = [{ id: "local", color: "#7C6CF0", private: true }, { id: "project" }];
+const dualEnv = (b, channel) => ({ ...envFor(b, channel), audiences: () => AUDS });
+const adapterOk = (b, urlOf, extra = {}) => ({ [urlOf]: (el) => {
+  globalThis.DeaiComments = { create: (cfg) => { b.created.push(cfg); return { ready: Promise.resolve(), load: () => [], save() {}, subscribe() {}, close() {}, ...extra }; } };
+  el.onload();
+} });
+
+test("T7-1: channel 'dual' — два запити comment-config (local, project); сховище комбіноване з teamDown === null; projectId — з локальної відповіді", async () => {
+  const R = resp({ module: "m-t7a", client: ["/api/module-client/m-t7a/adapter.js"], channel: "deai/liga/t-1" });
+  const b = browser({ resp: (url) => ({ ok: true, json: async () => (url.includes("ch=project") ? R : LOCAL_CFG) }) });
+  const scripts = adapterOk(b, "/api/module-client/m-t7a/adapter.js");
+  globalThis.document.head.appendChild = (el) => { b.appended.push(el.src); queueMicrotask(() => scripts[el.src](el)); };
+  try {
+    overviewComments(dualEnv(b, "dual")).enter();
+    await settle();
+    assert.deepEqual(b.errors, []);
+    assert.deepEqual(b.fetched, ["/api/comment-config?ch=local&it=it1", "/api/comment-config?ch=project&it=it1"]);
+    assert.equal(b.inits.length, 1);
+    const o = b.inits[0];
+    assert.equal(o.storage.teamDown, null, "командне піднялось");
+    assert.equal(o.projectId, "deai/liga/it1/local", "ключ коментатора — локальний");
+    assert.equal(o.local, false);
+    assert.deepEqual(o.audiences, AUDS);
+    assert.equal(b.created.length, 1, "адаптер модуля створено для командної частини");
+    assert.equal(b.created[0].channel, "deai/liga/t-1");
+    assert.equal(o.onAudience, undefined, "перемикання каналу зникло з контракту");
+  } finally { b.restore(); }
+});
+
+test("T7-2: командний конфіг відмовив (409) — «Огляд» піднято на локальних, teamDown = причина, env.fail мовчить", async () => {
+  const b = browser({ resp: (url) => (url.includes("ch=project")
+    ? { ok: false, status: 409, json: async () => ({ error: "no-provider" }) }
+    : { ok: true, json: async () => LOCAL_CFG }) });
+  try {
+    overviewComments(dualEnv(b, "dual")).enter();
+    await settle();
+    assert.deepEqual(b.errors, [], "падіння командного не валить «Огляд»");
+    assert.equal(b.inits.length, 1);
+    assert.equal(typeof b.inits[0].storage.teamDown, "string");
+    assert.ok(b.inits[0].storage.teamDown.length > 0);
+    assert.equal(b.inits[0].local, false);
+  } finally { b.restore(); }
+});
+
+test("T7-2b: адаптер командного не завантажився — теж лише teamDown, шар піднявся", async () => {
+  const R = resp({ module: "m-t7b", client: ["/api/module-client/m-t7b/adapter.js"], channel: "c" });
+  const b = browser({ resp: (url) => ({ ok: true, json: async () => (url.includes("ch=project") ? R : LOCAL_CFG) }) });   // scripts порожні → onerror
+  try {
+    overviewComments(dualEnv(b, "dual")).enter();
+    await settle();
+    assert.deepEqual(b.errors, []);
+    assert.equal(b.inits.length, 1);
+    assert.match(b.inits[0].storage.teamDown, /m-t7b\/adapter\.js/);
+  } finally { b.restore(); }
+});
+
+test("T7-3: channel 'local' — один запит ch=local, сховище локальне, local: true, аудиторій нема", async () => {
+  const b = browser({ resp: LOCAL_CFG });
+  const mine = { ready: Promise.resolve(), load: () => [], save() {} };
+  globalThis.CommentLayerLocal = (o) => { b.localOpts = o; return mine; };
+  try {
+    overviewComments(dualEnv(b, "local")).enter();
+    await settle();
+    assert.deepEqual(b.errors, []);
+    assert.deepEqual(b.fetched, ["/api/comment-config?ch=local&it=it1"]);
+    assert.equal(b.localOpts.endpoint, "/api/local-comments");
+    assert.equal(b.inits[0].storage, mine, "саме локальне сховище, без обгортки");
+    assert.equal(b.inits[0].local, true);
+    assert.deepEqual(b.inits[0].audiences, []);
   } finally { b.restore(); }
 });
