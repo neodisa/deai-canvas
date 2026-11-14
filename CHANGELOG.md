@@ -3,6 +3,35 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.26.0] — 14.11.2026
+
+Shell redesign, stage B1: the comments panel moves from the commenter into the shell. The commenter keeps drawing pins and the
+compose form, and tells the shell about everything through events.
+
+### Додано
+- **Панель «Коментарі» праворуч в оболонці** — у «Макеті» і на «Огляді». Вхід: кнопка-острівець із числом відкритих, клавіша C
+  (перемикає панель), ⌘K → «Коментарі». H ховає піни, поки панель відкрита; Esc закриває.
+- **Розділи:** «Відкриті», «З попередніх ітерацій» (кнопка «перенести в поточну») і «Закриті» — із «Зроблено · Іт.N» та поясненням
+  Claude (`resolveReason`; службове значення коментатора «resolved manually» не показується).
+- **Пошук:** `#N` — точний номер, інакше — текст.
+- **Картка коментаря:** правка, видалення, скриншот, режим, вьюпорт, цитата. Якщо елемента немає на екрані, пін показує, де він був
+  (`meta.ctx`).
+- **Перемикач каналу «Claude / Команда»** у шапці панелі (цілі 28px); на «Огляді» перемикання каналу лишає панель відкритою.
+- **`commenter/README.md`** — опис коментатора, режиму хоста, збірки й охоронця.
+
+### Змінено
+- **Ручка й власна панель коментатора** в робочому місці й на «Огляді» (режим хоста) сховані; клавіша P більше нічого не робить,
+  C/H тримає оболонка.
+- **Джерело коментатора — у репо (`commenter/`).** Збірка: `cd commenter && npm ci && npm run build` пише прямо в `app/vendor/` і в
+  `commenter/build-stamp.json`; охоронець — `tests/commenter-stamp.test.mjs`.
+
+### Виправлено
+- Піни більше не губляться на React-сторінках; видалений локальний пін не повертається (прийшло з джерелом коментатора).
+- Сервер вичищає службові поля коментатора `_el` і `_pending` з локальних пінів під час запису.
+
+### Не змінено
+- Опубліковані превʼю й `/commented`, відкритий напряму (без `host=1`), виглядають і працюють рівно як раніше.
+
 ## [0.25.0] — 13.11.2026
 
 Shell redesign, stage A: the top bar holds only what belongs to the current task, and open tasks get their own tabs row with an

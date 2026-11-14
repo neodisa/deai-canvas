@@ -359,6 +359,17 @@ runs only after you trust it. The service has to allow CORS for the opaque origi
 `/published` view; Supabase does). Supabase is tested against an in-process fake REST server,
 not a real project. Screenshots are not part of the role contract: the role has no file storage, so a module may offer an optional `uploadShot` (as `supabase-comments` does with `shots_bucket`), and without it the layer keeps no uploaded screenshot.
 
+**The comments panel (0.26).** In the work area and on the Overview the shell has its own «Comments» panel on the right. Open it
+with the island button (it shows the number of open comments), the **C** key or ⌘K → «Comments»; **H** hides the pins while it is
+open and **Esc** closes it. It lists open comments, comments from earlier iterations (with a «carry to the current one» action) and
+closed ones — with «Done · It.N» and the explanation the agent left — and searches by text or by `#N`. The «Claude / Team» channel
+switch sits in the panel header. The commenter's own handle and panel are hidden there (it only draws pins and the compose form);
+published previews and `/commented` opened without `host=1` look exactly as before.
+
+**Building the commenter.** Its source is in [`commenter/`](commenter/README.md). After changing it:
+`cd commenter && npm ci && npm run build` — the build writes into `app/vendor/` and `commenter/build-stamp.json`, and
+`tests/commenter-stamp.test.mjs` fails if the committed bundle does not match the source.
+
 ## Tasks and tags
 
 Every task can carry **tags** — short labels in any space. Set them in the field «Мітки» of «New task» (comma-separated, optional)
