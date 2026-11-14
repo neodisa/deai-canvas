@@ -43,6 +43,7 @@ import test from "node:test";
 import { chromium } from "playwright";
 import { VIEW, guardRealDeai, spacesApi, stop, text, waitText, waitBarReady, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
+import { hermeticLiga } from "./_liga-supabase.mjs";
 
 /* Свої бази: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs`
    стереже, що жодна база не збігається з чужою). Привітання — окрема смуга: там
@@ -71,6 +72,10 @@ async function boot(t, { first = "liga", portBase = PORT_BASE, requests = null }
   t.after(() => stop(server.child));
   const context = await browser.newContext({ viewport: VIEW });
   t.after(() => context.close());
+  /* Мігрована ЛІГА з роллю `comments`: робоче місце читає командне сховище (вигаданий хост Supabase) — його запити перехоплює
+     `hermeticLiga`, а будь-що поза машиною мусить лишитись порожнім (охоронець `tests/live-hermetic.test.mjs`). */
+  const seen = await hermeticLiga(context);
+  t.after(() => assert.deepEqual(seen.outside, [], `запити за межі машини:\n${seen.outside.join("\n")}`));
   if (requests) context.on("request", (r) => requests.push(r.url()));
   const page = await context.newPage();
   await page.goto(`${server.url}/app/`);
