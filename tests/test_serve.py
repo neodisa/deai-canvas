@@ -692,6 +692,19 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(got['comments'], [{'id': 'c1', 'text': 't', 'replies': [1]},
                                            {'id': 'c2', 'text': 'u'}])
 
+    def test_local_comments_drop_audience_marker(self):
+        """`_aud` — службова позначка адресата комбінованого сховища (0.27.0), а не дані піна.
+
+        Шар віддає її коментатору на копіях; на диск вона не лягає, навіть якщо
+        писар (шар, ручний POST) її приніс. Решта полів лишається.
+        """
+        pins = [{'id': 'c1', 'text': 't', '_aud': 'project', '_pending': True, 'replies': [1]},
+                {'id': 'c2', 'text': 'u', '_aud': 'local'}]
+        post(self.base + '/api/local-comments', {'comments': pins})
+        got = json.load(urllib.request.urlopen(self.base + '/api/local-comments'))
+        self.assertEqual(got['comments'], [{'id': 'c1', 'text': 't', 'replies': [1]},
+                                           {'id': 'c2', 'text': 'u'}])
+
     # ---------- Пакет тюнера (Task 16) ----------
     # ⛔ Тюнер НЕ ПИШЕ ні у файл макета, ні в шар коментарів: його вихід —
     # пакет РЕКОМЕНДАЦІЙ, який читає Клод і за яким робить правки в коді.

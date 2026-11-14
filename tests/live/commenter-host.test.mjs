@@ -258,3 +258,129 @@ test("з host + anchors (полотно): destroy() гасить armed(false) у
   assert.deepEqual(await page.evaluate((k) => window.__ev.slice(k), n), [], "destroy() кликав колбеки хоста");
   await page.close();
 });
+
+/* ---- Deai 0.27.0: чипи адресата, колір піна за `_aud`, setMeta, uploadShot з піном ---- */
+const AUDS = [{ id: "local", label: "L", color: "#7C6CF0" }, { id: "project", label: "P", note: "бачать колеги" }];
+
+/** `store` пам'ятає і виклики `uploadShot` (третій аргумент теж); `__picked` — що почув `onAudiencePick`. */
+async function bootAud({ withHost = true, audiences = AUDS, seed = [], defaultAudience = () => "project" } = {}) {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.setContent(PAGE);
+  await page.addScriptTag({ content: BUNDLE });
+  await page.evaluate(({ withHost, audiences, seed, hasDefault }) => {
+    const mem = seed.slice();
+    window.__mem = mem; window.__picked = []; window.__shots = [];
+    const store = {
+      load: () => mem.slice(),
+      save: (l) => { mem.length = 0; mem.push(...l); },
+      uploadShot: async (id, shot, c) => { window.__shots.push({ id, aud: c && c._aud, hasC: c !== undefined }); return null; },
+    };
+    const host = withHost ? {
+      ...(hasDefault ? { defaultAudience: () => "project" } : {}),
+      onAudiencePick: (id) => window.__picked.push(id),
+    } : undefined;
+    window.CommentLayer.init({ projectId: "t", storage: store, version: "2", user: { name: "Тест" }, audiences, host });
+  }, { withHost, audiences, seed, hasDefault: !!defaultAudience });
+  return page;
+}
+const SH = "document.querySelector('[data-comment-layer]').shadowRoot";
+async function openForm(page) {
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  await page.click("#p");
+  await page.waitForFunction(`!!${SH}.querySelector('.compose textarea')`);
+}
+const chipsOf = (page) => page.evaluate(`[...${SH}.querySelectorAll('.compose .caud-b')].map((b) => [b.textContent, b.getAttribute('aria-pressed')])`);
+
+test("A: host + 2 аудиторії — чипи, натиснутий за defaultAudience, note, вибір іде в пін і в onAudiencePick", async () => {
+  const page = await bootAud();
+  await openForm(page);
+  assert.deepEqual(await chipsOf(page), [["L", "false"], ["P", "true"]]);
+  assert.equal(await page.evaluate(`${SH}.querySelector('.compose .caud-note').textContent`), "бачать колеги");
+  await page.evaluate(`${SH}.querySelector('.compose .caud-b[data-pick="local"]').click()`);
+  assert.deepEqual(await chipsOf(page), [["L", "true"], ["P", "false"]]);
+  assert.equal(await page.evaluate(`${SH}.querySelector('.compose .caud-note').textContent`), "");
+  await page.evaluate(`(() => { const ta = ${SH}.querySelector('.compose textarea'); ta.value = 'x'; ${SH}.querySelector('.compose .save').click(); })()`);
+  await page.waitForFunction(() => window.__mem.some((c) => c.text === "x"));
+  assert.equal(await page.evaluate(() => window.__mem.find((c) => c.text === "x")._aud), "local");
+  assert.deepEqual(await page.evaluate(() => window.__picked), ["local"]);
+  await page.close();
+});
+
+test("B: колір піна — з audiences[i].color, нешкідливий; без color інлайн-фону нема; data-aud", async () => {
+  // Піни створюємо справжньою формою: DOM-пін без fp у сіді не має якоря й не малюється.
+  const make = async (page, target, aud, text) => {
+    await page.click(target);
+    await page.waitForFunction(`!!${SH}.querySelector('.compose textarea')`);
+    await page.evaluate(`(() => { ${SH}.querySelector('.compose .caud-b[data-pick="${aud}"]').click();
+      ${SH}.querySelector('.compose textarea').value = '${text}'; ${SH}.querySelector('.compose .save').click(); })()`);
+    await page.waitForFunction((t) => window.__mem.some((c) => c.text === t), text);
+  };
+  const pins = (page) => page.evaluate(`[...${SH}.querySelectorAll('.pin')].map((p) => [p.dataset.aud, p.style.background])`);
+  const run = async (audiences) => {
+    const page = await bootAud({ audiences });
+    await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+    await make(page, "#t", "local", "l");
+    await make(page, "#p", "project", "p");
+    await page.waitForFunction(`${SH}.querySelectorAll('.pin').length === 2`);
+    const got = await pins(page);
+    await page.close();
+    return got;
+  };
+  const got = await run(AUDS);
+  assert.deepEqual(got.map((x) => x[0]), ["local", "project"]);
+  assert.match(got[0][1], /rgb\(124, 108, 240\)/);
+  assert.equal(got[1][1], "");
+  // Не-hex колір ігнорується. `red` браузер би прийняв як фон — це ловить відсутність регекспа; `red;x` сам би відкинув
+  // присвоєнням у style, тож його перевіряємо на самій функції.
+  const bad = await run([{ id: "local", label: "L", color: "red" }, { id: "project", label: "P" }]);
+  assert.deepEqual(bad.map((x) => x[1]), ["", ""]);
+  const inj = await bootAud({ audiences: [{ id: "local", label: "L", color: "red;x" }, { id: "project", label: "P" }] });
+  assert.equal(await inj.evaluate(() => window.CommentLayer._audColor({ _aud: "local" })), null);
+  await inj.close();
+});
+
+test("C: без host чипів нема навіть при двох аудиторіях (форма як була)", async () => {
+  const page = await bootAud({ withHost: false });
+  await page.keyboard.press("c");
+  await page.click("#p");
+  await page.waitForFunction(`!!${SH}.querySelector('.compose textarea')`);
+  assert.equal((await chipsOf(page)).length, 0);
+  await page.close();
+});
+
+test("D: host + одна аудиторія — чипів нема", async () => {
+  const page = await bootAud({ audiences: [AUDS[0]] });
+  await openForm(page);
+  assert.equal((await chipsOf(page)).length, 0);
+  await page.close();
+});
+
+test("E: setMeta додає/знімає ключ meta і повертає false на невідомий id", async () => {
+  const seed = [{ id: "a1", author: "Т", text: "l", status: "open", meta: { seq: 1, iteration: "2", version: "2" }, ts: "13.11.2026 10:00" }];
+  const page = await bootAud({ seed });
+  assert.equal(await page.evaluate(() => window.CommentLayer.setMeta("a1", { assignee: "claude" })), true);
+  assert.equal(await page.evaluate(() => window.__mem[0].meta.assignee), "claude");
+  assert.equal(await page.evaluate(() => window.CommentLayer.setMeta("a1", { assignee: null })), true);
+  assert.equal(await page.evaluate(() => "assignee" in window.__mem[0].meta), false);
+  assert.equal(await page.evaluate(() => window.CommentLayer.setMeta("nope", { assignee: "x" })), false);
+  await page.close();
+});
+
+test("F: uploadShot отримує пін третім аргументом (_aud доходить до сховища)", async () => {
+  const page = await bootAud();
+  // Захоплення скріншота в голій сторінці недоступне — підміняємо _captureShot, решта шляху (форма → _finishComment) справжня.
+  await page.evaluate(() => { window.CommentLayer._captureShot = async () => "data:image/png;base64,iVBORw0KGgo="; });
+  await openForm(page);
+  await page.evaluate(`(() => { const ta = ${SH}.querySelector('.compose textarea'); ta.value = 'y'; ${SH}.querySelector('.compose .save').click(); })()`);
+  await page.waitForFunction(() => window.__shots.length > 0);
+  assert.deepEqual(await page.evaluate(() => window.__shots[0].aud), "project");
+  assert.equal(await page.evaluate(() => window.__shots[0].hasC), true);
+  await page.close();
+});
+
+test("G: carry переносить _aud у копію", async () => {
+  const page = await bootAud({ seed: [{ id: "a1", author: "Т", text: "p", status: "open", _aud: "project", meta: { seq: 1, iteration: "1", version: "1" }, ts: "13.11.2026 10:00" }] });
+  await page.evaluate(() => window.CommentLayer.carry("a1"));
+  assert.deepEqual(await page.evaluate(() => window.__mem.map((c) => c._aud)), ["project", "project"]);
+  await page.close();
+});

@@ -394,6 +394,11 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     .compose textarea::placeholder{color:var(--lo)}
     .compose textarea:focus{border-color:var(--line2)}
     .compose .row{display:flex;gap:8px;margin-top:10px;justify-content:flex-end}
+    .compose .caud{display:flex;gap:6px;margin-top:8px}
+    .compose .caud-b{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:0 10px;border-radius:var(--rsm);border:1px solid var(--line);background:var(--s2);color:var(--lo);font:12px/1 inherit;cursor:pointer}
+    .compose .caud-b[aria-pressed="true"]{border-color:var(--line2);color:var(--hi)}
+    .compose .caud-note{min-height:0;margin-top:4px;font-size:11px;color:var(--lo)}
+    .compose .caud-note:empty{display:none}
     .compose button{font:600 13px/1 inherit;border-radius:var(--rsm);padding:9px 13px;cursor:pointer;border:1px solid var(--line2);background:transparent;color:var(--mid);display:inline-flex;align-items:center;gap:7px}
     .compose button:hover{background:var(--s3);color:var(--hi)}
     .compose button svg{width:14px;height:14px}
@@ -1118,8 +1123,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       box.className = 'compose';
       const tx = (t.fp && t.fp.text || '').slice(0, 50);
       box.innerHTML = `<div class="csel">on &lt;${esc(t.fp && t.fp.tag || '?')}&gt;${tx ? ' · “' + esc(tx) + '”' : ''}</div><textarea placeholder="Leave a change request…"></textarea>
-        <div class="row"><button class="cancel">Cancel</button><button class="primary save">Comment</button></div>`;
-      this._sh.appendChild(box);
+        ${this._audChipsHTML()}<div class="row"><button class="cancel">Cancel</button><button class="primary save">Comment</button></div>`;
+      this._sh.appendChild(box); this._wireAudChips(box);
       /* Права межа — за СПРАВЖНІМИ ширинами композера й панелі. Числа 260/340
          DOM-режиму менші за 290/372, і біля панелі кнопка «Comment» ховалась під
          нею — знайдено живим тестом K (клік по «Comment» не доходив). */
@@ -1133,10 +1138,11 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       box.querySelector('.cancel').onclick = () => box.remove();
       box.querySelector('.save').onclick = () => {
         const text = ta.value.trim(); if (!text) return;
-        this._addCanvasComment(t, text); box.remove();
+        const aud = this._pickedAud(box); if (aud) this._emit('onAudiencePick', aud);
+        this._addCanvasComment(t, text, aud); box.remove();
       };
     },
-    _addCanvasComment(t, text) {
+    _addCanvasComment(t, text, aud) {
       const user = getUser(this.user, this.opts && this.opts.defaultUser);
       const m = t.meta || {};
       // Та сама форма, що в DOM-режимі (`buildContextBundle`) — щоб `inbox.py` і
@@ -1150,6 +1156,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         id, author: user.name, text, status: 'open', fp: t.fp,
         htmlSnapshot: ctx.htmlSnapshot, meta: ctx.meta,
         bornV: this._version(), ts: nowStamp(), _pending: true,
+        ...(aud ? { _aud: aud } : {}),
       });
       this._backupNow(); this._render();
       this._finishCanvasComment(id, t);
@@ -1167,7 +1174,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         if (c() && shot) {
           c().meta.shot = shot;
           if (this.store && typeof this.store.uploadShot === 'function') {
-            const url = await this._withTimeout(this.store.uploadShot(id, shot), 8000);
+            // Третій аргумент — пін: комбіноване сховище за `_aud` вирішує, чи слати знімок у командний кошик (поправка 5 плану Б2).
+            const url = await this._withTimeout(this.store.uploadShot(id, shot, c()), 8000);
             if (url) c().meta.shotUrl = url;
           }
         }
@@ -1190,8 +1198,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         : sel ? `on: “${esc(sel.slice(0, 120))}”`
         : `on ${desc(el)}`;
       box.innerHTML = `<div class="csel">${note}</div><textarea placeholder="Leave a change request…"></textarea>
-        <div class="row"><button class="cancel">Cancel</button><button class="primary save">Comment</button></div>`;
-      this._sh.appendChild(box);
+        ${this._audChipsHTML()}<div class="row"><button class="cancel">Cancel</button><button class="primary save">Comment</button></div>`;
+      this._sh.appendChild(box); this._wireAudChips(box);
       /* Хост: праву межу рахуємо за СПРАВЖНЬОЮ шириною композера (260 — менше за неї) і за місцем, яке тримає хост. */
       if (this._hostOpts) box.style.left = Math.max(8, Math.min(r.left, window.innerWidth - this._hostInset() - (box.offsetWidth || 290) - 12)) + 'px';
       // Vertical placement: below the element, but flip above / clamp so it never runs off-screen.
@@ -1201,11 +1209,12 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       box.querySelector('.cancel').onclick = () => box.remove();
       box.querySelector('.save').onclick = () => {
         const text = ta.value.trim(); if (!text) return;
-        this._addComment(el, text, sel, extra); box.remove();
+        const aud = this._pickedAud(box); if (aud) this._emit('onAudiencePick', aud);
+        this._addComment(el, text, sel, extra, aud); box.remove();
       };
     },
 
-    _addComment(el, text, sel, extra) {
+    _addComment(el, text, sel, extra, aud) {
       const user = getUser(this.user, this.opts && this.opts.defaultUser);
       const ctx = buildContextBundle({
         outerHTML: el.outerHTML,
@@ -1223,13 +1232,15 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (extra && extra.fps) ctx.meta.fps = extra.fps;         // multi: fingerprints of all picked elements
       if (extra && extra.rect) ctx.meta.rect = extra.rect;      // area: drawn region
       if (extra && extra.count) ctx.meta.count = extra.count;
-      try { const where = captureContext(el, this.target, { heading: this.appLocal }); if (where) ctx.meta.ctx = where; } catch (e) { /* контекст — підказка, не умова */ }
+      // TD-36: заголовок (там може бути ПІБ) пишемо лише в локальний пін; командний їде в спільне сховище без нього.
+      try { const where = captureContext(el, this.target, { heading: this.appLocal || (aud === 'local' && this._formAuds().length > 0) }); if (where) ctx.meta.ctx = where; } catch (e) { /* контекст — підказка, не умова */ }
       this.comments.push({
         id: genId(), author: user.name, text, status: 'open',
         fp: fingerprint(el, this.target),
         htmlSnapshot: ctx.htmlSnapshot, meta: ctx.meta,
         bornV: this._version(), ts: nowStamp(),
         _pending: true,   // unsynced until _persist confirms — protects it from live-merge drop
+        ...(aud ? { _aud: aud } : {}),
       });
       // Пин показуємо одразу (оптимістично) + негайний бекап; РЕАЛЬНИЙ persist
       // (=INSERT=тригер Teams) — у _finishComment, ПІСЛЯ захвату+заливки скриншота,
@@ -1251,7 +1262,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         if (c && shot) {
           c.meta = c.meta || {}; c.meta.shot = shot;
           if (this.store && typeof this.store.uploadShot === 'function') {
-            const url = await this._withTimeout(this.store.uploadShot(id, shot), 8000);
+            const url = await this._withTimeout(this.store.uploadShot(id, shot, c), 8000);   // `c` — для комбінованого сховища (поправка 5 плану Б2)
             if (url) c.meta.shotUrl = url;
           }
         }
@@ -1328,6 +1339,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         if (r.width === 0 && r.height === 0) continue;
         const p = document.createElement('div');
         p.className = 'pin'; p.textContent = this.appLocal ? '' : this._seqOf(c);
+        const col = this._audColor(c); if (col) p.style.background = col;
+        if (c._aud) p.dataset.aud = c._aud;
         p.style.left = (r.left + 10) + 'px'; p.style.top = (r.top + 10) + 'px';
         p.onclick = () => this._focusCard(c.id);
         p.onmouseenter = () => this._showPinPop(p, c);   // hover → preview the comment beside the pin
@@ -1381,6 +1394,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         const label = it.off ? String(it.label || it.ids.length)
           : it.cluster ? String(it.ids.length) : (this.appLocal || !c ? '' : String(this._seqOf(c)));
         if (w.firstChild.textContent !== label) w.firstChild.textContent = label;
+        const col = c ? this._audColor(c) : null; w.firstChild.style.background = col || '';
+        if (c && c._aud) w.firstChild.dataset.aud = c._aud; else delete w.firstChild.dataset.aud;
         w.firstChild.classList.toggle('cluster', !!it.cluster);
         w.firstChild.classList.toggle('off', !!it.off);
         w.style.transform = it.vis ? `translate3d(${it.x}px,${it.y}px,0)` : 'translate3d(-9999px,-9999px,0)';
@@ -1654,6 +1669,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
           carriedFrom: { id: src.id, iteration: this._pinIter(src) },
         }, this.anchors ? carryCanvasMeta(src.meta, this._curIter()) : null),
         bornV: this._version(), ts: nowStamp(), _pending: true,
+        ...(src._aud ? { _aud: src._aud } : {}),
       };
       this.comments.push(copy);
       this._persist(); this._relocate(); this._render(); this._placePins();
@@ -1716,6 +1732,65 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const h = this._hostOpts;
       if (!h || typeof h.rightInset !== 'function') return 0;
       try { const n = +h.rightInset(); return Number.isFinite(n) && n > 0 ? n : 0; } catch (e) { return 0; }
+    },
+    /** Аудиторії для чипів адресата у формі: лише з хостом і ≥ 2 аудиторіями (Deai 0.27.0). Без хоста — `[]`: форма як була. */
+    _formAuds() {
+      const a = this.opts && this.opts.audiences;
+      if (!this._hostOpts || !Array.isArray(a)) return [];
+      const ok = a.filter((x) => x && typeof x.id === 'string' && x.id);
+      return ok.length >= 2 ? ok : [];
+    },
+    /** Адресат за замовчуванням: `host.defaultAudience` (функція чи рядок), якщо він серед аудиторій, інакше перша. */
+    _defaultAud(auds) {
+      const d = this._hostOpts && this._hostOpts.defaultAudience;
+      let v = null;
+      try { v = typeof d === 'function' ? d() : d; } catch (e) { v = null; }
+      return auds.some((x) => x.id === v) ? v : auds[0].id;
+    },
+    _audChipsHTML() {
+      const auds = this._formAuds();
+      if (!auds.length) return '';
+      const cur = this._defaultAud(auds);
+      return '<div class="caud" role="group">' + auds.map((x) => `<button type="button" class="caud-b" data-pick="${esc(x.id)}"`
+        + ` aria-pressed="${x.id === cur}">${icon(x.icon, 13)}<span>${esc(x.label)}</span></button>`).join('')
+        + '</div><div class="caud-note"></div>';
+    },
+    /** Чипи: один натиснутий; рядок під ними — `note` вибраної аудиторії (напр. «команда бачить це в превʼю»). */
+    _wireAudChips(box) {
+      const auds = this._formAuds();
+      const note = box.querySelector('.caud-note');
+      const sync = () => {
+        const on = box.querySelector('.caud-b[aria-pressed="true"]');
+        const a = on && auds.find((x) => x.id === on.getAttribute('data-pick'));
+        if (note) note.textContent = a && typeof a.note === 'string' ? a.note : '';
+      };
+      box.querySelectorAll('.caud-b').forEach((b) => {
+        b.onclick = () => {
+          box.querySelectorAll('.caud-b').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          sync();
+        };
+      });
+      sync();
+    },
+    _pickedAud(box) {
+      const on = box && box.querySelector('.caud-b[aria-pressed="true"]');
+      return on ? on.getAttribute('data-pick') : null;
+    },
+    /** Колір піна за адресатом: `audiences[i].color` лише `#rgb`…`#rrggbbaa`, інакше `null` (колір за замовчуванням). */
+    _audColor(c) {
+      const list = c && c._aud && this.opts && Array.isArray(this.opts.audiences) ? this.opts.audiences : null;
+      const a = list && list.find((x) => x && x.id === c._aud);
+      return a && typeof a.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(a.color) ? a.color : null;
+    },
+    /** Змінити поля `meta` піна (Deai 0.27.0: доручення `assignee`): `null`/`undefined` прибирає ключ. Звичайний `_persist`. */
+    setMeta(id, patch) {
+      const c = this._inited && this.comments.find((x) => x.id === id);
+      if (!c || !patch || typeof patch !== 'object') return false;
+      c.meta = Object.assign({}, c.meta || {});
+      for (const k of Object.keys(patch)) { if (patch[k] == null) delete c.meta[k]; else c.meta[k] = patch[k]; }
+      c._pending = true;
+      this._persist(); this._render();
+      return true;
     },
     _emit(name, arg) {
       const h = this._hostOpts;

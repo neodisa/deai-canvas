@@ -6986,7 +6986,8 @@ class Handler(SimpleHTTPRequestHandler):
         # ⛔ `_el` (DOM-вузол якоря) і `_pending` — живі поля коментатора, а не
         # дані піна. Адаптер їх і так не шле; тут — рубіж для будь-якого писаря
         # і самоочищення старих файлів, де `_el` осів у кожному піні (fb 05.11.2026).
-        comments = [{k: v for k, v in c.items() if k not in ('_el', '_pending')}
+        # `_aud` — службова позначка адресата комбінованого сховища (0.27.0).
+        comments = [{k: v for k, v in c.items() if k not in ('_el', '_pending', '_aud')}
                     if isinstance(c, dict) else c for c in comments]
         atomic_write_json(self._local_file(task), comments, indent=1)
         self._send_json({'ok': True, 'count': len(comments)})
