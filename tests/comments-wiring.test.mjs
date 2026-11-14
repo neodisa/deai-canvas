@@ -128,13 +128,15 @@ test("ревʼю T9: оновлення на focus працює й без ком
 });
 
 /* --- Числа на вкладках (Б2, Task 10) --- */
-function pollHarness({ tabs, current = "T0", space = "s1", visible = true, replies = {}, seenStore = {} }) {
+function pollHarness({ tabs, current = "T0", space = "s1", visible = true, replies = {}, seenStore = {}, clock = { t: 1e6 }, onApi } ) {
   const calls = []; const saved = [];
+  const spaceBox = { id: space };
   const env = {
+    Date: { now: () => clock.t },
     document: { visibilityState: visible ? "visible" : "hidden" },
     tabs, currentTaskId: current,
-    spaceNow: () => ({ id: space }),
-    api: async (p) => { calls.push(p); const r = replies[decodeURIComponent(p.split("task=")[1])]; if (r instanceof Error) throw r; return r; },
+    spaceNow: () => ({ id: spaceBox.id }),
+    api: async (p) => { calls.push(p); if (onApi) onApi(spaceBox); const r = replies[decodeURIComponent(p.split("task=")[1])]; if (r instanceof Error) throw r; return r; },
     seenKey: (s, t) => `${s}:${t}`,
     loadSeen: (k) => seenStore[k] ?? null,
     saveSeen: (k, v) => { saved.push(k); seenStore[k] = v; },
@@ -147,9 +149,11 @@ function pollHarness({ tabs, current = "T0", space = "s1", visible = true, repli
   const body = fn("pollTabNews");
   const names = Object.keys(env);
   // eslint-disable-next-line no-new-func
-  const f = new Function(...names, "let newsBusy = false, newsAgain = false;\n"
-    + `async function pollTabNews() ${body}\nreturn { run: pollTabNews, news: () => tabNews };`)(...names.map((n) => env[n]));
-  return { f, calls, saved, seenStore };
+  const sbody = fn("saveTabs");
+  const f = new Function(...names, "TABS_KEY", "writeTabs", "localStorage", "let newsBusy = false, newsAgain = false, newsSetKey = null, newsLastAt = 0;\n"
+    + `async function pollTabNews(force = false) ${body}\nfunction saveTabs() ${sbody}\n`
+    + "return { run: pollTabNews, save: saveTabs, news: () => tabNews };")(...names.map((n) => env[n]), "k", () => "", { setItem() {} });
+  return { f, calls, saved, seenStore, clock, spaceBox };
 }
 const items3 = [{ id: "a" }, { id: "b" }];
 test("pollTabNews: активна вкладка і вкладки інших просторів не опитуються", async () => {
@@ -172,15 +176,50 @@ test("pollTabNews: рахує нові інших вкладок, пише ма�
   assert.deepEqual(h2.saved, ["s1:T1"], "перша відповідь supported:true — основа без числа; unsupported — без запису");
   assert.deepEqual(h2.f.news(), {});
 });
+test("pollTabNews: supported:true з error (команда впала) — ні числа, ні маркера (інакше після одужання усе «нове»)", async () => {
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, items: [], error: "x" } } });
+  await h.f.run();
+  assert.deepEqual(h.f.news(), {});
+  assert.deepEqual(h.saved, []);
+});
+test("опит: незмінний склад вкладок — один опит; зміна складу — опит і в межах 30 с", async () => {
+  const tabs = [{ id: "T1", space: "s1" }];
+  const h = pollHarness({ tabs, replies: { T1: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
+  h.f.save(); h.f.save(); h.f.save();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(h.calls.length, 1, "три saveTabs без зміни складу — один запит на вкладку");
+  tabs.push({ id: "T2", space: "s1" });
+  h.f.save();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(h.calls.length, 3, "новий склад — новий опит одразу, хоч і 30 с не минуло (T1 + T1,T2)");
+});
+test("опит: без force — не частіше разу на 30 с", async () => {
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
+  await h.f.run();
+  h.clock.t += 29000; await h.f.run();
+  assert.equal(h.calls.length, 1, "focus/таймер у межах 30 с — без запитів");
+  h.clock.t += 2000; await h.f.run();
+  assert.equal(h.calls.length, 2, "після 30 с — опитує");
+  await h.f.run(true);
+  assert.equal(h.calls.length, 3, "force ігнорує поріг");
+});
+test("опит: простір перемкнули посеред опиту — старі числа не малюються", async () => {
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) },
+    onApi: (box) => { box.id = "s2"; } });
+  await h.f.run();
+  assert.deepEqual(h.f.news(), {}, "sp зняли на старті, на кінці простір інший — присвоєння немає");
+});
 test("pollTabNews: приховане вікно — жодного запиту", async () => {
   const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], visible: false, replies: { T1: { supported: true, items: items3 } } });
   await h.f.run();
   assert.deepEqual(h.calls, []);
 });
 test("проводка: paintTabs передає news і гасить число активної; saveTabs і focus опитують", () => {
-  assert.match(fn("paintTabs"), /news: tabNews/);
+  assert.match(fn("paintTabs"), /news: newsHere/);
   assert.match(fn("paintTabs"), /delete tabNews\[currentTaskId\]/);
-  assert.match(fn("saveTabs"), /pollTabNews\(\)/);
+  assert.match(fn("saveTabs"), /pollTabNews\(true\)/);
+  assert.match(fn("paintTabs"), /pollTabNews\(true\)/, "зміна активної задачі/простору — примусовий опит");
+  assert.match(fn("paintTabs"), /\(x\.space \?\? null\) === spNow/, "числа лише вкладок поточного простору");
   assert.match(src, /window\.addEventListener\('focus', \(\) => \{ pollTabNews\(\); \}\);/);
   assert.match(src, /setInterval\(pollTabNews, NEWS_EVERY_MS\)/);
 });

@@ -1024,7 +1024,18 @@ function barState() {
 
 /* Вкладки відкритих задач (0.25.0): клієнтський стан цього вікна (`tabs-model.js`, його шапка). */
 let tabs = (() => { try { return readTabs(localStorage.getItem(TABS_KEY)); } catch (e) { return []; } })();
-function saveTabs() { try { localStorage.setItem(TABS_KEY, writeTabs(tabs)); } catch (e) {} pollTabNews(); }
+/* Опит нових на вкладках — лише при ЗМІНІ складу вкладок (а не на кожен `render`, що кличе `saveTabs`): інакше 25–60 запитів/хв
+   у командну базу (її квоту вже вибирали). Стан опиту оголошено тут, нагорі, щоб жоден шлях `saveTabs` не вскочив у TDZ. */
+let newsBusy = false;
+let newsAgain = false;
+let newsSetKey = null;
+let newsLastAt = 0;
+let newsCtxKey = null;
+function saveTabs() {
+  try { localStorage.setItem(TABS_KEY, writeTabs(tabs)); } catch (e) {}
+  const k = tabs.map((x) => `${x.space ?? ''}/${x.id}`).sort().join('|');
+  if (k !== newsSetKey) { newsSetKey = k; pollTabNews(true); }
+}
 /** `{ключ: {state, age_s}}` з `/api/claude-statuses` або `null` (стан Claude на вкладках). */
 let claudeAll = null;
 /** Нові командні на ІНШИХ вкладках: `{id задачі: n}` (опит `pollTabNews`, поправка 17 плану Б2). */
@@ -1068,9 +1079,17 @@ let tabsActiveSeen = null;
 function paintTabs() {
   /* Активна вкладка числа не має (його показує острівець): перехід НА вкладку гасить число одразу. */
   if (currentTaskId && tabNews[currentTaskId]) { tabNews = { ...tabNews }; delete tabNews[currentTaskId]; }
+  /* Зміна активної задачі чи простору міняє, які вкладки «інші»: один примусовий опит (не на кожен paintTabs). */
+  const spNow = spaceNow()?.id ?? null;
+  const ctx = `${spNow ?? ''}/${currentTaskId ?? ''}`;
+  if (newsCtxKey !== null && ctx !== newsCtxKey) pollTabNews(true);
+  newsCtxKey = ctx;
+  /* Числа лише вкладок поточного простору: після перемикання простору числа старого не мусять висіти. */
+  const newsHere = {};
+  for (const x of tabs) if (tabNews[x.id] && (x.space ?? null) === spNow) newsHere[x.id] = tabNews[x.id];
   tabsEl.setAttribute('aria-label', t('tabsNav'));
   const html = tabsHTML(tabsModel({ tabs, activeId: currentTaskId, homeOpen, homePage, claude: claudeAll,
-    update: pillModel(updateInfo), news: tabNews }));
+    update: pillModel(updateInfo), news: newsHere }));
   const list = tabsEl.querySelector('.tabs-list');
   const scrolled = list ? list.scrollLeft : 0;
   if (!writeKeepFocus(tabsEl, html, tabsHtmlLast)) return;
@@ -5756,11 +5775,13 @@ async function pollClaudeAll() {
    що в острівця. Маркер-основу пишемо ЛИШЕ з відповіді `supported:true`: впала/відсутня команда не мусить лишити порожній
    маркер, після якого кожен коментар колеги став би «новим». */
 const NEWS_EVERY_MS = 90000;
-let newsBusy = false;
-let newsAgain = false;
-async function pollTabNews() {
+async function pollTabNews(force = false) {
   if (document.visibilityState !== 'visible') return;
-  if (newsBusy) { newsAgain = true; return; }
+  const now = Date.now();
+  /* focus / visibilitychange / таймер — не частіше разу на 30 с; зміна складу вкладок чи активної задачі — `force`. */
+  if (!force && now - newsLastAt < 30000) return;
+  if (newsBusy) { newsAgain = newsAgain || (force ? 'force' : true); return; }
+  newsLastAt = now;
   newsBusy = true;
   try {
     const sp = spaceNow()?.id ?? null;
@@ -5769,17 +5790,20 @@ async function pollTabNews() {
       if (x.id === currentTaskId || (x.space ?? null) !== sp) continue;
       let r = null;
       try { r = await api(`/api/comment-news?task=${encodeURIComponent(x.id)}`); } catch (e) { r = null; }
-      if (!r || !r.supported || !Array.isArray(r.items)) continue;
+      /* `error` при supported:true — команда впала (квота/мережа): порожній список НЕ основа, інакше після одужання усе «нове». */
+      if (!r || !r.supported || r.error || !Array.isArray(r.items)) continue;
       const key = seenKey(sp, x.id);
       let seen = loadSeen(key);
       if (!seen) { seen = baseline(r.items); saveSeen(key, seen); }
       const n = countNew(r.items, seen, myName());
       if (n && x.id !== currentTaskId) next[x.id] = n;
     }
+    /* Простір перемкнули, поки ішов опит: чужі числа не малюємо (новий опит уже в черзі від paintTabs). */
+    if (sp !== (spaceNow()?.id ?? null)) return;
     if (JSON.stringify(next) !== JSON.stringify(tabNews)) { tabNews = next; paintTabs(); }
   } finally {
     newsBusy = false;
-    if (newsAgain) { newsAgain = false; pollTabNews(); }
+    if (newsAgain) { const f = newsAgain === 'force'; newsAgain = false; pollTabNews(f); }
   }
 }
 setInterval(pollTabNews, NEWS_EVERY_MS);

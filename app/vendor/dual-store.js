@@ -60,17 +60,20 @@
     if (team && typeof team.subscribe === 'function') team.subscribe(function () { shadow = null; notify(); });
     /* Готовність команди обмежена таймером; локальна — ні. Пізній підсумок після тайм-ауту (чи після close) ігноруємо:
        без воскресіння, без подвійного close, без необробленої відмови. */
+    /* `ready` команди здається й після збою першого читання (квота/мережа) — тоді вона сама каже про це в `loadError`:
+       без цього порожній кеш виглядав би «командних нема», а панель не показала б «команда недоступна». */
+    function checkLoad(t) { if (team === t && typeof t.loadError === 'string' && t.loadError) dropTeam(t.loadError); }
     function teamReady() {
       var t = team;
       if (!t) return null;
-      if (typeof setTimeout !== 'function') return Promise.resolve(t.ready).catch(function (e) { if (team === t) dropTeam((e && e.message) || 'team comments did not answer'); });   // середовище без таймерів (пісочниця): без обмеження
+      if (typeof setTimeout !== 'function') return Promise.resolve(t.ready).then(function () { checkLoad(t); }, function (e) { if (team === t) dropTeam((e && e.message) || 'team comments did not answer'); });   // середовище без таймерів (пісочниця): без обмеження
       var ms = typeof opts.teamTimeoutMs === 'number' ? opts.teamTimeoutMs : TEAM_READY_MS;
       var timer = null;
       var guard = new Promise(function (resolve) {
         timer = setTimeout(function () { timer = null; if (team === t) dropTeam('team comments did not answer'); resolve(); }, ms);
       });
       var settled = Promise.resolve(t.ready).then(
-        function () {},
+        function () { checkLoad(t); },
         function (e) { if (team === t) dropTeam((e && e.message) || 'team comments did not answer'); }
       ).then(function () { if (timer !== null) { clearTimeout(timer); timer = null; } });
       return Promise.race([settled, guard]);

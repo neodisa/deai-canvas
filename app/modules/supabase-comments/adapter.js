@@ -113,17 +113,22 @@
       for (var i = 0; i < listeners.length; i++) { try { listeners[i](cache); } catch (e) { /* підписник не валить решту */ } }
     }
 
+    /* Помилка ЧИТАННЯ (квота 402, мережа): `ready` усе одно здається (інші споживачі на нього покладаються), тож без цього
+       поля подвійне сховище не знало б, що команда лежить, і порожній кеш виглядав би «командних нема». Скидається
+       першим вдалим читанням. */
+    var loadError = null;
     function fetchAll() {
       if (closed) return Promise.resolve();  // подія realtime після close() нічого не питає в бази
       var mine = ++seq;
       return Promise.resolve(client.from(TABLE).select('*').eq('project_id', channel).order('id')).then(function (res) {
         if (closed || mine !== seq) return;
-        if (res.error) { warn('fetch failed', res.error); return; }
+        if (res.error) { loadError = String(res.error.message || res.error); warn('fetch failed', res.error); return; }
+        loadError = null;
         cache = (res.data || []).map(rowToComment);
         written = {};
         cache.forEach(function (c) { written[c.id] = stable(commentToRow(c, channel)); });
         emit();
-      }).catch(function (e) { warn('fetch failed', e); });
+      }).catch(function (e) { loadError = String((e && e.message) || e); warn('fetch failed', e); });
     }
 
     /* Подія realtime → перечитування через `REFETCH_MS`; нова подія в цей час посуває термін, а не додає запит. */
@@ -160,6 +165,7 @@
 
     var store = {
       ready: ready,
+      get loadError() { return loadError; },
       load: function () { return cache; },
       /* Примусове перечитування (його кличе «Огляд» при поверненні на нього). */
       refresh: function () { return fetchAll(); },

@@ -108,6 +108,23 @@ test("команда впала на ready — teamDown, під-сховище �
   assert.ok(T.log.some((e) => e[0] === "close"));
 });
 
+test("команда здала ready, але з loadError (збій першого читання) — teamDown, команду закрито, локальні піни на місці", async () => {
+  for (const timers of [undefined, { setTimeout: undefined, clearTimeout: undefined }]) {
+    const L = fake([P("l1")]), T = fake([]);
+    T.store.loadError = "402";
+    const d = (timers ? load(timers) : load())({ local: L.store, team: T.store });
+    await d.ready;
+    assert.equal(d.teamDown, "402", timers ? "без таймерів" : "з таймером");
+    assert.deepEqual(plain(d.load().map((c) => c.id)), ["l1"]);
+    assert.ok(T.log.some((e) => e[0] === "close"));
+  }
+  const L = fake([P("l1")]), T = fake([P("t1")]);
+  T.store.loadError = null;
+  const d = load()({ local: L.store, team: T.store });
+  await d.ready;
+  assert.equal(d.teamDown, null, "здорова команда не відключається");
+});
+
 test("сповіщення будь-якого під-сховища — свіже обʼєднання; refresh і close — обом", async () => {
   const L = fake([P("l1")]), T = fake([P("t1")]);
   const d = load()({ local: L.store, team: T.store });

@@ -199,7 +199,7 @@ test("create: createClient(url, key, без автентифікації кор�
   assert.equal(sel.length, 1);
   assert.deepEqual(plain(sel[0]), { op: "select", table: "comments", cols: "*", filters: [["eq", "project_id", CHANNEL]], order: "id" });
   assert.deepEqual(s.load().map((c) => c.id), ["b", "a"], "порядок — як віддав сервер (order=id робить він)");
-  assert.deepEqual(Object.keys(s).sort(), ["close", "load", "ready", "refresh", "remove", "save", "subscribe"]);
+  assert.deepEqual(Object.keys(s).sort(), ["close", "load", "loadError", "ready", "refresh", "remove", "save", "subscribe"]);
 });
 
 test("rowToComment: рівно 11 полів CommentLayer; project_id і created_at лишаються в базі; null → null", async () => {
@@ -234,6 +234,25 @@ test("ready і refresh ніколи не відхиляються: запит, �
   await s.refresh();
   assert.deepEqual(plain(s.load()), []);
   assert.ok(w.warnings.filter((m) => m.includes("select rejected")).length >= 2);
+});
+
+test("loadError: збій ПЕРШОГО читання видно в полі (ready усе одно здається); вдале перечитування його скидає", async () => {
+  const w = world({ rows: [row("a")], failSelect: true });
+  const s = w.create();
+  await s.ready;                                                       // не відхиляється: інші споживачі на це покладаються
+  assert.equal(s.loadError, "select boom");
+  w.opts.failSelect = false;
+  await s.refresh();
+  assert.equal(s.loadError, null, "вдале читання скидає");
+  assert.deepEqual(s.load().map((c) => c.id), ["a"]);
+  const w2 = world({ rejectSelect: true });
+  const s2 = w2.create();
+  await s2.ready;
+  assert.equal(s2.loadError, "select rejected", "кинутий запит теж");
+  const w3 = world({ rows: [] });
+  const s3 = w3.create();
+  await s3.ready;
+  assert.equal(s3.loadError, null, "здорова база — без помилки");
 });
 
 test("refresh: примусове перечитування каналу; після close — нічого не питає й нічого не повідомляє", async () => {
@@ -509,7 +528,7 @@ test("без shotsBucket у cfg uploadShot у сховища нема (і з п�
     const s = w.create(cfg);
     await s.ready;
     assert.equal(typeof s.uploadShot, "undefined", JSON.stringify(cfg));
-    assert.deepEqual(Object.keys(s).sort(), ["close", "load", "ready", "refresh", "remove", "save", "subscribe"]);
+    assert.deepEqual(Object.keys(s).sort(), ["close", "load", "loadError", "ready", "refresh", "remove", "save", "subscribe"]);
   }
 });
 
