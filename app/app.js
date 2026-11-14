@@ -1031,10 +1031,18 @@ let newsAgain = false;
 let newsSetKey = null;
 let newsLastAt = 0;
 let newsCtxKey = null;
+/* Примусові опити (зміна складу вкладок / активної задачі) зливаємо в ОДИН: швидке перемикання між вкладками
+   не мусить слати по запиту на кожну з них при кожному кроці. Хвостовий debounce; поріг 30 с для не-force лишається. */
+const NEWS_SOON_MS = 1500;
+let newsSoonTimer = null;
+function pollTabNewsSoon() {
+  clearTimeout(newsSoonTimer);
+  newsSoonTimer = setTimeout(() => { newsSoonTimer = null; pollTabNews(true); }, NEWS_SOON_MS);
+}
 function saveTabs() {
   try { localStorage.setItem(TABS_KEY, writeTabs(tabs)); } catch (e) {}
   const k = tabs.map((x) => `${x.space ?? ''}/${x.id}`).sort().join('|');
-  if (k !== newsSetKey) { newsSetKey = k; pollTabNews(true); }
+  if (k !== newsSetKey) { newsSetKey = k; pollTabNewsSoon(); }
 }
 /** `{ключ: {state, age_s}}` з `/api/claude-statuses` або `null` (стан Claude на вкладках). */
 let claudeAll = null;
@@ -1082,7 +1090,7 @@ function paintTabs() {
   /* Зміна активної задачі чи простору міняє, які вкладки «інші»: один примусовий опит (не на кожен paintTabs). */
   const spNow = spaceNow()?.id ?? null;
   const ctx = `${spNow ?? ''}/${currentTaskId ?? ''}`;
-  if (newsCtxKey !== null && ctx !== newsCtxKey) pollTabNews(true);
+  if (newsCtxKey !== null && ctx !== newsCtxKey) pollTabNewsSoon();
   newsCtxKey = ctx;
   /* Числа лише вкладок поточного простору: після перемикання простору числа старого не мусять висіти. */
   const newsHere = {};

@@ -387,7 +387,11 @@ test("7: пін колеги в іншій задачі → число на її
     await page.waitForFunction((want) => !!document.querySelector(`#tabs [data-act="tab"][data-val="${want}"][aria-current="page"]`), id);
   };
   await openFromHome("second");                                         // склад вкладок змінився → опит (база для «fixture»)
+  /* Примусові опити зливаються хвостовим debounce (~1,5 с): чекаємо САМ раунд опиту «second», а не лише маркер
+     (його міг уже записати острівець, коли «second» була активною) — інакше пін додасться до того, як опит візьме основу. */
+  const baseRound = page.waitForResponse((r) => r.url().includes("/api/comment-news?task=second"), { timeout: 8000 });
   await page.click('#tabs [data-act="tab"][data-val="fixture"]');       // активна змінилась → опит (база для «second»)
+  await baseRound;
   await until(async () => (await lsGet(page, seenKey("second"))) !== null, "маркер-база вкладки second");
 
   const fp = await fpOf(env, "holovna", "h1");
