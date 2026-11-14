@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { guardRealDeai, postJson, stop, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
+import { hermeticLiga } from "./_liga-supabase.mjs";
 
 /* Своя смуга (`tests/live-ports.test.mjs`): тести ЦЬОГО файла йдуть послідовно, тож одна база на всі. */
 const PORT_BASE = 22000;
@@ -39,13 +40,19 @@ const IDENTITY = { DC_IDENTITY_NAME: "Alpha", DC_IDENTITY_EMAIL: "alpha@example.
 /* Канал задачі `t1` без `comment_project` — `dc/<id>` (`comment_channel`). */
 const CHANNEL = "dc/t1";
 
+/* Спільний збирач запитів усіх сторінок файла: ЛІГА під `supabase: true` читає командне сховище, тож без `hermeticLiga` сторінка йшла б
+   на справжній `*.supabase.co`. `outside` мусить лишитись порожнім (перевіряє `test.after`). */
+const SEEN = { outside: [], supabase: [], sockets: [], cdn: [] };
 let browser;
 test.before(async () => {
   /* Залишки попередніх прогонів, убитих охоронцем (124/125): `t.after` тоді не спрацював, а тека лежить у корені чекаута. */
   for (const n of readdirSync(ROOT)) if (n.startsWith(".live-ntf-")) rmSync(path.join(ROOT, n), { recursive: true, force: true });
   browser = await chromium.launch();
 });
-test.after(async () => { await browser?.close(); });
+test.after(async () => {
+  await browser?.close();
+  assert.deepEqual(SEEN.outside, [], "запити поза машиною: герметичність ЛІГИ порушена");
+});
 
 /* ── прилади ───────────────────────────────────────────────────────────────────────────────────────── */
 
@@ -79,6 +86,7 @@ async function bootPlain(t, { portOffset = 0 } = {}) {
 
 async function newPage(t, url) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await hermeticLiga(context, { seen: SEEN });
   t.after(() => context.close());
   const page = await context.newPage();
   const errors = [];

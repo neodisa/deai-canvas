@@ -97,6 +97,11 @@ async function boot(t, { tasks = ["fixture"], enable = true } = {}) {
   const errors = [];
   context.on("page", (p) => p.on("pageerror", (e) => errors.push(String(e.message ?? e))));
   const page = await context.newPage();
+  /* Спільний детектор для КОЖНОГО сценарію: витік за межі машини й помилки сторінки не мусять з'являтись нізвідки. */
+  t.after(() => {
+    assert.deepEqual(outside, [], "запити поза машиною");
+    assert.deepEqual(errors, [], errors.join("\n"));
+  });
   return { ...server, memo, context, page, dirs, outside, errors };
 }
 
@@ -330,6 +335,27 @@ test("5: пін колеги → «нових» на острівці, плаш�
   await sleep(1500);
   assert.equal(await newCount(page), null);
   assert.equal(await page.locator('.cv-notice[data-notice="cmt-news"]').count(), 0, "плашка зʼявилась на першому знімку після завантаження");
+});
+
+test("5б: пін колеги, що прийшов при ВІДКРИТІЙ панелі, одразу «побачений» — після перезавантаження ні бейджа, ні плашки, ні числа в дереві", async (t) => {
+  const env = await boot(t);
+  const { page, memo } = env;
+  await openShell(env);
+  await openPanel(page);
+  await until(async () => (await lsGet(page, seenKey())) !== null, "маркер-база dc-seen");
+
+  const fp = await fpOf(env, "poshuk", "#q");
+  memo.store.set(channelOf("fixture"), [pinRow(env, { id: "team-open", author: "Колега", text: "Прийшов при відкритій панелі", pageId: "poshuk", seq: 1, fp })]);
+  await page.waitForSelector("#cmt-panel:not([hidden]) .cmt-sec--new .cmt-card", { timeout: 8000 });
+
+  /* Гілка відкритої панелі мусить сама зберегти маркер (`saveSeen`): інакше після перезавантаження пін знову «новий». */
+  await page.reload();
+  await page.waitForSelector('#hud [data-act="comments"]');
+  await until(async () => (await totalCount(page)) !== null, "число відкритих на острівці після перезавантаження");
+  await sleep(1500);
+  assert.equal(await newCount(page), null, "бейдж «нових» зʼявився після перезавантаження");
+  assert.equal(await page.locator('.cv-notice[data-notice="cmt-news"]').count(), 0, "плашка зʼявилась після перезавантаження");
+  assert.equal(await page.locator(".row-news").count(), 0, "число в дереві зʼявилось після перезавантаження");
 });
 
 test("6: власний командний пін не «новий» — ні бейджа, ні плашки після закриття панелі", async (t) => {

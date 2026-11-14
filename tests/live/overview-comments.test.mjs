@@ -692,7 +692,7 @@ test("U: живий вид у браузері без prompt() і без іме�
 /* ── Б2 (0.27.0, Task 12): «Огляд» у просторі з командним каналом і падіння командного ───────────────── */
 
 /** Пін на «Огляді» живою формою: клік по цілі, (за потреби) вибір чипа, текст, «Comment». Віддає чипи, що були у формі. */
-async function ovPin(page, sel, text, pick = null) {
+async function ovPin(page, sel, text, pick = null, submit = true) {
   await settleCam(page);
   await page.mouse.move(700, 450);
   await page.keyboard.press("c");
@@ -702,6 +702,7 @@ async function ovPin(page, sel, text, pick = null) {
   assert.ok(await shadow(page, "return !!root.querySelector('.compose textarea');"), "композер не відкрився");
   const chips = await shadow(page, "return [...root.querySelectorAll('.compose .caud-b')].map((b) => [b.dataset.pick, b.getAttribute('aria-pressed')]);");
   if (pick) await shadow(page, "root.querySelector(`.compose .caud-b[data-pick=\"${a}\"]`).click();", pick);
+  if (!submit) return chips;   // лише відкрити форму й зняти стан чипів (памʼять адресата)
   await page.keyboard.type(text);
   const save = await shadow(page, "const r = root.querySelector('.compose .save').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };");
   await pressAt(page, save.x, save.y);
@@ -734,6 +735,11 @@ test("V2: пін «Огляду» — два чипи; локальний НЕ �
   await ovPin(page, ".card:nth-child(4) h2", "V2 командний", "project");
   await until2(() => storageHits().length > before, "знімок командного піна у Storage (позитивний контроль)");
   assert.equal(await localHas("V2 командний"), null, "командний пін потрапив у локальний файл");
+  /* Памʼять адресата: вибір «Команді» хост «Огляду» запамʼятав, і НАСТУПНА форма вже відкривається з ним. */
+  assert.equal(await page.evaluate(() => localStorage.getItem("dc-cmt-aud")), "project", "вибір адресата на «Огляді» не запамʼятано");
+  await page.keyboard.press("Escape");
+  const again = await ovPin(page, ".card:nth-child(5) h2", "", null, false);
+  assert.deepEqual(again, [["local", "false"], ["project", "true"]], "наступна форма «Огляду» не памʼятає «Команді»");
   await page.close();
 });
 

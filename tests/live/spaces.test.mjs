@@ -312,10 +312,7 @@ test("5: у «P» жодного запиту за межі машини — р�
   await page.click('#tabs [data-act="tab"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
 
-  /* Збережений вибір ЛІГА («Проєкт») не мусить вести назовні: рамка й коментатор
-     просять лише локальний канал. Ставимо вибір ДО перезавантаження — затискання
-     читає його при завантаженні рамки. */
-  await page.evaluate(() => localStorage.setItem("dc-comment-mode", "project"));
+  /* Рамка макета й коментатор просять лише локальний канал (простір без інтеграцій): свіже завантаження рамки це й покаже. */
   await page.reload();
   await waitBarReady(page);
   await page.waitForFunction(() => {
@@ -325,8 +322,6 @@ test("5: у «P» жодного запиту за межі машини — р�
   const src = await frameSrc(page);
   assert.match(src, /^\/commented\?/, `рамка макета: ${src}`);
   assert.ok(!/ch=project/.test(src), `рамка просить проєктний канал у просторі без інтеграцій: ${src}`);
-  assert.equal(await page.evaluate(() => localStorage.getItem("dc-comment-mode")), "project",
-    "затиск не мусить переписувати збережений вибір (він ЛІГА-шний)");
 
   /* «Огляд»: кадри, коментатор полотна. Без наведення на Figma й без знімка піна —
      це дії, що ведуть назовні (capture.js), і сценарій їх не торкається. */

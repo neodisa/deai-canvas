@@ -7,6 +7,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 
 import { startServer, taskFixture } from "./fixture.mjs";
+import { hermeticLiga } from "./_liga-supabase.mjs";
 
 /* Тиша Teams на канал задачі (батч 1.52). База тут — `DC_TEAMS_FAKE` (локальний
    JSON): живий канал команди з тесту не чіпаємо НІКОЛИ, і сервер це гарантує
@@ -23,7 +24,10 @@ test("Teams: вимкнути з підтвердженням, увімкнут�
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  const seen = await hermeticLiga(context);   // ЛІГА читає командне сховище: справжній `*.supabase.co` недопустимий
+  t.after(() => assert.deepEqual(seen.outside, [], "запити поза машиною: герметичність порушена"));
+  const page = await context.newPage();
   await page.goto(`${url}/app/`);
   await page.waitForSelector('#bar [data-dd="pub"]');
 
@@ -71,7 +75,10 @@ test("Teams: база недосяжна — пункт вимкнений із 
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  const seen = await hermeticLiga(context);   // ЛІГА читає командне сховище: справжній `*.supabase.co` недопустимий
+  t.after(() => assert.deepEqual(seen.outside, [], "запити поза машиною: герметичність порушена"));
+  const page = await context.newPage();
   await page.goto(`${url}/app/`);
   await page.click('#bar [data-dd="pub"]');
   await page.waitForFunction(() => /стан невідомий/.test(
