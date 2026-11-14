@@ -576,3 +576,72 @@ test("uploadShot після close() → null без fetch", async () => {
   assert.equal(await s.uploadShot("c1", DATA), null);
   assert.deepEqual(w.fetches, []);
 });
+
+/* ── Б2, поправка 8: запис різницею й realtime лише свого каналу ── */
+const upserts = (w) => w.calls.filter((c) => c.op === "upsert");
+
+test("запис різницею: save того самого списку, що прийшов із select, — жодного upsert", async () => {
+  const w = world({ rows: [row("a"), row("b")] });
+  const s = w.create();
+  await s.ready;
+  await s.save(plain(s.load()));
+  assert.equal(upserts(w).length, 0);
+  assert.deepEqual(s.load().map((c) => c.id), ["a", "b"], "кеш лишається");
+});
+
+test("запис різницею: змінено один пін (meta.assignee) — upsert рівно з ОДНИМ рядком", async () => {
+  const w = world({ rows: [row("a"), row("b"), row("c")] });
+  const s = w.create();
+  await s.ready;
+  const list = plain(s.load());
+  list[1].meta = { ...list[1].meta, assignee: "claude" };
+  await s.save(list);
+  const up = upserts(w);
+  assert.equal(up.length, 1);
+  assert.deepEqual(up[0].rows.map((r) => r.id), ["b"]);
+  assert.equal(plain(up[0].rows[0]).meta.assignee, "claude");
+});
+
+test("запис різницею: база віддала meta з іншим порядком ключів — save без змін нічого не шле", async () => {
+  const w = world({ rows: [row("a", { meta: { seq: 1, version: "2" } })] });
+  const s = w.create();
+  await s.ready;
+  await s.save([pin("a", { meta: { version: "2", seq: 1 } })]);
+  assert.equal(upserts(w).length, 0, "порядок ключів jsonb не робить рядок зміненим");
+});
+
+test("запис різницею: після успішного запису повторний save мовчить; після невдалого — шле знову", async () => {
+  const w = world();
+  const s = w.create();
+  await s.ready;
+  await s.save([pin("a")]);
+  assert.equal(upserts(w).length, 1);
+  await s.save([pin("a")]);
+  assert.equal(upserts(w).length, 1, "успішно записане вдруге не йде");
+  const w2 = world({ failUpserts: 3 });
+  const s2 = w2.create();
+  await s2.ready;
+  await assert.rejects(drive(w2, s2.save([pin("a")])), /supabase save failed/);
+  assert.equal(upserts(w2).length, 3);
+  await s2.save([pin("a")]);
+  assert.equal(upserts(w2).length, 4, "невдалий запис не вважається записаним");
+});
+
+test("realtime: події чужого каналу не перечитують; свого — перечитують; DELETE — за id з кешу; незнайома форма — перечитує", async () => {
+  const w = world({ rows: [row("a")] });
+  const s = w.create();
+  await s.ready;
+  const cb = w.channels[0].handlers[0].cb;
+  const fire = async (p) => {
+    const before = w.selectCalls().length;
+    cb(p);
+    w.runTimers();
+    await settle();
+    return w.selectCalls().length - before;
+  };
+  assert.equal(await fire({ eventType: "INSERT", new: { project_id: "інший" } }), 0, "чужий INSERT");
+  assert.equal(await fire({ eventType: "UPDATE", new: { project_id: CHANNEL } }), 1, "свій UPDATE");
+  assert.equal(await fire({ eventType: "DELETE", old: { id: "a" } }), 1, "DELETE id з кешу");
+  assert.equal(await fire({ eventType: "DELETE", old: { id: "чужий" } }), 0, "DELETE чужого id");
+  assert.equal(await fire({}), 1, "незнайома форма");
+});

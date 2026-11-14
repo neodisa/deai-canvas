@@ -12,7 +12,11 @@
  *   · видалення — `id in (…) AND project_id = канал`: без другого фільтра один запит міг би зачепити чужий канал;
  *   · realtime — підписка `postgres_changes` на таблицю, а на подію — перечитування каналу (з коротким згладжуванням: серія
  *     подій від одного upsert-а дає ОДНЕ перечитування). Фільтра project_id у самій підписці нема навмисно: події DELETE несуть
- *     лише первинний ключ, і фільтр мовчки губив би видалення.
+ *     лише первинний ключ, і фільтр мовчки губив би видалення; натомість колбек сам відсіює події чужих каналів
+ *     (`relevant`: з 0.27.0 кожна сторінка задачі ЛІГИ підписана на командний канал, а без відсіву кожен коментар будь-де
+ *     давав би `select *` зі знімками HTML у кожному відкритому вікні — урок квоти трафіку 21.10.2026);
+ *   · запис різницею (0.27.0): `save` шле upsert лише рядків, що відрізняються від останнього прочитаного чи записаного знімка
+ *     (порівняння — канонічним JSON із сортованими ключами: `jsonb` переставляє ключі `meta`); нема змін — нема запиту.
  * Клієнт supabase-js створюється БЕЗ автентифікації користувача (`persistSession`, `autoRefreshToken`, `detectSessionInUrl` —
  * вимкнені): за замовчуванням кожен `create()` запускав би інтервал оновлення токена, `BroadcastChannel`, записи в
  * сховище браузера й слухачі вікна, які `close()` не знімав би (а «Огляд» створює сховище на кожен запуск).
@@ -48,6 +52,17 @@
   function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
   function warn(what, e) { console.warn('[deai-comments] supabase ' + what + ':', e && e.message ? e.message : e); }
 
+  /* Канонічний JSON (ключі обʼєктів відсортовано, `undefined` пропущено): Postgres `jsonb` переставляє ключі `meta`, і наївне
+     `JSON.stringify` вважало б зміненим кожен рядок (поправка 8 плану Б2). */
+  function stable(v) {
+    if (Array.isArray(v)) return '[' + v.map(stable).join(',') + ']';
+    if (v && typeof v === 'object') {
+      return '{' + Object.keys(v).filter(function (k) { return v[k] !== undefined; }).sort()
+        .map(function (k) { return JSON.stringify(k) + ':' + stable(v[k]); }).join(',') + '}';
+    }
+    return JSON.stringify(v === undefined ? null : v);
+  }
+
   function create(cfg) {
     if (!cfg || typeof cfg.channel !== 'string' || !cfg.channel) throw new Error('DeaiComments.create: cfg.channel must be a non-empty string');
     var sb = window.supabase;
@@ -57,6 +72,7 @@
     });
     var channel = cfg.channel;
     var cache = [];
+    var written = {};                        // id → stable(рядка), який база точно має (останнє читання чи успішний запис)
     var listeners = typeof cfg.onChange === 'function' ? [cfg.onChange] : [];
     var closed = false;
     var seq = 0;                             // «покоління» кешу: стара відповідь не затирає свіжішу, ні свій запис
@@ -101,6 +117,8 @@
         if (closed || mine !== seq) return;
         if (res.error) { warn('fetch failed', res.error); return; }
         cache = (res.data || []).map(rowToComment);
+        written = {};
+        cache.forEach(function (c) { written[c.id] = stable(commentToRow(c, channel)); });
         emit();
       }).catch(function (e) { warn('fetch failed', e); });
     }
@@ -112,8 +130,19 @@
       refetchTimer = setTimeout(function () { refetchTimer = null; fetchAll(); }, REFETCH_MS);
     }
 
+    /* Подія realtime стосується НАШОГО каналу? Підписка — на всю таблицю (DELETE несе лише ключ, фільтр у підписці губив би
+       видалення), тож відсіюємо тут: без цього кожен коментар будь-де давав би `select *` у кожному відкритому вікні
+       (з Б2 кожна сторінка задачі підписана; урок квоти трафіку 21.10.2026). */
+    function relevant(p) {
+      var n = p && p.new, o = p && p.old;
+      if (n && n.project_id != null) return n.project_id === channel;
+      var id = o && o.id;
+      if (id == null) return true;                       // незнайома форма — краще перечитати
+      return cache.some(function (c) { return c.id === id; });
+    }
+
     var realtime = client.channel('cl-' + channel)
-      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, scheduleFetch)
+      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, function (p) { if (relevant(p)) scheduleFetch(); })
       .subscribe();
 
     var ready = fetchAll();
@@ -135,10 +164,14 @@
       subscribe: function (fn) { if (typeof fn === 'function') listeners.push(fn); },
       save: function (comments) {
         var rows = comments.map(function (c) { return commentToRow(c, channel); });
-        return upsert(rows, 0).then(function (err) {
+        /* Запис РІЗНИЦЕЮ (Deai 0.27.0): лише рядки, яких база ще не має в такому вигляді. Застарілий список одного вікна вже не
+           перетирає чужого закриття чи доручення в РЕШТІ рядків; два записи в ОДИН рядок — виграє останній. */
+        var changed = rows.filter(function (r) { return written[r.id] !== stable(r); });
+        if (!changed.length) { cache = comments.slice(); seq++; return Promise.resolve(); }
+        return upsert(changed, 0).then(function (err) {
           cache = comments.slice();          // оптимістичний кеш: запис не губиться, навіть якщо база не відповіла
           seq++;                             // а відповідь, що вже летіла до запису, його не затре
-          if (!err) return;
+          if (!err) { changed.forEach(function (r) { written[r.id] = stable(r); }); return; }
           warn('save failed after retries', err);
           throw new Error('supabase save failed: ' + err.message);
         });
@@ -149,6 +182,7 @@
         return Promise.resolve(client.from(TABLE).delete().in('id', ids).eq('project_id', channel)).then(function (res) {
           if (res.error) warn('delete failed', res.error);
           cache = cache.filter(function (c) { return ids.indexOf(c.id) < 0; });
+          ids.forEach(function (id) { delete written[id]; });
           seq++;
         });
       },
