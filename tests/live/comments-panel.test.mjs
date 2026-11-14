@@ -324,6 +324,119 @@ test("14: поки готовності нового документа нема
   await page.unroute("**/comment-layer.min.js");
 });
 
+/* ───────── Сервер A, продовження: рамка без коментатора, чужий origin, C у чистому вигляді й під діалогом ───────── */
+/** Рамка знову на коментованій сторінці в режимі хоста; чекає `ready` і картки. */
+async function backToLayer() {
+  const { page } = A;
+  const base = (await page.getAttribute("#frame", "src")).replace(/&host=1/, "");
+  await page.evaluate(() => { window.__cmtMsgs.length = 0; });
+  // З боку оболонки, а не з документа рамки: із чужого origin навігація йшла б як міжсайтова й сервер її відхиляє.
+  await page.evaluate((u) => { document.getElementById("frame").src = u; }, base);
+  await until(() => page.evaluate(() => window.__cmtMsgs.includes("ready")));
+  await until(async () => (await cardTexts(A.page)).length > 0);
+}
+const keyC = (frame) => frame.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "c", code: "KeyC", bubbles: true, cancelable: true })));
+
+test("21: M-2 — рамка перейшла на сторінку того ж походження без коментатора: старі картки зникають, не лишаються з мертвими діями", async () => {
+  const { page, frame, url } = A;
+  await backToLayer();
+  assert.equal(await panelOpen(page), true);
+  await frame.evaluate((u) => { location.href = u; }, `${url}/app/esc.js`);
+  await until(async () => (await cardTexts(page)).length === 0);
+  assert.equal((await page.$$("#cmt-panel .cmt-card")).length, 0, "картки без живого коментатора лишились");
+  assert.match(await panelText(page), /Коментатор завантажується/);
+  await backToLayer();
+});
+
+test("22: M-1 — рамка пішла на чужий origin: картки зникають, а посилка звідти (source збігається, origin ні) панель не змінює", async () => {
+  const { page, frame } = A;
+  await backToLayer();
+  await page.route("http://other.test/**", (r) => r.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: `<!DOCTYPE html><title>x</title><script>
+    window.addEventListener("message", (e) => {
+      if (e.data !== "forge") return;
+      parent.postMessage({ type: "dc-comments", ev: "ready" }, "*");
+      parent.postMessage({ type: "dc-comments", ev: "change", snapshot: { iteration: "1", comments: [{ id: "f", n: 99, text: "foreign-origin", status: "open", scope: "current" }] } }, "*");
+    });</script>` }));
+  await frame.evaluate(() => { location.href = "http://other.test/x"; });
+  await until(async () => (await cardTexts(page)).length === 0);
+  const n0 = await msgCount(page, "change");
+  await page.evaluate(() => document.getElementById("frame").contentWindow.postMessage("forge", "*"));
+  await until(async () => (await msgCount(page, "change")) > n0);
+  await settle(page);
+  assert.equal((await panelText(page)).includes("foreign-origin"), false, "посилка з чужого origin потрапила в панель");
+  await page.unroute("http://other.test/**");
+  await backToLayer();
+});
+
+test("23: M-4 — у чистому вигляді C не вмикає коментування ні з оболонки, ні з макета", async () => {
+  const { page, frame } = A;
+  await backToLayer();
+  await page.click("#bar", { position: { x: 3, y: 3 } });
+  await page.keyboard.press("c");
+  await until(async () => !(await panelOpen(page)));
+  await page.keyboard.press("ControlOrMeta+Shift+Backslash");
+  await until(() => page.evaluate(() => document.documentElement.classList.contains("cv-clean")));
+  // Окремо: два перемикання поспіль гасили б одне одного, і зламана охорона лишилась би непоміченою.
+  await page.keyboard.press("c");
+  await pause(400);
+  assert.equal(await panelOpen(page), false, "C з оболонки у чистому вигляді відкрила панель");
+  assert.equal(await modesShown(frame), false, "C з оболонки у чистому вигляді запустила коментатора");
+  await keyC(frame);
+  await pause(400);
+  assert.equal(await panelOpen(page), false, "C з макета у чистому вигляді відкрила панель");
+  assert.equal(await modesShown(frame), false, "C з макета у чистому вигляді запустила коментатора");
+  await page.keyboard.press("ControlOrMeta+Shift+Backslash");
+  await until(() => page.evaluate(() => !document.documentElement.classList.contains("cv-clean")));
+  await page.keyboard.press("c");
+  await until(() => panelOpen(page)); // контроль: поза чистим виглядом та сама клавіша працює
+});
+
+test("24: M-5 — під відкритим діалогом оболонки (відгук) C не перемикає панель: ні з фокусом на кнопці діалогу, ні з макета", async () => {
+  const { page, frame } = A;
+  assert.equal(await panelOpen(page), true);
+  await page.click('#hud [data-act="feedback"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  await page.locator(".cv-ask-scrim button").first().focus();
+  await page.keyboard.press("c");
+  await keyC(frame);
+  await pause(400);
+  assert.equal(await panelOpen(page), true, "C під діалогом закрила панель");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
+  assert.equal(await panelOpen(page), true, "Esc діалогу закрив ще й панель");
+});
+
+test("25: M-3 — зміна ітерації скидає вибір і редагування: після `ready` нового документа їх нема (id належать старому)", async (t) => {
+  const { page } = await boot(t, TWO_IT_PORT_BASE + 50, (dir) => {
+    cpSync(path.join(dir, "iterations", "it1"), path.join(dir, "iterations", "it2"), { recursive: true });
+    writeFileSync(path.join(dir, "iterations.json"), JSON.stringify({ iterations: [
+      { id: "it1", date: "24.08.2026 12:00", note: "перша", published: true },
+      { id: "it2", date: "25.08.2026 12:00", note: "друга", published: true }] }));
+    writeFileSync(path.join(dir, ".dc-local-comments.json"), JSON.stringify([seedPin({
+      id: "o1", text: "Лишилось з першої", meta: { iteration: "1", version: "1", seq: 3, viewport: { w: 1280, h: 900 } },
+    })]));
+  });
+  const pick = async (id) => {
+    await page.evaluate(() => { window.__cmtMsgs.length = 0; });
+    await page.locator('[data-dd="iter"]').click();
+    await page.locator(`.dd [data-act="iter"][data-val="${id}"]`).click();
+    await until(() => page.evaluate(() => window.__cmtMsgs.includes("ready")));
+  };
+  await pick("it1");
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector('#cmt-panel .cmt-card[data-cid="o1"]');
+  await page.click('#cmt-panel [data-act="cmtshow"]');
+  await page.click('#cmt-panel [data-act="cmtedit"]');
+  await page.waitForSelector("#cmt-panel textarea.cmt-edit");
+  assert.ok(await page.$("#cmt-panel .cmt-card--sel"));
+  await pick("it2");
+  await page.waitForSelector('#cmt-panel .cmt-fold[data-val="earlier"]');
+  await page.click('#cmt-panel .cmt-fold[data-val="earlier"]');
+  await page.waitForSelector('#cmt-panel .cmt-card[data-cid="o1"]');
+  assert.equal(!!(await page.$("#cmt-panel textarea.cmt-edit")), false, "редагування старого документа пережило зміну ітерації");
+  assert.equal(!!(await page.$("#cmt-panel .cmt-card--sel")), false, "вибір старого документа пережив зміну ітерації");
+});
+
 /* ───────── Сервер D: «Огляд» (Task 8). Коментатор полотна — у вікні оболонки; панель — та сама, що в «Макеті» ───────── */
 const D = {};
 const OVR_PORT_BASE = 26400;

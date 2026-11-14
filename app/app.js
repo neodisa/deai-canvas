@@ -119,6 +119,7 @@ const inspEl = document.getElementById('insp-panel');
 /* Панель «Коментарі» (0.26.0). Відкрита панель = увімкнений режим коментування (як у Figma). Знімок — від
    коментатора поточного виду (рамка в «Макеті», полотно в «Огляді»); сховища панель не читає (спека Б-Р4). */
 const cmtEl = document.getElementById('cmt-panel');
+let lastFrameSrc = null;   // адреса рамки на момент попереднього `applyMode`: змінилась — вибір/редагування панелі коментарів старого документа скидаються
 let cmtOpen = false, cmtSnap = null, cmtSel = null, cmtQuery = '', cmtEditing = null, cmtDraft = null, frameCmtReady = false;
 const cmtExpanded = { earlier: false, closed: false };
 const CMT_EVENTS = new Set(['ready', 'change', 'select', 'mode']);
@@ -1804,6 +1805,17 @@ function cmtViewSwitch() {
   }
   paintComments();
 }
+/** Рамка втратила свого коментатора (нова адреса, чужий документ, сторінка без нього): старі картки з мертвими діями
+ *  не лишаємо — панель показує «завантажується/недоступно». `sel`: ще й скинути вибір/редагування/чернетку (id належать
+ *  старому документу чи каналу). У «Огляді» `cmtSnap` — полотна, його не чіпаємо. */
+function dropFrameCmt({ sel = false } = {}) {
+  frameCmtReady = false;
+  if (mode !== 'canvas') cmtSnap = null;
+  if (sel) { cmtSel = null; cmtEditing = null; cmtDraft = null; }
+  paintComments();
+}
+/** Відкритий модальний шар оболонки (палітра/довідка, будь-який діалог `askForm`): клавіші C/H тоді не наші. */
+const shellModalOpen = () => !!paletteOverlay || !!document.querySelector('.cv-ask-scrim, [aria-modal="true"]');
 /** Подія коментатора: `src` — 'frame' чи 'canvas'; чужий вид — ігнор (поправка 11). */
 function onCommentsEvent(src, m) {
   if ((src === 'canvas') !== (mode === 'canvas')) return;
@@ -1826,9 +1838,11 @@ function onCommentsEvent(src, m) {
   }
 }
 /* Посилки коментатора з рамки (режим хоста, `host=1`). Те саме правило джерела, що й у `dc-audience` вище:
-   ⛔ `ev.source === frame.contentWindow` — інакше чужа сторінка підсунула б панелі фальшиві картки. */
+   ⛔ `ev.source === frame.contentWindow` — інакше чужа сторінка підсунула б панелі фальшиві картки. Плюс
+   `ev.origin === location.origin`: рамка, що пішла на чужий сайт, лишається тим самим вікном (`source` збігається),
+   але її посилки — не наші. */
 window.addEventListener('message', (ev) => {
-  if (ev.source !== frame.contentWindow) return;
+  if (ev.source !== frame.contentWindow || ev.origin !== location.origin) return;
   const m = ev.data;
   if (!m || m.type !== 'dc-comments' || !CMT_EVENTS.has(m.ev)) return;
   onCommentsEvent('frame', m);
@@ -1850,14 +1864,19 @@ function typingIn(ev, doc) {
 const frameTyping = (ev) => typingIn(ev, frame.contentDocument);
 function frameCmtKey(ev) {
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey || ev.repeat || ev.isComposing) return;
-  if (frameTyping(ev)) return;
+  if (frameTyping(ev) || shellModalOpen()) return;
   const k = (ev.key || '').toLowerCase();
   if (k === 'c' || ev.code === 'KeyC') { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.comments(); }
   else if ((k === 'h' || ev.code === 'KeyH') && cmtOpen) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.cmtpins(); }
 }
 frame.addEventListener('load', () => {
   let w = null;
-  try { w = frame.contentWindow; w.addEventListener('keydown', frameCmtKey, true); } catch (e) { return; /* чужий документ */ }
+  try { w = frame.contentWindow; w.addEventListener('keydown', frameCmtKey, true); } catch (e) {
+    dropFrameCmt(); // чужий документ: коментатора там нема, старі картки з мертвими діями не лишаємо
+    return;
+  }
+  // Той самий origin, але сторінка без коментатора (перейшли на статичний файл): те саме.
+  if (!w.CommentLayer) dropFrameCmt();
   /* Поправка 15: коментатор у `_focusElement` переходить на `meta.url` піна, а в пінів до 0.26.0 там нема `host=1` —
      рамка піднялась би без колбеків і з власною ручкою. Дописуємо `host=1` без запису в історію. */
   try {
@@ -2045,7 +2064,7 @@ const BAR_ACTIONS = {
   // ним напряму — iframe тієї самої origin. На bird-view кнопки немає взагалі:
   // там макети вантажаться bare=1 з pointer-events:none, інспектора там нема.
   /* Панель «Коментарі» (0.26.0): дії над живим коментатором поточного виду (`cmtLayer()`); знімок вертає `change`. */
-  comments: () => { if (!homeOpen) setCommentsOpen(!cmtOpen); },
+  comments: () => { if (!homeOpen && !cleanView) setCommentsOpen(!cmtOpen); },
   cmtshow: (id) => { cmtSel = id; cmtLayer()?.focus(id); paintComments(); },
   cmtres: (id) => { cmtLayer()?.resolveComment(id); },
   cmtreopen: (id) => { cmtLayer()?.reopenComment(id); },
@@ -6559,7 +6578,10 @@ function applyMode(task, { keepFrame = false } = {}) {
           + `&ch=${effMode()}&host=1${stateQuery(pickedState)}`
         : (picked ? `/commented?it=${encodeURIComponent(picked)}&ch=${effMode()}&host=1` : 'about:blank');
       /* Нова сторінка в рамці — новий коментатор: старий знімок і готовність уже не про неї (`ready` поверне нове). */
-      frameCmtReady = false; cmtSnap = null;
+      /* Змінилась адреса (ітерація/канал/сторінка) — вибір, редагування й чернетка належать старому документу. */
+      const srcNow = frame.getAttribute('src');
+      dropFrameCmt({ sel: srcNow !== lastFrameSrc });
+      lastFrameSrc = srcNow;
     }
     cmtViewSwitch();
   }
@@ -7890,7 +7912,7 @@ document.addEventListener('keydown', (ev) => {
 
   /* Коментарі (0.26.0): `C` — панель (і режим коментування), `H` — сховати піни, поки панель відкрита, `Esc` — закрити.
      Після `typing` вище: у полі пошуку панелі `c` друкується. */
-  const cmtFree = !ev.repeat && !ev.isComposing && !ev.defaultPrevented && !document.querySelector('.cv-ask-scrim');
+  const cmtFree = !ev.repeat && !ev.isComposing && !ev.defaultPrevented && !shellModalOpen();
   if (cmtFree && !meta && !ev.altKey && !ev.shiftKey && (ev.key.toLowerCase() === 'c' || ev.code === 'KeyC')) {
     ev.preventDefault(); BAR_ACTIONS.comments(); return;
   }

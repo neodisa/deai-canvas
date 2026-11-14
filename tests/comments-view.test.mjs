@@ -144,3 +144,55 @@ test("службова причина «resolved manually» не показує�
   assert.equal(html.includes("cmt-reason"), false);
   assert.match(html, /Закрито/);
 });
+
+/* I-2: КОЖНЕ поле, що потрапляє в розмітку, екранується. Ворожий рядок закриває атрибут, тег і textarea; якщо хоч
+   одне поле піде в HTML сирим, у виході зʼявиться живий `<img`/`<script` або розрив `</textarea><script`. */
+const H = '"><img src=x onerror=1></textarea><script>';
+const SHOT = 'https://x/"onerror="y';
+const hostileCard = (o = {}) => ({ id: H, n: H, text: H, author: H, ts: H, iter: H, resolvedV: H, resolveReason: H,
+  status: "open", scope: "current", where: "here",
+  meta: { mode: H, count: H, sel: H, ctx: { active: [H], heading: H }, viewport: { w: H, h: H }, shot: SHOT }, ...o });
+const noBreakout = (html, what) => {
+  assert.equal(/<img src=x/.test(html), false, `${what}: живий <img`);
+  assert.equal(/<script/i.test(html), false, `${what}: живий <script`);
+  assert.equal(/onerror=1/.test(html.replace(/onerror=1&gt;/g, "")), false, `${what}: onerror поза екранованим рядком`);
+  assert.equal(/<\/textarea><script/i.test(html), false, `${what}: розрив textarea`);
+  // Єдиний `<img` — наша мініатюра, а її src лишається в лапках і не відкриває власного атрибута.
+  for (const m of html.matchAll(/<img [^>]*>/g)) assert.match(m[0], /^<img src="[^"]*" alt="[^"]*">$/, `${what}: img зіпсовано`);
+};
+const hostileHtml = (over, card = {}) => commentsPanelHTML(base({ snapshot: { iteration: H, comments: [
+  hostileCard(card)] }, ...over }));
+
+test("I-2: ворожий рядок у кожному полі відкритої картки (ts, viewport, n, mode/count, sel, ctx, author, text, shot, id) не рве розмітку", () => {
+  const html = hostileHtml({ selectedId: H, query: H }, { where: "offscreen" });
+  noBreakout(html, "відкрита");
+  assert.match(html, /src="https:\/\/x\/&quot;onerror=&quot;y"/, "src мініатюри має лишитись у лапках");
+  assert.match(html, /<span class="cmt-when">&quot;&gt;&lt;img/);
+  assert.match(html, /<p class="cmt-vp">&quot;&gt;&lt;img[^<]*×&quot;&gt;&lt;img/);
+  assert.match(html, /<input type="search" id="cmt-q" value="&quot;&gt;&lt;img/);
+});
+
+test("I-2: ворожий рядок у картці редагування — textarea, лапки значення, id", () => {
+  const html = hostileHtml({ editingId: H });
+  noBreakout(html, "редагування");
+  assert.match(html, /<textarea class="cmt-edit" data-val="&quot;&gt;&lt;img[^>]*>&quot;&gt;&lt;img[^<]*&lt;\/textarea&gt;&lt;script&gt;<\/textarea>/);
+  assert.equal((html.match(/<\/textarea>/g) || []).length, 1, "textarea закрита зайвий раз");
+});
+
+test("I-2: закрита картка — resolvedV, resolveReason; попередня — iter і підпис «Перенести в Іт.»", () => {
+  const closed = commentsPanelHTML(base({ expanded: { earlier: true, closed: true }, snapshot: { iteration: H, comments: [
+    hostileCard({ status: "resolved" }), hostileCard({ id: "e", scope: "earlier" })] } }));
+  noBreakout(closed, "закрита й попередня");
+  assert.match(closed, /<p class="cmt-done">Зроблено · Іт\.&quot;&gt;&lt;img/);
+  assert.match(closed, /<p class="cmt-reason">&quot;&gt;&lt;img/);
+  assert.match(closed, /<p class="cmt-iter">Іт\.&quot;&gt;&lt;img/);
+  assert.match(closed, /aria-label="Перенести в Іт\.&quot;&gt;&lt;img/);
+});
+
+test("I-2: ворожі текст відмови, пошуковий запит без збігів і картка «на іншій сторінці»", () => {
+  const down = commentsPanelHTML(base({ snapshot: null, down: H }));
+  noBreakout(down, "down");
+  assert.match(down, /недоступні: &quot;&gt;&lt;img/);
+  const none = commentsPanelHTML(base({ query: H, snapshot: { iteration: H, comments: [] } }));
+  noBreakout(none, "порожній пошук");
+});
