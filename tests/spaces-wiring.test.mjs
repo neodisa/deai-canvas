@@ -67,28 +67,20 @@ test("список просторів: спершу задача відкрит�
   assert.match(src, /const spaceNow = \(\) => curTask\?\.space \?\? currentSpace\(spacesResp\);/);
 });
 
-/* ── канал коментарів затискається при ВИКОРИСТАННІ ────────────────────── */
+/* ── канал коментарів: перемикача нема (0.27.0, поправка 10 плану Б2) ─────────────────── */
 
-test("канал коментарів: усі читання йдуть через effMode(), сирий commentMode не потрапляє в URL чи канал", () => {
-  assert.doesNotMatch(src, /&ch=\$\{commentMode\}/, "рамка просить `ch` повз затиск");
-  assert.equal([...src.matchAll(/&ch=\$\{effMode\(\)\}/g)].length, 2, "обидві гілки applyMode");
-  assert.match(src, /channel: \(\) => effMode\(\),/);
-  assert.match(src, /audiences: \(\) => \(noTeamComments\(\) \? \[\] : \[/, "без командного каналу (роль `comments`) вкладок аудиторій нема");
-  assert.match(src, /active: effMode\(\) === 'local'/);
-  assert.match(src, /active: effMode\(\) === 'project'/);
-  assert.match(src, /commentMode: effMode\(\),/, "палітра й смуга бачать ДІЮЧИЙ канал");
+test("канал коментарів: «Огляд» — комбінований за наявності командного каналу, інакше локальний; рамка без `ch`", () => {
+  assert.equal([...src.matchAll(/&ch=/g)].length, 0, "рамка просить `ch` — його вибір тепер на боці сервера (`host=1`)");
+  assert.match(src, /channel: \(\) => \(noTeamComments\(\) \? 'local' : 'dual'\),/);
+  assert.match(src, /audiences: \(\) => \(noTeamComments\(\) \? \[\] : \[/, "без командного каналу (роль `comments`) чипів адресата нема");
+  assert.match(src, /id: 'local', label: t\('audChipLocal'\), icon: 'bot', color: LOCAL_PIN_COLOR, private: true/,
+    "локальна аудиторія «Огляду» — приватна (поправка 20), колір — спільний із `DUAL_AUDIENCES_JS`");
 });
 
-test("збережений вибір (localStorage) не переписується затиском: запис лише в setAudience, читання сире", () => {
-  assert.equal([...src.matchAll(/setItem\('dc-comment-mode'/g)].length, 1);
-  assert.match(fn("setAudience"), /setItem\('dc-comment-mode'/);
-  assert.match(src, /let commentMode = \(\(\) => \{ try \{ return localStorage\.getItem\('dc-comment-mode'\) \|\| 'local'; \}/,
-    "читання при старті — сире значення, без затиску");
-  const body = fn("setAudience");
-  assert.match(body, /if \(ch === 'project' && noTeamComments\(\)\) return;/, "команди без постачальника коментарів — відмова");
-  assert.match(body, /if \(effMode\(\) === ch\) return;/, "порівняння з ДІЮЧИМ: `local` у просторі без командного каналу не переписує збережений `project`");
-  assert.ok(body.indexOf("noTeamComments()") < body.indexOf("effMode() === ch"));
-  assert.doesNotMatch(body, /noOutward/, "командний канал — не `noOutward`: його дає роль `comments`");
+test("перемикач каналу прибрано повністю: жодного `effMode`/`commentMode`/`setAudience`/`dc-audience`/`dc-comment-mode`", () => {
+  for (const dead of [/\beffMode\b/, /\blet commentMode\b/, /\bsetAudience\b/, /dc-audience/, /dc-comment-mode/, /\bcmtch\b/, /\bBAR_ACTIONS\.aud\b/, /^  aud: /m, /effectiveCommentMode/]) {
+    assert.doesNotMatch(src, dead, String(dead));
+  }
 });
 
 /* ── скидання стану при зміні простору ─────────────────────────────────── */
@@ -448,13 +440,12 @@ test("«Відкрити превью» і «Скопіювати посилан
   assert.ok(copy.indexOf("copyLinkRefused(") < copy.indexOf("copyUrl(target"), "відмова — ДО складання посилання");
 });
 
-test("палітра й смуга: публікація — на hasPublish, командний канал — на hasTeamComments, GitLab — на hasVcs", () => {
-  assert.match(pal, /import \{ hasPublish, hasTeamComments, hasVcs \} from "\.\/spaces-model\.js";/);
+test("палітра й смуга: публікація — на hasPublish, GitLab — на hasVcs", () => {
+  assert.match(pal, /import \{ hasPublish, hasVcs \} from "\.\/spaces-model\.js";/);
   assert.match(pal, /const noVcs = !hasVcs\(s\.space\);/, "синк із git — на ролі `vcs`");
   assert.match(pal, /if \(hasPublish\(s\.space\)\) \{\n    out\.push\(\{\n      id: "publish"/);
   assert.match(pal, /if \(!noVcs\) \{\n    \/\/ Той самий трьохгілковий розгляд/);
-  assert.match(pal, /if \(ch === "project" && !hasTeamComments\(s\.space\)\) continue;/, "командний канал — на `capabilities.comments`, не на інтеграціях");
-  assert.doesNotMatch(pal, /noOutward && ch === "project"/);
+  assert.doesNotMatch(pal, /hasTeamComments|aud-project|aud-local/, "палітра більше не знає про командний канал (перемикач прибрано)");
   const model = readFileSync(new URL("../app/bar-model.js", import.meta.url), "utf8");
   assert.match(model, /hasPublish\(s\.space\)/);
   assert.match(model, /isLegacyPublish\(s\.space\)/);
@@ -463,14 +454,14 @@ test("палітра й смуга: публікація — на hasPublish, к
 
 test("командний канал у app.js — `noTeamComments` на hasTeamComments; `noOutward` його не питає", () => {
   assert.match(src, /const noTeamComments = \(\) => needsWelcome\(spacesResp\) \|\| !hasTeamComments\(spaceNow\(\)\);/);
-  assert.match(src, /effectiveCommentMode, hasNotify, hasTeamComments, healTarget,/, "імпорт із spaces-model.js (4c-3: додався hasNotify)");
+  assert.match(src, /hasNotify, hasTeamComments, healTarget,/, "імпорт із spaces-model.js (4c-3: додався hasNotify)");
   // GitLab на `noVcs`, Teams-тиша на `noNotify` (4c-3), а канал `project` на `noOutward`-подібне більше не спирається
   assert.doesNotMatch(src, /noOutward\(\)[^;\n]*(?:'project'|audiences)|(?:'project'|audiences)[^;\n]*noOutward\(\)/);
 });
 
 test("`noNotify` у app.js — на hasNotify (роль `notify`); `noOutward` зник, публікація його не питала", () => {
   assert.match(src, /const noNotify = \(\) => needsWelcome\(spacesResp\) \|\| !hasNotify\(spaceNow\(\)\);/);
-  assert.match(src, /effectiveCommentMode, hasNotify, hasTeamComments, healTarget,/, "імпорт із spaces-model.js");
+  assert.match(src, /hasNotify, hasTeamComments, healTarget,/, "імпорт із spaces-model.js");
   assert.doesNotMatch(src, /\bnoOutward\b\(/, "4c-3: тиша Teams більше не на `integrations` — виклику noOutward() не лишилось");
   assert.doesNotMatch(src, /hasPublish\(spaceNow\(\)\)[^;]*noNotify|noNotify\(\)[^;]*hasPublish/);
   const model = readFileSync(new URL("../app/bar-model.js", import.meta.url), "utf8");

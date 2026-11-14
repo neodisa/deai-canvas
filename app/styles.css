@@ -1882,3 +1882,11 @@ body:not(.home-open) .cn-drawer{display:none}
 .cmt-act{border:1px solid var(--line2);background:var(--s2);color:var(--hi);border-radius:6px;cursor:pointer;font-size:11px;padding:3px 7px;display:inline-flex;align-items:center;gap:4px}
 .cmt-act:hover{background:var(--s4)}
 .cmt-down{margin:0;font-size:12px;color:var(--open)}
+.isl-count--new{background:var(--open);color:var(--on-sel)}
+.tab-news{margin-left:4px;min-width:15px;padding:0 4px;border-radius:999px;background:var(--open);color:var(--on-sel);font-size:10px;font-weight:600;line-height:15px;text-align:center;box-sizing:border-box;flex:none}
+.row-news{flex:none;margin-left:4px;min-width:15px;padding:0 4px;border-radius:999px;background:var(--open);color:var(--on-sel);font-size:10px;font-weight:600;line-height:15px;text-align:center;box-sizing:border-box}
+.cmt-teamdown{margin:8px 12px;padding:8px 10px;border-radius:var(--r-sm);background:color-mix(in srgb,var(--bad) 12%,transparent);color:var(--bad);font-size:12px}
+.cmt-aud{font-size:11px;color:var(--dim)}
+.cmt-aud--project{color:var(--open)}
+.cmt-badge{font-size:10px;padding:0 6px;border-radius:999px;border:1px solid var(--line2);color:var(--dim)}
+.cmt-h--new{color:var(--open)}

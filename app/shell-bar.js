@@ -431,10 +431,8 @@ function crumbTitle(model) {
  * `{id, name, color, capabilities}` з `/api/task`, `spaces` — масив
  * `/api/spaces`; без `space` фішки нема зовсім).
  *
- * ⛔ `state.commentMode` тут БІЛЬШЕ НЕ читається: смуга нічого не знає про
- * аудиторію коментарів (принцип 6 PRODUCT.md, коментар над `crumbIter`).
- * `barState()` його все ще віддає — але для ⌘K (`paletteState()` в
- * `app.js`), не для смуги.
+ * Смуга нічого не знає про аудиторію коментарів (принцип 6 PRODUCT.md): адресата
+ * вибирають у формі коментатора, а `state.commentMode` у 0.27.0 прибрано зовсім.
  */
 export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;

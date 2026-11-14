@@ -168,7 +168,7 @@ test("у смузі немає перемикача аудиторії — ні 
   const iterList = [{ id: "it1", label: "Іт.1", note: "перша", pub: true, onGl: false }];
   const taskList = [{ id: "LIGA-7003", jira: "LIGA-7003", title: "Задача" }];
   for (const dd of [null, "iter", "more", "gl", "pub"]) {
-    const st = S({ openDd: dd, commentMode: "project", iterList, taskList, gl: "behind" });
+    const st = S({ openDd: dd, iterList, taskList, gl: "behind" });
     const h = barHTML(barModel(st), st);
     assert.doesNotMatch(h, /data-act="cmode"/, `«cmode» лишився в дропдауні ${dd}`);
     assert.doesNotMatch(h, /data-val="(local|project)"/,

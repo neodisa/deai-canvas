@@ -29,8 +29,8 @@
  *   4б (зіпсований старий файл) — `legacy_error` у `spaces.listing()` і `needsWelcome`
  *        (`spaces-model.js`). Мутація «`needsWelcome` ігнорує `legacy_error`» червонить 4б
  *        (привітання замість смуги помилки); «`listing` без `legacy_error`» — теж.
- *   5 (мережа)       — пониження `ch=project` у `_commented` (сервер), затиск
- *        `effectiveCommentMode` (клієнт) і вимикач у `comment-config`. Кожна мутація
+ *   5 (мережа)       — пониження `ch=project` у `_commented` (сервер), вимикач
+ *        у `comment-config` (клієнтський затиск `effectiveCommentMode` прибрано в 0.27.0 — перемикача каналу нема). Кожна мутація
  *        червонить 5 (сервер — кроком «прямий `ch=project`», клієнт — кроком «рамка»).
  *   6 (майстер)      — відмова сервера лишається на кроці 1 майстра (`showError` у `wizard.js`: текст у `#wz-err`;
  *        мутація «без тексту» червонить 6).

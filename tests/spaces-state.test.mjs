@@ -3,39 +3,18 @@ import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  SPACE_COLORS, colorStep, currentSpace, effectiveCommentMode, freeColor, hasTeamComments, healTarget,
+  SPACE_COLORS, colorStep, currentSpace, freeColor, hasTeamComments, healTarget,
   isReadErrKey, needsWelcome, peekFound, peekRegistered, readErrKey, rovingIndex, shouldRefreshHome, spaceChanged, taskErrKey,
 } from "../app/spaces-model.js";
 
 /* Рішення, які приймає `app.js` у просторах (Task 7) і помилка в яких не кидає, а
-   мовчки спотворює стан: який канал коментарів діє, чи змінився простір, куди вести
+   мовчки спотворює стан: чи змінився простір, куди вести
    при «задачі нема», який колір пропонувати. Проводку (DOM, мережа) стережуть
    `tests/spaces-wiring.test.mjs` і живі тести; тут — чисті правила. */
 
 const has = (k) => DICT.uk[k] !== undefined && DICT.en[k] !== undefined;
 
 /* ── канал коментарів ──────────────────────────────────────────────────── */
-
-const NOCOMM = { capabilities: { publish: null, tokens: null, comments: null } };
-const COMM = { capabilities: { publish: null, tokens: null, comments: "supabase-comments" } };
-
-test("effectiveCommentMode: без постачальника коментарів `project` затискається в `local`, решта — як є", () => {
-  assert.equal(effectiveCommentMode(NOCOMM, "project"), "local");
-  assert.equal(effectiveCommentMode(NOCOMM, "local"), "local");
-  assert.equal(effectiveCommentMode(COMM, "project"), "project");
-  assert.equal(effectiveCommentMode(COMM, "local"), "local");
-});
-
-test("effectiveCommentMode: затискається ЛИШЕ `project`; інше значення (і сміття зі сховища) — як є", () => {
-  assert.equal(effectiveCommentMode(NOCOMM, "щось"), "щось");
-  assert.equal(effectiveCommentMode(NOCOMM, undefined), undefined);
-});
-
-test("effectiveCommentMode: невідомий простір каналу не відбирає", () => {
-  for (const space of [null, undefined, {}]) {
-    assert.equal(effectiveCommentMode(space, "project"), "project", JSON.stringify(space));
-  }
-});
 
 /* ── командний канал за `capabilities.comments` (2b-2, Task 2) ──────────────────────────────────────
    Командний канал дає РОЛЬ `comments`: id модуля; `null` — нікого. Прапорця `integrations` сервер більше не шле
@@ -74,16 +53,6 @@ test("hasTeamComments: стара форма (без capabilities) — не кр
   for (const space of [null, undefined, {}]) {
     assert.equal(hasTeamComments(space), true, JSON.stringify(space));
   }
-});
-
-test("effectiveCommentMode: простір із модулем коментарів лишає `project`", () => {
-  const mod = { capabilities: { publish: "static-publish", tokens: null, comments: "memo-comments" } };
-  assert.equal(effectiveCommentMode(mod, "project"), "project");
-  assert.equal(effectiveCommentMode(mod, "local"), "local");
-});
-
-test("effectiveCommentMode: форма 2а (capabilities без `comments`) лишає `project` — невідомість не краде", () => {
-  assert.equal(effectiveCommentMode({ capabilities: { publish: "vercel-publish", tokens: null } }, "project"), "project");
 });
 
 /* ── зміна простору ────────────────────────────────────────────────────── */

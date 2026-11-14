@@ -60,7 +60,7 @@ const PALETTE = (o) => ({
   published: true, iterPub: true, pagePub: true, pickedPage: "main",
   gl: "sync", iterLabel: "Іт.3",
   shots: { have: 3, stale: 0, total: 3, running: false, bad: false, done: 0 },
-  lang: "uk", commentMode: "local",
+  lang: "uk",
   space: { id: LIGA.id, capabilities: LIGA.capabilities, compat: LIGA.compat },
   ...o,
 });

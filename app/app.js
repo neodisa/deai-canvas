@@ -33,7 +33,7 @@ import { barHTML } from './shell-bar.js';
 import { cleanTitle, readHomeUi, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, thumbBrokenHTML } from './tasks-home.js';
 import {
-  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasNotify, hasTeamComments, healTarget,
+  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, hasNotify, hasTeamComments, healTarget,
   cleanupWarning, commentsUnavailableCode, copyLinkRefused, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwUnreadable, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
   spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
@@ -61,7 +61,8 @@ import { TABS_KEY, closeTab, pruneTabs, readTabs, tabsModel, upsertTab, writeTab
 import { tabsHTML } from './tabs-view.js';
 import { islandToolsHTML } from './island.js';
 import { commentsPanelHTML } from './comments-view.js';
-import { openCount } from './comments-model.js';
+import { FILTERS, openCount } from './comments-model.js';
+import { arrived, baseline, isNew, markSeen, newsByPage, readSeen, seenKey, teamOf, writeSeen } from './comment-news.js';
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
@@ -122,6 +123,19 @@ const cmtEl = document.getElementById('cmt-panel');
 let lastFrameSrc = null;   // адреса рамки на момент попереднього `applyMode`: змінилась — вибір/редагування панелі коментарів старого документа скидаються
 let cmtOpen = false, cmtSnap = null, cmtSel = null, cmtQuery = '', cmtEditing = null, cmtDraft = null, frameCmtReady = false;
 const cmtExpanded = { earlier: false, closed: false };
+/** Фільтр панелі «Усі / Для Claude / Команда» (Б2) — памʼятається на вікно. */
+let cmtFilter = (() => { try { const v = localStorage.getItem('dc-cmt-filter'); return FILTERS.includes(v) ? v : 'all'; } catch (e) { return 'all'; } })();
+/** Причина, з якої командні недоступні (`L.store.teamDown`), або `null`. */
+let cmtTeamDown = null;
+/** «Нові від команди» цього відкриття панелі (поправка 13), id попереднього знімка (поправка 14), число нових для острівця. */
+const cmtFresh = new Set();
+let cmtPrevIds = null;
+let cmtNewsN = 0;
+let cmtNewsPages = {};
+/** Ключ памʼяті адресата — спільний із рамкою (`HOST_ARG` у `serve.py`; пару приколює `test_comments_role`). */
+const CMT_AUD_KEY = 'dc-cmt-aud';
+/** колір піна коментатора (не CSS оболонки): пара з `DUAL_AUDIENCES_JS` у `serve.py` — приколює `test_comments_role`. */
+const LOCAL_PIN_COLOR = '#7C6CF0';
 const CMT_EVENTS = new Set(['ready', 'change', 'select', 'mode']);
 let picked = null; // обрана ітерація (id); нормалізується в render() до останньої
 let mode = 'single'; // 'single' — одна ітерація в iframe; 'canvas' — bird-view холст
@@ -170,8 +184,6 @@ let appliedFrames = new Set();
 let progressTimer = null;
 /** Останній знімок прогресу зʼємки або null. З нього живе підпис кнопки. */
 let shootProgress = null;
-// режим коментарів робочого перегляду: 'local' — фідбек Claude у локальний файл (не Supabase); 'project' — канал Supabase (колеги/історія)
-let commentMode = (() => { try { return localStorage.getItem('dc-comment-mode') || 'local'; } catch (e) { return 'local'; } })();
 
 /* ===== Смуга (Task 3 Плану B): стан, якого нема більш ніде ===== */
 /** Який дропдаун смуги розкритий: `'iter'|'gl'|'pub'|'more'|'space'|null`. */
@@ -270,14 +282,12 @@ const noVcs = () => needsWelcome(spacesResp) || !hasVcs(spaceNow());
  *  роль `comments` (зашитий ЛІГА або модуль, `capabilities.comments`), і простір без інтеграцій, але з модулем
  *  коментарів його має. Просторів нема зовсім (привітання) — теж без каналу: задач і сторінок нема. */
 const noTeamComments = () => needsWelcome(spacesResp) || !hasTeamComments(spaceNow());
-/** Канал коментарів, який ДІЄ (див. `effectiveCommentMode`). `commentMode` у сховищі не чіпаємо. */
-const effMode = () => effectiveCommentMode(spaceNow(), commentMode);
 
 /* Ширина рамки макета в робочому вигляді: число пікселів або `null` — вільна
    ширина вікна («Десктоп»). ОДНА величина на весь стан: який сегмент підсвічений,
    виводиться з неї (`activePreset`), а не тримається другим прапорцем — інакше
    «вибрав планшет» і «набрав 768 руками» стали б двома станами, які колись
-   розійдуться. Персист у браузері, як `dc-comment-mode`: вибрав мобайл — вертаєшся
+   розійдуться. Персист у браузері: вибрав мобайл — вертаєшся
    в мобайл, бо адаптив дивляться серіями, а не по одному разу. */
 let vpWidth = (() => { try { return readStored(localStorage.getItem('dc-viewport')); } catch (e) { return null; } })();
 
@@ -1002,14 +1012,6 @@ function barState() {
     homeOpen,
     /* Сторінка оверлею (`tasks`/`conn`/`wiz`) — для крихти смуги й пункту ⌘K; поза оверлеєм — `null`. */
     homePage: homeOpen ? homePage : null,
-    /* Смуга цього поля вже НЕ читає (принцип 6 PRODUCT.md — перемикач
-       аудиторії переїхав у панель коментатора). Лишається, бо `paletteState()`
-       будується з `barState()` і бере поточну аудиторію звідси — другий шлях
-       до того самого модульного `commentMode` розійшовся б із першим.
-       Віддаємо ДІЮЧИЙ канал (`effMode`), а не збережений: у просторі без
-       інтеграцій збережений `project` там не працює, і палітра, що позначила б
-       його вибраним, збрехала б. */
-    commentMode: effMode(),
     /* Простір для фішки й дропдауна (див. «Простори» вгорі файла). Без `space`
        фішки в смузі нема зовсім: шар вимкнено або просторів ще нема. */
     space: spaceNow(),
@@ -1078,7 +1080,7 @@ function paintTabs() {
 function paintIsland() {
   islandEl.setAttribute('aria-label', t('islandNav'));
   const html = islandToolsHTML({ screen: homeOpen ? 'home' : 'task', mode: mode === 'canvas' ? 'overview' : 'layout',
-    inspectorOn: !!inspectorApi()?.on, commentsOn: cmtOpen, commentsCount: openCount(cmtSnap) });
+    inspectorOn: !!inspectorApi()?.on, commentsOn: cmtOpen, commentsCount: openCount(cmtSnap), commentsNew: cmtNewsN });
   if (writeKeepFocus(islTools, html, islHtmlLast)) islHtmlLast = html;
 }
 /** Відкрита задача — вкладка; задачі поточного простору, яких вже нема, — геть (чистка лише в межах простору, що його
@@ -1685,56 +1687,6 @@ async function editTaskTags(id) {
  * `pillMenu`/`#pp-newit`/`paintGitlab`/`#pp-copy` (перенесене СЮДИ, а не
  * звідти: `renderPanel()` — межа Task 4, її тіло не чіпаємо).
  */
-/**
- * Перемкнути аудиторію коментарів — ЄДИНА реалізація на всі входи.
- *
- * Входів рівно два, і жоден із них не у смузі (принцип 6 PRODUCT.md):
- * вкладки в панелі САМОГО коментатора (`postMessage` нижче) і аварійний вихід
- * у ⌘K (`aud-local`/`aud-project` у `shell-palette.js` — потрібен саме тоді,
- * коли коментатор не піднявся й вкладок немає разом із ним). Обидва йдуть
- * СЮДИ: друга копія цього тіла коштувала б розходження позначки в оболонці з
- * тим, що справді показано, — рівно того, від чого спека забороняє
- * коментатору навігувати самому.
- *
- * ⛔ Білий список, а не будь-яке `ch`: значення тепер приходить ЧЕРЕЗ МЕЖУ
- * (посилкою з рамки), а звідси їде і в `localStorage`, і в `frame.src`
- * (`applyMode`). Раніше воно народжувалось у нашій же розмітці смуги, і
- * перевіряти не було чого.
- */
-function setAudience(ch) {
-  if (ch !== 'local' && ch !== 'project') return;
-  /* Командного каналу в просторі без постачальника ролі `comments` нема — відмова, а не
-     тиха зміна збереженого вибору. І порівнюємо з ДІЮЧИМ каналом: у такому просторі
-     `project` зі сховища й так читається як `local`, тож `local` тут не «зміна» і не
-     мусить переписувати вибір, що в ЛІГА лишається. */
-  if (ch === 'project' && noTeamComments()) return;
-  if (effMode() === ch) return;
-  commentMode = ch;
-  try { localStorage.setItem('dc-comment-mode', commentMode); } catch (e) {}
-  render();
-}
-
-/* Вкладки аудиторій живуть у панелі САМОГО коментатора, тобто всередині рамки,
-   і про вибір вона ПОВІДОМЛЯЄ посилкою, а не навігує (див. `audiences_arg` у
-   `serve.py`). Приймач перевіряє ДВІ речі, і друга не менш обовʼязкова за
-   першу: тип посилки й ДЖЕРЕЛО.
-
-   ⛔ `ev.source === frame.contentWindow` — це те, що відрізняє наш макет від
-   будь-якої іншої сторінки в будь-якому фреймі (вкладений iframe у макеті,
-   вкладка, відкрита через `window.open`, банер із чужим кодом). Без цієї
-   перевірки чужа сторінка перемикала б канал дизайнера, і фідбек, призначений
-   Клоду, тихо поїхав би в командний потік — тобто колегам, у Supabase.
-
-   ⛔ `ev.origin` НЕ заміна джерелу: рамка того самого походження, що й
-   оболонка (обидві з сервера інструмента), тож вкладений iframe із цього ж
-   сервера пройшов би перевірку origin і не пройшов би цю. */
-window.addEventListener('message', (ev) => {
-  if (ev.source !== frame.contentWindow) return;
-  const msg = ev.data;
-  if (!msg || msg.type !== 'dc-audience') return;
-  setAudience(msg.ch);
-});
-
 /* ===== Панель «Коментарі» (0.26.0) ===== */
 
 /** Живий коментатор поточного виду або `null` (ще вантажиться / виду нема). */
@@ -1750,8 +1702,8 @@ function cmtDown() {
 }
 function paintComments() {
   const html = cmtOpen && !homeOpen ? commentsPanelHTML({ snapshot: cmtSnap, query: cmtQuery, selectedId: cmtSel,
-    editingId: cmtEditing, expanded: cmtExpanded, channel: effMode(), team: !noTeamComments(),
-    down: cmtSnap ? null : cmtDown() }) : '';
+    editingId: cmtEditing, expanded: cmtExpanded, filter: cmtFilter, dual: !noTeamComments(), teamDown: cmtTeamDown,
+    fresh: cmtFresh, down: cmtSnap ? null : cmtDown() }) : '';
   /* Фокус і каретку поля пошуку / редагування — назад після перезапису (той самий прийом, що в `paintInsp`). */
   const act = document.activeElement;
   const keep = act && cmtEl.contains(act) && (act.id === 'cmt-q' || act.classList.contains('cmt-edit'))
@@ -1776,12 +1728,72 @@ function paintComments() {
   if (cmtSel) cmtEl.querySelector(`[data-cid="${CSS.escape(cmtSel)}"]`)?.scrollIntoView({ block: 'nearest' });
   paintIsland();
 }
+/** Імʼя автора цього вікна — те, що пише коментатор (той самий origin); нема — «мого» нема (поправка 15). */
+const myName = () => { try { return localStorage.getItem('comment-layer:user') || ''; } catch (e) { return ''; } };
+const cmtSeenKey = () => seenKey(spaceNow()?.id, currentTaskId);
+function loadSeen(key) { try { return readSeen(localStorage.getItem(key)); } catch (e) { return null; } }
+function saveSeen(key, set) { try { localStorage.setItem(key, writeSeen(set)); } catch (e) {} }
+/** Причина падіння командного з комбінованого сховища шару (`DeaiDualStore.teamDown`), або `null`. */
+function readTeamDown(L) { try { const v = L && L.store && L.store.teamDown; return typeof v === 'string' && v ? v : null; } catch (e) { return null; } }
+/** Свіжість локальних (Б2.1): комбіноване сховище перечитує локальні піни з диска (їх міг дописати Claude). */
+const cmtRefreshLocal = () => { try { cmtLayer()?.store?.refreshLocal?.(); } catch (e) {} };
+/** Знімок коментатора поточного виду змінився: маркер, свіжі, число острівця, дерево, тост. */
+let cmtNewsTask = null;
+let cmtNewsPagesKey = '{}';
+function cmtNewsUpdate() {
+  if (cmtNewsTask !== currentTaskId) { cmtNewsTask = currentTaskId; cmtFresh.clear(); cmtPrevIds = null; }
+  const all = cmtSnap && Array.isArray(cmtSnap.comments) ? cmtSnap.comments : null;
+  if (!all || !currentTaskId) { cmtNewsN = 0; cmtNewsPages = {}; cmtNewsTree(); return; }
+  const team = teamOf(all);
+  const key = cmtSeenKey();
+  let seen = loadSeen(key);
+  if (!seen) { seen = baseline(team); saveSeen(key, seen); }
+  const fresh = team.filter((c) => isNew(c, seen, myName()));
+  const came = arrived(cmtPrevIds, fresh);
+  cmtPrevIds = new Set(all.map((c) => c.id));
+  if (cmtOpen) {
+    for (const c of fresh) cmtFresh.add(c.id);
+    if (fresh.length) saveSeen(key, markSeen(seen, fresh.map((c) => c.id)));
+    cmtNewsN = 0; cmtNewsPages = {};
+    cmtNewsTree();
+    return;
+  }
+  cmtNewsN = fresh.length;
+  cmtNewsPages = newsByPage(fresh);
+  cmtNewsTree();
+  if (came.length) newsToast(came);
+}
+/** Число «нових» у дереві сторінок — перемальовуємо дерево лише коли воно справді змінилось. */
+function cmtNewsTree() {
+  const k = JSON.stringify(cmtNewsPages);
+  if (k === cmtNewsPagesKey) return;
+  cmtNewsPagesKey = k;
+  if (curTask) renderPanel();
+}
+function newsToast(came) {
+  const last = came[came.length - 1];
+  notice('cmt-news', came.length === 1 ? t('cmtNewToast', last.author || '—') : t('cmtNewToastN', came.length), [{
+    act: 'cmtshownew', label: t('cmtShowNew'),
+    run: () => { dropNotice('cmt-news'); setCommentsOpen(true); cmtSel = last.id; paintComments(); cmtLayer()?.focus(last.id); },
+  }]);
+}
 function setCommentsOpen(on) {
   on = !!on;
   /* Інспектор і коментарі — взаємно виключні: обидва ділять праву панель і обидва ловлять клік по макету. */
   if (on) { const api = inspectorApi(); if (api?.on) { api.set(false); paintBar(); } }
   cmtOpen = on;
-  if (!on) { cmtSel = null; cmtEditing = null; cmtDraft = null; }
+  if (!on) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtFresh.clear(); }
+  else {
+    /* Маркер «бачив» посуваємо ОДРАЗУ на відкритті: нові стають розділом «Нові від команди» цього відкриття (поправка 13). */
+    const key = cmtSeenKey();
+    const seen = loadSeen(key) || new Set();
+    const fresh = teamOf(cmtSnap?.comments).filter((c) => isNew(c, seen, myName()));
+    fresh.forEach((c) => cmtFresh.add(c.id));
+    if (fresh.length) saveSeen(key, markSeen(seen, fresh.map((c) => c.id)));
+    cmtNewsN = 0; cmtNewsPages = {}; cmtNewsTree();
+    dropNotice('cmt-news');
+    cmtRefreshLocal();
+  }
   const L = cmtLayer();
   if (L && !!L.commentMode !== on) L.setCommentMode(on);
   paintComments();
@@ -1795,14 +1807,18 @@ function cmtViewSwitch() {
   const was = cmtView;
   cmtView = mode;
   cmtSel = null; cmtEditing = null; cmtDraft = null;
+  cmtFresh.clear(); cmtPrevIds = null;
   if (mode === 'canvas') {
     if (was) try { const FL = frame.contentWindow?.CommentLayer; if (FL?.commentMode) FL.setCommentMode(false); } catch (e) {}
     cmtSnap = ovc.layer ? ovc.layer.snapshot() : null;
+    cmtTeamDown = readTeamDown(ovc.layer);
   } else {
     const L = cmtLayer();
     cmtSnap = L ? L.snapshot() : null;
+    cmtTeamDown = readTeamDown(L);
     if (L && cmtOpen && !L.commentMode) L.setCommentMode(true);
   }
+  cmtNewsUpdate();
   paintComments();
 }
 /** Рамка втратила свого коментатора (нова адреса, чужий документ, сторінка без нього): старі картки з мертвими діями
@@ -1810,8 +1826,8 @@ function cmtViewSwitch() {
  *  старому документу чи каналу). У «Огляді» `cmtSnap` — полотна, його не чіпаємо. */
 function dropFrameCmt({ sel = false } = {}) {
   frameCmtReady = false;
-  if (mode !== 'canvas') cmtSnap = null;
-  if (sel) { cmtSel = null; cmtEditing = null; cmtDraft = null; }
+  if (mode !== 'canvas') { cmtSnap = null; cmtTeamDown = null; }
+  if (sel) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtFresh.clear(); cmtPrevIds = null; }
   paintComments();
 }
 /** Відкритий модальний шар оболонки (палітра/довідка, будь-який діалог `askForm`): клавіші C/H тоді не наші. */
@@ -1825,10 +1841,11 @@ function onCommentsEvent(src, m) {
   if (m.ev === 'ready') {
     if (src === 'frame') frameCmtReady = true;
     const L = cmtLayer();
-    if (L) { cmtSnap = L.snapshot(); if (cmtOpen) L.setCommentMode(true); }
+    if (L) { cmtSnap = L.snapshot(); cmtTeamDown = readTeamDown(L); if (cmtOpen) L.setCommentMode(true); }
+    cmtNewsUpdate();
     paintComments();
   } else if (m.ev === 'change') {
-    if (m.snapshot && Array.isArray(m.snapshot.comments)) { cmtSnap = m.snapshot; paintComments(); }
+    if (m.snapshot && Array.isArray(m.snapshot.comments)) { cmtSnap = m.snapshot; cmtNewsUpdate(); paintComments(); }
   } else if (m.ev === 'select') {
     cmtSel = typeof m.id === 'string' ? m.id : null;
     if (!cmtOpen) setCommentsOpen(true); else paintComments();
@@ -1837,7 +1854,7 @@ function onCommentsEvent(src, m) {
     else if (m.on && !cmtOpen) { cmtOpen = true; paintComments(); }
   }
 }
-/* Посилки коментатора з рамки (режим хоста, `host=1`). Те саме правило джерела, що й у `dc-audience` вище:
+/* Посилки коментатора з рамки (режим хоста, `host=1`). Правило джерела:
    ⛔ `ev.source === frame.contentWindow` — інакше чужа сторінка підсунула б панелі фальшиві картки. Плюс
    `ev.origin === location.origin`: рамка, що пішла на чужий сайт, лишається тим самим вікном (`source` збігається),
    але її посилки — не наші. */
@@ -2079,7 +2096,9 @@ const BAR_ACTIONS = {
   cmtcarry: (id) => { cmtLayer()?.carry(id); },
   cmtshot: (id) => { cmtLayer()?.openShot(id); },
   cmtsec: (k) => { if (k in cmtExpanded) { cmtExpanded[k] = !cmtExpanded[k]; paintComments(); } },
-  cmtch: (ch) => { setAudience(ch); },
+  cmtfilter: (f) => { if (!FILTERS.includes(f)) return; cmtFilter = f; try { localStorage.setItem('dc-cmt-filter', f); } catch (e) {} paintComments(); },
+  cmtassign: (id) => { cmtLayer()?.setMeta?.(id, { assignee: 'claude' }); },
+  cmtunassign: (id) => { cmtLayer()?.setMeta?.(id, { assignee: null }); },
   cmtpins: () => { cmtLayer()?.togglePins(); },
 
   inspector: () => {
@@ -2259,20 +2278,6 @@ const BAR_ACTIONS = {
   feedback: () => openFeedback(),
   updatenotes: () => openUpdateDialog(),
   updatecheck: () => checkUpdateNow(),
-
-  /* Аудиторія коментарів. У смузі цієї дії НЕМА жодного `data-act` — обидва
-     входи зовнішні: вкладки в панелі коментатора (`postMessage`) і ⌘K
-     (`shell-palette.js`, `act: "aud"`). Лежить у `BAR_ACTIONS`, бо саме тут
-     `execPaletteAction` шукає обробники дій палітри
-     (`BAR_ACTIONS[a.act] || PANEL_ACTIONS[a.act]`) — окремої третьої мапи
-     заради одного ключа не завели б.
-
-     ⛔ Звалась `cmode`, поки жила пунктом дропдауна ітерації. Перейменована
-     разом із переїздом: імʼя дії — контракт із розміткою, і `cmode` після
-     зникнення того пункту вказувало б на дім, якого немає. Ключ сховища
-     (`dc-comment-mode`) НЕ перейменований свідомо: це збережений вибір
-     дизайнера, і перейменування тихо скинуло б усім канал на типовий. */
-  aud: (val) => setAudience(val),
 
   // ── крошка ітерації: дії, яких у старій смузі не було зовсім (лише в
   // панелі) — логіка та сама, що в `pillMenu`/`#pp-newit`, написана тут
@@ -4398,6 +4403,7 @@ function panelState() {
       count: s ? [s.pages && t('countPages', s.pages), s.states && t('countStates', s.states),
         !s.pages && !s.states && s.folders && t('countFolders', s.folders)].filter(Boolean).join(' · ') : '',
       countTitle: s ? t('countTitle', s.pages, s.states, s.folders) : '',
+      news: cmtNewsPages[p.id] || 0,
     };
   });
   const focusNode = panelFocus ? byId.get(panelFocus)?.page : null;
@@ -5237,7 +5243,7 @@ const ovc = overviewComments({
   cards: () => cards,
   cardW,
   picked: () => picked,
-  channel: () => effMode(),
+  channel: () => (noTeamComments() ? 'local' : 'dual'),
   frameKeyOf: (card) => frameKey(card.id, canvasW),
   shotOf: (card) => shotManifest.shots?.[frameKey(card.id, canvasW)] || null,
   camTo: (target) => { userMoved = true; camTo(target); },
@@ -5246,14 +5252,11 @@ const ovc = overviewComments({
     camTo(focusBox({ x: card.x, y: card.y, w: cardW() },
                    { w: canvasEl.clientWidth, h: canvasEl.clientHeight }));
   },
-  /* Без командного каналу вкладок аудиторій нема ЗОВСІМ: порожній перелік коментатор читає
-     як «рядка нема» (контракт `audiences`), а єдина вкладка «Клод» була б вибором без
-     вибору. Активна — за ДІЮЧИМ каналом, не за збереженим. */
+  /* Аудиторії піна на «Огляді» (поправки 11, 12, 20): без командного каналу — одна (чипів нема). */
   audiences: () => (noTeamComments() ? [] : [
-    { id: 'local', label: t('audTabLocal'), active: effMode() === 'local', icon: 'bot' },
-    { id: 'project', label: t('audTabTeam'), active: effMode() === 'project', icon: 'team' },
+    { id: 'local', label: t('audChipLocal'), icon: 'bot', color: LOCAL_PIN_COLOR, private: true },
+    { id: 'project', label: t('audChipTeam'), icon: 'team', note: t('audChipTeamNote') },
   ]),
-  onAudience: (ch) => setAudience(ch),
   onArmed: (on) => { commentArmed = !!on; canvasEl.classList.toggle('cv-commenting', commentArmed); },
   /* Панель коментарів — оболонки (0.26.0): коментатор полотна живе в цьому ж вікні й кличе приймач напряму. */
   host: {
@@ -5262,6 +5265,8 @@ const ovc = overviewComments({
     /* `onReady` летить ВСЕРЕДИНІ `init()`, коли `ovc.layer` ще не присвоєно (присвоєння — після повернення з `init`):
        мікрозадача дає присвоїти, і `cmtLayer()` уже бачить шар (знімок, режим коментування при відкритій панелі). */
     onReady: () => queueMicrotask(() => onCommentsEvent('canvas', { ev: 'ready' })),
+    defaultAudience: () => { try { return localStorage.getItem(CMT_AUD_KEY); } catch (e) { return null; } },
+    onAudiencePick: (id) => { try { localStorage.setItem(CMT_AUD_KEY, id); } catch (e) {} },
     onChange: (snapshot) => onCommentsEvent('canvas', { ev: 'change', snapshot }),
     onSelect: (id) => onCommentsEvent('canvas', { ev: 'select', id }),
     onMode: (on) => onCommentsEvent('canvas', { ev: 'mode', on: !!on }),
@@ -5654,6 +5659,8 @@ async function refreshPanelFromDisk() {
   finally { panelRefreshing = false; }
 }
 window.addEventListener('focus', () => { syncTuneFromDisk(); refreshPanelFromDisk(); });
+/* Свіжість локальних піни (Б2.1): Claude міг дописати їх на диск, поки вікно не мало фокуса. */
+window.addEventListener('focus', cmtRefreshLocal);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') { syncTuneFromDisk(); refreshPanelFromDisk(); }
 });
@@ -6575,8 +6582,8 @@ function applyMode(task, { keepFrame = false } = {}) {
     if (!keepFrame) {
       frame.src = (picked && pickedPage)
         ? `/commented?it=${encodeURIComponent(picked)}&page=${encodeURIComponent(pickedPage)}`
-          + `&ch=${effMode()}&host=1${stateQuery(pickedState)}`
-        : (picked ? `/commented?it=${encodeURIComponent(picked)}&ch=${effMode()}&host=1` : 'about:blank');
+          + `&host=1${stateQuery(pickedState)}`
+        : (picked ? `/commented?it=${encodeURIComponent(picked)}&host=1` : 'about:blank');
       /* Нова сторінка в рамці — новий коментатор: старий знімок і готовність уже не про неї (`ready` поверне нове). */
       /* Змінилась адреса (ітерація/канал/сторінка) — вибір, редагування й чернетка належать старому документу. */
       const srcNow = frame.getAttribute('src');
@@ -7726,11 +7733,6 @@ function paletteState() {
     lang: getLang(),
     canInstall: pwa.canInstall(),
     standalone: pwa.isStandalone(),
-    /* Поточна аудиторія — щоб палітра позначила її вибраною, як мову. Іде
-       через `barState()`, як і решта полів вище, хоч сама смуга його вже не
-       читає (принцип 6): другий шлях до того самого модульного `commentMode`
-       розійшовся б із першим на першій же правці. */
-    commentMode: st.commentMode,
     /* Простори для ⌘K: МАСИВ лише коли шар увімкнено (`off` / не питали — `undefined`,
        і пунктів просторів нема зовсім, а не «Новий простір…» без реєстру). `space` —
        вимикач: синк із git палітра показує за роллю `vcs` (`capabilities.vcs`), публікацію й командний канал — за їхніми

@@ -76,7 +76,7 @@
  */
 
 import { figmaWhyKey, flowWhyKey, linkWhyKey } from "./bar-model.js";
-import { hasPublish, hasTeamComments, hasVcs } from "./spaces-model.js";
+import { hasPublish, hasVcs } from "./spaces-model.js";
 import { pillModel } from "./update-model.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
@@ -121,7 +121,7 @@ import { ico } from "./icons.js";
  *     не пропонується. space: {id, capabilities}|null — поточний простір;
  *     синк із git, публікацію й командний канал дають їхні постачальники:
  *     `capabilities.vcs`, `capabilities.publish` і `capabilities.comments`
- *     (`hasVcs`, `hasPublish`, `hasTeamComments`; стара форма без `capabilities` —
+ *     (`hasVcs`, `hasPublish`; стара форма без `capabilities` —
  *     не знаємо → не крадемо).
  */
 /* Мова інтерфейсу — єдина група, що не залежить від задачі: її читає і звичайний
@@ -221,8 +221,6 @@ export function paletteActions(state) {
      (`bar-model.js`, «Вимикач»). ОМІТ, не «вимкнено з причиною» (той самий вибір, що для груп,
      безглуздих у режимі). Рішення — `hasVcs(space)`: ключ `capabilities.vcs`, а без нього
      «не знаємо → не крадемо» (4a).
-     Командний канал коментарів (`aud-project`) — на ролі (2b-2): його
-     дає роль `comments` — `hasTeamComments(space)`, див. групу `gSet` нижче.
      ПУБЛІКАЦІЯ (`publish`, `togglepub`, `copylink`, `openpreview`) від інтеграцій більше
      не залежить (модулі 2а, Task 8): вона йде на `hasPublish` (`capabilities.publish`) —
      простір без інтеграцій публікує вбудованим модулем у теку, і з палітри її забирає
@@ -435,51 +433,8 @@ export function paletteActions(state) {
   out.push(...installActions(s));
   out.push(...appActions(s));
 
-  /* Аудиторія коментарів — і це НЕ дубль вкладок у панелі коментатора, а
-     АВАРІЙНИЙ ВИХІД. Записано тут, бо без цього абзацу наступний прибере
-     «дубль» — і буде послідовним, але не правим.
-
-     Дім аудиторії — вкладки «Клод»/«Команда» в панелі САМОГО коментатора
-     (принцип 6 PRODUCT.md; `AUDIENCES_TMPL` у `serve.py`). Але коли
-     коментатор не піднявся — заблокований CDN Supabase, банер `__clDown` у
-     рамці, — разом із ним зникає ВСЯ його поверхня, вкладки включно. Зі смуги
-     перемикач прибрано, тож вернутись у канал Клода стало б НІЧИМ: рамка
-     тримає `ch=project`, `commentMode` лежить у localStorage, і єдиною
-     «кнопкою» лишилась би консоль браузера. Палітра — саме те місце, де
-     живуть рідкісні дії й аварійні виходи (шапка файла), і це рівно той
-     «виняток із записаною причиною», який принцип 4 PRODUCT.md дозволяє.
-     Живий сторож сценарію — третій тест у
-     `tests/live/comment-audience.test.mjs`.
-
-     ⛔ `act: "aud"` — ТА САМА реалізація, що в приймача `postMessage` від
-     вкладок (`BAR_ACTIONS.aud` → `setAudience` в `app.js`), а не друга копія:
-     інакше позначка в оболонці розійшлась би з тим, що показано в рамці.
-
-     ⛔ Гейт `hasIteration` — той самий, що в `gIter`: без ітерації
-     `projectId` (`dc/<задача>/<ітерація>[/internal]`) не існує, рамка стоїть
-     на `about:blank`, і перемикати канал було б ні для чого. ОМІТ, не
-     «вимкнено».
-
-     Поточний канал позначено `disabled` + `whyKey`, як поточна мова поруч:
-     третього способу позначки реєстр не має, і вигадувати його заради двох
-     пунктів означало б розійтись із сусідом по групі. */
-  if (hasIteration) {
-    for (const [id, ch, labelKey, icon] of [
-      ["aud-local", "local", "audLocal", "comment"],
-      ["aud-project", "project", "audProject", "globe"],
-    ]) {
-      /* Командного каналу в просторі без постачальника ролі `comments` нема (`GET /comments`,
-         `?ch=project` → 409): локальний — єдиний, і аварійний вихід «до локального» лишається.
-         Постачальник — модуль, тож це `hasTeamComments`
-         (`capabilities.comments`): простір із модулем коментарів має канал `project`,
-         хоч Teams у нього й нема. */
-      if (ch === "project" && !hasTeamComments(s.space)) continue;
-      out.push({
-        id, group: "gSet", labelKey, icon, act: "aud", val: ch,
-        disabled: s.commentMode === ch, whyKey: s.commentMode === ch ? "audCur" : "",
-      });
-    }
-  }
+  /* Перемикача аудиторії в палітрі нема (0.27.0): адресата піна вибирають чипами у формі коментатора, а падіння
+     командного не валить коментатора, тож аварійний вихід «до локального» втратив причину. */
 
   /* ── gDanger ──────────────────────────────────────────────────────────── */
   if (hasIteration) {
@@ -506,12 +461,6 @@ const ALIASES = {
   /* Обома мовами — як `lang-*`: «install» знаходить пункт в українському
      інтерфейсі, «встановити» — в англійському. */
   "pwa-install": "встановити застосунок додаток install app pwa deai canvas",
-  /* Аварійний вихід мусить бути ЗНАХОДЖУВАНИЙ: вихід, якого не знайти, — не
-     вихід, а рядок у реєстрі. Тому обидві мови плюс слово «коментар», яким
-     дизайнер це й називає («де перемикнути коментарі»), і саме імʼя каналу
-     («локальні»/«команда»), яким його звали в смузі до переїзду. */
-  "aud-local": "аудиторія audience коментар comment клод claude локальні local",
-  "aud-project": "аудиторія audience коментар comment команда team проєкт project",
   /* Простір: обома мовами, як мова вище, — «space» в українському інтерфейсі й
      «простір» в англійському. Ключ — не `id` дії, а слово `space`: пункти просторів
      мають динамічні id, див. `aliasOf`. */

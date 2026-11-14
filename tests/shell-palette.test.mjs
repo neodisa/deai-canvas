@@ -18,7 +18,7 @@ const S = (o = {}) => ({
   published: true, iterPub: true, pagePub: true, pickedPage: "main",
   gl: "sync", iterLabel: "Іт.3",
   shots: { have: 3, stale: 0, total: 3, running: false, bad: false, done: 0 },
-  lang: "uk", commentMode: "local", ...o,
+  lang: "uk", ...o,
 });
 
 /* ── стереження зі спеки задачі ──────────────────────────────────────────── */
@@ -96,61 +96,17 @@ test("підпис перемикача мови — поточною мовою
   setLang("uk");
 });
 
-/* 3b. Аудиторія коментарів у ⌘K — НЕ дубль вкладок у панелі коментатора, а
-   АВАРІЙНИЙ ВИХІД. Коли коментатор не піднявся (мертвий CDN → банер
-   `__clDown` у рамці, `_COMMENT_DOWN_BANNER` у `serve.py`), разом із ним зникають
-   і вкладки — і вернутись у локальний канал стало б нічим, бо зі смуги
-   перемикач прибрано принципом 6 PRODUCT.md. Повне ЧОМУ — коментар над
-   групою `gSet` у `app/shell-palette.js`; ці тести стережуть, щоб «прибрати
-   дубль» не стало тихою правкою.
-
-   `act` мусить бути ТОЙ САМИЙ, що в приймача `postMessage` і вкладок
-   (`BAR_ACTIONS.aud` → `setAudience`): друга реалізація перемикання
-   коштувала б розходження позначки в оболонці з тим, що показано в рамці —
-   рівно того, від чого спека забороняє коментатору навігувати самому. */
-test("аудиторія коментарів є в палітрі, у групі налаштувань, і йде через act:aud", () => {
-  const actions = paletteActions(S());
-  const local = actions.find((a) => a.id === "aud-local");
-  const project = actions.find((a) => a.id === "aud-project");
-  assert.ok(local, "немає аварійного виходу в локальний канал (⌘K)");
-  assert.ok(project, "немає аварійного виходу в командний канал (⌘K)");
-  for (const a of [local, project]) {
-    assert.equal(a.act, "aud", `дія «${a.id}» не йде через ту саму реалізацію, що вкладки`);
-    assert.equal(a.group, "gSet", `дія «${a.id}» не в групі налаштувань, поруч із мовою`);
+/* 3b. Аудиторії коментарів у ⌘K більше НЕМАЄ (0.27.0, поправка 10 плану Б2): адресата піна вибирають чипами у формі
+   коментатора, а падіння командного більше не валить коментатора (він працює з одним локальним) — аварійний вихід
+   «до локального» втратив причину. Тест стереже, щоб пункти `aud-*` не повернулись мовчки. */
+test("палітра не має перемикача аудиторії: ні `aud-*`, ні в жодному просторі, ні з ітерацією, ні без", () => {
+  const spaces = [null, { id: "n", capabilities: { publish: null, tokens: null, comments: null } },
+    { id: "t", capabilities: { publish: null, tokens: null, comments: "supabase-comments" } }];
+  for (const space of spaces) for (const hasIteration of [true, false]) {
+    const ids = paletteActions(S({ space, hasIteration })).map((a) => a.id);
+    assert.deepEqual(ids.filter((id) => id.startsWith("aud-")), [], JSON.stringify([space, hasIteration]));
   }
-  assert.equal(local.val, "local");
-  assert.equal(project.val, "project");
-});
-
-/* Поточна аудиторія позначена ТИМ САМИМ способом, що поточна мова —
-   `disabled` + видима причина (`whyKey`). Іншого способу позначки реєстр не
-   має (`itemHTML` показує `whyKey` рівно замість клавіші), і вигадувати
-   третій заради двох пунктів означало б розійтись із сусідом по групі. */
-test("поточна аудиторія позначена й не діє, друга діє — в обох напрямках", () => {
-  for (const [cur, other] of [["local", "project"], ["project", "local"]]) {
-    const actions = paletteActions(S({ commentMode: cur }));
-    const on = actions.find((a) => a.id === `aud-${cur}`);
-    const off = actions.find((a) => a.id === `aud-${other}`);
-    assert.equal(on.disabled, true, `поточна аудиторія «${cur}» мусить бути вимкнена`);
-    assert.equal(on.whyKey, "audCur", `поточна аудиторія «${cur}» без причини`);
-    assert.equal(off.disabled, false, `аудиторія «${other}» мусить діяти з каналу «${cur}»`);
-  }
-});
-
-/* Аварійний вихід мусить бути ЗНАХОДЖУВАНИЙ: вихід, якого не знайти, — не
-   вихід. `t()` віддає лише ПОТОЧНУ мову, тож без псевдонімів запит
-   «audience» в українському інтерфейсі не знаходив би нічого — рівно та вада
-   прототипу, яку для мови вже виправлено (шапка `shell-palette.js`). */
-test("аудиторія знаходиться в ⌘K обома мовами", () => {
-  setLang("uk");
-  const uk = filterActions(paletteActions(S({ lang: "uk" })), "audience");
-  assert.ok(uk.some((a) => a.id === "aud-local"),
-    "запит «audience» в українському інтерфейсі не знайшов аудиторії");
-  setLang("en");
-  const en = filterActions(paletteActions(S({ lang: "en" })), "аудиторія");
-  assert.ok(en.some((a) => a.id === "aud-local"),
-    "запит «аудиторія» в англійському інтерфейсі не знайшов аудиторії");
-  setLang("uk");
+  assert.equal(paletteActions(S()).some((a) => a.act === "aud"), false);
 });
 
 /* 4. Вимкнена дія несе `whyKey`, а не просто зникає (за винятком свідомо
@@ -498,16 +454,6 @@ test("без ітерації немає гдІтер-групи і кадрів
   assert.ok(!actions.some((a) => a.id === "go-iter"), "«перейти до ітерацій» без жодної ітерації — нікуди йти");
 });
 
-/* Той самий гейт, що в решти дій над ітерацією: без ітерації `projectId`
-   (`dc/<задача>/<ітерація>[/internal]`) не існує зовсім, рамка стоїть на
-   `about:blank` (`applyMode` в `app.js`), і перемикати канал було б ні для
-   чого. ОМІТ, а не «вимкнено з причиною», — той самий вибір, що для gIter. */
-test("без ітерації аудиторії в палітрі немає — канал ні до чого привʼязати", () => {
-  const actions = paletteActions(S({ hasIteration: false, shots: null, pickedPage: null }));
-  assert.ok(!actions.some((a) => a.id === "aud-local" || a.id === "aud-project"),
-    "аудиторія лишилась без ітерації");
-});
-
 test("інспектор і сегмент Сітка/Флоу існують лише у своєму режимі", () => {
   assert.ok(paletteActions(S({ mode: "layout" })).some((a) => a.id === "inspector"));
   assert.ok(!paletteActions(S({ mode: "overview" })).some((a) => a.id === "inspector"));
@@ -661,8 +607,8 @@ test("екран «Задачі»: палітра не пропонує жодн
   const taskScoped = ["mode", "view-grid", "view-flow", "vp-desktop", "vp-tablet", "vp-mobile",
     "inspector", "comments", "panel", "clean", "newit", "renit", "dupit", "newfolder", "renpage", "hidepage",
     "groupsel", "ungroup", "outdent", "focusbranch", "togglekind", "shoot", "figma", "publish",
-    "togglepub", "copylink", "openpreview", "glpush", "glpull", "glsetup", "aud-local",
-    "aud-project", "delit", "delpage", "go-iter", "go-pages"];
+    "togglepub", "copylink", "openpreview", "glpush", "glpull", "glsetup",
+    "delit", "delpage", "go-iter", "go-pages"];
   for (const id of taskScoped) {
     assert.ok(!ids.includes(id), `дія «${id}» не має бути в палітрі на екрані «Задачі»`);
   }
@@ -923,15 +869,15 @@ test("простори: кожна нова дія має labelKey в обох �
 
 const NO_ROLES = { publish: null, tokens: null, comments: null, vcs: null, notify: null, dashboard: null, tracker: null };
 
-test("простір без ролей: з палітри йдуть публікація, посилання, превʼю, GitLab, аудиторія команди", () => {
+test("простір без ролей: з палітри йдуть публікація, посилання, превʼю, GitLab", () => {
   const off = (o = {}) => paletteActions(S({ space: { capabilities: NO_ROLES }, gl: "behind", ...o })).map((a) => a.id);
   const ids = off();
-  for (const id of ["aud-project", "publish", "togglepub", "copylink", "openpreview", "glpush", "glpull", "glsetup"]) {
+  for (const id of ["publish", "togglepub", "copylink", "openpreview", "glpush", "glpull", "glsetup"]) {
     assert.ok(!ids.includes(id), `«${id}» мусить піти з палітри простору без ролей`);
   }
   assert.ok(!off({ gl: "off" }).includes("glsetup"), "glsetup — теж GitLab");
   // що лишається: усе, що не ходить назовні
-  for (const id of ["figma", "aud-local", "mode", "newit", "shoot", "lang-en", "delit"]) {
+  for (const id of ["figma", "mode", "newit", "shoot", "lang-en", "delit"]) {
     assert.ok(ids.includes(id), `«${id}» не мав зникати`);
   }
 });
@@ -942,7 +888,7 @@ test("простір зі схемою ЛІГИ (або без відомост�
     const ids = paletteActions(S({ space, gl: "behind" })).map((a) => a.id);
     assert.deepEqual(ids, baseIds, JSON.stringify(space));
   }
-  for (const id of ["aud-project", "publish", "copylink", "openpreview", "glpull", "glpush"]) {
+  for (const id of ["publish", "copylink", "openpreview", "glpull", "glpush"]) {
     assert.ok(baseIds.includes(id), id);
   }
 });
@@ -951,7 +897,7 @@ test("простір без ролей: решта палітри не заче�
   const all = paletteActions(S({ gl: "behind" })).map((a) => a.id);
   const off = paletteActions(S({ space: { capabilities: NO_ROLES }, gl: "behind" })).map((a) => a.id);
   const gone = all.filter((id) => !off.includes(id)).sort();
-  assert.deepEqual(gone, ["aud-project", "copylink", "glpull", "glpush", "openpreview", "publish", "togglepub"]);
+  assert.deepEqual(gone, ["copylink", "glpull", "glpush", "openpreview", "publish", "togglepub"]);
 });
 
 test("простори: id дій унікальні навіть для простору з id `new` (колізія зі `space-new`)", () => {
@@ -987,7 +933,6 @@ test("палітра: «Копіювати посилання» і «Відкр�
 /* ── публікація за `capabilities.publish` (модулі 2а, Task 8) ─────────────────
    Спільний `if (!noOutward)` розщеплено: `publish`/`togglepub`/`copylink`/`openpreview`
    ходять на `hasPublish` (`spaces-model.js`), а GitLab (`gl*`) — на `hasVcs`;
-   командний канал (`aud-project`) від 2b-2 — на `hasTeamComments` (`capabilities.comments`).
    Простір, де публікує вбудований модуль, отримує публікацію, але не GitLab. */
 {
   /* `comments` у capabilities — командний канал (2b-2): ЛІГА має свій (модуль зі схемою в `compat`), решта в цих фікстурах — нікого. */
@@ -1002,14 +947,13 @@ test("палітра: «Копіювати посилання» і «Відкр�
   test("публікація модулем: у палітрі публікація, превʼю й посилання — без GitLab і командного каналу", () => {
     const got = ids(MODS);
     for (const id of PUB) assert.ok(got.includes(id), `«${id}» мусить бути в палітрі простору з модулем`);
-    for (const id of [...GL, "aud-project"]) assert.ok(!got.includes(id), `«${id}» — на ролі vcs/comments, а їх тут нема`);
-    assert.ok(got.includes("aud-local"), "аварійний вихід до локального каналу лишається");
+    for (const id of GL) assert.ok(!got.includes(id), `«${id}» — на ролі vcs, а її тут нема`);
     assert.ok(!ids(MODS, { gl: "off" }).includes("glsetup"));
   });
 
   test("простір без постачальника публікації (`publish: null`): жодної з чотирьох дій публікації", () => {
     const got = ids(NOPUB);
-    for (const id of [...PUB, ...GL, "aud-project"]) assert.ok(!got.includes(id), id);
+    for (const id of [...PUB, ...GL]) assert.ok(!got.includes(id), id);
     const withVcs = { ...NOPUB, capabilities: { ...NOPUB.capabilities, vcs: "git-sync" } };
     assert.ok(ids(withVcs).includes("glpush"), "GitLab — на ролі vcs, не на публікації");
     assert.ok(!ids(withVcs).includes("publish"));
@@ -1017,55 +961,19 @@ test("палітра: «Копіювати посилання» і «Відкр�
 
   test("простір ЛІГА (compat): палітра ціла, як була", () => {
     const got = ids(LEGS);
-    for (const id of [...PUB, ...GL.slice(0, 2), "aud-project"]) assert.ok(got.includes(id), id);
+    for (const id of [...PUB, ...GL.slice(0, 2)]) assert.ok(got.includes(id), id);
     assert.deepEqual(got, ids(null), "те саме, що без відомостей про простір");
   });
 
-  test("простір з модулем: відрізняється від ЛІГА рівно GitLab і командним каналом", () => {
+  test("простір з модулем: відрізняється від ЛІГА рівно GitLab", () => {
     const mod = ids(MODS);
     const gone = ids(LEGS).filter((id) => !mod.includes(id)).sort();
-    assert.deepEqual(gone, ["aud-project", "glpull", "glpush"]);
+    assert.deepEqual(gone, ["glpull", "glpush"]);
   });
 
   test("модуль публікації з ролями vcs і comments: GitLab і командний канал живі", () => {
     const got = ids({ ...MODS, capabilities: { ...MODS.capabilities, vcs: "git-sync", comments: "supabase-comments" } });
-    for (const id of [...PUB, "glpush", "glpull", "aud-project"]) assert.ok(got.includes(id), id);
-  });
-
-  /* Командний канал — на `capabilities.comments` (роль `comments`, 2b-2), GitLab — на ролі `vcs`.
-     Простір із МОДУЛЕМ коментарів має канал `project`, але не GitLab; простір з роллю vcs без постачальника
-     коментарів — GitLab, але без каналу. */
-  test("модуль коментарів у просторі БЕЗ ролі vcs: `aud-project` є, GitLab нема", () => {
-    const got = ids({ ...MODS, capabilities: { ...MODS.capabilities, comments: "memo-comments" } });
-    assert.ok(got.includes("aud-project"));
-    assert.ok(got.includes("aud-local"));
-    for (const id of GL) assert.ok(!got.includes(id), id);
-  });
-
-  test("простір ЛІГИ, але БЕЗ постачальника коментарів (`comments: null`): GitLab є, `aud-project` нема", () => {
-    const got = ids({ ...LEGS, capabilities: { ...LEGS.capabilities, comments: null } });
-    assert.ok(!got.includes("aud-project"));
-    assert.ok(got.includes("aud-local"));
-    for (const id of GL.slice(0, 2)) assert.ok(got.includes(id), id);
-  });
-
-  test("`aud-project`: capabilities форми 2а (без ключа `comments`) — не знаємо → не крадемо: ЛІГА зі старим сервером не губить «Команду»", () => {
-    assert.ok(ids({ id: "liga", capabilities: { publish: "vercel-publish", tokens: null } }).includes("aud-project"));
-  });
-
-  test("`aud-project`: стара форма простору (без capabilities) — не крадемо", () => {
-    for (const space of [{ id: "o" }, {}, null, undefined]) {
-      assert.ok(ids(space).includes("aud-project"), JSON.stringify(space));
-    }
-  });
-
-  test("`aud-project` — лише в ітерації й лише коли каналу немає в просторі; позначка поточного — як була", () => {
-    const withMod = { ...MODS, capabilities: { ...MODS.capabilities, comments: "memo-comments" } };
-    const proj = paletteActions(S({ space: withMod, commentMode: "project" })).find((a) => a.id === "aud-project");
-    assert.deepEqual([proj.disabled, proj.whyKey, proj.act, proj.val], [true, "audCur", "aud", "project"]);
-    const loc = paletteActions(S({ space: withMod, commentMode: "local" })).find((a) => a.id === "aud-project");
-    assert.deepEqual([loc.disabled, loc.whyKey], [false, ""]);
-    assert.ok(!paletteActions(S({ space: withMod, hasIteration: false })).some((a) => a.id.startsWith("aud-")), "без ітерації обох нема");
+    for (const id of [...PUB, "glpush", "glpull"]) assert.ok(got.includes(id), id);
   });
 
   test("порядок групи gPub не змінився: figma, publish, togglepub, copylink, openpreview, потім GitLab", () => {

@@ -56,7 +56,6 @@ import "./_env.mjs";
 import { chromium } from "playwright";
 
 import { CLUSTER_W } from "../../app/overview-pins.js";
-import { MODULE_ADAPTER_GLOB, hermeticLiga } from "./_liga-supabase.mjs";
 import { startServer } from "./fixture.mjs";
 import { ANCHOR, TARGETS, seedPins, shootAll, t45Task } from "./_t45-fixture.mjs";
 
@@ -322,15 +321,15 @@ test("J: шапка панелі коментарів — під смугою о
     const h = head.getBoundingClientRect();
     return { head: h.top, canvas: document.getElementById("canvas").getBoundingClientRect().top,
              hit: !!document.elementFromPoint(x.left + x.width / 2, x.top + x.height / 2)?.closest('#cmt-panel [data-act="comments"]'),
-             /* Перемикач каналу (коли є) — друга ціль шапки: його теж не мусить накривати смуга. */
-             segHit: [...document.querySelectorAll('#cmt-panel [data-act="cmtch"]')].map((b) => {
+             /* Фільтр адресата (коли є) — друга ціль шапки: його теж не мусить накривати смуга. */
+             segHit: [...document.querySelectorAll('#cmt-panel [data-act="cmtfilter"]')].map((b) => {
                const q = b.getBoundingClientRect();
-               return !!document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)?.closest('#cmt-panel [data-act="cmtch"]');
+               return !!document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)?.closest('#cmt-panel [data-act="cmtfilter"]');
              }) };
   });
   assert.ok(r.head >= r.canvas - 0.5, `шапка панелі вище полотна: ${JSON.stringify(r)}`);
   assert.equal(r.hit, true, "✕ панелі накриває смуга оболонки");
-  assert.ok(r.segHit.every(Boolean), `перемикач каналу панелі накриває смуга оболонки: ${JSON.stringify(r.segHit)}`);
+  assert.ok(r.segHit.every(Boolean), `фільтр адресата панелі накриває смуга оболонки: ${JSON.stringify(r.segHit)}`);
   await page.close();
 });
 
@@ -415,7 +414,7 @@ test("K: коментар на «Огляді» — підсвітка, клік
   assert.ok(mine, "коментар не доїхав до файлу каналу");
   assert.deepEqual(mine.fp, tgt.fp, "відбиток ≠ живому fingerprint того самого елемента");
   assert.equal(mine.meta.version, "1/holovna");
-  assert.match(mine.meta.url, /\/commented\?it=it1&page=holovna&ch=local$/);
+  assert.match(mine.meta.url, /\/commented\?it=it1&page=holovna&ch=dual$/, "0.27.0: «Огляд» у просторі з командним каналом — комбінований ключ");
   assert.equal(mine.meta.via, "overview");
   assert.ok(Math.abs(mine.meta.anchor.fx - want.fx) < 0.03 && Math.abs(mine.meta.anchor.fy - want.fy) < 0.03,
     `частка кліку ${JSON.stringify(mine.meta.anchor)}`);
@@ -461,40 +460,6 @@ test("L: у режимі коментування перетягування п�
 
 /* ── Ревʼю T-45: D1–D4 і D7. Після K/L — деякі пишуть у спільну фікстуру. ── */
 
-/** Заглушка supabase-js ДО завантаження сторінки: канал «Команда» піднімається без мережі й без справжньої бази; записи
- *  збираються у `window.__sbWrites`. Від 4b-2 канал «Команда» ЛІГИ — це адаптер модуля `supabase-comments` (його
- *  `adapter.js` справжній, він кличе `window.supabase.createClient`), тож заглушка лишилась тією самою, а справжній
- *  `supabase.min.js` модуля підмінено порожнім файлом, щоб він її не затер. Конфіг Supabase ЛІГИ — у `tasks.json` фікстури
- *  (`supabase: true`); усе за межі машини `abort`-иться й складається в `.outside` (тест мусить лишити його порожнім). */
-async function withSupabaseStub(page) {
-  const seen = await hermeticLiga(page);
-  await page.route(MODULE_ADAPTER_GLOB.replace("adapter.js", "supabase.min.js"), (route) => route.fulfill({
-    status: 200, contentType: "application/javascript", body: "" }));
-  await page.addInitScript(() => {
-    window.__sbWrites = []; window.__sbClosed = 0;
-    window.supabase = { createClient: () => {
-      const q = { select() { return q; }, eq() { return q; }, in() { return q; }, delete() { return q; },
-        order() { return Promise.resolve({ data: [], error: null }); },
-        upsert: async (rows) => { window.__sbWrites.push(...rows); return { error: null }; } };
-      return { from: () => q, channel: () => ({ on() { return this; }, subscribe() { return this; } }),
-               removeChannel: () => { window.__sbClosed += 1; } };
-    } };
-  });
-  return seen;
-}
-const hosts = (page) => page.evaluate(() => document.querySelectorAll("#canvas [data-comment-layer]").length);
-async function switchAudience(page, id) {
-  if (!(await shellPanelOpen(page))) {
-    await page.mouse.move(700, 450); await page.keyboard.press("c"); await page.waitForSelector(SHELL_PANEL); await page.waitForTimeout(450);
-  }
-  await page.click(`#cmt-panel [data-act="cmtch"][data-val="${id}"]`);
-  await page.waitForFunction(() => {
-    const hs = document.querySelectorAll("#canvas [data-comment-layer]");
-    return hs.length === 1 && hs[0].shadowRoot.querySelector(".handle");
-  }, null, { timeout: 20000 });
-  await page.waitForTimeout(300);
-}
-
 test("M: пін без місця на кадрі — лічильник «поза кадром: 1» над кадром; клік — панель на ньому", async () => {
   const page = await overview();
   await settleCam(page);
@@ -506,52 +471,6 @@ test("M: пін без місця на кадрі — лічильник «по�
   await pressAt(page, off.cx, off.cy);
   await page.waitForTimeout(100);
   await page.waitForSelector(`${SHELL_PANEL} [data-cid="t45-ghost"].cmt-card--sel`, { timeout: 5000 });
-  await page.close();
-});
-
-test("N (D1): перемикання каналу на «Огляді» лишає ОДИН інстанс, і коментар «Клоду» йде у файл, а не в «Команду»", async () => {
-  const page = await browser.newPage({ viewport: VIEW });
-  const net = await withSupabaseStub(page);
-  /* Скільки разів піднімали інстанс — по запитах конфігу каналу. Самого числа
-     хостів мало: друга лінія (`if (cl) destroy()` перед `init`) прибирає дубль
-     у кінці, і перевірка «один хост» зеленіла навіть без `inflight`. Лишні
-     підйоми — це й є вада: подвійна мережа, два клієнти Supabase, вікно, коли
-     інстансів два (мутаційно). */
-  let configs = 0;
-  page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/comment-config") configs += 1; });
-  await page.goto(`${server.url}/app/`);
-  await page.getByRole("button", { name: /Огляд/ }).click();
-  await page.locator(".cv-card img").first().waitFor();
-  await page.waitForFunction(() => document.querySelector("#canvas [data-comment-layer]")?.shadowRoot?.querySelector(".handle"));
-  assert.equal(configs, 1, `вхід у «Огляд» підняв інстанс ${configs} рази`);
-  await switchAudience(page, "project");
-  await switchAudience(page, "local");
-  await switchAudience(page, "project");
-  await switchAudience(page, "local");
-  assert.equal(await hosts(page), 1, "після чотирьох перемикань — не один інстанс");
-  assert.equal(configs, 5, `на 4 перемикання — ${configs - 1} підйомів інстансу замість 4`);
-  assert.ok(await page.evaluate(() => window.__sbClosed) >= 2, "realtime-канал «Команди» не закрито при знищенні (TD-27)");
-  const styles = await page.evaluate(() => [...document.head.querySelectorAll("style")].filter((x) => x.textContent.includes(".cl-hl")).length);
-  assert.equal(styles, 1, `стилів коментатора в head: ${styles}`);
-  // коментар у каналі «Клод»
-  await page.keyboard.press("Escape");
-  await page.mouse.move(700, 450);
-  await page.keyboard.press("c");
-  await page.waitForTimeout(450);
-  const tgt = await pointOf(page, "poshuk", "ol li:nth-child(4)", 0.5, 0.5);
-  await page.mouse.move(tgt.x, tgt.y); await page.waitForTimeout(60);
-  await pressAt(page, tgt.x, tgt.y);
-  await page.keyboard.type("D1: коментар Клоду");
-  const save = await shadow(page, "const r = root.querySelector('.compose .save').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };");
-  await pressAt(page, save.x, save.y);
-  let mine = null;
-  for (let i = 0; i < 60 && !mine; i += 1) {
-    mine = (await (await fetch(`${server.url}/api/local-comments`)).json()).comments.find((c) => c.text === "D1: коментар Клоду") || null;
-    if (!mine) await page.waitForTimeout(250);
-  }
-  assert.ok(mine, "коментар «Клоду» не доїхав у локальний файл");
-  assert.deepEqual(await page.evaluate(() => window.__sbWrites.map((r) => r.text)), [], "коментар «Клоду» поїхав у «Команду»");
-  assert.deepEqual(net.outside, [], `запити за межі машини:\n${net.outside.join("\n")}`);
   await page.close();
 });
 
@@ -570,9 +489,8 @@ test("O (D2): пін, лишений у живому виді, видно на �
   await page.close();
 });
 
-test("P (D3): перемикання каналу посеред режиму коментування не лишає його «залиплим»", async () => {
+test("P (D3): режим коментування не «залипає»: після закриття панелі прапорець гасне, і клік по кадру знову відкриває кадр", async () => {
   const page = await browser.newPage({ viewport: VIEW });
-  await withSupabaseStub(page);
   await page.goto(`${server.url}/app/`);
   await page.getByRole("button", { name: /Огляд/ }).click();
   await page.locator(".cv-card img").first().waitFor();
@@ -580,13 +498,10 @@ test("P (D3): перемикання каналу посеред режиму к
   await page.mouse.move(700, 450);
   await page.keyboard.press("c");
   await page.waitForTimeout(450);
-  await switchAudience(page, "project");
-  /* 0.26.0: панель при зміні каналу лишається відкритою (destroy у режимі хоста без колбеків), а новий шар перезвімкнув
-     режим — «панель відкрита ⇔ режим увімкнено». Раніше режим мусив бути вимкнений; охорона та сама (прапорець не
-     «залипає»): після закриття панелі прапорець гасне, і клік по кадру знову відкриває кадр. */
-  assert.equal(await shellPanelOpen(page), true, "зміна каналу закрила панель");
-  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), true,
-    "новий шар не перезвімкнув режим при відкритій панелі");
+  /* «Панель відкрита ⇔ режим увімкнено». (Раніше тест був про зміну каналу посеред режиму; перемикач каналу прибрано в
+     0.27.0 — лишилась друга половина: прапорець не «залипає».) */
+  assert.equal(await shellPanelOpen(page), true);
+  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), true);
   await page.keyboard.press("c");
   await page.waitForFunction(() => document.getElementById("cmt-panel").hidden);
   assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), false,
@@ -694,7 +609,7 @@ test("S (NEW-3): мережевий збій геометрії — не вир�
   await page.locator(".cv-card img").first().waitFor();
   const early = await page.evaluate(() => [...document.querySelector("#canvas [data-comment-layer]")?.shadowRoot?.querySelectorAll(".pin.off") || []].map((p) => p.textContent));
   assert.ok(early.every((x) => x === "поза кадром: 1"), `збій мережі дав «поза кадром»: ${early.join(", ")}`);
-  await page.waitForFunction(() => [...document.querySelector("#canvas [data-comment-layer]").shadowRoot.querySelectorAll(".cp")]
+  await page.waitForFunction(() => [...(document.querySelector("#canvas [data-comment-layer]")?.shadowRoot?.querySelectorAll(".cp") || [])]
     .filter((w) => !w._item.off && !w._item.cluster).length >= 8, null, { timeout: 15000 });
   assert.ok(aborted >= 1, "перехоплення не спрацювало — перевірка нічого не довела");
   await page.close();

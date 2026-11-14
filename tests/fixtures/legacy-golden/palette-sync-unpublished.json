@@ -259,26 +259,6 @@
     "whyKey": ""
   },
   {
-    "id": "aud-local",
-    "group": "gSet",
-    "labelKey": "audLocal",
-    "icon": "comment",
-    "act": "aud",
-    "val": "local",
-    "disabled": true,
-    "whyKey": "audCur"
-  },
-  {
-    "id": "aud-project",
-    "group": "gSet",
-    "labelKey": "audProject",
-    "icon": "globe",
-    "act": "aud",
-    "val": "project",
-    "disabled": false,
-    "whyKey": ""
-  },
-  {
     "id": "delit",
     "group": "gDanger",
     "labelKey": "delIteration",

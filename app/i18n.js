@@ -338,9 +338,6 @@ const UK = {
   // ключі пішли за ним: у смузі їх не кличе ніхто, а мертвий ключ у словнику
   // — не смітинка, а симптом того, що текст десь малюють руками (так
   // `glIterationTag` тихо лежав перекладеним, поки код малював кирилицю).
-  // Аварійний вихід у ⌘K має ВЛАСНІ підписи — `audLocal`/`audProject` нижче,
-  // у блоці палітри, поруч із мовою: там це не «дім контролу», а рідкісна
-  // дія, і формулюється вона як сусідні («Аудиторія коментарів: …»).
   tasks: 'Задачі',
   allTasks: 'Усі задачі',
   /* Задача без теки на цій машині (екран «Задачі»). */
@@ -685,9 +682,6 @@ const UK = {
   audChipLocal: 'Claude',
   audChipTeam: 'Команді',
   audChipTeamNote: 'Командні коментарі видно колегам у превʼю',
-  audLocal: 'Аудиторія коментарів: Клод',
-  audProject: 'Аудиторія коментарів: Команда',
-  audCur: 'поточна аудиторія',
   keysTitle: 'Гарячі клавіші',
   keysGeneral: 'Загальні',
   keysLayout: 'У макеті',
@@ -1268,9 +1262,6 @@ const UK = {
   cmtIsland: (n) => n ? `Коментарі, відкритих: ${n}` : 'Коментарі',
   cmtClose: 'Закрити панель',
   cmtSearch: 'Пошук — текст, автор, #5',
-  cmtChannel: 'Кому',
-  cmtChLocal: 'Claude',
-  cmtChTeam: 'Команда',
   cmtFilter: 'Кому',
   cmtFAll: 'Усі',
   cmtFLocal: 'Для Claude',
@@ -1800,9 +1791,6 @@ const EN = {
   audChipLocal: 'Claude',
   audChipTeam: 'Team',
   audChipTeamNote: 'Team comments are visible to colleagues in the preview',
-  audLocal: 'Comment audience: Claude',
-  audProject: 'Comment audience: Team',
-  audCur: 'current audience',
   keysTitle: 'Keyboard shortcuts',
   keysGeneral: 'General',
   keysLayout: 'In the layout',
@@ -2371,9 +2359,6 @@ const EN = {
   cmtIsland: (n) => n ? `Comments, ${n} open` : 'Comments',
   cmtClose: 'Close panel',
   cmtSearch: 'Search — text, author, #5',
-  cmtChannel: 'Audience',
-  cmtChLocal: 'Claude',
-  cmtChTeam: 'Team',
   cmtFilter: 'Addressee',
   cmtFAll: 'All',
   cmtFLocal: 'For Claude',

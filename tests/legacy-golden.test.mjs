@@ -46,7 +46,7 @@ test("знімок справді знімає ЛІГА: у ньому GitLab, �
     assert.ok(h.includes(s), `в еталоні ЛІГА нема ${s} — він знімав не те`);
   }
   const ids = snap.palette.behind.map((a) => a.id);
-  for (const id of ["publish", "togglepub", "copylink", "openpreview", "glpull", "glpush", "aud-project"]) {
+  for (const id of ["publish", "togglepub", "copylink", "openpreview", "glpull", "glpush"]) {
     assert.ok(ids.includes(id), `в палітрі еталона ЛІГА нема «${id}»`);
   }
 });

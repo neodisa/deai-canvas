@@ -1906,6 +1906,16 @@ class DualPagesTest(PagesEnv):
         self.assertIn('defaultAudience: function', serve.HOST_ARG)
         self.assertIn('onAudiencePick: function', serve.HOST_ARG)
 
+    def test_shell_shares_the_audience_key_and_pin_color_with_the_frame(self):
+        """Пара «Python ↔ JS»: ключ памʼяті адресата й колір локального піна в `app.js` — ті самі, що в `serve.py`
+        (інакше рамка й «Огляд» памʼятали б вибір окремо, а локальний пін мав би різний колір на макеті й на «Огляді»)."""
+        with open(os.path.join(os.path.dirname(serve.__file__), 'app.js'), encoding='utf-8') as fh:
+            js = fh.read()
+        self.assertIn("const CMT_AUD_KEY = 'dc-cmt-aud';", js)
+        self.assertIn("'dc-cmt-aud'", serve.HOST_ARG)
+        self.assertEqual(re.findall(r"const LOCAL_PIN_COLOR = '(#[0-9A-Fa-f]{6})';", js), ['#7C6CF0'])
+        self.assertIn("color: '#7C6CF0'", serve.DUAL_AUDIENCES_JS)
+
     def test_dual_audience_labels_match_dictionary(self):
         """Підписи чипів у `DUAL_AUDIENCES_JS` — парні до `audChip*` у `app/i18n.js` (сервер не бачить JS-словника)."""
         with open(os.path.join(os.path.dirname(serve.__file__), 'i18n.js'), encoding='utf-8') as fh:
