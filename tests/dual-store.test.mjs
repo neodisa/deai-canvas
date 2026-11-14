@@ -161,3 +161,25 @@ test("синхронний кидок під-сховища стає відмо�
   await d2.ready;
   await assert.rejects(d2.save([{ ...P("l1"), text: "z" }]), /локальне впало/);
 });
+
+test("teamDirty: пізній успіх СТАРОГО командного запису не знімає відмову новішого (teamSeq)", async () => {
+  const L = fake([P("l1")]), T = fake([P("t1")]);
+  const defers = [];
+  const orig = T.store.save;
+  T.store.save = (list) => { T.log.push(["save", list.map((c) => ({ ...c }))]); return new Promise((res, rej) => defers.push({ res, rej })); };
+  const d = load()({ local: L.store, team: T.store });
+  await d.ready;
+  const base = d.load().map((c) => ({ ...c }));
+  const a = d.save([...base, { ...P("n1"), _aud: "project" }]);                       // A у польоті
+  const b = d.save([...base, { ...P("n1"), _aud: "project" }, { ...P("n2"), _aud: "project" }]);   // B у польоті
+  defers[1].rej(new Error("мережа"));
+  await assert.rejects(b);
+  defers[0].res();
+  await a;                                                                              // повільний A завершився успіхом
+  const n = T.log.length;
+  T.store.save = orig;
+  const next = d.load().map((c) => ({ ...c }));                                         // командна частина — та сама
+  await d.save(next);
+  assert.equal(T.log.length, n + 1, "запис B повторено");
+  assert.deepEqual(plain(T.log.at(-1)[1].map((c) => c.id)), ["t1", "n1", "n2"]);
+});

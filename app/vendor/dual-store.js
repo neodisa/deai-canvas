@@ -41,6 +41,7 @@
     var team = opts.team || null;
     var subs = [];
     var teamDirty = false;                   // командний запис відхилено: кеші вже мають список, а база — ні; повторити
+    var teamSeq = 0;                         // номер останнього командного запису: лише його підсумок чіпає teamDirty
     var shadow = null;                       // командна частина, щойно віддана в `team.save`, поки `team` не заговорить сам
     var store = { teamDown: team ? null : String(opts.teamDown || 'team comments unavailable') };
     function teamList() { return team ? (shadow || team.load()) : []; }
@@ -73,9 +74,12 @@
       var jobs = [];
       if (doLocal) jobs.push(call(function () { return local.save(mine.local); }));
       if (doTeam) {
+        /* Записи можуть перекриватися й закінчуватись не по черзі. Останній завжди несе ПОВНИЙ командний список, тож лише
+           його підсумок ставить чи знімає teamDirty: пізній успіх старого запису не мусить затерти відмову новішого. */
+        var mySeq = ++teamSeq;
         jobs.push(call(function () { return team.save(mine.project); }).then(
-          function () { teamDirty = false; },
-          function (e) { teamDirty = true; throw e; }));
+          function () { if (mySeq === teamSeq) teamDirty = false; },
+          function (e) { if (mySeq === teamSeq) teamDirty = true; throw e; }));
       }
       else if (!team && mine.project.length) {
         jobs.push(Promise.reject(new Error('team comments unavailable: ' + store.teamDown)));
