@@ -645,3 +645,42 @@ test("realtime: події чужого каналу не перечитують
   assert.equal(await fire({ eventType: "DELETE", old: { id: "чужий" } }), 0, "DELETE чужого id");
   assert.equal(await fire({}), 1, "незнайома форма");
 });
+
+test("запис різницею: remove(id) прибирає id зі знімка written — повторне створення того самого id пишеться знову", async () => {
+  const w = world();
+  const s = w.create();
+  await s.ready;
+  await s.save([pin("a")]);
+  assert.equal(upserts(w).length, 1);
+  await s.remove(["a"]);
+  await s.save([pin("a")]);
+  assert.equal(upserts(w).length, 2, "після видалення той самий рядок — знову новий для бази");
+});
+
+test("запис різницею: fetchAll скидає written до щойно прочитаного — те, чого база не віддала, пишеться знову", async () => {
+  const w = world({ rows: [] });
+  const s = w.create();
+  await s.ready;
+  await s.save([pin("a")]);
+  assert.equal(upserts(w).length, 1);
+  await drive(w, s.refresh());                           // база (все ще) порожня: знімок записаного застарів
+  await s.save([pin("a")]);
+  assert.equal(upserts(w).length, 2, "рядок, якого перечитування не знайшло, не вважається записаним");
+});
+
+test("запис різницею: коментар без необовʼязкового поля (undefined) після fetchAll → save того ж списку — жодного upsert", async () => {
+  const w = world({ rows: [row("a", { resolved_v: null, resolve_reason: null })] });
+  const s = w.create();
+  await s.ready;
+  const mine = pin("a");
+  delete mine.resolvedV; delete mine.resolveReason; delete mine.ts;      // у БД це null, у вікні — відсутнє поле
+  mine.ts = "19.10.2026 10:00";
+  await s.save([mine]);
+  assert.equal(upserts(w).length, 0, "undefined і null — одне й те саме для порівняння");
+  const w2 = world({ rows: [row("b", { author: null })] });
+  const s2 = w2.create();
+  await s2.ready;
+  const c = pin("b"); delete c.author;
+  await s2.save([c]);
+  assert.equal(upserts(w2).length, 0, "відсутній author проти null з бази");
+});

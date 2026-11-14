@@ -41,10 +41,13 @@
 
   /* Коментар CommentLayer → рядок таблиці. Канал ставить адаптер, а не вхідні дані. */
   function commentToRow(c, channel) {
+    /* `undefined` → `null` (Б2, ревʼю задачі 3): база віддає null, і без цього свіжозбудований рядок відрізнявся б від прочитаного,
+       а кожен save переписував би незмінені рядки. */
+    function n(v) { return v === undefined ? null : v; }
     return {
-      id: c.id, project_id: channel, author: c.author, text: c.text, status: c.status,
-      fp: c.fp, html_snapshot: c.htmlSnapshot || null, meta: c.meta || null,
-      born_v: c.bornV, resolved_v: c.resolvedV || null,
+      id: c.id, project_id: channel, author: n(c.author), text: n(c.text), status: n(c.status),
+      fp: n(c.fp), html_snapshot: c.htmlSnapshot || null, meta: c.meta || null,
+      born_v: n(c.bornV), resolved_v: c.resolvedV || null,
       resolve_reason: c.resolveReason || null, ts: c.ts || null
     };
   }
