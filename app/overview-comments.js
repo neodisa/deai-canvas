@@ -64,6 +64,11 @@ async function configError(res) {
   return new Error(t("errCommentConfig", res.status, code));
 }
 
+/** Пауза до повтору командної частини «Огляду», що не піднялась (5xx конфігурації, адаптер не завантажився, сервіс
+ *  мовчав): повтор — лише на вході/перебудові полотна, не частіше за цей строк, бо шар перебудовується разом із
+ *  кадрами. Тест підставляє свій строк через `env.teamRetryMs`, годинник — через `env.now`. */
+const TEAM_RETRY_MS = 60000;
+
 /** id модуля → фабрика його адаптера (`window.DeaiComments`, захоплена ОДРАЗУ після завантаження його файлів). */
 const FACTORIES = new Map();
 
@@ -79,7 +84,8 @@ const FACTORIES = new Map();
  *
  * `channel` і `onChange` — ядра: модуль не перекриє їх ключами свого `config`. `onChange` порожній: шар коментатора живе
  * через `store.subscribe`. Невдача (файл не завантажився, фабрики нема, `create` кинув) — виняток викликачу; нічого не
- * кешується, тож наступний вхід в «Огляд» спробує знову, а сам «Огляд» без пінів працює.
+ * кешується, тож наступний вхід в «Огляд» спробує знову, а сам «Огляд» без пінів працює. У «Огляді» командна
+ * частина, що не піднялась, повторюється лише після паузи `TEAM_RETRY_MS` (див. `ensure()`).
  * @param cfg {{module: string, client?: string[], config?: object, channel: string}}
  */
 export async function moduleStore(cfg, { load = loadScript, win = window, factories = FACTORIES } = {}) {
@@ -107,6 +113,11 @@ export async function moduleStore(cfg, { load = loadScript, win = window, factor
 
 /** Закрити сховище, якщо воно вміє (`close` необовʼязковий у контракті). Збій закриття не має заступити причину,
  *  заради якої закриваємо, тож тут він проковтується. */
+/** Закрите сховище, що ніхто вже не чекає, може відхилити `ready` пізніше — без обробника це необроблена відмова. */
+function silence(store) {
+  try { Promise.resolve(store && store.ready).catch(() => {}); } catch { /* немає що гасити */ }
+}
+
 function closeQuietly(store) {
   try { if (store && typeof store.close === "function") store.close(); }
   catch { /* закриття — найкраще зусилля */ }
@@ -124,6 +135,7 @@ function closeQuietly(store) {
  */
 export function overviewComments(env) {
   let cl = null;        // інстанс comment-layer (`CommentLayer.create()`)
+  let builtAt = 0;      // коли піднято поточний інстанс (для паузи повтору командної частини)
   let cfgKey = null;    // `<ітерація>|<канал>` — під яким він піднятий
   let active = false;   // «Огляд» на екрані
   let view = null;      // габарит полотна в екранних координатах
@@ -321,7 +333,12 @@ export function overviewComments(env) {
   async function ensure() {
     if (!env.picked()) return;
     const key = keyNow();
-    if (cfgKey === key && (cl || inflight)) return inflight;
+    /* Командна частина лежала (`teamDown`) і пауза минула — ключ вважаємо застарілим: шар перебудується, і обидві
+       конфігурації читаються заново. Лише тут (вхід/перебудова), без таймера. */
+    const nowMs = (env.now || Date.now)();
+    const retry = cfgKey === key && cl && !inflight && cl.store && cl.store.teamDown
+      && nowMs - builtAt >= (env.teamRetryMs == null ? TEAM_RETRY_MS : env.teamRetryMs);
+    if (cfgKey === key && (cl || inflight) && !retry) return inflight;
     if (cl) { cl.destroy(); cl = null; subs.length = 0; }
     cfgKey = key;
     const gen = epoch;
@@ -356,7 +373,7 @@ export function overviewComments(env) {
       let team = null, why = null;
       try { team = await moduleStore(await cfgOf("project")); }
       catch (e) { why = (e && e.message) || String(e); }
-      if (stale()) { closeQuietly(team); closeQuietly(local); return; }
+      if (stale()) { closeQuietly(team); closeQuietly(local); silence(local); return; }
       store = window.DeaiDualStore({ local, team, teamDown: why });
     } else {
       store = local;
@@ -371,9 +388,12 @@ export function overviewComments(env) {
     if (stale()) { closeQuietly(store); return; }
     if (cl) { cl.destroy(); cl = null; subs.length = 0; }   // друга лінія: інстанс завжди ОДИН
     iterNum = cfg.version;
+    builtAt = (env.now || Date.now)();
+    // Без команди — одна (локальна, приватна) аудиторія, чипів нема: те саме, що в рамці «Макета» (поправка 4).
+    const auds = ch === "dual" ? (store.teamDown ? env.audiences().slice(0, 1) : env.audiences()) : [];
     cl = window.CommentLayer.create().init({
       projectId: cfg.project, storage: store, version: cfg.version, local: ch !== "dual",
-      anchors: provider, audiences: ch === "dual" ? env.audiences() : [],
+      anchors: provider, audiences: auds,
       // особа машини — запасне імʼя автора, коли браузер не показує діалог імені (вбудований)
       defaultUser: cfg.user || null,
       // колбеки панелі оболонки (0.26.0); ручку й панель полотна тримає оболонка

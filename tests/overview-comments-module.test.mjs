@@ -31,9 +31,9 @@ import { moduleStore, overviewComments } from "../app/overview-comments.js";
 
 /* Справжнє `DeaiDualStore` (класичний скрипт `window.*`) — у пісочниці, як у `tests/dual-store.test.mjs`. */
 const DUAL_SRC = fs.readFileSync(new URL("../app/vendor/dual-store.js", import.meta.url), "utf8");
-function loadDual() {
+function loadDual(timers = false) {
   const win = {};
-  vm.runInNewContext(DUAL_SRC, { window: win });
+  vm.runInNewContext(DUAL_SRC, timers ? { window: win, setTimeout, clearTimeout } : { window: win });
   return win.DeaiDualStore;
 }
 
@@ -628,5 +628,127 @@ test("T7-3: channel 'local' — один запит ch=local, сховище л�
     assert.equal(b.inits[0].storage, mine, "саме локальне сховище, без обгортки");
     assert.equal(b.inits[0].local, true);
     assert.deepEqual(b.inits[0].audiences, []);
+  } finally { b.restore(); }
+});
+
+/* ── Б2, T7 (ревʼю): повтор командної частини, аудиторії без команди, тиха відмова застарілого запуску ──────────── */
+
+/** Командний канал, що лежить, поки `state.up` хибне; піднятий — адаптер рахує створені сховища в `b.created`. */
+function flaky(mod) {
+  const state = { up: false };
+  const R = resp({ module: mod, client: [`/api/module-client/${mod}/adapter.js`], channel: "c" });
+  const b = browser({ resp: (url) => {
+    if (url.includes("ch=local")) return { ok: true, json: async () => LOCAL_CFG };
+    return state.up ? { ok: true, json: async () => R } : { ok: false, status: 502, json: async () => ({ code: "module-error" }) };
+  } });
+  const scripts = adapterOk(b, `/api/module-client/${mod}/adapter.js`);
+  globalThis.document.head.appendChild = (el) => { b.appended.push(el.src); queueMicrotask(() => scripts[el.src](el)); };
+  return { b, state };
+}
+
+test("T7-R1: командне лежало — перебудова в межах паузи шар не чіпає; після паузи обидві конфігурації читаються заново й командне піднімається", async () => {
+  const { b, state } = flaky("m-r1");
+  let now = 1000;
+  try {
+    const oc = overviewComments({ ...dualEnv(b, "dual"), teamRetryMs: 5000, now: () => now });
+    oc.enter();
+    await settle();
+    assert.equal(b.inits.length, 1);
+    assert.equal(typeof b.inits[0].storage.teamDown, "string");
+    state.up = true;
+    now += 4999;
+    oc.rebuild();
+    await settle();
+    assert.equal(b.fetched.length, 2, "у межах паузи — жодного нового запиту");
+    assert.equal(b.inits.length, 1, "шар той самий");
+    now += 1;
+    oc.rebuild();
+    await settle();
+    assert.equal(b.fetched.length, 4, "після паузи — обидва конфіги заново");
+    assert.equal(b.inits.length, 2);
+    assert.equal(b.destroyed, 1, "старий шар знищено");
+    assert.equal(b.inits[1].storage.teamDown, null, "командне піднялось");
+    oc.rebuild();
+    await settle();
+    assert.equal(b.fetched.length, 4, "піднялось — далі шар живе без повторів");
+    assert.deepEqual(b.errors, []);
+  } finally { b.restore(); }
+});
+
+test("T7-R1b: командне лежить далі — повтор не частіше за паузу (без циклу)", async () => {
+  const { b } = flaky("m-r1b");
+  let now = 0;
+  try {
+    const oc = overviewComments({ ...dualEnv(b, "dual"), teamRetryMs: 100, now: () => now });
+    oc.enter();
+    await settle();
+    now = 100; oc.rebuild(); await settle();
+    assert.equal(b.inits.length, 2);
+    oc.rebuild(); await settle();
+    assert.equal(b.inits.length, 2, "щойно перебудовано — знову чекаємо паузу");
+  } finally { b.restore(); }
+});
+
+test("T7-A: аудиторії — без команди лише перша (локальна приватна), з командою — усі", async () => {
+  const down = flaky("m-a1");
+  try {
+    overviewComments(dualEnv(down.b, "dual")).enter();
+    await settle();
+    assert.deepEqual([...down.b.inits[0].audiences].map((a) => a.id), ["local"]);
+  } finally { down.b.restore(); }
+  const up = flaky("m-a2");
+  up.state.up = true;
+  try {
+    overviewComments(dualEnv(up.b, "dual")).enter();
+    await settle();
+    assert.deepEqual([...up.b.inits[0].audiences].map((a) => a.id), ["local", "project"]);
+  } finally { up.b.restore(); }
+});
+
+test("T7-Q: застарілий запуск не лишає необробленої відмови `ready` локального сховища", async () => {
+  let release, rejectLocal;
+  const gate = new Promise((r) => { release = r; });
+  const R = resp({ module: "m-q", client: ["/api/module-client/m-q/adapter.js"], channel: "c" });
+  const b = browser({ resp: async (url) => {
+    if (url.includes("ch=project")) await gate;
+    return { ok: true, json: async () => (url.includes("ch=project") ? R : LOCAL_CFG) };
+  } });
+  const scripts = adapterOk(b, "/api/module-client/m-q/adapter.js");
+  globalThis.document.head.appendChild = (el) => { queueMicrotask(() => scripts[el.src](el)); };
+  const lateReady = new Promise((_, no) => { rejectLocal = no; });
+  globalThis.CommentLayerLocal = () => ({ ready: lateReady, load: () => [], save() {}, close() {} });
+  const seen = [];
+  const onRej = (e) => seen.push(e && e.message);
+  process.on("unhandledRejection", onRej);
+  try {
+    const oc = overviewComments(dualEnv(b, "dual"));
+    oc.enter();
+    await settle();
+    oc.invalidate();                       // запуск у дорозі застарів
+    release();
+    await settle();
+    rejectLocal(new Error("пізня відмова"));
+    await settle();
+    assert.deepEqual(seen, [], "відмову погашено");
+    assert.equal(b.inits.length, 0);
+  } finally { process.off("unhandledRejection", onRej); b.restore(); }
+});
+
+test("T7-T: командний модуль завис (ready не вирішується) — реальний тайм-аут комбінованого: «Огляд» піднято на локальних", async () => {
+  const R = resp({ module: "m-t", client: ["/api/module-client/m-t/adapter.js"], channel: "c" });
+  const b = browser({ resp: R });
+  const real = loadDual(true);
+  globalThis.DeaiDualStore = (o) => real({ ...o, teamTimeoutMs: 20 });
+  const scripts = { "/api/module-client/m-t/adapter.js": (el) => {
+    globalThis.DeaiComments = { create: () => ({ ready: new Promise(() => {}), load: () => [], save() {}, close() {} }) };
+    el.onload();
+  } };
+  globalThis.document.head.appendChild = (el) => { queueMicrotask(() => scripts[el.src](el)); };
+  try {
+    overviewComments(dualEnv(b, "dual")).enter();
+    await new Promise((r) => setTimeout(r, 120));
+    assert.deepEqual(b.errors, []);
+    assert.equal(b.inits.length, 1);
+    assert.equal(typeof b.inits[0].storage.teamDown, "string");
   } finally { b.restore(); }
 });
