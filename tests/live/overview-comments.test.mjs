@@ -57,6 +57,7 @@ import { chromium } from "playwright";
 
 import { CLUSTER_W } from "../../app/overview-pins.js";
 import { startServer } from "./fixture.mjs";
+import { hermeticLiga } from "./_liga-supabase.mjs";
 import { ANCHOR, TARGETS, seedPins, shootAll, t45Task } from "./_t45-fixture.mjs";
 
 const PORT_BASE = 12090;
@@ -64,11 +65,16 @@ const VIEW = { width: 1440, height: 900 };
 const SHOTS = process.env.T45_SHOTS || "";   // тека для скриншотів у звіт (необовʼязково)
 
 let server, browser, comments;
+/* Простір має командний канал (`supabase: true`), тож кожна сторінка тут — «комбінована» й іде на вигаданий хост Supabase:
+   усі сторінки герметизуємо (`hermeticLiga`), а в кінці стверджуємо, що за межі машини не пішло нічого. */
+const NET = { outside: [], supabase: [], sockets: [], cdn: [] };
 
 test.before(async () => {
   const { dir } = t45Task();
   server = await startServer(dir, { portBase: PORT_BASE, title: "T-45", supabase: true });
   browser = await chromium.launch();
+  const rawNewPage = browser.newPage.bind(browser);
+  browser.newPage = async (opts) => { const p = await rawNewPage(opts); await hermeticLiga(p, { seen: NET }); return p; };
   comments = await seedPins(browser, server.url);
   const shot = await shootAll(server.url);
   assert.ok(shot.ok, `зʼємка: ${JSON.stringify(shot).slice(0, 400)}`);
@@ -76,6 +82,7 @@ test.before(async () => {
 
 test.after(async () => {
   await browser?.close();
+  assert.deepEqual(NET.outside, [], `запити за межі машини:\n${NET.outside.join("\n")}`);
   server?.child.kill();
 });
 
@@ -414,7 +421,7 @@ test("K: коментар на «Огляді» — підсвітка, клік
   assert.ok(mine, "коментар не доїхав до файлу каналу");
   assert.deepEqual(mine.fp, tgt.fp, "відбиток ≠ живому fingerprint того самого елемента");
   assert.equal(mine.meta.version, "1/holovna");
-  assert.match(mine.meta.url, /\/commented\?it=it1&page=holovna&ch=dual$/, "0.27.0: «Огляд» у просторі з командним каналом — комбінований ключ");
+  assert.match(mine.meta.url, /\/commented\?it=it1&page=holovna$/, "0.27.0: «Огляд» у просторі з командним каналом — комбінований ключ");
   assert.equal(mine.meta.via, "overview");
   assert.ok(Math.abs(mine.meta.anchor.fx - want.fx) < 0.03 && Math.abs(mine.meta.anchor.fy - want.fy) < 0.03,
     `частка кліку ${JSON.stringify(mine.meta.anchor)}`);
@@ -484,6 +491,8 @@ test("O (D2): пін, лишений у живому виді, видно на �
   await fetch(`${server.url}/api/local-comments`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ comments: [...list, { ...src, id: "t45-live", text: "лишено в живому виді", meta: { ...src.meta, seq: 999 } }] }) });
   await page.getByRole("button", { name: /Макет/ }).click();
+  // «Макет» виконується асинхронно: без очікування «Огляд» клікнувся б раніше, ніж `leave()` встиг би спрацювати
+  await page.waitForFunction(() => document.getElementById("canvas").hidden);
   await page.getByRole("button", { name: /Огляд/ }).click();
   await page.waitForFunction((b) => document.querySelector('#isl-tools [data-act="comments"] .isl-count')?.textContent === String(Number(b) + 1), before, { timeout: 10000 });
   await page.close();

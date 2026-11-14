@@ -64,7 +64,7 @@ test("«нові»: при відкритій панелі тост не пок�
   assert.match(branch, /cmtNewsN = 0; cmtNewsPages = \{\};/);
   assert.ok(body.indexOf("newsToast(came)") > open + branch.length, "тост — лише після гілки відкритої панелі");
   assert.match(body, /const came = arrived\(cmtPrevIds, fresh\);/, "лише те, що зʼявилось у знімку ПІД ЧАС сесії");
-  assert.match(body, /if \(!seen\) \{ seen = baseline\(team\); saveSeen\(key, seen\); \}/, "перший погляд — усе наявне бачене");
+  assert.match(body, /if \(!seen\) \{ seen = baseline\(team\);/, "перший погляд — усе наявне бачене");
 });
 
 test("відкриття панелі посуває маркер «бачив» ОДРАЗУ й складає розділ «нових»", () => {
@@ -99,4 +99,30 @@ test("усі читання й записи localStorage у проводці к�
     assert.match(m[0], /try \{/, name);
   }
   assert.match(src, /const myName = \(\) => \{ try \{ return localStorage\.getItem\('comment-layer:user'\)/);
+});
+
+test("ревʼю T9: маркер «бачив» не пишеться, поки командного нема (впало чи не заведене)", () => {
+  const body = fn("cmtNewsUpdate");
+  assert.match(body, /if \(!seen\) \{ seen = baseline\(team\); if \(!cmtTeamDown && !noTeamComments\(\)\) saveSeen\(key, seen\); \}/,
+    "базова лінія зі знімка без команди порожня: усі колеги стали б «новими» при поверненні команди");
+});
+
+test("ревʼю T9: тост «нових» не переживає зміну задачі, виду чи рамки", () => {
+  assert.match(fn("cmtNewsUpdate"), /cmtNewsTask = currentTaskId; cmtFresh\.clear\(\); cmtPrevIds = null; dropNotice\('cmt-news'\);/);
+  assert.match(fn("cmtViewSwitch"), /cmtFresh\.clear\(\); cmtPrevIds = null; dropNotice\('cmt-news'\);/);
+  assert.match(fn("dropFrameCmt"), /cmtFresh\.clear\(\); cmtPrevIds = null; dropNotice\('cmt-news'\);/);
+});
+
+test("ревʼю T9: оновлення на focus працює й без команди — refreshLocal, інакше refresh (поведінка)", () => {
+  const line = /^const cmtRefreshLocal = .*$/m.exec(src);
+  assert.ok(line, "нема cmtRefreshLocal");
+  const make = (store) => new Function("cmtLayer", `${line[0]}\nreturn cmtRefreshLocal;`)(() => ({ store }));
+  const calls = [];
+  make({ refreshLocal() { calls.push(["local", this]); } , refresh() { calls.push(["full"]); } })();
+  assert.deepEqual(calls.map((c) => c[0]), ["local"], "комбіноване: лише локальні");
+  const plain = { refresh() { calls.push(["plain", this]); } };
+  make(plain)();
+  assert.equal(calls[1][0], "plain", "локальний адаптер без refreshLocal: кличе refresh");
+  assert.equal(calls[1][1], plain, "this = сховище");
+  assert.doesNotThrow(() => make(undefined)());
 });

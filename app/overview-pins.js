@@ -209,8 +209,7 @@ export function targetFor({ card, e, lx, ly, cam, view, head, it, iterNum, chann
             width: e.w * s, height: e.h * s },
     geo: e,
     meta: {
-      url: `${origin}/commented?it=${encodeURIComponent(it)}&page=${encodeURIComponent(card.page)}`
-        + `&ch=${encodeURIComponent(channel)}${stateQuery(card.state)}`,
+      url: `${origin}/commented?it=${encodeURIComponent(it)}&page=${encodeURIComponent(card.page)}${stateQuery(card.state)}`,
       route: "/commented",
       version: card.page === IMPLICIT_PAGE ? String(iterNum) : `${iterNum}/${card.page}`,
       viewport: { w: canvasW, h: 900 },

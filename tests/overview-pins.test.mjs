@@ -33,7 +33,7 @@ test("A: сторінка піна — суфікс версії, неявна m
 });
 
 test("B: стан — хвіст url без наших параметрів, тим самим stateQuery, що в кадрі", () => {
-  const t = pinTarget(pin("e", "3/poshuk", "http://h/commented?it=it3&page=poshuk&ch=local&tab=b&q=x"));
+  const t = pinTarget(pin("e", "3/poshuk", "http://h/commented?it=it3&page=poshuk&tab=b&q=x"));
   assert.equal(t.stateQ, "&q=x&tab=b");
   assert.equal(cardMatches({ page: "poshuk", state: { tab: "b", q: "x" } }, t), true);
   assert.equal(cardMatches({ page: "poshuk", state: null }, t), false, "стан не той — кадр не той");
@@ -42,7 +42,7 @@ test("B: стан — хвіст url без наших параметрів, т�
 });
 
 test("B2: host=1 у url піна (створений у рамці режиму хоста) — той самий стан і вузол, що без нього", () => {
-  const base = "http://h/commented?it=it3&page=poshuk&ch=local&tab=b";
+  const base = "http://h/commented?it=it3&page=poshuk&tab=b";
   const plain = pinTarget(pin("h", "3/poshuk", base));
   const hosted = pinTarget(pin("i", "3/poshuk", base + "&host=1"));
   assert.deepEqual(hosted, plain);
@@ -173,7 +173,7 @@ test("I: ціль нового коментаря — відбиток із ге
   assert.deepEqual(t.anchor, { fx: 0.25, fy: 0.25 });
   assert.deepEqual(t.rect, { left: 0 + 10 + 1100 * 0.5, top: 46 + 20 + (200 + HEAD + 50) * 0.5, width: 100, height: 20 });
   assert.equal(t.meta.version, "4/poshuk");
-  assert.equal(t.meta.url, "http://h/commented?it=it4&page=poshuk&ch=local&tab=b");
+  assert.equal(t.meta.url, "http://h/commented?it=it4&page=poshuk&tab=b");
   assert.equal(t.meta.route, "/commented");
   assert.deepEqual(t.meta.viewport, { w: 1280, h: 900 });
   assert.equal(t.meta.via, "overview");

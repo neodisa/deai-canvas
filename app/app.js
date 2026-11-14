@@ -1736,18 +1736,20 @@ function saveSeen(key, set) { try { localStorage.setItem(key, writeSeen(set)); }
 /** Причина падіння командного з комбінованого сховища шару (`DeaiDualStore.teamDown`), або `null`. */
 function readTeamDown(L) { try { const v = L && L.store && L.store.teamDown; return typeof v === 'string' && v ? v : null; } catch (e) { return null; } }
 /** Свіжість локальних (Б2.1): комбіноване сховище перечитує локальні піни з диска (їх міг дописати Claude). */
-const cmtRefreshLocal = () => { try { cmtLayer()?.store?.refreshLocal?.(); } catch (e) {} };
+const cmtRefreshLocal = () => { try { const st = cmtLayer()?.store; (st?.refreshLocal || st?.refresh)?.call(st); } catch (e) {} };
 /** Знімок коментатора поточного виду змінився: маркер, свіжі, число острівця, дерево, тост. */
 let cmtNewsTask = null;
 let cmtNewsPagesKey = '{}';
 function cmtNewsUpdate() {
-  if (cmtNewsTask !== currentTaskId) { cmtNewsTask = currentTaskId; cmtFresh.clear(); cmtPrevIds = null; }
+  if (cmtNewsTask !== currentTaskId) { cmtNewsTask = currentTaskId; cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news'); }
   const all = cmtSnap && Array.isArray(cmtSnap.comments) ? cmtSnap.comments : null;
   if (!all || !currentTaskId) { cmtNewsN = 0; cmtNewsPages = {}; cmtNewsTree(); return; }
   const team = teamOf(all);
   const key = cmtSeenKey();
   let seen = loadSeen(key);
-  if (!seen) { seen = baseline(team); saveSeen(key, seen); }
+  /* Командного нема (впав чи не заведений) — знімок без команди порожній: базова лінія з нього зробила б «новими» усіх колег,
+     коли команда повернеться. Маркер лишаємо незаданим: першим базовим стане перший справжній знімок команди. */
+  if (!seen) { seen = baseline(team); if (!cmtTeamDown && !noTeamComments()) saveSeen(key, seen); }
   const fresh = team.filter((c) => isNew(c, seen, myName()));
   const came = arrived(cmtPrevIds, fresh);
   cmtPrevIds = new Set(all.map((c) => c.id));
@@ -1807,7 +1809,7 @@ function cmtViewSwitch() {
   const was = cmtView;
   cmtView = mode;
   cmtSel = null; cmtEditing = null; cmtDraft = null;
-  cmtFresh.clear(); cmtPrevIds = null;
+  cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news');
   if (mode === 'canvas') {
     if (was) try { const FL = frame.contentWindow?.CommentLayer; if (FL?.commentMode) FL.setCommentMode(false); } catch (e) {}
     cmtSnap = ovc.layer ? ovc.layer.snapshot() : null;
@@ -1827,7 +1829,7 @@ function cmtViewSwitch() {
 function dropFrameCmt({ sel = false } = {}) {
   frameCmtReady = false;
   if (mode !== 'canvas') { cmtSnap = null; cmtTeamDown = null; }
-  if (sel) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtFresh.clear(); cmtPrevIds = null; }
+  if (sel) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news'); }
   paintComments();
 }
 /** Відкритий модальний шар оболонки (палітра/довідка, будь-який діалог `askForm`): клавіші C/H тоді не наші. */
