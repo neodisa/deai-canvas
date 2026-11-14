@@ -74,3 +74,12 @@ test("Б2 ревʼю M3: newsByPage рахує все, що отримала —
   assert.deepEqual(newsByPage(mixed), { stattia: 3 }, "без відбору — усі");
   assert.deepEqual(newsByPage(mixed.filter((c) => isNew(c, seen, "Я"))), { stattia: 1 });
 });
+
+test("countNew: рахує лише нові (відкриті, не мої, не бачені); не масив — 0", async () => {
+  const { countNew } = await import("../app/comment-news.js");
+  const items = [{ id: "a", status: "open", author: "x" }, { id: "b", status: "open", author: "me" },
+    { id: "c", status: "resolved", author: "x" }, { id: "d", status: "open", author: "x" }];
+  assert.equal(countNew(items, new Set(["d"]), "me"), 1);
+  assert.equal(countNew(items, null, "me"), 0);
+  assert.equal(countNew(null, new Set(), "me"), 0);
+});

@@ -62,7 +62,7 @@ import { tabsHTML } from './tabs-view.js';
 import { islandToolsHTML } from './island.js';
 import { commentsPanelHTML } from './comments-view.js';
 import { FILTERS, openCount } from './comments-model.js';
-import { arrived, baseline, isNew, markSeen, newsByPage, readSeen, seenKey, teamOf, writeSeen } from './comment-news.js';
+import { arrived, baseline, countNew, isNew, markSeen, newsByPage, readSeen, seenKey, teamOf, writeSeen } from './comment-news.js';
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
@@ -1023,9 +1023,11 @@ function barState() {
 
 /* Вкладки відкритих задач (0.25.0): клієнтський стан цього вікна (`tabs-model.js`, його шапка). */
 let tabs = (() => { try { return readTabs(localStorage.getItem(TABS_KEY)); } catch (e) { return []; } })();
-function saveTabs() { try { localStorage.setItem(TABS_KEY, writeTabs(tabs)); } catch (e) {} }
+function saveTabs() { try { localStorage.setItem(TABS_KEY, writeTabs(tabs)); } catch (e) {} pollTabNews(); }
 /** `{ключ: {state, age_s}}` з `/api/claude-statuses` або `null` (стан Claude на вкладках). */
 let claudeAll = null;
+/** Нові командні на ІНШИХ вкладках: `{id задачі: n}` (опит `pollTabNews`, поправка 17 плану Б2). */
+let tabNews = {};
 const tabsEl = document.getElementById('tabs');
 const hudEl = document.getElementById('hud');
 const islTools = document.getElementById('isl-tools');
@@ -1056,9 +1058,11 @@ let islHtmlLast = null;
 let tabsActiveSeen = null;
 /** Рядок вкладок: логотип, вкладки, «+», пігулка оновлення, шестерня. */
 function paintTabs() {
+  /* Активна вкладка числа не має (його показує острівець): перехід НА вкладку гасить число одразу. */
+  if (currentTaskId && tabNews[currentTaskId]) { tabNews = { ...tabNews }; delete tabNews[currentTaskId]; }
   tabsEl.setAttribute('aria-label', t('tabsNav'));
   const html = tabsHTML(tabsModel({ tabs, activeId: currentTaskId, homeOpen, homePage, claude: claudeAll,
-    update: pillModel(updateInfo) }));
+    update: pillModel(updateInfo), news: tabNews }));
   const list = tabsEl.querySelector('.tabs-list');
   const scrolled = list ? list.scrollLeft : 0;
   if (!writeKeepFocus(tabsEl, html, tabsHtmlLast)) return;
@@ -5724,6 +5728,40 @@ async function pollClaudeAll() {
   if (JSON.stringify(next) === JSON.stringify(claudeAll)) return;
   claudeAll = next; paintTabs();
 }
+/* Нові командні на ІНШИХ вкладках (поправка 17): лише вкладки поточного простору, крім активної (її рахує острівець), лише
+   коли вікно видиме; одразу при зміні складу вкладок (`saveTabs`) і на `focus`, далі раз на 90 с. Маркер «бачив» — той самий,
+   що в острівця. Маркер-основу пишемо ЛИШЕ з відповіді `supported:true`: впала/відсутня команда не мусить лишити порожній
+   маркер, після якого кожен коментар колеги став би «новим». */
+const NEWS_EVERY_MS = 90000;
+let newsBusy = false;
+let newsAgain = false;
+async function pollTabNews() {
+  if (document.visibilityState !== 'visible') return;
+  if (newsBusy) { newsAgain = true; return; }
+  newsBusy = true;
+  try {
+    const sp = spaceNow()?.id ?? null;
+    const next = {};
+    for (const x of tabs) {
+      if (x.id === currentTaskId || (x.space ?? null) !== sp) continue;
+      let r = null;
+      try { r = await api(`/api/comment-news?task=${encodeURIComponent(x.id)}`); } catch (e) { r = null; }
+      if (!r || !r.supported || !Array.isArray(r.items)) continue;
+      const key = seenKey(sp, x.id);
+      let seen = loadSeen(key);
+      if (!seen) { seen = baseline(r.items); saveSeen(key, seen); }
+      const n = countNew(r.items, seen, myName());
+      if (n && x.id !== currentTaskId) next[x.id] = n;
+    }
+    if (JSON.stringify(next) !== JSON.stringify(tabNews)) { tabNews = next; paintTabs(); }
+  } finally {
+    newsBusy = false;
+    if (newsAgain) { newsAgain = false; pollTabNews(); }
+  }
+}
+setInterval(pollTabNews, NEWS_EVERY_MS);
+/* Окремий слухач (не в наявних `focus`: їх приколюють регекс-охоронці). */
+window.addEventListener('focus', () => { pollTabNews(); });
 setInterval(pollClaude, CLAUDE_EVERY_MS);
 setInterval(pollClaudeAll, CLAUDE_EVERY_MS);
 /* Старт: спершу ЗНЯТИ бейдж, що міг лишитись від упалого вікна (`pagehide` тоді не
@@ -5740,7 +5778,7 @@ setInterval(pollUpdate, UPDATE_POLL_MS);
 /* Повернулись до вікна — правду одразу, не через 5 с; бейдж — ще раз, якщо система
    його скинула. */
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { paintClaude(true); pollClaude(); pollClaudeAll(); }
+  if (document.visibilityState === 'visible') { paintClaude(true); pollClaude(); pollClaudeAll(); pollTabNews(); }
 });
 /* Вікно закрили — опитувати більше нікому, і бейдж без нагляду брехав би. Решту вікон
    канваса про це сповіщаємо: бейдж спільний, вони поставлять його знову. */

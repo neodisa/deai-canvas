@@ -126,3 +126,61 @@ test("ревʼю T9: оновлення на focus працює й без ком
   assert.equal(calls[1][1], plain, "this = сховище");
   assert.doesNotThrow(() => make(undefined)());
 });
+
+/* --- Числа на вкладках (Б2, Task 10) --- */
+function pollHarness({ tabs, current = "T0", space = "s1", visible = true, replies = {}, seenStore = {} }) {
+  const calls = []; const saved = [];
+  const env = {
+    document: { visibilityState: visible ? "visible" : "hidden" },
+    tabs, currentTaskId: current,
+    spaceNow: () => ({ id: space }),
+    api: async (p) => { calls.push(p); const r = replies[decodeURIComponent(p.split("task=")[1])]; if (r instanceof Error) throw r; return r; },
+    seenKey: (s, t) => `${s}:${t}`,
+    loadSeen: (k) => seenStore[k] ?? null,
+    saveSeen: (k, v) => { saved.push(k); seenStore[k] = v; },
+    baseline: (items) => new Set(items.map((c) => c.id)),
+    countNew: (items, seen) => items.filter((c) => !seen.has(c.id)).length,
+    myName: () => "me",
+    paintTabs: () => {},
+    tabNews: {},
+  };
+  const body = fn("pollTabNews");
+  const names = Object.keys(env);
+  // eslint-disable-next-line no-new-func
+  const f = new Function(...names, "let newsBusy = false, newsAgain = false;\n"
+    + `async function pollTabNews() ${body}\nreturn { run: pollTabNews, news: () => tabNews };`)(...names.map((n) => env[n]));
+  return { f, calls, saved, seenStore };
+}
+const items3 = [{ id: "a" }, { id: "b" }];
+test("pollTabNews: активна вкладка і вкладки інших просторів не опитуються", async () => {
+  const h = pollHarness({ tabs: [{ id: "T0", space: "s1" }, { id: "T1", space: "s1" }, { id: "T2", space: "s2" }, { id: "T3" }],
+    replies: { T1: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
+  await h.f.run();
+  assert.deepEqual(h.calls, ["/api/comment-news?task=T1"]);
+  assert.deepEqual(h.f.news(), { T1: 1 });
+});
+test("pollTabNews: рахує нові інших вкладок, пише маркер лише з supported:true; збій/unsupported — ні числа, ні маркера", async () => {
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }, { id: "T2", space: "s1" }, { id: "T3", space: "s1" }, { id: "T4", space: "s1" }],
+    replies: { T1: { supported: true, items: items3 }, T2: { supported: false, items: [] }, T3: new Error("down"), T4: { supported: true, items: "x" } },
+    seenStore: { "s1:T1": new Set(["a"]) } });
+  await h.f.run();
+  assert.deepEqual(h.f.news(), { T1: 1 });
+  assert.deepEqual(h.saved, [], "маркер уже був у T1; решта не мусить його отримати");
+  const h2 = pollHarness({ tabs: [{ id: "T1", space: "s1" }, { id: "T2", space: "s1" }],
+    replies: { T1: { supported: true, items: items3 }, T2: { supported: false, items: [] } } });
+  await h2.f.run();
+  assert.deepEqual(h2.saved, ["s1:T1"], "перша відповідь supported:true — основа без числа; unsupported — без запису");
+  assert.deepEqual(h2.f.news(), {});
+});
+test("pollTabNews: приховане вікно — жодного запиту", async () => {
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], visible: false, replies: { T1: { supported: true, items: items3 } } });
+  await h.f.run();
+  assert.deepEqual(h.calls, []);
+});
+test("проводка: paintTabs передає news і гасить число активної; saveTabs і focus опитують", () => {
+  assert.match(fn("paintTabs"), /news: tabNews/);
+  assert.match(fn("paintTabs"), /delete tabNews\[currentTaskId\]/);
+  assert.match(fn("saveTabs"), /pollTabNews\(\)/);
+  assert.match(src, /window\.addEventListener\('focus', \(\) => \{ pollTabNews\(\); \}\);/);
+  assert.match(src, /setInterval\(pollTabNews, NEWS_EVERY_MS\)/);
+});

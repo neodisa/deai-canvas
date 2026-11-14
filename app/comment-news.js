@@ -47,3 +47,5 @@ export function newsByPage(comments) {
   }
   return out;
 }
+/** Скільки «нових» у відповіді `/api/comment-news` для задачі (число на вкладці). */
+export const countNew = (items, seen, me) => (Array.isArray(items) ? items.filter((c) => isNew(c, seen, me)).length : 0);
