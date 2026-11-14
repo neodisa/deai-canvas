@@ -68,6 +68,7 @@
 17. **Вкладки:** опит `GET /api/comment-news` для відкритих вкладок, крім активної (активна — острівець), лише вкладок поточного простору, лише коли вікно видиме; одразу при зміні складу вкладок і на `focus` вікна, далі раз на 90 с. Вкладки інших просторів — без числа (маршрут бачить лише задачі простору запиту).
 18. **Урок Б1 «ітерацію закриття — окремим полем» розглянуто й НЕ беремо в Б2:** для командних пінів окреме поле вимагало б PATCH усього `meta` (урок `patch_project_pin`: PostgREST міняє `jsonb` цілком, ризик затерти `shot`/`shotUrl`) або колонки (не-ціль спеки). Лишається правило Б1 для обох сховищ (`byClaude = resolvedV != null && resolveReason !== 'resolved manually'`); T8 додає тест на командний пін, закритий агентом і вручну.
 19. **Режими коментування — в острівці, одна панель** (рішення власника 14.11.2026 зі скріншота: «острівець і смужка режимів — дві панелі в різних дизайнах; має бути одна»). У режимі хоста коментатор ховає свою смужку режимів (`.modes`), як у Б1 сховав ручку й панель, і віддає хосту `tool()` / `setMode(m)` / `setFreeze(on)`; острівець, поки коментування ввімкнено в «Макеті», показує режими Елемент / Текст / Кілька / Область і «Заморозити» своїми іконками й мовою оболонки. На «Огляді» режим один (елемент) — кнопок режимів нема. Підйом острівця над смужкою (`claude-lift`, опит раз на 500 мс) прибирається. Композер і форма «Кілька» не опускаються нижче острівця (`host.bottomInset()`). Задача T11.
+20. **Заголовок розділу в контексті піна — лише для приватної аудиторії** (знайдено виконавцем T4: план ламав охоронця TD-36 `commenter/test/offscreen-context.test.mjs` — командний пін їде в спільне сховище, а ПІБ у заголовку не розпізнати). Коментатор не знає id каналів Deai (контракт `commenter/src/audiences.js`: «channel must NOT leak in here»), тому не `aud === 'local'`, а прапорець аудиторії `private: true` («лишається на цій машині»): `heading: this.appLocal || this._audPrivate(aud)`; без прапорця — без заголовка (безпечне за замовчуванням). Локальна аудиторія в `DUAL_AUDIENCES_JS` (T6) і в `env.audiences` «Огляду» (T7/T9) несе `private: true`; контракт — у `commenter/README.md` (T13).
 
 ---
 
@@ -791,7 +792,7 @@
 - Test: `tests/test_comments_role.py`, `tests/test_publish_module.py`
 
 - [ ] **Step 1: Тести (червоні)** у `tests/test_comments_role.py` (на наявних `PagesEnv`/`CommentsEnv` — тими самими викликами, що вже тестують `/commented` з `host=1`; пошук `host=1`):
-  1. простір із модулем `memo` + `/commented?it=it1&host=1` → у сторінці `window.DeaiDualStore(`, `local-adapter.js`, `dual-store.js`, файли адаптера модуля БЕЗ `onerror=` (регексп на теги `/api/module-client/`), `projectId: "<tid>/local"`, `color: '#7C6CF0'`, `defaultAudience`; НЕМА `ch=` у логіці вибору (параметр `ch=project` у запиті нічого не змінює — відповідь та сама);
+  1. простір із модулем `memo` + `/commented?it=it1&host=1` → у сторінці `window.DeaiDualStore(`, `local-adapter.js`, `dual-store.js`, файли адаптера модуля БЕЗ `onerror=` (регексп на теги `/api/module-client/`), `projectId: "<tid>/local"`, `color: '#7C6CF0'`, `private: true` (поправка 20), `defaultAudience`; НЕМА `ch=` у логіці вибору (параметр `ch=project` у запиті нічого не змінює — відповідь та сама);
   2. той самий простір, `/commented?it=it1&ch=project` БЕЗ `host` → сторінка байт-у-байт та сама, що до задачі (еталони `tests/fixtures/comments-role/` не змінюються; наявні тести еталонів — зелені без правок);
   3. простір без постачальника + `host=1` → локальний сніпет (як у Б1), `DeaiDualStore` нема;
   4. постачальник є, а конфіг не зібрався (`ModuleError`, напр. без обовʼязкового налаштування — як у наявному тесті «comments-unconfigured») + `host=1` → комбінований сніпет із `var why = "командні коментарі не піднялись (<код>)"`, без тегів адаптера, без банера-примітки `COMMENT_NOTICE_SNIPPET`;
@@ -826,7 +827,7 @@
           var en = { local: 'Claude', team: 'Team', note: 'Team comments are visible to colleagues in the preview' };
           var L = uk;
           try { if (localStorage.getItem('dc-lang') === 'en') L = en; } catch (e) {}
-          return [{ id: 'local', label: L.local, icon: 'bot', color: '#7C6CF0' },
+          return [{ id: 'local', label: L.local, icon: 'bot', color: '#7C6CF0', private: true },
                   { id: 'project', label: L.team, icon: 'team', note: L.note }];
         })()"""
 
@@ -1167,7 +1168,7 @@
   ```
   (перевірити, що делегація з `#cmt-panel` пропускає ці `data-act` так само, як `cmtres`/`cmtdel`).
 
-- [ ] **Step 5: «Огляд».** У `env` для `overviewComments` (`app.js` ~5252): `channel: () => (noTeamComments() ? 'local' : 'dual')`; `audiences: () => [{ id: 'local', label: t('audChipLocal'), icon: 'bot', color: '#7C6CF0' }, { id: 'project', label: t('audChipTeam'), icon: 'team', note: t('audChipTeamNote') }]`; `onAudience` — прибрати; у `host` — `defaultAudience: () => { try { return localStorage.getItem(CMT_AUD_KEY); } catch (e) { return null; } }`, `onAudiencePick: (id) => { try { localStorage.setItem(CMT_AUD_KEY, id); } catch (e) {} }`. Колір `#7C6CF0` — і в Python (`DUAL_AUDIENCES_JS`), і тут: пару приколює тест у `tests/test_comments_role.py` (рядок `#7C6CF0` є в обох файлах) — додати разом із парою `dc-cmt-aud`. Якщо `css-guards`/інший охоронець забороняє hex у `app/*.js` — винести в `const LOCAL_PIN_COLOR = '#7C6CF0'` з коментарем «колір піна коментатора (не CSS оболонки)» і, за потреби, дозволити в охоронці точково; рішення — у звіт.
+- [ ] **Step 5: «Огляд».** У `env` для `overviewComments` (`app.js` ~5252): `channel: () => (noTeamComments() ? 'local' : 'dual')`; `audiences: () => [{ id: 'local', label: t('audChipLocal'), icon: 'bot', color: '#7C6CF0', private: true }, { id: 'project', label: t('audChipTeam'), icon: 'team', note: t('audChipTeamNote') }]`; `onAudience` — прибрати; у `host` — `defaultAudience: () => { try { return localStorage.getItem(CMT_AUD_KEY); } catch (e) { return null; } }`, `onAudiencePick: (id) => { try { localStorage.setItem(CMT_AUD_KEY, id); } catch (e) {} }`. Колір `#7C6CF0` — і в Python (`DUAL_AUDIENCES_JS`), і тут: пару приколює тест у `tests/test_comments_role.py` (рядок `#7C6CF0` є в обох файлах) — додати разом із парою `dc-cmt-aud`. Якщо `css-guards`/інший охоронець забороняє hex у `app/*.js` — винести в `const LOCAL_PIN_COLOR = '#7C6CF0'` з коментарем «колір піна коментатора (не CSS оболонки)» і, за потреби, дозволити в охоронці точково; рішення — у звіт.
 
 - [ ] **Step 6: Стилі** (`app/styles.css`, лише токени):
   ```css
