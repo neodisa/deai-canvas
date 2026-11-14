@@ -680,6 +680,11 @@ const UK = {
      розійшлись, їх приколює тест `test_audience_labels_match_dictionary`. */
   audTabLocal: 'Клод',
   audTabTeam: 'Команда',
+  /* Чипи адресата в формі піна (0.27.0): ті самі три підписи дублює `DUAL_AUDIENCES_JS` у `app/serve.py` — парність
+     приколює `test_dual_audience_labels_match_dictionary`. */
+  audChipLocal: 'Claude',
+  audChipTeam: 'Команді',
+  audChipTeamNote: 'Командні коментарі видно колегам у превʼю',
   audLocal: 'Аудиторія коментарів: Клод',
   audProject: 'Аудиторія коментарів: Команда',
   audCur: 'поточна аудиторія',
@@ -1775,6 +1780,9 @@ const EN = {
   langDone: 'Language changed · ⌘K to switch back',
   audTabLocal: 'Claude',
   audTabTeam: 'Team',
+  audChipLocal: 'Claude',
+  audChipTeam: 'Team',
+  audChipTeamNote: 'Team comments are visible to colleagues in the preview',
   audLocal: 'Comment audience: Claude',
   audProject: 'Comment audience: Team',
   audCur: 'current audience',

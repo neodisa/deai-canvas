@@ -2895,6 +2895,7 @@ def audiences_arg(active):
 # `window.CommentLayer.*`. Чому лише за `host=1` в URL: оболонка ЗАВЖДИ його додає, а сторінка без нього (відкрита
 # напряму, старі еталони `tests/fixtures/comments-role/`, публікація) — байт у байт як до 0.26.0. Публікація `host`
 # не отримує НІКОЛИ: у превʼю колег нема оболонки, і схована ручка лишила б їх без коментарів.
+# Ключ `dc-cmt-aud` — памʼять вибору адресата піна, спільна для рамки й оболонки (той самий origin, поправка 12 плану Б2).
 # Чому `location.origin`, а не `'*'`: батько — оболонка цього ж сервера; чужому вікну посилка не потрібна.
 HOST_ARG = """,
         host: (function () {
@@ -2903,7 +2904,9 @@ HOST_ARG = """,
             onReady: function () { send({ ev: 'ready' }); },
             onChange: function (s) { send({ ev: 'change', snapshot: s }); },
             onSelect: function (id) { send({ ev: 'select', id: id }); },
-            onMode: function (on) { send({ ev: 'mode', on: !!on }); }
+            onMode: function (on) { send({ ev: 'mode', on: !!on }); },
+            defaultAudience: function () { try { return localStorage.getItem('dc-cmt-aud'); } catch (e) { return null; } },
+            onAudiencePick: function (id) { try { localStorage.setItem('dc-cmt-aud', id); } catch (e) {} }
           };
         })()"""
 
@@ -3054,6 +3057,78 @@ def inject_module_comment_layer(html, assets_base, client_urls, config, version=
             assets=assets, ds=inspector_ds_arg(profile, space)) if inspector else '',
         cfg_js=js_literal(config), version_js=js_literal(version),
         audiences=audiences_arg('project' if audiences else None), host=host_arg(host))
+    return _insert_before_body(html, snippet)
+
+
+# Комбінований канал робочого місця (Deai 0.27.0, Б2.1) — лише з `host=1` і командним постачальником: ОДИН шар коментатора на
+# ДВА сховища (`app/vendor/dual-store.js`), адресат піна = сховище. Відмінності від `MODULE_COMMENT_SNIPPET`:
+#   · теги адаптера модуля — БЕЗ `onerror`-банера: падіння командного не ховає локальних (смуга в панелі оболонки, поправка 4);
+#   · `why` від сервера (конфіг модуля не зібрався) — адаптер навіть не пробуємо;
+#   · аудиторій дві лише коли командне живе (`team`), інакше одна — і чипів у формі нема (коментатор малює їх від двох).
+# Банер `__clDown` — ПЕРШИМ тегом, як у `MODULE_COMMENT_SNIPPET` (порядок несучий, див. коментар над `_COMMENT_DOWN_BANNER`).
+DUAL_AUDIENCES_JS = """(function () {
+        var uk = { local: 'Claude', team: 'Команді', note: 'Командні коментарі видно колегам у превʼю' };
+        var en = { local: 'Claude', team: 'Team', note: 'Team comments are visible to colleagues in the preview' };
+        var L = uk;
+        try { if (localStorage.getItem('dc-lang') === 'en') L = en; } catch (e) {}
+        return [{ id: 'local', label: L.local, icon: 'bot', color: '#7C6CF0', private: true },
+                { id: 'project', label: L.team, icon: 'team', note: L.note }];
+      })()"""
+
+DUAL_CLIENT_TAG = '\n<script src="{src}"></script>'
+
+DUAL_COMMENT_SNIPPET = '\n' + _COMMENT_DOWN_BANNER + """
+<script src="{assets}/local-adapter.js" onerror="window.__clDown('локальний адаптер не завантажився')"></script>
+<script src="{assets}/dual-store.js" onerror="window.__clDown('сховище коментарів не завантажилось')"></script>
+<script src="{assets}/comment-layer.min.js" onerror="window.__clDown('шар коментарів не завантажився')"></script>{client_tags}{inspector}
+<script>
+window.__deaiCommentsCfg = {cfg_js};
+(function () {{
+  var init = function () {{
+    var cfg = window.__deaiCommentsCfg, team = null, why = {why_js};
+    if (!window.CommentLayer || !window.CommentLayerLocal || !window.DeaiDualStore) {{
+      window.__clDown('шар коментарів не піднявся');
+      return;
+    }}
+    if (!why) {{
+      try {{
+        if (!window.DeaiComments) throw new Error('адаптер командних коментарів не завантажився');
+        team = window.DeaiComments.create(Object.assign({{}}, cfg, {{ onChange: function () {{}} }}));
+        if (!team || typeof team.load !== 'function' || typeof team.save !== 'function') {{
+          throw new Error('адаптер повернув сховище без load/save');
+        }}
+      }} catch (e) {{
+        if (team && typeof team.close === 'function') {{ try {{ team.close(); }} catch (x) {{}} }}
+        team = null;
+        why = (e && e.message) || 'адаптер не зміг піднятись';
+      }}
+    }}
+    var auds = {auds_js};
+    var store = window.DeaiDualStore({{ local: window.CommentLayerLocal({{ endpoint: {endpoint_js} }}), team: team, teamDown: why }});
+    store.ready.then(function () {{
+      window.CommentLayer.init({{ projectId: {project_js}, storage: store, version: {version_js},
+        audiences: store.teamDown ? auds.slice(0, 1) : auds{host} }});
+    }});
+  }};
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+}})();
+</script>"""
+
+
+def inject_dual_comment_layer(html, assets_base, client_urls, config, endpoint, project, version='', team_error=None,
+                              profile='', space=None):
+    """Комбінований канал робочого місця (Deai 0.27.0): локальний адаптер + адаптер модуля через `DeaiDualStore`, режим хоста
+    завжди, інспектор завжди (як `inject_module_comment_layer` з `inspector=True`). `team_error` — причина, з якої сервер не
+    зібрав конфіг модуля (тоді `client_urls` порожній, `config` — `{}`). ⛔ Публікація сюди не доходить ніколи."""
+    assets = html_escape(assets_base, quote=True)
+    snippet = DUAL_COMMENT_SNIPPET.format(
+        assets=assets,
+        client_tags=''.join(DUAL_CLIENT_TAG.format(src=html_escape(u, quote=True)) for u in client_urls),
+        inspector=INSPECTOR_TAG.format(assets=assets, ds=inspector_ds_arg(profile, space)),
+        cfg_js=js_literal(config or {}), why_js=js_literal(team_error), auds_js=DUAL_AUDIENCES_JS,
+        endpoint_js=js_literal(endpoint), project_js=js_literal(project), version_js=js_literal(version),
+        host=host_arg(True))
     return _insert_before_body(html, snippet)
 
 
@@ -6368,43 +6443,62 @@ class Handler(SimpleHTTPRequestHandler):
             page_space = spaces.active_space()
             prov, prov_err = comments_provider(page_space)
             team = prov is not None
-            notice = None            # код відмови, який людині ПОКАЗУЄМО на локальній сторінці (див. нижче)
-            if ch == 'project' and not team:
-                ch = 'local'
-                notice = prov_err.code if prov_err is not None else None
-            # version МУСИТЬ збігатися з publish-конвенцією (iter_num: it1→"1"),
-            # інакше піни, народжені у опублікованому/проєктному перегляді (bornV=1),
-            # не лягають на ітерацію в канвасі (appVersion "it1" ≠ bornV 1).
-            ver = pm.page_version_tag(it, page)
-            module_cfg = mod = None
-            if ch == 'project' and prov is not None:
-                # Командний канал веде модуль ролі `comments`: власний модуль простору або (ЛІГА) вбудований
-                # `supabase-comments` з конфігом установки й каналом `comment_channel` (`comments_route`). Відмова — не
-                # 5xx: сторінка лишається РОБОЧОЮ (локальні коментарі) і каже, чому нема командних.
-                try:
-                    mod, cctx, route_channel = comments_route(page_space, prov)
-                    channel = route_channel(task, tid)        # ⛔ канал — ДО коду модуля (як у `publish_comments`)
-                    module_cfg = {**deai_modules.comments_client(page_space, mod, cctx), 'channel': channel}
-                except deai_modules.ModuleError as e:
-                    # Постачальник є, а його конфіг не піднявся: сторінка локальна, і вкладки «Команда» на ній нема —
-                    # вона вела б у ту саму відмову (контракт коментатора: «нема `audiences` → нема рядка»).
-                    ch, notice, team = 'local', e.code, False
-            if module_cfg is not None:
-                # `inspector=True`: аудиторія коментарів змінює, КОМУ їде фідбек, а не те, чиїми очима дивляться на
-                # макет — це та сама локальна машина дизайнера. До 02.09.2026 інспектор тут був мертвий, і кнопка в смузі
-                # тихо нічого не робила (виміряно в браузері).
-                html = inject_module_comment_layer(
-                    html, f'{origin}/app/vendor', module_client_urls(mod, page_space), module_cfg, version=ver,
-                    inspector=True, audiences=team, profile=task_ds(task, page_space), space=page_space, host=host)
+            local_key = f'{tid}/local' + ('' if page.get('id') == 'main' else f'/{page["id"]}')
+            if host and (prov is not None or prov_err is not None):
+                # Б2 (0.27.0): робоче місце з командним постачальником — ОДИН шар на обидва сховища; `ch` тут не діє.
+                # Постачальник не вирішився чи конфіг не зібрався — комбінований сніпет із причиною: локальні працюють, а
+                # панель оболонки каже, чому нема командних (поправка 4 плану Б2).
+                mod, module_cfg, team_err = None, None, None
+                if prov_err is not None:
+                    team_err = f'командні коментарі не піднялись ({prov_err.code})'
+                else:
+                    try:
+                        mod, cctx, route_channel = comments_route(page_space, prov)
+                        module_cfg = {**deai_modules.comments_client(page_space, mod, cctx), 'channel': route_channel(task, tid)}
+                    except deai_modules.ModuleError as e:
+                        team_err = f'командні коментарі не піднялись ({e.code})'
+                html = inject_dual_comment_layer(
+                    html, f'{origin}/app/vendor', module_client_urls(mod, page_space) if module_cfg else [],
+                    module_cfg or {}, f'{origin}/api/local-comments', local_key,
+                    version=pm.page_version_tag(it, page), team_error=team_err,
+                    profile=task_ds(task, page_space), space=page_space)
             else:
-                # режим «Локальні · мені» (дефолт): фідбек Claude у локальний файл, НЕ Supabase
-                local_key = f'{tid}/local' + ('' if page.get('id') == 'main' else f'/{page["id"]}')
-                html = inject_local_comment_layer(
-                    html, f'{origin}/api/local-comments', local_key,
-                    f'{origin}/app/vendor', version=ver, audiences=team,
-                    profile=task_ds(task, page_space), space=page_space, host=host)
-                if notice:
-                    html = inject_comment_notice(html, f'командні коментарі не піднялись ({notice}), показано локальні')
+                notice = None            # код відмови, який людині ПОКАЗУЄМО на локальній сторінці (див. нижче)
+                if ch == 'project' and not team:
+                    ch = 'local'
+                    notice = prov_err.code if prov_err is not None else None
+                # version МУСИТЬ збігатися з publish-конвенцією (iter_num: it1→"1"),
+                # інакше піни, народжені у опублікованому/проєктному перегляді (bornV=1),
+                # не лягають на ітерацію в канвасі (appVersion "it1" ≠ bornV 1).
+                ver = pm.page_version_tag(it, page)
+                module_cfg = mod = None
+                if ch == 'project' and prov is not None:
+                    # Командний канал веде модуль ролі `comments`: власний модуль простору або (ЛІГА) вбудований
+                    # `supabase-comments` з конфігом установки й каналом `comment_channel` (`comments_route`). Відмова — не
+                    # 5xx: сторінка лишається РОБОЧОЮ (локальні коментарі) і каже, чому нема командних.
+                    try:
+                        mod, cctx, route_channel = comments_route(page_space, prov)
+                        channel = route_channel(task, tid)        # ⛔ канал — ДО коду модуля (як у `publish_comments`)
+                        module_cfg = {**deai_modules.comments_client(page_space, mod, cctx), 'channel': channel}
+                    except deai_modules.ModuleError as e:
+                        # Постачальник є, а його конфіг не піднявся: сторінка локальна, і вкладки «Команда» на ній нема —
+                        # вона вела б у ту саму відмову (контракт коментатора: «нема `audiences` → нема рядка»).
+                        ch, notice, team = 'local', e.code, False
+                if module_cfg is not None:
+                    # `inspector=True`: аудиторія коментарів змінює, КОМУ їде фідбек, а не те, чиїми очима дивляться на
+                    # макет — це та сама локальна машина дизайнера. До 02.09.2026 інспектор тут був мертвий, і кнопка в смузі
+                    # тихо нічого не робила (виміряно в браузері).
+                    html = inject_module_comment_layer(
+                        html, f'{origin}/app/vendor', module_client_urls(mod, page_space), module_cfg, version=ver,
+                        inspector=True, audiences=team, profile=task_ds(task, page_space), space=page_space, host=host)
+                else:
+                    # режим «Локальні · мені» (дефолт): фідбек Claude у локальний файл, НЕ Supabase
+                    html = inject_local_comment_layer(
+                        html, f'{origin}/api/local-comments', local_key,
+                        f'{origin}/app/vendor', version=ver, audiences=team,
+                        profile=task_ds(task, page_space), space=page_space, host=host)
+                    if notice:
+                        html = inject_comment_notice(html, f'командні коментарі не піднялись ({notice}), показано локальні')
         body = html.encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')

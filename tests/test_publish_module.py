@@ -414,6 +414,8 @@ class BuildPreview(TaskFixture):
             self.assertIn(f'{depth_up}comment-layer/comment-layer.min.js', html, rel)
             self.assertNotIn('dc-comments', html, rel)        # 0.26.0: публікація НІКОЛИ не отримує режиму хоста
             self.assertNotIn('host:', html, rel)
+            for dual in ('DeaiDualStore', 'dual-store.js', 'defaultAudience'):        # 0.27.0: комбінованого сніпета в превʼю нема
+                self.assertNotIn(dual, html, rel)
         self.assertTrue(self._mentions(pub, b'supabase'),
                         'контроль: з коментарями supabase у дереві МАЄ бути')
 

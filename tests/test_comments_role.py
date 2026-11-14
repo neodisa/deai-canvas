@@ -1822,6 +1822,98 @@ class ModulePagesTest(PagesEnv):
 
 # ------------------------------------------------------------ вузькі перевірки сніпета, примітки, еталонів (fixup Task 2)
 
+class DualPagesTest(PagesEnv):
+    """0.27.0 (Б2, T6): робоче місце (`host=1`) з командним постачальником — ОДИН шар коментатора на два сховища
+    (`DeaiDualStore`). Без `host` сторінка лишається як у 0.26.0 (еталони `GOLDEN`), параметр `ch` з `host=1` не діє."""
+
+    def dual(self, extra=''):
+        return self.page('local', '&host=1' + extra)
+
+    def test_the_host_page_with_a_provider_is_the_dual_snippet(self):
+        self.enable(self.plain, 'http://127.0.0.1:4555')
+        html = self.dual()
+        for need in ('window.DeaiDualStore(', 'local-adapter.js', 'dual-store.js', '/api/module-client/memo-comments/adapter.js',
+                     'projectId: "x/local"', "color: '#7C6CF0'", 'private: true', 'defaultAudience', 'team = null, why = null'):
+            self.assertIn(need, html, need)
+        self.assertEqual(html.count('window.__deaiCommentsCfg = '), 1)
+        self.assertEqual(self.cfg_of(html)['channel'], f'deai/{self.plain["id"]}/x')
+        self.assertRegex(html, r'<script type="module" src="[^"]*/inspector\.js\?ds=tool&sp=')
+
+    def test_the_module_adapter_tags_have_no_onerror_banner(self):
+        """Падіння командного не ховає коментатора (поправка 4): банер лише в тегів шару й локального адаптера."""
+        self.enable(self.plain, 'http://127.0.0.1:4555')
+        html = self.dual()
+        tags = re.findall(r'<script src="/api/module-client/[^"]*"[^>]*>', html)
+        self.assertEqual(len(tags), 1)
+        self.assertNotIn('onerror', tags[0])
+        for own in ('local-adapter.js', 'dual-store.js', 'comment-layer.min.js'):
+            self.assertRegex(html, r'<script src="[^"]*' + re.escape(own) + r'" onerror="window\.__clDown\(')
+
+    def test_ch_does_not_matter_with_host(self):
+        self.enable(self.plain, 'http://127.0.0.1:4555')
+        base = self.page('local', '&host=1')
+        for ch in ('project', 'local'):
+            self.assertEqual(self.page(ch, '&host=1'), base, ch)
+
+    def test_without_host_the_page_is_the_old_one(self):
+        self.enable(self.plain, 'http://127.0.0.1:4555')
+        for ch in ('project', 'local'):
+            html = self.page(ch)
+            self.assertNotIn('DeaiDualStore', html, ch)
+            self.assertNotIn('dual-store.js', html, ch)
+            self.assertNotIn('defaultAudience', html, ch)
+
+    def test_the_host_page_without_a_provider_is_the_local_snippet_with_host(self):
+        html = self.dual()
+        self.assertIn('local-adapter.js', html)
+        self.assertEqual(html.count('dc-comments'), 1)
+        for gone in ('DeaiDualStore', 'dual-store.js', '__deaiCommentsCfg'):
+            self.assertNotIn(gone, html, gone)
+
+    def test_a_module_whose_config_failed_gives_the_dual_snippet_with_the_reason(self):
+        self.enable(self.plain, 'http://127.0.0.1:4555')
+        dm.write_module_state(self.plain, 'memo-comments', settings={'endpoint': None})        # `None` знімає ключ
+        html = self.dual()
+        self.assertIn('window.DeaiDualStore(', html)
+        self.assertIn('team = null, why = "командні коментарі не піднялись (bad-settings)"', html)
+        self.assertNotIn('/api/module-client/', html)
+        self.assertIn('window.__deaiCommentsCfg = {};', html)
+        self.assertNotIn('window.__clDown("', html)        # примітка `COMMENT_NOTICE_SNIPPET` тут не потрібна: причину несе `why`
+
+    def test_a_lost_module_gives_the_dual_snippet_with_its_code(self):
+        self.break_module(self.plain)
+        html = self.dual()
+        self.assertIn('window.DeaiDualStore(', html)
+        self.assertIn('team = null, why = "командні коментарі не піднялись (module-error)"', html)
+
+    def test_js_literal_none_is_null(self):
+        self.assertEqual(serve.js_literal(None), 'null')
+
+    def test_host_arg_remembers_the_audience_under_the_shared_key(self):
+        self.assertIn("localStorage.getItem('dc-cmt-aud')", serve.HOST_ARG)
+        self.assertIn("localStorage.setItem('dc-cmt-aud'", serve.HOST_ARG)
+        self.assertIn('defaultAudience: function', serve.HOST_ARG)
+        self.assertIn('onAudiencePick: function', serve.HOST_ARG)
+
+    def test_dual_audience_labels_match_dictionary(self):
+        """Підписи чипів у `DUAL_AUDIENCES_JS` — парні до `audChip*` у `app/i18n.js` (сервер не бачить JS-словника)."""
+        with open(os.path.join(os.path.dirname(serve.__file__), 'i18n.js'), encoding='utf-8') as fh:
+            src = fh.read()
+        keys = ('audChipLocal', 'audChipTeam', 'audChipTeamNote')
+        want = {}
+        for key in keys:
+            found = re.findall(rf"^\s*{key}:\s*'([^']*)'", src, re.M)
+            self.assertEqual(len(found), 2, key)
+            want[key] = found
+        for i, lang in enumerate(('uk', 'en')):
+            line = re.search(rf"var {lang} = \{{ local: '([^']*)', team: '([^']*)', note: '([^']*)' \}};", serve.DUAL_AUDIENCES_JS)
+            self.assertIsNotNone(line, lang)
+            self.assertEqual(line.groups(), tuple(want[k][i] for k in keys), lang)
+
+    def test_one_audience_only_when_the_team_is_down(self):
+        self.assertIn('audiences: store.teamDown ? auds.slice(0, 1) : auds', serve.DUAL_COMMENT_SNIPPET)
+
+
 class GoldenPinTest(unittest.TestCase):
     """Еталони ЛІГА/«нічого» — зняті з коду bc2d786 ДО Task 2 і є доказом «байт у байт, як було». `UPDATE_COMMENTS_GOLDEN=1`
     перезнімає їх з коду, що на диску, — тож без цього піна можна було б непомітно «оновити» еталон під зламану розмітку.
