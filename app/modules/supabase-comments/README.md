@@ -59,6 +59,21 @@ socket operation — shorter than the core's own 5 s and 10 s, so a slow project
   the iteration number, `resolve` also writes it to `resolved_v` (only a real integer ≥ 1; otherwise the column is left alone);
 * pin screenshots in Storage, when you set the optional `shots_bucket` (next section).
 
+## Version 1.3.0 (Deai Canvas 0.27.0)
+
+* **`recent(ctx, channel)`** — an optional function of the role: the open comments of the channel as `{id, ts, author, status, version}`,
+  without HTML snapshots, screenshots or fingerprints. It feeds `GET /api/comment-news` (the new-comment numbers on the tabs, polled
+  every 90 s). It returns at most 200 newest rows, so a tab number may slightly over-count; the tab baseline covers open items only,
+  which is acceptable.
+* **Write by difference** — `save` upserts only the rows that differ from the last read or written snapshot (canonical JSON with sorted
+  keys, because `jsonb` reorders keys of `meta`); nothing changed, no request.
+* **Realtime of its own channel only** — the subscription is on the whole table (a DELETE event carries only the key), so the callback
+  drops events of other channels instead of re-reading.
+* **`loadError`** — a getter on the browser store: a string while the initial read failed (quota, network), `null` after a successful
+  read. The combined store treats a string as «team down»: a strip, no addressee chips, pins go local. It is read once per layer: if the
+  team falls later, the chips stay until reload.
+* `uploadShot(id, dataUrl)` gets a third argument from the combined store and ignores it.
+
 ## Pin screenshots (optional)
 
 Set the optional setting `shots_bucket` to the name of a **public** Storage bucket of the same project (lowercase letters,

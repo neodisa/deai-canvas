@@ -329,6 +329,15 @@ notes are in [the module README](app/modules/supabase-comments/README.md):
 
    The answer carries the verdict of `check`: `bad-key`, `no-schema` (run step 2), `network`.
 
+**Addressee, assignment, news (0.27.0).** In a workplace with a team channel the compose form asks who the pin is for:
+**Claude** (stays on this machine) or **the team** (goes to the service). The panel filter is «All / For Claude / Team».
+**The agent sees only what was assigned to it:** `bin/inbox.py`, `bin/state.py` and `/comments` show local pins and team pins
+with `meta.assignee = "claude"` («Assign to Claude» / «Take back» on a team card). `python3 bin/inbox.py --all` (or
+`/comments?all=1`) shows every team pin. The history line «(+ N resolved in history)» counts only the assigned team pins by
+default; `hidden` in `/comments` counts all hidden pins, resolved ones too. New team comments are marked in the panel, on the
+island and on the tabs of other tasks (the optional `recent` function of the module feeds the tab numbers). If the team
+channel is down, a strip says why and local pins keep working.
+
 **Pin screenshots.** Set the optional `shots_bucket` (the name of a **public** Storage bucket of the
 same project) and the browser adapter uploads the screenshot of a pin to
 `<bucket>/comment-shots/<id>.jpg` and keeps the public address in the pin; without it pins have no
