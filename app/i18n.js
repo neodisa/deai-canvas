@@ -686,7 +686,6 @@ const UK = {
   keysTitle: 'Гарячі клавіші',
   keysGeneral: 'Загальні',
   keysLayout: 'У макеті',
-  keysWidget: 'клавіші коментатора — він окремий віджет і слухає їх сам',
   kPalette: 'Палітра команд',
   kKeys: 'Ця довідка',
   kMode: 'Перемкнути режим',
@@ -696,12 +695,6 @@ const UK = {
   cleanExit: 'Показати інтерфейс',
   cleanExitTitle: 'Повернути інтерфейс (⇧⌘\\)',
   kInspector: 'Інспектор',
-  // Три рядки нижче документують КЛАВІШІ КОМЕНТАТОРА в довідці `?` — сам
-  // коментатор про цю довідку не знає (він окремий віджет, шапка `shell-
-  // palette.js` пояснює чому), тому текст живе тут, а не переїжджає звідти.
-  cmArm: 'Коментувати',
-  comments: 'Коментарі',
-  cmHidePins: 'Сховати пини',
 
   /* ext-shell.js — «Огляд» у зовнішньому (опублікованому) превʼю.
      Дві РІЗНІ причини на вигляд однієї дірки, і різні вони тому, що глядачеві
@@ -1788,7 +1781,6 @@ const EN = {
   keysTitle: 'Keyboard shortcuts',
   keysGeneral: 'General',
   keysLayout: 'In the layout',
-  keysWidget: 'commenter keys — it is a separate widget and listens for them itself',
   kPalette: 'Command palette',
   kKeys: 'This sheet',
   kMode: 'Switch mode',
@@ -1798,9 +1790,6 @@ const EN = {
   cleanExit: 'Show interface',
   cleanExitTitle: 'Bring the interface back (⇧⌘\\)',
   kInspector: 'Inspector',
-  cmArm: 'Comment',
-  comments: 'Comments',
-  cmHidePins: 'Hide pins',
 
   // ext-shell.js — see the UK block for why these two reasons are separate.
   extNoFrameWidth: (w) => `no ${w}px frames — this width was never captured`,

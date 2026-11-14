@@ -28,7 +28,7 @@
   ```
   **Ніколи** `git add -A` / `git add .`; не стейджити `docs/superpowers/specs/2026-10-20-agents-in-canvas-design.md` і `docs/superpowers/specs/2026-11-09-agents-sdk-policy-addendum.md`; ніколи `--amend`, `stash`, `reset`, `checkout` інших гілок. У zsh список шляхів у змінній розгортати як `${=P}`.
 - ⛔ Живий канвас працює з ІНШОГО дерева (`deai-canvas`, порт 8765). Його не чіпаємо: ні файлів, ні процесу, ні порту.
-- ⛔ `~/Liga Tools/design-office` — лише ЧИТАННЯ (`git -C … show <коміт>:<шлях>`, `git -C … log`). Нічого там не змінювати, не перемикати гілок, не збирати.
+- ⛔ `<design-office>` — лише ЧИТАННЯ (`git -C … show <коміт>:<шлях>`, `git -C … log`). Нічого там не змінювати, не перемикати гілок, не збирати.
 - ⛔ У жоден комітований файл не пишемо справжніх імен людей, хостів, імен користувачів машини, ключів, шляхів зі scratchpad чи тимчасових тек.
 - Правки наявних файлів — точкові (`Edit`); нові файли — `Write`.
 
@@ -98,7 +98,7 @@
 - [ ] **Step 2: Звірити джерело.** Має бути саме цей коміт і чисте дерево коментатора:
 
 ```bash
-DO="$HOME/Liga Tools/design-office"
+DO="<design-office>"
 git -C "$DO" rev-parse --short fix/local-pins-react      # очікується 3581cd0
 git -C "$DO" ls-tree --name-only 3581cd0 comment-layer/src/ comment-layer/test/ comment-layer/scripts/
 ```
@@ -144,7 +144,7 @@ git -C "$DO" show 3581cd0:comment-layer/LICENSE > commenter/LICENSE
 - [ ] **Step 7: Чистота.** Сканування забороненого списку по теці:
 
 ```bash
-F="$HOME/Liga Tools/design-office-transition/scripts/deai-forbidden.txt"
+F="<forbidden-list>"
 grep -rIl -F -f <(grep -v '^\s*#' "$F" | grep -v '^\s*$') commenter/ || echo "0 збігів"
 ```
 
@@ -269,7 +269,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- ${=P}
 - Modify: `app/vendor/local-adapter.js`
 - Modify: `tests/local-adapter.test.mjs`
 
-- [ ] **Step 1: Звірити різницю:** `DO="$HOME/Liga Tools/design-office"; NEW=$(mktemp); git -C "$DO" show 3581cd0:design-canvas/app/vendor/local-adapter.js > "$NEW"; diff app/vendor/local-adapter.js "$NEW"`. Очікується: лише ДОДАНО знімок `snap()` (кільце `_el`) і чергу записів `serial()`; жодного видаленого рядка поведінки. Інакше — СТОП, `NEEDS_CONTEXT`.
+- [ ] **Step 1: Звірити різницю:** `DO="<design-office>"; NEW=$(mktemp); git -C "$DO" show 3581cd0:design-canvas/app/vendor/local-adapter.js > "$NEW"; diff app/vendor/local-adapter.js "$NEW"`. Очікується: лише ДОДАНО знімок `snap()` (кільце `_el`) і чергу записів `serial()`; жодного видаленого рядка поведінки. Інакше — СТОП, `NEEDS_CONTEXT`.
 
 - [ ] **Step 2: Тести, що падають.** Знайти тести цих фіксів у design-office: `git -C "$DO" show --stat 7290cca 3581cd0 | grep -i test`. Перенести їхні сценарії в `tests/local-adapter.test.mjs` (у стилі файла, `node:test`). Мінімум два сценарії:
   1. `save()` списку, де в піна є кільцеве посилання (`c._el = { self: null }; c._el.self = c._el` чи DOM-подібне кільце) — запис іде, кільце не серіалізується;
@@ -1223,7 +1223,7 @@ test("кнопка «Коментарі» — у задачі в обох вид
 ### Task 11: Фінальне ревʼю, релізний прогін, перевірка проти живого (контролер)
 
 - [ ] **Step 1: Фінальне ревʼю** (один ревʼюер, Sonnet, англійський бриф) усієї гілки `main..feat/shell-comments` проти спеки (Б1 + поправки цього плану): безпека посилок і розмітки, шлях без `host` байт-у-байт, публікація без `host`, охоронці доведені мутаціями. Ревʼюер працює з копією-архівом гілки, не з деревом. Знахідки → виправлення окремими комітами → повторне ревʼю.
-- [ ] **Step 2: Релізний прогін:** JS (усі три набори), Python (3 discover, тимчасовий `HOME`), живі — усі ПОСЛІДОВНО. Детермінізм збірки: `cd commenter && npm ci && npm run build && cd .. && git diff --exit-code app/vendor commenter/build-stamp.json`. Охоронець забороненого списку (`DEAI_FORBIDDEN_LIST=<design-office-transition/scripts/deai-forbidden.txt> DEAI_REQUIRE_FORBIDDEN_LIST=1`) — зелений.
+- [ ] **Step 2: Релізний прогін:** JS (усі три набори), Python (3 discover, тимчасовий `HOME`), живі — усі ПОСЛІДОВНО. Детермінізм збірки: `cd commenter && npm ci && npm run build && cd .. && git diff --exit-code app/vendor commenter/build-stamp.json`. Охоронець забороненого списку (`DEAI_FORBIDDEN_LIST=<forbidden-list> DEAI_REQUIRE_FORBIDDEN_LIST=1`) — зелений.
 - [ ] **Step 3: Локальний реліз:** злиття в `main` (fast-forward), анотований тег `v0.26.0` (автор neodisa). Живий канвас 8765 — перезапуск на 0.26.0 (зупинка за PID, `start.command >/dev/null 2>&1`, слухач — `lsof -iTCP:8765 -sTCP:LISTEN`).
 - [ ] **Step 4: Перевірка проти живого:** справжня задача ЛІГИ — C/острівець відкривають панель; поставити, відредагувати, закрити й повернути ЛОКАЛЬНИЙ пін; `bin/inbox.py` бачить відкритий; «Огляд» показує той самий список; командний канал ЛІГИ — лише ЧИТАННЯ (жодного запису в спільний Supabase); прибрати тестовий пін. Знахідки — фікси з живим тестом і мутацією.
 - [ ] **Step 5: Пуш — лише з дозволу власника** (пуш на GitHub = пігулка оновлення всій команді): перевірити `git remote get-url origin`, пушити `main` і тег `v0.26.0`; ніколи — `backup-pre-rewrite-4d1` і `fix/supabase-egress`.
