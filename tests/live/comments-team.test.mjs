@@ -412,6 +412,35 @@ test("7: пін колеги в іншій задачі → число на її
   await page.waitForFunction((b) => !document.querySelector(b), badge);
 });
 
+/* Охоронець поведінки (а не регексу в `comments-wiring`): `render()` без зміни задачі/простору/складу вкладок опиту новин не дає. */
+test("7b: кілька render() поспіль без зміни задачі/простору/вкладок — жодного запиту /api/comment-news", async (t) => {
+  const env = await boot(t, { tasks: ["fixture", "second"] });
+  const { page } = env;
+  await openShell(env);
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector('#tasks-home .th-card[data-id="second"]');
+  const baseRound = page.waitForResponse((r) => r.url().includes("/api/comment-news?task="), { timeout: 8000 });
+  await page.click('#tasks-home .th-card[data-id="second"]');
+  await page.waitForFunction(() => !!document.querySelector('#tabs [data-act="tab"][data-val="second"][aria-current="page"]'));
+  await page.click('#tabs [data-act="tab"][data-val="fixture"]');
+  await baseRound;                                                      // базовий опит стався
+  await sleep(2200);                                                    // вікно debounce минуло, хвіст теж
+  const news = [];
+  page.on("request", (r) => { if (r.url().includes("/api/comment-news")) news.push(r.url()); });
+  for (let i = 0; i < 5; i++) {
+    await page.evaluate(() => {                                         // `retry` → `render()` (див. `forceRender` у canvas.test)
+      const b = document.createElement("button");
+      b.dataset.act = "retry";
+      document.getElementById("bar").appendChild(b);
+      b.click();
+      b.remove();
+    });
+    await sleep(100);
+  }
+  await sleep(2500);
+  assert.deepEqual(news, [], "render() без зміни контексту не мусить опитувати новини");
+});
+
 /* ── 8: падіння командного ────────────────────────────────────────────────────────────────────────── */
 
 test("8: адаптер модуля не вантажиться → у рамці нема банера, у панелі смуга, чипів нема, локальний пін пишеться у файл", async (t) => {
