@@ -257,6 +257,9 @@ test("12: смуга задачі віддає назві й ітерації в
      і ітерацію, хоча після етапу А в зоні 1 лише вони дві й місця ~450px. */
   const { page, url } = await boot(t, PORT_BASE + 1200, { viewport: { width: 1280, height: 800 } });
   await openFromHome(page, url, "long");
+  /* Вкладка стає активною раніше, ніж смуга перемальовується під нову задачу: без цього очікування тест зрідка ловив
+     порожню смугу (`#bar .crumb--title` ще null) — гонка самого тесту, знайдена релізним прогоном 0.26.0. */
+  await page.waitForSelector("#bar .crumb--title .txt");
   const w = await page.evaluate(() => {
     const el = document.querySelector("#bar .crumb--title");
     const txt = el.querySelector(".txt");
