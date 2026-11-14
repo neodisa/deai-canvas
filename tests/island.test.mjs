@@ -77,6 +77,22 @@ test("режими: натиснутий — за mode; невідомий ре�
   for (const id of [...h.matchAll(/#i-([a-z]+)/g)].map((m) => m[1])) assert.ok(ICONS[id], `іконки «${id}» нема у спрайті`);
 });
 
+test("режими: лише власні ключі MODE_ICON; фільтр перед порогом > 1; на «Огляді» без режимів", () => {
+  const mk = (modes, over = {}) => islandToolsHTML({ screen: "task", mode: "layout", commentsOn: true, commentTool: { ...TOOL, modes }, ...over });
+  for (const bad of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    assert.deepEqual(modeActs(mk(["element", bad, "text"])), ["element", "text"], bad);
+  }
+  /* один відомий + сміття: самотньої кнопки й зайвих роздільників нема */
+  const lone = mk(["element", "bogus"]);
+  assert.equal(lone.includes("cmtmode"), false);
+  assert.equal(lone.includes("isl-modes"), false);
+  assert.equal(mk(["constructor", "__proto__"]).includes("cmtmode"), false);
+  assert.equal(mk(["element", 7, null, {}, "text"]).includes('data-val="7"'), false);
+  /* явно «Огляд»: режими не малюються, навіть якщо інструмент каже 4 */
+  assert.equal(mk(["element", "text", "multi", "area"], { mode: "overview" }).includes("cmtmode"), false);
+  assert.equal(mk(["element", "text", "multi", "area"], { mode: "overview" }).includes("cmtfreeze"), false);
+});
+
 test("заморозка: aria-pressed і isl-freeze--on за freeze; canFreeze:false — кнопки нема", () => {
   const on = islandToolsHTML({ screen: "task", mode: "layout", commentsOn: true, commentTool: TOOL });
   assert.match(on, /isl-freeze isl-freeze--on" data-act="cmtfreeze" aria-pressed="true"/);

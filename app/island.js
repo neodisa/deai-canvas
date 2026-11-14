@@ -22,14 +22,18 @@ export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn 
     const label = commentsNew > 0 ? t("cmtIslandNew", commentsNew) : t("cmtIsland", commentsCount);
     parts.push(`<button class="isl-btn${commentsOn ? " isl-btn--on" : ""}" data-act="comments" aria-pressed="${commentsOn}"`
       + ` aria-label="${esc(label)}" title="${esc(t("cmtKey"))}">${ico("comment")}${n}</button>`);
-    if (commentsOn && commentTool && Array.isArray(commentTool.modes) && commentTool.modes.length > 1) {
-      const modes = commentTool.modes.filter((m) => MODE_ICON[m]);
+    /* Фільтр ПЕРШИМ (лише власні ключі MODE_ICON — не `constructor`/`__proto__`), потім потрібно > 1 відомого режиму.
+       На «Огляді» режим один — кнопок режимів нема за будь-яких даних інструмента. */
+    const known = commentsOn && mode !== "overview" && commentTool && Array.isArray(commentTool.modes)
+      ? commentTool.modes.filter((m) => typeof m === "string" && Object.hasOwn(MODE_ICON, m)) : [];
+    if (known.length > 1) {
+      const modes = known;
       parts.push('<span class="isl-sep" aria-hidden="true"></span>');
       parts.push(`<div class="isl-modes" role="group" aria-label="${esc(t("islModes"))}">`
         + modes.map((m) => {
           const on = commentTool.mode === m;
           const tip = esc(t(`islMode_${m}`));
-          return `<button class="isl-btn${on ? " isl-btn--on" : ""}" data-act="cmtmode" data-val="${m}" aria-pressed="${on}"`
+          return `<button class="isl-btn${on ? " isl-btn--on" : ""}" data-act="cmtmode" data-val="${esc(m)}" aria-pressed="${on}"`
             + ` aria-label="${tip}" title="${tip}">${ico(MODE_ICON[m])}</button>`;
         }).join("") + "</div>");
       if (commentTool.canFreeze) {

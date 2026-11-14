@@ -530,6 +530,19 @@ test("T11-2: tool(), setMode, setFreeze — форма, неправильний
   await page.close();
 });
 
+test("T11-2б: повторне ввімкнення в режимі «Кілька» повертає форму (.mcompose.show)", async () => {
+  const page = await bootTool();
+  assert.equal(await page.evaluate(() => window.CommentLayer.setMode("multi")), true);
+  const shown = () => page.evaluate(`${SHOT}.querySelector('.mcompose').classList.contains('show')`);
+  assert.equal(await shown(), true);
+  await page.evaluate(() => window.CommentLayer.setCommentMode(false));
+  assert.equal(await shown(), false, "вимкнення мусить ховати форму");
+  assert.equal((await page.evaluate(() => window.CommentLayer.tool())).mode, "multi");
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  assert.equal(await shown(), true, "після повторного ввімкнення форма «Кілька» не повернулась");
+  await page.close();
+});
+
 test("T11-3: коментатор полотна (anchors) — єдиний режим element, заморозки нема, setMode('text') → false", async () => {
   const page = await bootTool({ anchors: true });
   assert.deepEqual(await page.evaluate(() => window.CommentLayer.tool()),

@@ -1018,6 +1018,12 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (this._lbl) this._lbl.textContent = on ? 'Stop' : 'Comment'; // vertical tab label; icon + badge stay
       if (this._modesBar && !this._hostOpts) this._modesBar.classList.toggle('show', on); // bar shows only while actively commenting
       if (!on) { this._clearMulti(); this._clearArea(); if (this._mcompose) this._mcompose.classList.remove('show'); }
+      // Повторне ввімкнення в режимі «Кілька»: форма мусить повернутись (її ховає disarm), бо острівець показує Multi натиснутим.
+      if (on && this._mode === 'multi' && this._mcompose) {
+        this._mcompose.classList.add('show');
+        this._refreshMultiAuds();
+        if (this._hostOpts) this._placeHostMulti();
+      }
       this._syncFreeze();   // the shield is only active while commenting
       this._setHover(on);
       this._emit('onMode', !!on);

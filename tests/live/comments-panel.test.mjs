@@ -67,7 +67,7 @@ const shadowShown = (frame, sel) => frame.evaluate((s) => {
 }, sel);
 /* «Коментування ввімкнено» — через `tool().armed`: з host смужка `.modes` коментатора схована навмисно (режими — в острівці,
    0.27.0), тож `.modes.show` більше не ознака режиму. Імʼя лишене: його вживають 8 сценаріїв. */
-const modesShown = (frame) => frame.evaluate(() => !!window.CommentLayer.tool().armed);
+const modesShown = (frame) => frame.evaluate(() => !!window.CommentLayer?.tool?.()?.armed);
 const panelOpen = (page) => page.evaluate(() => !document.getElementById("cmt-panel").hidden);
 const cardTexts = (page) => page.$$eval("#cmt-panel .cmt-card .cmt-text", (els) => els.map((e) => e.textContent));
 const panelText = (page) => page.textContent("#cmt-panel");
