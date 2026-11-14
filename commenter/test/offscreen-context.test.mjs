@@ -28,8 +28,8 @@ console.log("offscreen-context: ok");
 
 /* TD-36: проєктний пін (не `appLocal`) не пише заголовок у контекст — він їде в
    Supabase, а ПІБ у заголовку не розпізнати. Проводку стережемо текстом. */
-assert.match(src, /captureContext\(el, this\.target, \{ heading: this\.appLocal \|\| \(aud === 'local' && this\._formAuds\(\)\.length > 0\) \}\)/,
-  "створення піна мусить передавати { heading: this.appLocal || (aud === 'local' && …) } — командний пін без заголовка");
-assert.doesNotMatch(src, /heading: this\.appLocal \|\| this\._formAuds/,
-  "командний пін (aud !== 'local') не пише заголовок: він їде в спільне сховище (TD-36)");
+assert.match(src, /captureContext\(el, this\.target, \{ heading: this\.appLocal \|\| this\._audPrivate\(aud\) \}\)/,
+  "створення піна мусить передавати { heading: this.appLocal || this._audPrivate(aud) } — заголовок лише для приватної аудиторії");
+assert.doesNotMatch(src, /heading: this\.appLocal \|\| this\._formAuds/, "заголовок не залежить від самої наявності чипів (TD-36)");
+assert.doesNotMatch(src, /aud === 'local'/, "коментатор не знає id каналів хоста");
 console.log("offscreen-context: проводка заголовка ok");

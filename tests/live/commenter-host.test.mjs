@@ -384,3 +384,22 @@ test("G: carry переносить _aud у копію", async () => {
   assert.deepEqual(await page.evaluate(() => window.__mem.map((c) => c._aud)), ["project", "project"]);
   await page.close();
 });
+
+test("TD-36: заголовок розділу в meta.ctx — лише для аудиторії з private === true (строго)", async () => {
+  const headingFor = async (audiences, aud) => {
+    const page = await bootAud({ audiences });
+    await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+    await page.click("#p");
+    await page.waitForFunction(`!!${SH}.querySelector('.compose textarea')`);
+    await page.evaluate(`(() => { ${SH}.querySelector('.compose .caud-b[data-pick="${aud}"]').click();
+      ${SH}.querySelector('.compose textarea').value = 'h'; ${SH}.querySelector('.compose .save').click(); })()`);
+    await page.waitForFunction(() => window.__mem.some((c) => c.text === "h"));
+    const h = await page.evaluate(() => window.__mem.find((c) => c.text === "h").meta.ctx?.heading || "");
+    await page.close();
+    return h;
+  };
+  const priv = [{ id: "local", label: "L", private: true }, { id: "project", label: "P" }];
+  assert.equal(await headingFor(priv, "local"), "Заголовок");
+  assert.equal(await headingFor(priv, "project"), "");
+  assert.equal(await headingFor([{ id: "local", label: "L", private: "yes" }, { id: "project", label: "P" }], "local"), "");
+});

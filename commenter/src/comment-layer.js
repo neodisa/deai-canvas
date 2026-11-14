@@ -1233,7 +1233,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (extra && extra.rect) ctx.meta.rect = extra.rect;      // area: drawn region
       if (extra && extra.count) ctx.meta.count = extra.count;
       // TD-36: заголовок (там може бути ПІБ) пишемо лише в локальний пін; командний їде в спільне сховище без нього.
-      try { const where = captureContext(el, this.target, { heading: this.appLocal || (aud === 'local' && this._formAuds().length > 0) }); if (where) ctx.meta.ctx = where; } catch (e) { /* контекст — підказка, не умова */ }
+      try { const where = captureContext(el, this.target, { heading: this.appLocal || this._audPrivate(aud) }); if (where) ctx.meta.ctx = where; } catch (e) { /* контекст — підказка, не умова */ }
       this.comments.push({
         id: genId(), author: user.name, text, status: 'open',
         fp: fingerprint(el, this.target),
@@ -1781,6 +1781,12 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const list = c && c._aud && this.opts && Array.isArray(this.opts.audiences) ? this.opts.audiences : null;
       const a = list && list.find((x) => x && x.id === c._aud);
       return a && typeof a.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(a.color) ? a.color : null;
+    },
+    /** `private` аудиторії = фідбек лишається на цій машині, тож заголовок розділу можна писати в контекст піна.
+     *  Лише строге `true`; без прапора заголовка нема (безпечне типове, TD-36). Коментатор не знає id каналів хоста. */
+    _audPrivate(aud) {
+      const a = aud && this._formAuds().find((x) => x.id === aud);
+      return !!a && a.private === true;
     },
     /** Змінити поля `meta` піна (Deai 0.27.0: доручення `assignee`): `null`/`undefined` прибирає ключ. Звичайний `_persist`. */
     setMeta(id, patch) {
