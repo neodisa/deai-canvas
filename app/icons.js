@@ -177,6 +177,21 @@ export const ICONS = {
   stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
   <path d="M12 3H9a3 3 0 0 0 0 6h3zM12 3h3a3 3 0 0 1 0 6h-3zM12 9H9a3 3 0 0 0 0 6h3z"/>
   <circle cx="15" cy="12" r="3"/><path d="M12 15H9a3 3 0 1 0 3 3z"/></symbol>`,
+  element: `<symbol id="i-element" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="4.5" y="4.5" width="15" height="15" rx="3.5"/></symbol>`,
+  text: `<symbol id="i-text" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 6h14M12 6v12M9 19h6"/></symbol>`,
+  layers: `<symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></symbol>`,
+  area: `<symbol id="i-area" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/></symbol>`,
+  freeze: `<symbol id="i-freeze" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M12 2v20M4.5 6.5l15 11M19.5 6.5l-15 11"/><path d="M12 6.5l2.5-2M12 6.5L9.5 4.5M12 17.5l2.5 2M12 17.5l-2.5 2"/></symbol>`,
   lang: `<symbol id="i-lang" viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
   <path d="M3.5 5.5h8M7.5 5.5v-2M9.8 5.5c0 4-2.6 7.2-6.3 8.5"/><path d="M4.5 9.8c1.3 2.5 3.4 4 6 4.7"/>

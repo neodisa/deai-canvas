@@ -288,13 +288,12 @@ test("G: на «Огляді» C бере коментатор полотна (�
   await page.waitForSelector(SHELL_PANEL);
   const frameState = () => page.evaluate(() => {
     const F = document.getElementById("frame").contentWindow.CommentLayer;
-    return { frameMode: !!F.commentMode,
-             frameModes: !!document.getElementById("frame").contentDocument.querySelector("[data-comment-layer]").shadowRoot.querySelector(".modes.show") };
+    return { frameMode: !!F.commentMode };
   });
   const st = await page.evaluate(() => ({ shell: !document.getElementById("cmt-panel").hidden,
     canvasMode: document.getElementById("canvas").classList.contains("cv-commenting") }));
   assert.deepEqual(st, { shell: true, canvasMode: true });
-  assert.deepEqual(await frameState(), { frameMode: false, frameModes: false });
+  assert.deepEqual(await frameState(), { frameMode: false });
   /* Охорона замість порожнього `framePanel === false` (панель коментатора в режимі хоста сховано завжди): Esc із фокусом в
      оболонці не мусить зачепити прихований живий iframe — його обробник вішається на ВСІ вікна-предки. Щоб перевірка щось
      міряла, спершу вмикаємо режим у рамці напряму: живий обробник вийшов би з нього на Esc. */

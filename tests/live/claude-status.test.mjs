@@ -314,7 +314,7 @@ test("F: сегмент Claude є в «Огляді» (підказка види
   await page.waitForSelector("#canvas:not([hidden])");
   assert.equal(await shown(), true, "острівця немає в «Огляді»");
   assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById("canvas-hint")).visibility),
-    "visible", "підказка «Огляду» схована без причини: ховає її лише claude-lift (смужка режимів коментатора)");
+    "visible", "підказка «Огляду» схована без причини (ніщо її більше не ховає)");
   await page.click('[data-act="mode"][data-val="layout"]');
   await page.waitForSelector("#stage:not([hidden])");
 
@@ -333,74 +333,32 @@ test("F: сегмент Claude є в «Огляді» (підказка види
   assert.deepEqual(await page.$$eval("#hud .isl-btn", (els) => els.map((e) => e.dataset.act)), ["feedback"]);
 });
 
-/* Геометрія смужки режимів коментатора й острівця в координатах вікна. Смужка живе в
-   тіньовому корені коментатора ВСЕРЕДИНІ рамки: її координати — від рамки. */
-const geometry = (page) => page.evaluate(() => {
-  const f = document.getElementById("frame");
-  const fr = f.getBoundingClientRect();
-  const bar = f.contentDocument.querySelector("[data-comment-layer]").shadowRoot.querySelector(".modes").getBoundingClientRect();
-  const i = document.querySelector("#hud .island").getBoundingClientRect();
-  return { barTop: fr.top + bar.top, barBottom: fr.top + bar.bottom, barLeft: fr.left + bar.left, barRight: fr.left + bar.right,
-    islTop: i.top, islBottom: i.bottom, islLeft: i.left, islRight: i.right, winH: innerHeight };
-});
-
-/** Міряє, доки `ok(g)` не справдиться (смужка й острівець їдуть .2 с, опит — до .5 с),
- *  і ще раз після паузи: перший збіг може випасти на середину руху. */
-async function settled(page, ok, ms = 4000) {
-  const end = Date.now() + ms;
-  let g = await geometry(page);
-  while (!ok(g) && Date.now() < end) {
-    await page.waitForTimeout(150);
-    g = await geometry(page);
-  }
-  if (!ok(g)) return g;
-  await page.waitForTimeout(450);
-  return geometry(page);
-}
-
-test("G: острівець над смужкою режимів коментатора, поки вона відкрита, і знову внизу, коли ні", async (t) => {
+/* Режими коментатора живуть в острівці (0.27.0, поправка 19): його власної смужки з host нема, острівець не піднімається. */
+test("G: з увімкненим коментуванням острівець лишається внизу (без підйому), смужка режимів коментатора не показана, режими — в острівці", async (t) => {
   const { page, url } = await boot(t, 500);
   await stubWorking(page);
   await page.goto(`${url}/app/`);
   await page.waitForSelector("#claude-hud .claude-island", { timeout: 12000 });
-  /* Як дизайнер: кнопка «Коментарі» в острівці оболонки (ручка коментатора в режимі хоста схована) — вмикає режим у рамці. */
   await page.waitForFunction(() => document.getElementById("frame").contentDocument
     ?.querySelector("[data-comment-layer]")?.shadowRoot?.querySelector(".handle"), null, { timeout: 15000 });
+  const gap = () => page.evaluate(() => innerHeight - document.querySelector("#hud .island").getBoundingClientRect().bottom);
+  const rest = await gap();
+  assert.ok(rest >= 8 && rest <= 24, `острівець у спокої не внизу: відступ ${rest}px`);
   await page.click('#isl-tools [data-act="comments"]');
-  await page.waitForFunction(() => document.getElementById("frame").contentDocument
-    .querySelector("[data-comment-layer]").shadowRoot.querySelector(".modes.show"), null, { timeout: 5000 });
-
+  await page.waitForSelector('#isl-tools [data-act="cmtmode"]', { timeout: 5000 });
   for (const width of [1440, 1024]) {
     await page.setViewportSize({ width, height: 900 });
-    const g = await settled(page, (m) => m.barTop - m.islBottom >= 6);
-    /* Свідок: по горизонталі смужка й острівець перетинаються, тож перевірка по
-       вертикалі справді щось міряє, а не зеленіє через те, що вони порознь. */
-    assert.ok(g.barLeft < g.islRight && g.islLeft < g.barRight,
-      `${width}: смужка й острівець не перетинаються по горизонталі — тест порожній: ${JSON.stringify(g)}`);
-    assert.ok(g.barTop - g.islBottom >= 6,
-      `${width}: острівець накриває смужку режимів коментатора (запас ${g.barTop - g.islBottom}px): ${JSON.stringify(g)}`);
+    await page.waitForTimeout(450);
+    assert.equal(await gap(), rest, `${width}: острівець піднявся при коментуванні (відступ ${await gap()}px проти ${rest}px)`);
+    assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById("frame").contentDocument
+      .querySelector("[data-comment-layer]").shadowRoot.querySelector(".modes")).display), "none", `${width}: смужка режимів коментатора видима`);
   }
-
-  /* Вийшли з коментування (та сама кнопка острівця, друге натискання) → смужка зникла → острівець опускається. */
-  await page.click('#isl-tools [data-act="comments"]');
-  const g = await settled(page, (m) => m.winH - m.islBottom <= 24);
-  assert.ok(g.winH - g.islBottom >= 8 && g.winH - g.islBottom <= 24,
-    `острівець лишився піднятим після виходу з коментування: відступ ${g.winH - g.islBottom}px`);
-
-  /* «Огляд»: коментатор полотна живе в документі оболонки, а не в рамці — той самий підйом; режим вмикає та сама кнопка острівця. */
+  /* «Огляд»: коментатор полотна в документі оболонки; режим один, тож кнопок режимів нема, а острівець — на місці. */
   await page.click('[data-act="mode"][data-val="overview"]');
   await page.waitForSelector("#canvas:not([hidden])");
-  await page.waitForFunction(() => document.querySelector("#canvas [data-comment-layer]")?.shadowRoot?.querySelector(".handle"),
-    null, { timeout: 15000 });
-  await page.click('#isl-tools [data-act="comments"]');
-  await page.waitForFunction(() => document.querySelector("#canvas [data-comment-layer]").shadowRoot.querySelector(".modes.show"),
-    null, { timeout: 5000 });
-  let gap = 0;
-  for (let i = 0; i < 20 && gap < 70; i += 1) {
-    await page.waitForTimeout(150);
-    gap = await page.evaluate(() => innerHeight - document.querySelector("#hud .island").getBoundingClientRect().bottom);
-  }
-  assert.ok(gap >= 70, `в «Огляді» острівець не піднявся над смужкою режимів коментатора: відступ ${gap}px`);
+  await page.waitForTimeout(450);
+  assert.equal(await gap(), rest, "в «Огляді» острівець змістився");
+  assert.equal(await page.locator('#isl-tools [data-act="cmtmode"]').count(), 0);
 });
 
 test("H: острівець по центру робочої області за згорнутої панелі й відкритого інспектора", async (t) => {

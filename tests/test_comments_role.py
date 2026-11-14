@@ -1916,6 +1916,18 @@ class DualPagesTest(PagesEnv):
         self.assertEqual(re.findall(r"const LOCAL_PIN_COLOR = '(#[0-9A-Fa-f]{6})';", js), ['#7C6CF0'])
         self.assertIn("color: '#7C6CF0'", serve.DUAL_AUDIENCES_JS)
 
+    def test_host_arg_asks_the_shell_for_the_island_inset(self):
+        """Пара «Python ↔ JS» (Deai 0.27.0, T11): рамка питає в оболонки, скільки знизу займає острівець, через
+        `window.parent.__dcIslandInset`; оболонка (`app.js`) цю функцію виставляє. Одне з двох без другого — форми
+        коментаря знову лягають під острівець."""
+        with open(os.path.join(os.path.dirname(serve.__file__), 'app.js'), encoding='utf-8') as fh:
+            js = fh.read()
+        self.assertIn('bottomInset: function', serve.HOST_ARG)
+        self.assertIn('__dcIslandInset', serve.HOST_ARG)
+        self.assertIn('window.__dcIslandInset = ', js)
+        # «Огляд»: коментатор полотна живе у вікні оболонки і бере ту саму межу від свого `host`.
+        self.assertIn('bottomInset: () => islandInsetOver(canvasEl.getBoundingClientRect())', js)
+
     def test_dual_audience_labels_match_dictionary(self):
         """Підписи чипів у `DUAL_AUDIENCES_JS` — парні до `audChip*` у `app/i18n.js` (сервер не бачить JS-словника)."""
         with open(os.path.join(os.path.dirname(serve.__file__), 'i18n.js'), encoding='utf-8') as fh:

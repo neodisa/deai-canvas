@@ -492,7 +492,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       .search{font-size:16px}
       .pin{min-width:30px;height:30px}                  /* larger tap target */
     }
-    .root.hosted .handle,.root.hosted .panel,.root.hosted .sheetscrim,.root.hosted .sheetpeek{display:none !important}
+    .root.hosted .handle,.root.hosted .panel,.root.hosted .sheetscrim,.root.hosted .sheetpeek,.root.hosted .modes{display:none !important}
   `;
 
   /* ===========================================================================
@@ -700,14 +700,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._mcta = root.querySelector('.mcta');
       this._mccount = root.querySelector('.mccount');
       root.querySelectorAll('.mode:not(.mstop):not(.mfreeze)').forEach((b) => {
-        b.onclick = () => {
-          this._clearMulti(); this._clearArea(); this._setHover(false); // drop any element outline
-          this._mode = b.getAttribute('data-mode');
-          root.querySelectorAll('.mode:not(.mstop):not(.mfreeze)').forEach((x) => x.classList.toggle('active', x === b));
-          this._mcompose.classList.toggle('show', this._mode === 'multi'); // multi uses a modal
-          if (this._mode === 'multi') this._refreshMultiAuds();
-          this._armComment(true); // picking a mode readies commenting
-        };
+        b.onclick = () => this._pickMode(b.getAttribute('data-mode'));
       });
       // Mobile mode bar carries a "Done" button (the pull-tab is hidden while commenting).
       root.querySelector('.mstop').onclick = () => this._armComment(false);
@@ -1023,7 +1016,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._toggleBtn.classList.toggle('active', on);
       this._sh.classList.toggle('arming', on); // mobile: swap the pull-tab for the bottom mode bar
       if (this._lbl) this._lbl.textContent = on ? 'Stop' : 'Comment'; // vertical tab label; icon + badge stay
-      if (this._modesBar) this._modesBar.classList.toggle('show', on); // bar shows only while actively commenting
+      if (this._modesBar && !this._hostOpts) this._modesBar.classList.toggle('show', on); // bar shows only while actively commenting
       if (!on) { this._clearMulti(); this._clearArea(); if (this._mcompose) this._mcompose.classList.remove('show'); }
       this._syncFreeze();   // the shield is only active while commenting
       this._setHover(on);
@@ -1126,6 +1119,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     },
     // Верх панелі режимів (Element/Text/…) — нижче нього композер не опускається.
     _composeFloor() {
+      if (this._hostOpts) { const hb = this._hostBottomInset(); return hb > 0 ? window.innerHeight - hb - 8 : Infinity; }
       const b = this._modesBar;
       if (!b || !b.classList.contains('show')) return Infinity;
       return b.getBoundingClientRect().top - 8;
@@ -1750,6 +1744,43 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (!h || typeof h.rightInset !== 'function') return 0;
       try { const n = +h.rightInset(); return Number.isFinite(n) && n > 0 ? n : 0; } catch (e) { return 0; }
     },
+    /** Скільки px знизу вікна коментатора займає ХОСТ (острівець): форми не лягають під нього. Без колбека, нечисло, виняток — 0. */
+    _hostBottomInset() {
+      const h = this._hostOpts;
+      if (!h || typeof h.bottomInset !== 'function') return 0;
+      try { const n = +h.bottomInset(); return Number.isFinite(n) && n > 0 ? n : 0; } catch (e) { return 0; }
+    },
+    /** Форма «Кілька» в режимі хоста: правий край — від панелі хоста, низ — над острівцем. */
+    _placeHostMulti() {
+      this._mcompose.style.right = (this._hostInset() + 20) + 'px';
+      this._mcompose.style.bottom = (this._hostBottomInset() + 12) + 'px';
+    },
+    /** Вибір режиму — і кнопкою смужки (без хоста), і хостом (`setMode`). */
+    _pickMode(m) {
+      this._clearMulti(); this._clearArea(); this._setHover(false); // drop any element outline
+      this._mode = m;
+      this._sh.querySelectorAll('.mode:not(.mstop):not(.mfreeze)').forEach((x) => x.classList.toggle('active', x.getAttribute('data-mode') === m));
+      this._mcompose.classList.toggle('show', m === 'multi'); // multi uses a modal
+      if (m === 'multi') { this._refreshMultiAuds(); if (this._hostOpts) this._placeHostMulti(); }
+      this._armComment(true); // picking a mode readies commenting
+    },
+    /** Інструмент коментування для хоста (Deai 0.27.0, поправка 19): режим, заморозка, увімкнено, доступні режими
+     *  (полотно — лише `element`, заморозки там нема: це не сторінка). */
+    tool() {
+      return { mode: this._mode, freeze: !!this.freeze, armed: !!this.commentMode,
+        modes: this.anchors ? ['element'] : ['element', 'text', 'multi', 'area'], canFreeze: !this.anchors };
+    },
+    /** Вибрати режим (= кнопка смужки): вмикає коментування. Недоступний чи невідомий — `false`. */
+    setMode(m) {
+      if (!this._inited || this.tool().modes.indexOf(m) < 0) return false;
+      this._pickMode(m);
+      return true;
+    },
+    setFreeze(on) {
+      if (!this._inited || this.anchors) return false;
+      this._setFreeze(!!on);
+      return true;
+    },
     /** Аудиторії для чипів адресата у формі: лише з хостом і ≥ 2 аудиторіями (Deai 0.27.0). Без хоста — `[]`: форма як була. */
     _formAuds() {
       const a = this.opts && this.opts.audiences;
@@ -1876,7 +1907,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
 
   function stripRuntime(c) { const { _el, _pending, ...rest } = c; return rest; }
   // Верх композера: під елементом, інакше над ним, інакше — притиснутий донизу,
-  // але НЕ нижче `floor` (верх панелі режимів). Панель лежить вище за z-index, і
+  // але НЕ нижче `floor` (верх панелі режимів чи острівця хоста; елемент, що сам нижче межі, теж не опускає форму). Панель лежить вище за z-index, і
   // на великому <section> кнопки форми опинялись під нею: клік по «Comment»
   // вмикав режим Text, коментар не йшов (fb 05.11.2026, рамка 978px).
   function composeTop(r, boxH, viewH, floor) {
@@ -1884,7 +1915,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     let top = r.bottom + 8;
     if (top + boxH > limit) {
       const above = r.top - boxH - 8;
-      top = above >= vpad ? above : Math.max(vpad, limit - boxH);
+      top = (above >= vpad && above + boxH <= limit) ? above : Math.max(vpad, limit - boxH);
     }
     return top;
   }

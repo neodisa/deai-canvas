@@ -87,7 +87,7 @@ test("з host: режим через API, пін через форму, знім
   const page = await boot({ withHost: true });
   await page.evaluate(() => window.CommentLayer.setCommentMode(true));
   assert.deepEqual(await page.evaluate(() => window.__ev.filter((e) => e[0] === "mode").map((e) => e[1])), [true]);
-  assert.notEqual(await root(page, ".modes.show"), null);
+  assert.equal(await root(page, ".modes.show"), null, "з host смужка режимів у коментатора не показується — режими в острівці");
   await addComment(page, "Зробити ширшим");
   const s = await lastSnap(page);
   assert.equal(s.comments.length, 1);
@@ -476,4 +476,88 @@ test("S0-4: форма «Кілька» має чипи адресата; виб
   assert.equal(await page.evaluate(() => window.__mem.find((c) => c.text === "m3")._aud), "project");
   assert.deepEqual(await page.evaluate(() => window.__picked), ["project", "local", "project"]);
   await page.close();
+});
+
+/* ---- Deai 0.27.0, T11: режими коментування — в острівці хоста (одна панель), `tool()` / `setMode` / `setFreeze` ---- */
+async function bootTool({ withHost = true, anchors = false, bottomInset } = {}) {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.setContent(PAGE.replace("</main>", '<div id="low" style="position:absolute;top:740px;left:60px;height:30px;width:200px">Низ</div></main>'));
+  await page.addScriptTag({ content: BUNDLE });
+  await page.evaluate(({ withHost, anchors, bottomInset }) => {
+    const mem = [];
+    window.__mem = mem;
+    const host = withHost ? { ...(bottomInset === undefined ? {} : { bottomInset: () => bottomInset }) } : undefined;
+    const a = anchors ? { place: () => [], subscribe: () => {}, active: () => true, armed: () => {},
+      hit: () => null } : undefined;
+    window.CommentLayer.init({ projectId: "t", storage: { load: () => mem.slice(), save: (l) => { mem.length = 0; mem.push(...l); } },
+      version: "2", user: { name: "Тест" }, host, anchors: a });
+  }, { withHost, anchors, bottomInset });
+  return page;
+}
+
+test("T11-1: з host смужка .modes прихована (display:none, без класу show); без host — видима, як було", async () => {
+  const hosted = await bootTool();
+  await hosted.evaluate(() => window.CommentLayer.setCommentMode(true));
+  assert.equal(await root(hosted, ".modes"), "none");
+  assert.equal(await hosted.evaluate(`${SHOT}.querySelector('.modes').classList.contains('show')`), false);
+  await hosted.close();
+  const plain = await bootTool({ withHost: false });
+  await plain.keyboard.press("c");
+  assert.notEqual(await root(plain, ".modes"), "none");
+  assert.equal(await plain.evaluate(`${SHOT}.querySelector('.modes').classList.contains('show')`), true);
+  await plain.close();
+});
+
+test("T11-2: tool(), setMode, setFreeze — форма, неправильний режим, форма «Кілька», клас cl-freeze", async () => {
+  const page = await bootTool();
+  assert.deepEqual(await page.evaluate(() => window.CommentLayer.tool()),
+    { mode: "element", freeze: true, armed: false, modes: ["element", "text", "multi", "area"], canFreeze: true });
+  assert.equal(await page.evaluate(() => window.CommentLayer.setMode("text")), true);
+  const t = await page.evaluate(() => window.CommentLayer.tool());
+  assert.equal(t.mode, "text"); assert.equal(t.armed, true);
+  assert.equal(await page.evaluate(() => window.CommentLayer.setMode("bogus")), false);
+  assert.equal((await page.evaluate(() => window.CommentLayer.tool())).mode, "text", "невідомий режим змінив режим");
+  assert.equal(await page.evaluate(() => window.CommentLayer.setMode("multi")), true);
+  assert.equal(await page.evaluate(`${SHOT}.querySelector('.mcompose').classList.contains('show')`), true);
+  assert.equal(await page.evaluate(() => window.CommentLayer.setMode("element")), true);
+  assert.equal(await page.evaluate(`${SHOT}.querySelector('.mcompose').classList.contains('show')`), false);
+  assert.equal(await page.evaluate(() => document.documentElement.classList.contains("cl-freeze")), true);
+  assert.equal(await page.evaluate(() => window.CommentLayer.setFreeze(false)), true);
+  assert.equal(await page.evaluate(() => document.documentElement.classList.contains("cl-freeze")), false);
+  assert.equal((await page.evaluate(() => window.CommentLayer.tool())).freeze, false);
+  assert.equal(await page.evaluate(() => window.CommentLayer.setFreeze(true)), true);
+  assert.equal(await page.evaluate(() => document.documentElement.classList.contains("cl-freeze")), true);
+  await page.close();
+});
+
+test("T11-3: коментатор полотна (anchors) — єдиний режим element, заморозки нема, setMode('text') → false", async () => {
+  const page = await bootTool({ anchors: true });
+  assert.deepEqual(await page.evaluate(() => window.CommentLayer.tool()),
+    { mode: "element", freeze: false, armed: false, modes: ["element"], canFreeze: false });
+  assert.equal(await page.evaluate(() => window.CommentLayer.setMode("text")), false);
+  assert.equal(await page.evaluate(() => window.CommentLayer.setFreeze(false)), false);
+  assert.equal((await page.evaluate(() => window.CommentLayer.tool())).mode, "element");
+  await page.close();
+});
+
+test("T11-4: host.bottomInset — форма піна і форма «Кілька» не опускаються нижче острівця", async () => {
+  const page = await bootTool({ bottomInset: 200 });
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  await page.click("#low");
+  await page.waitForFunction(`!!${SHOT}.querySelector('.compose textarea')`);
+  const b = await page.evaluate(`${SHOT}.querySelector('.compose').getBoundingClientRect().bottom`);
+  assert.ok(b <= 800 - 200, `форма піна заходить під острівець: bottom=${b}`);
+  await page.evaluate(`${SHOT}.querySelector('.compose .cancel').click()`);
+  await page.evaluate(() => window.CommentLayer.setMode("multi"));
+  const mb = await page.evaluate(`${SHOT}.querySelector('.mcompose').getBoundingClientRect().bottom`);
+  assert.ok(mb <= 800 - 200, `форма «Кілька» заходить під острівець: bottom=${mb}`);
+  await page.close();
+  // Без bottomInset форма піна біля низу лягає нижче (контроль, що тест щось міряє).
+  const free = await bootTool({ bottomInset: 0 });
+  await free.evaluate(() => window.CommentLayer.setCommentMode(true));
+  await free.click("#low");
+  await free.waitForFunction(`!!${SHOT}.querySelector('.compose textarea')`);
+  const fb = await free.evaluate(`${SHOT}.querySelector('.compose').getBoundingClientRect().bottom`);
+  assert.ok(fb > 800 - 200, `контроль: без inset форма мала б бути нижче 600, bottom=${fb}`);
+  await free.close();
 });

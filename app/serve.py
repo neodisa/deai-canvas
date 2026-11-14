@@ -2906,7 +2906,8 @@ HOST_ARG = """,
             onSelect: function (id) { send({ ev: 'select', id: id }); },
             onMode: function (on) { send({ ev: 'mode', on: !!on }); },
             defaultAudience: function () { try { return localStorage.getItem('dc-cmt-aud'); } catch (e) { return null; } },
-            onAudiencePick: function (id) { try { localStorage.setItem('dc-cmt-aud', id); } catch (e) {} }
+            onAudiencePick: function (id) { try { localStorage.setItem('dc-cmt-aud', id); } catch (e) {} },
+            bottomInset: function () { try { var f = window.parent && window.parent.__dcIslandInset; return typeof f === 'function' ? f() : 0; } catch (e) { return 0; } }
           };
         })()"""
 

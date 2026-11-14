@@ -65,7 +65,9 @@ const shadowShown = (frame, sel) => frame.evaluate((s) => {
   const el = document.querySelector("[data-comment-layer]").shadowRoot.querySelector(s);
   return el ? getComputedStyle(el).display : null;
 }, sel);
-const modesShown = (frame) => frame.evaluate(() => !!document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".modes.show"));
+/* «Коментування ввімкнено» — через `tool().armed`: з host смужка `.modes` коментатора схована навмисно (режими — в острівці,
+   0.27.0), тож `.modes.show` більше не ознака режиму. Імʼя лишене: його вживають 8 сценаріїв. */
+const modesShown = (frame) => frame.evaluate(() => !!window.CommentLayer.tool().armed);
 const panelOpen = (page) => page.evaluate(() => !document.getElementById("cmt-panel").hidden);
 const cardTexts = (page) => page.$$eval("#cmt-panel .cmt-card .cmt-text", (els) => els.map((e) => e.textContent));
 const panelText = (page) => page.textContent("#cmt-panel");
@@ -109,6 +111,33 @@ test("2: клік по кнопці — панель видима, aria-pressed=
   assert.equal(await panelOpen(page), true);
   assert.equal(await page.getAttribute('#hud [data-act="comments"]', "aria-pressed"), "true");
   assert.equal(await page.evaluate(() => document.body.classList.contains("with-cmt")), true);
+  await until(() => modesShown(frame));
+});
+
+test("2б: режими коментування — в острівці (4 кнопки + заморозка), смужки коментатора нема, острівець не піднімається", async () => {
+  const { page, frame } = A;
+  const isl = () => page.evaluate(() => document.querySelector("#hud .island").getBoundingClientRect().bottom);
+  const modes = () => page.$$eval('#hud [data-act="cmtmode"]', (els) => els.map((e) => [e.dataset.val, e.getAttribute("aria-pressed")]));
+  assert.deepEqual(await modes(), [["element", "true"], ["text", "false"], ["multi", "false"], ["area", "false"]]);
+  assert.equal(await page.getAttribute('#hud [data-act="cmtfreeze"]', "aria-pressed"), "true", "заморозка типово ввімкнена");
+  assert.equal(await shadowShown(frame, ".modes"), "none", "смужка режимів коментатора видима поряд з острівцем");
+  const bottomOpen = await isl();
+  await page.click('#hud [data-act="cmtmode"][data-val="text"]');
+  assert.equal(await frame.evaluate(() => window.CommentLayer.tool().mode), "text");
+  assert.equal(await page.getAttribute('#hud [data-act="cmtmode"][data-val="text"]', "aria-pressed"), "true");
+  assert.equal(await page.getAttribute('#hud [data-act="cmtmode"][data-val="element"]', "aria-pressed"), "false");
+  await page.click('#hud [data-act="cmtfreeze"]');
+  assert.equal(await frame.evaluate(() => document.documentElement.classList.contains("cl-freeze")), false);
+  assert.equal(await page.getAttribute('#hud [data-act="cmtfreeze"]', "aria-pressed"), "false");
+  await page.click('#hud [data-act="cmtfreeze"]');
+  assert.equal(await frame.evaluate(() => document.documentElement.classList.contains("cl-freeze")), true);
+  await page.click('#hud [data-act="cmtmode"][data-val="element"]');
+  assert.equal(await frame.evaluate(() => window.CommentLayer.tool().mode), "element");
+  /* Острівець той самий, що при закритій панелі: підйому (колишній claude-lift) нема. */
+  await page.click('#hud [data-act="comments"]');
+  await until(async () => (await modes()).length === 0);
+  assert.equal(await isl(), bottomOpen, "острівець зсунувся між відкритою й закритою панеллю");
+  await page.click('#hud [data-act="comments"]');
   await until(() => modesShown(frame));
 });
 
@@ -583,4 +612,18 @@ test("19: назад у «Макет» — панель лишається ві�
   await page.evaluate(() => window.postMessage({ type: "dc-comments", ev: "mode", on: false }, "*"));
   await settle(page);
   assert.equal(await panelOpen(page), true);
+});
+
+test("19б: «Огляд» — кнопок режимів нема (один режим), у «Макеті» вони повертаються, а з закритою панеллю зникають", async () => {
+  const { page } = D;
+  const n = () => page.$$eval('#hud [data-act="cmtmode"]', (els) => els.length);
+  assert.equal(await n(), 4, "у «Макеті» з відкритою панеллю мало б бути 4 режими");
+  await page.click('[data-act="mode"][data-val="overview"]');
+  await page.waitForSelector("#canvas:not([hidden])");
+  await until(async () => (await n()) === 0);
+  assert.equal(await page.$$eval('#hud [data-act="cmtfreeze"]', (els) => els.length), 0, "на «Огляді» кнопка заморозки");
+  await page.click('[data-act="mode"][data-val="layout"]');
+  await until(async () => (await n()) === 4);
+  await page.click('#hud [data-act="comments"]');
+  await until(async () => (await n()) === 0);
 });

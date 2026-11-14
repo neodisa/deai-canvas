@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setLang } from "../app/i18n.js";
 import { islandToolsHTML } from "../app/island.js";
+import { ICONS } from "../app/icons.js";
 
 setLang("uk");
 const acts = (h) => [...h.matchAll(/data-act="([a-z]+)"/g)].map((m) => m[1]);
@@ -49,4 +50,46 @@ test("нові від команди: isl-count--new із числом нови�
   assert.match(none, /<span class="isl-count" aria-hidden="true">5<\/span>/);
   assert.equal(none.includes("isl-count--new"), false);
   assert.match(islandToolsHTML({ screen: "task", mode: "layout", commentsNew: 150 }), /isl-count--new" aria-hidden="true">99\+</);
+});
+
+/* ---- T11: режими коментування в острівці ---- */
+const TOOL = { mode: "element", freeze: true, modes: ["element", "text", "multi", "area"], canFreeze: true };
+const modeActs = (h) => [...h.matchAll(/data-act="cmtmode" data-val="([a-z]+)"/g)].map((m) => m[1]);
+
+test("режими: лише коли коментування ввімкнено, є інструмент і режимів > 1; на «Огляді», «Задачах», без інструмента — нема", () => {
+  const base = { screen: "task", mode: "layout", commentsOn: true, commentTool: TOOL };
+  assert.deepEqual(modeActs(islandToolsHTML(base)), ["element", "text", "multi", "area"]);
+  assert.equal(islandToolsHTML({ ...base, commentsOn: false }).includes("cmtmode"), false);
+  assert.equal(islandToolsHTML({ ...base, commentTool: null }).includes("cmtmode"), false);
+  assert.equal(islandToolsHTML({ ...base }).includes("cmtmode"), true);
+  const ov = islandToolsHTML({ ...base, mode: "overview", commentTool: { mode: "element", freeze: false, modes: ["element"], canFreeze: false } });
+  assert.equal(ov.includes("cmtmode") || ov.includes("cmtfreeze"), false, "на «Огляді» режимів і заморозки нема");
+  assert.equal(islandToolsHTML({ ...base, screen: "home" }).includes("cmtmode"), false);
+});
+
+test("режими: натиснутий — за mode; невідомий режим у modes відкидається; тільки відомі іконки", () => {
+  const h = islandToolsHTML({ screen: "task", mode: "layout", commentsOn: true,
+    commentTool: { ...TOOL, mode: "multi", modes: ["element", "bogus", "multi"] } });
+  assert.deepEqual(modeActs(h), ["element", "multi"]);
+  assert.match(h, /data-act="cmtmode" data-val="multi" aria-pressed="true"/);
+  assert.match(h, /isl-btn isl-btn--on" data-act="cmtmode" data-val="multi"/);
+  assert.match(h, /data-act="cmtmode" data-val="element" aria-pressed="false"/);
+  for (const id of [...h.matchAll(/#i-([a-z]+)/g)].map((m) => m[1])) assert.ok(ICONS[id], `іконки «${id}» нема у спрайті`);
+});
+
+test("заморозка: aria-pressed і isl-freeze--on за freeze; canFreeze:false — кнопки нема", () => {
+  const on = islandToolsHTML({ screen: "task", mode: "layout", commentsOn: true, commentTool: TOOL });
+  assert.match(on, /isl-freeze isl-freeze--on" data-act="cmtfreeze" aria-pressed="true"/);
+  const off = islandToolsHTML({ screen: "task", mode: "layout", commentsOn: true, commentTool: { ...TOOL, freeze: false } });
+  assert.match(off, /data-act="cmtfreeze" aria-pressed="false"/);
+  assert.equal(off.includes("isl-freeze--on"), false);
+  const none = islandToolsHTML({ screen: "task", mode: "layout", commentsOn: true, commentTool: { ...TOOL, canFreeze: false } });
+  assert.equal(none.includes("cmtfreeze"), false);
+  assert.ok(none.includes("cmtmode"));
+});
+
+test("порядок: коментарі, режими, заморозка, інспектор, баг; режими в групі з aria-label", () => {
+  const h = islandToolsHTML({ screen: "task", mode: "layout", commentsOn: true, commentTool: TOOL });
+  assert.deepEqual(acts(h), ["comments", "cmtmode", "cmtmode", "cmtmode", "cmtmode", "cmtfreeze", "inspector", "feedback"]);
+  assert.match(h, /<div class="isl-modes" role="group" aria-label="Режим коментування">/);
 });

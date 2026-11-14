@@ -121,6 +121,7 @@ const inspEl = document.getElementById('insp-panel');
    коментатора поточного виду (рамка в «Макеті», полотно в «Огляді»); сховища панель не читає (спека Б-Р4). */
 const cmtEl = document.getElementById('cmt-panel');
 let lastFrameSrc = null;   // адреса рамки на момент попереднього `applyMode`: змінилась — вибір/редагування панелі коментарів старого документа скидаються
+let cmtTool = null;   // `CommentLayer.tool()` поточного виду для острівця (режими коментування, поправка 19)
 let cmtOpen = false, cmtSnap = null, cmtSel = null, cmtQuery = '', cmtEditing = null, cmtDraft = null, frameCmtReady = false;
 const cmtExpanded = { earlier: false, closed: false };
 /** Фільтр панелі «Усі / Для Claude / Команда» (Б2) — памʼятається на вікно. */
@@ -1032,6 +1033,13 @@ const tabsEl = document.getElementById('tabs');
 const hudEl = document.getElementById('hud');
 const islTools = document.getElementById('isl-tools');
 const islandEl = hudEl.querySelector('.island');
+/** Скільки px знизу перекриває острівець над прямокутником `r` (рамка чи полотно) — для `host.bottomInset` коментатора. */
+function islandInsetOver(r) {
+  const isl = islandEl.getBoundingClientRect();
+  return isl.height && r ? Math.max(0, Math.round(r.bottom - isl.top + 8)) : 0;
+}
+/* Рамка питає це через `HOST_ARG.bottomInset` (`serve.py`; пару приколює `test_comments_role`). */
+window.__dcIslandInset = () => islandInsetOver(frame.getBoundingClientRect());
 /**
  * Записати розмітку в контейнер, не гублячи фокус клавіатури: `innerHTML` знищує вузол, а з ним і фокус. Той самий рядок,
  * що й минулого разу, — нічого не пишемо взагалі (опит стану Claude та `paintBar` кличуть перемальовку часто); інакше
@@ -1084,7 +1092,8 @@ function paintTabs() {
 function paintIsland() {
   islandEl.setAttribute('aria-label', t('islandNav'));
   const html = islandToolsHTML({ screen: homeOpen ? 'home' : 'task', mode: mode === 'canvas' ? 'overview' : 'layout',
-    inspectorOn: !!inspectorApi()?.on, commentsOn: cmtOpen, commentsCount: openCount(cmtSnap), commentsNew: cmtNewsN });
+    inspectorOn: !!inspectorApi()?.on, commentsOn: cmtOpen, commentsCount: openCount(cmtSnap), commentsNew: cmtNewsN,
+    commentTool: cmtTool });
   if (writeKeepFocus(islTools, html, islHtmlLast)) islHtmlLast = html;
 }
 /** Відкрита задача — вкладка; задачі поточного простору, яких вже нема, — геть (чистка лише в межах простору, що його
@@ -1699,6 +1708,14 @@ function cmtLayer() {
   if (!frameCmtReady) return null;
   try { return frame.contentWindow?.CommentLayer || null; } catch (e) { return null; }
 }
+/** Інструмент коментатора поточного виду (`CommentLayer.tool()`, поправка 19) або `null`. Читаємо в `paintComments`, куди
+ *  сходяться `ready`/`mode`/`change`, перемикання виду, відкриття панелі й втрата шару, — тож він ніколи не застаріває. */
+function readTool(L) {
+  try {
+    const v = L && typeof L.tool === 'function' ? L.tool() : null;
+    return v && Array.isArray(v.modes) ? { mode: String(v.mode), freeze: !!v.freeze, modes: v.modes.slice(), canFreeze: !!v.canFreeze } : null;
+  } catch (e) { return null; }
+}
 /** Текст банера `__clDown` у рамці (коментатор не піднявся) — у панель, щоб людина бачила причину. */
 function cmtDown() {
   if (mode === 'canvas') return null;
@@ -1708,6 +1725,7 @@ function paintComments() {
   const html = cmtOpen && !homeOpen ? commentsPanelHTML({ snapshot: cmtSnap, query: cmtQuery, selectedId: cmtSel,
     editingId: cmtEditing, expanded: cmtExpanded, filter: cmtFilter, dual: !noTeamComments(), teamDown: cmtTeamDown,
     fresh: cmtFresh, down: cmtSnap ? null : cmtDown() }) : '';
+  cmtTool = cmtOpen && !homeOpen ? readTool(cmtLayer()) : null;
   /* Фокус і каретку поля пошуку / редагування — назад після перезапису (той самий прийом, що в `paintInsp`). */
   const act = document.activeElement;
   const keep = act && cmtEl.contains(act) && (act.id === 'cmt-q' || act.classList.contains('cmt-edit'))
@@ -2106,6 +2124,9 @@ const BAR_ACTIONS = {
   cmtassign: (id) => { cmtLayer()?.setMeta?.(id, { assignee: 'claude' }); },
   cmtunassign: (id) => { cmtLayer()?.setMeta?.(id, { assignee: null }); },
   cmtpins: () => { cmtLayer()?.togglePins(); },
+  /* Режими й заморозка коментатора — в острівці (поправка 19); `data-val` — режим. */
+  cmtmode: (m) => { const L = cmtLayer(); if (L && typeof L.setMode === 'function' && L.setMode(m)) { cmtTool = readTool(L); paintIsland(); } },
+  cmtfreeze: () => { const L = cmtLayer(); if (cmtTool && L && typeof L.setFreeze === 'function' && L.setFreeze(!cmtTool.freeze)) { cmtTool = readTool(L); paintIsland(); } },
 
   inspector: () => {
     const api = inspectorApi();
@@ -5268,6 +5289,8 @@ const ovc = overviewComments({
   host: {
     /* Скільки справа у вікні займає панель оболонки: композер коментатора не лягає під неї. */
     rightInset: () => (cmtOpen && !cmtEl.hidden ? cmtEl.getBoundingClientRect().width : 0),
+    /* Скільки знизу полотна перекриває острівець: форма піна й «Кілька» лягають над ним. */
+    bottomInset: () => islandInsetOver(canvasEl.getBoundingClientRect()),
     /* `onReady` летить ВСЕРЕДИНІ `init()`, коли `ovc.layer` ще не присвоєно (присвоєння — після повернення з `init`):
        мікрозадача дає присвоїти, і `cmtLayer()` уже бачить шар (знімок, режим коментування при відкритій панелі). */
     onReady: () => queueMicrotask(() => onCommentsEvent('canvas', { ev: 'ready' })),
@@ -5791,19 +5814,6 @@ addEventListener('pagehide', () => {
    сама, тож `pollClaude` його б не повернув. Опитуємо й одразу: `claudeView` у
    відновленої сторінки може бути годинної давнини. */
 addEventListener('pageshow', (e) => { if (e.persisted) { paintClaude(true); pollClaude(); pollClaudeAll(); } });
-/** Чи відкрита смужка режимів коментатора (`.modes.show`) — у рамці («Макет») чи на
- *  полотні («Огляд»). Острівець тоді піднімається над нею: інакше він накривав би
- *  «Area»/«Freeze» саме тоді, коли дизайнер коментує. Заглядаємо в тіньовий DOM
- *  коментатора так само, як `frameHeld()`; сам коментатор не чіпаємо (окремий продукт). */
-function layerModesShown() {
-  const shown = (doc) => !!doc?.querySelector('[data-comment-layer]')?.shadowRoot?.querySelector('.modes.show');
-  try { if (shown(document)) return true; } catch (e) { /* немає полотна — далі рамка */ }
-  try { return shown(frame.contentDocument); } catch (e) { return false; }
-}
-/* Острівець видно завжди (інструменти), тож піднімаємо його над смужкою режимів і без сегмента Claude. */
-setInterval(() => {
-  document.body.classList.toggle('claude-lift', layerModesShown());
-}, 500);
 /** Чи є в рамці щось, що перезавантаження знищило б: відкритий інспектор
  *  (запінений елемент) або набір коментаря. Не можемо подивитись — вважаємо,
  *  що є: зайва плашка дешевша за знищений текст. Стан тюнера живе тут, у
