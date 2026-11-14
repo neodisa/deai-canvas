@@ -32,11 +32,13 @@ export const isLocalUrl = (u) => {
 
 /**
  * @param {import("playwright").Page|import("playwright").BrowserContext} target
- * @param {{rows?: object[], seen?: object}} [opts] `rows` — що віддає `GET /rest/v1/…` (типово порожньо); `seen` — спільний
+ * @param {{rows?: object[], seen?: object, selectStatus?: number}} [opts] `rows` — що віддає `GET /rest/v1/…` (типово порожньо);
+ *   `selectStatus` — HTTP-статус, яким ВІДПОВІДАЄ кожен `GET` (402/500…: «команда впала», `{"message":…}` без рядків); без нього
+ *   поведінка та сама (200 + `rows`); `seen` — спільний
  *   збирач (його ж повертаємо), щоб кілька сторінок одного тесту складали запити в одне місце
  * @returns {Promise<{outside: string[], supabase: string[], sockets: string[], cdn: string[]}>}
  */
-export async function hermeticLiga(target, { rows = [], seen = { outside: [], supabase: [], sockets: [], cdn: [] } } = {}) {
+export async function hermeticLiga(target, { rows = [], seen = { outside: [], supabase: [], sockets: [], cdn: [] }, selectStatus } = {}) {
   /* Порядок значущий: пізніша маршрутизація має пріоритет, тож загальний `abort` ставимо ПЕРШИМ. */
   await target.route((u) => !isLocalUrl(u.href), (route) => {
     seen.outside.push(route.request().url());
@@ -51,6 +53,9 @@ export async function hermeticLiga(target, { rows = [], seen = { outside: [], su
     seen.supabase.push(`${req.method()} ${new URL(req.url()).pathname}`);
     if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS });
     const isGet = req.method() === "GET";
+    if (isGet && selectStatus) {
+      return route.fulfill({ status: selectStatus, headers: CORS, contentType: "application/json", body: JSON.stringify({ message: "stub failure" }) });
+    }
     return route.fulfill({
       status: isGet ? 200 : 201, headers: CORS, contentType: "application/json",
       body: JSON.stringify(isGet ? rows : []),

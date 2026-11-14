@@ -98,8 +98,10 @@ async function pressAt(page, x, y) {
   await page.mouse.up();
 }
 
-async function overview() {
+async function overview({ selectStatus } = {}) {
   const page = await browser.newPage({ viewport: VIEW });
+  /* `selectStatus` — командна база ВПАЛА (402/500…): пізніший маршрут перекриває загальний із `newPage`. */
+  if (selectStatus) await hermeticLiga(page, { seen: NET, selectStatus });
   await page.goto(`${server.url}/app/`);
   // рамка живого виду встигає підняти свій comment-layer — G перевіряє, що він мовчить
   await page.waitForFunction(() => {
@@ -686,3 +688,95 @@ test("U: живий вид у браузері без prompt() і без іме�
   assert.equal(mine.author, "Anonymous");
   await page.close();
 });
+
+/* ── Б2 (0.27.0, Task 12): «Огляд» у просторі з командним каналом і падіння командного ───────────────── */
+
+/** Пін на «Огляді» живою формою: клік по цілі, (за потреби) вибір чипа, текст, «Comment». Віддає чипи, що були у формі. */
+async function ovPin(page, sel, text, pick = null) {
+  await settleCam(page);
+  await page.mouse.move(700, 450);
+  await page.keyboard.press("c");
+  await page.waitForTimeout(450);
+  const tgt = await pointOf(page, "holovna", sel, 0.3, 0.5);
+  await pressAt(page, Math.round(tgt.x), Math.round(tgt.y));
+  assert.ok(await shadow(page, "return !!root.querySelector('.compose textarea');"), "композер не відкрився");
+  const chips = await shadow(page, "return [...root.querySelectorAll('.compose .caud-b')].map((b) => [b.dataset.pick, b.getAttribute('aria-pressed')]);");
+  if (pick) await shadow(page, "root.querySelector(`.compose .caud-b[data-pick=\"${a}\"]`).click();", pick);
+  await page.keyboard.type(text);
+  const save = await shadow(page, "const r = root.querySelector('.compose .save').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };");
+  await pressAt(page, save.x, save.y);
+  return chips;
+}
+const localHas = async (text) => (await (await fetch(`${server.url}/api/local-comments`)).json()).comments.find((c) => c.text === text) || null;
+const storageHits = () => NET.supabase.filter((l) => l.includes("/storage/"));
+
+test("V1: «Огляд» у просторі з командним каналом — локальні піни фіолетові з data-aud=local", async () => {
+  const page = await overview();
+  const pins = await shadow(page, `return [...root.querySelectorAll('.cp .pin')].map((p) => ({ aud: p.dataset.aud ?? null, bg: getComputedStyle(p).backgroundColor }));`);
+  assert.ok(pins.length >= 3, `піни полотна: ${JSON.stringify(pins)}`);
+  const single = pins.filter((p) => p.aud !== null);
+  assert.ok(single.length >= 3, "жоден пін полотна не несе data-aud");
+  for (const p of single) assert.deepEqual(p, { aud: "local", bg: "rgb(124, 108, 240)" });
+  await page.close();
+});
+
+test("V2: пін «Огляду» — два чипи; локальний НЕ вантажить знімок у командне сховище, командний — вантажить", async () => {
+  const page = await overview();
+  const before = storageHits().length;
+  const chips = await ovPin(page, ".card:nth-child(2) h2", "V2 локальний");
+  assert.deepEqual(chips, [["local", "true"], ["project", "false"]], "форма «Огляду» у просторі з командою: два чипи, Claude типово");
+  const mine = await until2(() => localHas("V2 локальний"), "локальний пін у файлі каналу");
+  assert.ok(mine);
+  await page.waitForTimeout(1500);
+  assert.equal(storageHits().length, before, `скріншот локального піна пішов у Storage команди: ${storageHits().slice(before).join(", ")}`);
+  /* Позитивний контроль: командний пін ту ж саму дорогу проходить і знімок вантажить. */
+  await page.keyboard.press("Escape");
+  await ovPin(page, ".card:nth-child(4) h2", "V2 командний", "project");
+  await until2(() => storageHits().length > before, "знімок командного піна у Storage (позитивний контроль)");
+  assert.equal(await localHas("V2 командний"), null, "командний пін потрапив у локальний файл");
+  await page.close();
+});
+
+test("V3: командна база впала на «Огляді» — у формі чипів нема, пін локальний", async () => {
+  const page = await overview({ selectStatus: 402 });
+  const chips = await ovPin(page, ".card:nth-child(1) h2", "V3 при падінні");
+  assert.deepEqual(chips, [], "чипи адресата при падінні командного");
+  assert.ok(await until2(() => localHas("V3 при падінні"), "пін у файлі каналу"));
+  await page.close();
+});
+
+test("V10: перше читання Supabase впало (402) — у робочому місці смуга в панелі, чипів нема, локальний пін пишеться, маркер dc-seen не пишеться", async () => {
+  const page = await browser.newPage({ viewport: VIEW });
+  await hermeticLiga(page, { seen: NET, selectStatus: 402 });
+  await page.goto(`${server.url}/app/`);
+  const frame = await (await page.waitForSelector("#frame")).contentFrame();
+  await frame.waitForFunction(() => window.CommentLayer && window.CommentLayer._inited, null, { timeout: 20000 });
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector("#cmt-panel .cmt-teamdown", { timeout: 15000 });
+  assert.equal(await frame.evaluate(() => !!document.getElementById("cl-down")), false, "банер __clDown замість смуги в панелі");
+  const SH = "document.querySelector('[data-comment-layer]').shadowRoot";
+  await frame.click("h1");
+  await frame.waitForFunction(`!!${SH}.querySelector('.compose textarea')`);
+  assert.equal(await frame.evaluate(`${SH}.querySelectorAll('.compose .caud-b').length`), 0, "чипи адресата при падінні командного");
+  await frame.evaluate((tx) => {
+    const r = document.querySelector("[data-comment-layer]").shadowRoot;
+    const ta = r.querySelector(".compose textarea");
+    ta.value = tx; ta.dispatchEvent(new Event("input", { bubbles: true }));
+    r.querySelector(".compose .save").click();
+  }, "V10 локальний при 402");
+  assert.ok(await until2(() => localHas("V10 локальний при 402"), "локальний пін у файлі задачі"));
+  await page.waitForTimeout(1500);
+  const keys = await page.evaluate(() => Object.keys(localStorage));
+  assert.deepEqual(keys.filter((k) => k.startsWith("dc-seen:")), [], "маркер «бачив» записано від порожньої відповіді впалої команди");
+  await page.close();
+});
+
+async function until2(fn, what, ms = 15000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const v = await fn();
+    if (v) return v;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return assert.fail(`не дочекались: ${what}`);
+}
