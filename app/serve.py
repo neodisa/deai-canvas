@@ -6454,7 +6454,8 @@ class Handler(SimpleHTTPRequestHandler):
                 else:
                     try:
                         mod, cctx, route_channel = comments_route(page_space, prov)
-                        module_cfg = {**deai_modules.comments_client(page_space, mod, cctx), 'channel': route_channel(task, tid)}
+                        channel = route_channel(task, tid)        # ⛔ канал — ДО коду модуля: непридатний id задачі не доходить до `client_config`
+                        module_cfg = {**deai_modules.comments_client(page_space, mod, cctx), 'channel': channel}
                     except deai_modules.ModuleError as e:
                         team_err = f'командні коментарі не піднялись ({e.code})'
                 html = inject_dual_comment_layer(

@@ -1886,6 +1886,17 @@ class DualPagesTest(PagesEnv):
         self.assertIn('window.DeaiDualStore(', html)
         self.assertIn('team = null, why = "командні коментарі не піднялись (module-error)"', html)
 
+    def test_the_channel_is_built_before_the_module_code_runs(self):
+        """⛔ Як у `publish_comments` і решти гілок: канал, який ядро не змогло збудувати, не доходить до `client_config`."""
+        self.enable(self.plain, 'http://127.0.0.1:4555')
+        bad = dm.ModuleError('module-error', message='channel: bad task id')
+        with mock.patch.object(dm, 'comment_channel_of', side_effect=bad), \
+                mock.patch.object(dm, 'comments_client', side_effect=AssertionError('client_config before channel')) as cc:
+            html = self.dual()
+        cc.assert_not_called()
+        self.assertIn('window.DeaiDualStore(', html)
+        self.assertIn('team = null, why = "командні коментарі не піднялись (module-error)"', html)
+
     def test_js_literal_none_is_null(self):
         self.assertEqual(serve.js_literal(None), 'null')
 
