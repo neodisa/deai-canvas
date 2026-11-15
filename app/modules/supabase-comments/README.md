@@ -76,7 +76,14 @@ socket operation — shorter than the core's own 5 s and 10 s, so a slow project
   (realtime still subscribes). Own `save`/`remove` update the stored rows but **not** `t`, so a full read still happens at least once
   per 2 minutes. The realtime echo of an own write (the row equals what the adapter already wrote) does not schedule a re-read.
   `refresh()` inside the 2 minutes does no request; the trade-off: a colleague's change that lands exactly in a frame-reload gap may
-  show up to 2 minutes late, realtime covers everything else. Over ~2,000,000 characters the snapshot is not stored; on a quota error
+  show up to 2 minutes late, realtime covers everything else.
+  Staleness is bounded at 2 minutes by one **catch-up read**: a seeded adapter schedules a single background full read for the
+  moment the snapshot expires (cancelled by any earlier full read or `close()`, never repeated), so a change that landed while nobody
+  in the tab was subscribed, and a «team down» state, show up at that read at the latest. Writes made before the adapter's first own
+  full read are not blind: `save` first fetches only the changed ids and merges field by field (and `meta` key by key) with a
+  three-way rule — base is the last known row, ours the outgoing one, theirs the remote one; if both sides changed a field, ours
+  wins. A failed check falls back to a plain upsert, a row deleted remotely is written as is. Instances of one tab share the
+  snapshot, and a stale instance never overwrites a newer read. Over ~2,000,000 characters the snapshot is not stored; on a quota error
   the adapter drops its own keys and retries once; without `sessionStorage` it behaves as before. No long-lived storage is used.
 * **`loadError`** — a getter on the browser store: a string while the initial read failed (quota, network), `null` after a successful
   read. The combined store treats a string as «team down»: a strip, no addressee chips, pins go local. It is read once per layer: if the

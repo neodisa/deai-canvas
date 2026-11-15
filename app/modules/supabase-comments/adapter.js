@@ -24,7 +24,13 @@
  *     свіжий знімок засіває кеш без читання з бази, realtime підписується як завжди. Власні `save`/`remove` оновлюють рядки
  *     знімка, але НЕ `t` (інакше власні записи вічно продовжували б його життя, і повного читання не було б ніколи); луна
  *     власного запису в realtime (рядок збігається з `written`) нового читання не планує; `refresh()` у межах TTL мережі не
- *     торкається. Без `sessionStorage` (чи коли він кидає) адаптер поводиться як раніше. Сховище, що переживає вкладку, не використовується навмисно.
+ *     торкається. Застарілість обмежена 2 хв: засіяний адаптер робить ОДНЕ фонове «наздоганяюче» читання через `TTL - вік`
+ *     (скасовується будь-яким повним читанням чи `close()`; далі realtime підписаний без прогалини) — тож і зміна, що
+ *     випала в проміжок між рамками, і «команда впала» зʼявляються щонайбільше за 2 хв. Запис ДО першого власного повного
+ *     читання (`seeded && !freshRead`) не сліпий: `save` спершу питає в бази лише змінені id (`in('id', …)`) і зливає
+ *     поле-за-полем (і ключ-за-ключем `meta`) трійкою база(`written`)/наше/їхнє; обидва змінили — наше (як до кешу).
+ *     Знімок спільний для рамок вкладки: `syncSnap` пише, лише якщо `t` у сховищі — наш (інакше затер би новіше читання).
+ *     Без `sessionStorage` (чи коли він кидає) адаптер поводиться як раніше. Сховище, що переживає вкладку, не використовується навмисно.
  * Клієнт supabase-js створюється БЕЗ автентифікації користувача (`persistSession`, `autoRefreshToken`, `detectSessionInUrl` —
  * вимкнені): за замовчуванням кожен `create()` запускав би інтервал оновлення токена, `BroadcastChannel`, записи в
  * сховище браузера й слухачі вікна, які `close()` не знімав би (а «Огляд» створює сховище на кожен запуск).
@@ -144,6 +150,9 @@
     var ss = snapStorage();
     var snapKey = CACHE_PREFIX + String(cfg.url).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[\/?#]/)[0].toLowerCase() + ':' + channel;
     var snapT = null;
+    var seeded = false;                      // кеш засіяно знімком (а не власним читанням)
+    var freshRead = false;                   // цей екземпляр уже завершив власне вдале повне читання
+    var catchTimer = null;                   // одноразове наздоганяюче читання засіяного екземпляра
     function fresh() {
       if (snapT === null) return false;
       var age = Date.now() - snapT;
@@ -153,7 +162,7 @@
     function syncSnap() {
       if (!ss || snapT === null) return;
       var o = readSnap(ss, snapKey);
-      if (!o) return;
+      if (!o || o.t !== snapT) return;       // знімок оновив чужий екземпляр (новіше читання): не затираємо його своїми старішими рядками
       writeSnap(ss, snapKey, o.t, cache.map(function (c) { return commentToRow(c, channel); }));
     }
 
@@ -192,11 +201,13 @@
     var loadError = null;
     function fetchAll() {
       if (closed) return Promise.resolve();  // подія realtime після close() нічого не питає в бази
+      if (catchTimer !== null) { clearTimeout(catchTimer); catchTimer = null; }   // повне читання вже відбувається: наздоганяти нічого
       var mine = ++seq;
       return Promise.resolve(client.from(TABLE).select('*').eq('project_id', channel).order('id')).then(function (res) {
         if (closed || mine !== seq) return;
         if (res.error) { loadError = String(res.error.message || res.error); warn('fetch failed', res.error); return; }
         loadError = null;
+        freshRead = true;
         cache = (res.data || []).map(rowToComment);
         written = {};
         cache.forEach(function (c) { written[c.id] = stable(commentToRow(c, channel)); });
@@ -239,7 +250,6 @@
     }
 
     /* Свіжий знімок засіває кеш без читання з бази: `ready` здається, `onChange` усе одно повідомляється (як після читання). */
-    var seeded = false;
     if (ss) {
       var snap = readSnap(ss, snapKey);
       var age = snap ? Date.now() - snap.t : -1;
@@ -248,6 +258,9 @@
         cache.forEach(function (c) { written[c.id] = stable(commentToRow(c, channel)); });
         snapT = snap.t;
         seeded = true;
+        /* Наздоганяюче читання: без нього засіяний екземпляр не побачив би зміни, що сталась, коли в вкладці ніхто не слухав
+           realtime (проміжок між рамками, чи користувач був на іншій задачі). Одне, на кінець життя знімка. */
+        catchTimer = setTimeout(function () { catchTimer = null; fetchAll(); }, CACHE_TTL_MS - age);
       }
     }
     var ready = seeded ? Promise.resolve().then(function () { if (!closed) emit(); }) : fetchAll();
@@ -258,6 +271,47 @@
         if (attempt + 1 >= ATTEMPTS) return res.error;
         return sleep(300 * (attempt + 1)).then(function () { return upsert(rows, attempt + 1); });
       });
+    }
+
+    /* Трійкове злиття одного рядка (див. шапку): база/наше/їхнє по стовпцю, а `meta` — по ключах верхнього рівня. */
+    function same(a, b) { return stable(a) === stable(b); }
+    function pick(b, o, t) { return same(o, b) ? t : (same(t, b) ? o : o); }
+    function mergeRow(base, ours, theirs) {
+      var out = {};
+      Object.keys(ours).concat(Object.keys(theirs), Object.keys(base)).forEach(function (k) {
+        if (k === 'id' || k === 'project_id' || k in out) return;
+        if (k === 'meta' && ours.meta && theirs.meta && base.meta) {
+          var m = {};
+          Object.keys(ours.meta).concat(Object.keys(theirs.meta), Object.keys(base.meta)).forEach(function (mk) {
+            if (mk in m) return;
+            var o = ours.meta[mk], t = theirs.meta[mk], b = base.meta[mk], v;
+            if (o === undefined && b !== undefined && !same(t, b)) v = t;    // наше видалення ключа чинне, лише якщо їхнє лишилось базовим
+            else v = pick(b, o, t);
+            m[mk] = v;
+          });
+          Object.keys(m).forEach(function (mk) { if (m[mk] === undefined) delete m[mk]; });
+          out.meta = m;
+        } else out[k] = pick(base[k], ours[k], theirs[k]);
+      });
+      out.id = ours.id; out.project_id = channel;
+      return out;
+    }
+    /* Запис ДО першого власного повного читання: `written` може бути зі старого знімка, тож змінені рядки звіряємо з базою
+       (лише їхні id) і зливаємо. Рядок, якого в базі вже нема (колега видалив), пишемо як є — як до кешу. Збій запиту — звичайний
+       запис (користувача не блокуємо). Повертає масив рядків до upsert-а. */
+    function precheck(changed) {
+      var ids = changed.map(function (r) { return r.id; });
+      return Promise.resolve().then(function () { return client.from(TABLE).select('*').in('id', ids).eq('project_id', channel); }).then(function (res) {
+        if (res.error) { warn('merge check failed', res.error); return changed; }
+        var remote = {};
+        (res.data || []).forEach(function (r) { remote[r.id] = r; });
+        return changed.map(function (r) {
+          if (!remote[r.id] || written[r.id] === undefined) return r;
+          var theirs = commentToRow(rowToComment(remote[r.id]), channel);
+          if (stable(theirs) === written[r.id]) return r;
+          return mergeRow(JSON.parse(written[r.id]), r, theirs);
+        });
+      }).catch(function (e) { warn('merge check failed', e); return changed; });
     }
 
     var store = {
@@ -276,10 +330,22 @@
            перетирає чужого закриття чи доручення в РЕШТІ рядків; два записи в ОДИН рядок — виграє останній. */
         var changed = rows.filter(function (r) { return written[r.id] !== stable(r); });
         if (!changed.length) { cache = comments.slice(); seq++; syncSnap(); return Promise.resolve(); }
-        return upsert(changed, 0).then(function (err) {
+        var pre = seeded && !freshRead ? precheck(changed) : Promise.resolve(changed);
+        return pre.then(function (out) {
+          return upsert(out, 0).then(function (err) { return [out, err]; });
+        }).then(function (pair) {
+          var out = pair[0], err = pair[1];
           cache = comments.slice();          // оптимістичний кеш: запис не губиться, навіть якщо база не відповіла
           seq++;                             // а відповідь, що вже летіла до запису, його не затре
-          if (!err) { changed.forEach(function (r) { written[r.id] = stable(r); }); syncSnap(); return; }
+          if (!err) {
+            var adopted = false, mergedBy = {};
+            out.forEach(function (r, i) { if (stable(r) !== stable(changed[i])) { mergedBy[r.id] = r; adopted = true; } });
+            if (adopted) cache = cache.map(function (c) { return mergedBy[c.id] ? rowToComment(mergedBy[c.id]) : c; });
+            out.forEach(function (r) { written[r.id] = stable(r); });
+            syncSnap();
+            if (adopted) emit();             // споживачі беруть злитий стан (чужа зміна не губиться)
+            return;
+          }
           warn('save failed after retries', err);
           throw new Error('supabase save failed: ' + err.message);
         });
@@ -299,6 +365,7 @@
         if (closed) return;
         closed = true;
         listeners.length = 0;
+        if (catchTimer !== null) { clearTimeout(catchTimer); catchTimer = null; }
         if (refetchTimer !== null) { clearTimeout(refetchTimer); refetchTimer = null; }
         /* removeChannel лише залишає канал; сокет realtime (з серцебиттям) закриває `disconnect`. Обидва — без відмов назовні. */
         var left;
