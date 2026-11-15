@@ -70,7 +70,7 @@ function fakeStorage({ quota = 0 } = {}) {
 function world(opts = {}) {
   const w = {
     calls: [], fetches: [], channels: [], removedChannels: [], disconnects: 0, created: [], delays: [], warnings: [], logs: [], selects: 0,
-    timers: [], nextTimer: 1, pendingSelects: [],
+    timers: [], nextTimer: 1, pendingSelects: [], pendingTargeted: [],
   };
   w.opts = { rows: [], failSelect: false, rejectSelect: false, manualSelect: false, failUpserts: 0, failDelete: false,
     removeChannel: "ok", disconnect: "ok", upload: "ok", ...opts };
@@ -92,7 +92,9 @@ function world(opts = {}) {
               if (inF) {                                  // цільовий select перед злиттям: `opts.targeted(ids)` або рядки за id
                 if (w.opts.failTargeted) return Promise.resolve({ data: null, error: { message: "targeted boom" } }).then(res, rej);
                 const src = typeof w.opts.targeted === "function" ? w.opts.targeted(inF[2]) : (typeof w.opts.rows === "function" ? w.opts.rows(n) : w.opts.rows);
-                return Promise.resolve({ data: src.filter((r) => inF[2].includes(r.id)), error: null }).then(res, rej);
+                const out = { data: src.filter((r) => inF[2].includes(r.id)), error: null };
+                if (w.opts.gateTargeted) return new Promise((r) => w.pendingTargeted.push(() => r(out))).then(res, rej);   // відповідь чекає тесту
+                return Promise.resolve(out).then(res, rej);
               }
               if (w.opts.manualSelect) return new Promise((r) => w.pendingSelects.push(r)).then(res, rej);
               if (w.opts.rejectSelect) return Promise.reject(new Error("select rejected")).then(res, rej);
@@ -744,6 +746,13 @@ const SNAP_KEY = `deai-comments:v1:abcdefghijkl.supabase.co:${CHANNEL}`;
 const TTL = 120000;
 const snapOf = (st, key = SNAP_KEY) => JSON.parse(st.getItem(key));
 const upsertsOf = (w) => w.calls.filter((c) => c.op === "upsert");
+/** Подія realtime + виконати ЛИШЕ таймер із затримкою `ms` (решта таймерів, зокрема наздоганяючий, чекає). */
+const fireOnly = async (w, ev, ms, i = 0) => {
+  w.channels[i].handlers[0].cb(ev);
+  const t = w.pending().find((x) => x.ms === ms);
+  t.live = false; t.fn();
+  await settle();
+};
 const fire = async (w, ev, i = 0) => { w.channels[i].handlers[0].cb(ev); w.runTimers(); await settle(); };
 
 test("знімок: другий create у межах TTL на тому ж url+каналі — 0 select; той самий load() і written (save без змін — без upsert)", async () => {
@@ -766,7 +775,7 @@ test("знімок: другий create у межах TTL на тому ж url+�
   assert.equal(upsertsOf(w).length, 0, "written засіяно: нічого не змінено — нічого не пишемо");
   await s2.save([pin("a", { text: "нове" }), pin("b")]);
   assert.equal(upsertsOf(w).length, 1);
-  assert.deepEqual(upsertsOf(w)[0].rows.map((r) => r.id), ["a"]);
+  assert.deepEqual(plain(upsertsOf(w)[0].rows.map((r) => r.id)), ["a"]);
 });
 
 test("знімок: після TTL — рівно одне читання (і знімок оновлено)", async () => {
@@ -1013,7 +1022,7 @@ test("наздоганяюче читання: засіяний екземпля
 
 test("наздоганяюче читання: скасовується раннім повним читанням (realtime і refresh після TTL) та close()", async () => {
   const a = await seededWorld();
-  await fire(a.w, { eventType: "UPDATE", new: row("a", { text: "чуже" }) }, 1);
+  await fireOnly(a.w, { eventType: "UPDATE", new: row("a", { text: "чуже" }) }, 120, 1);
   assert.equal(a.w.selectCalls().length, 2, "realtime-перечитування");
   assert.equal(a.w.pending().length, 0, "наздоганяюче скасовано");
   const b = await seededWorld();
@@ -1094,14 +1103,126 @@ test("злиття: пропущеної зміни нема — рівно од
   assert.equal(w2.targetedCalls().length, 0, "екземпляр, що сам читав, не питає");
 });
 
-test("злиття: збій цільового select — звичайний upsert з попередженням; рядок, якого в базі вже нема, пишеться як є", async () => {
+test("злиття: збій цільового select — звичайний upsert з попередженням (користувача не блокуємо)", async () => {
   const a = await seededWorld({ failTargeted: true });
   await a.s2.save([pin("a", { text: "мій" })]);
   assert.equal(upsertsOf(a.w)[0].rows[0].text, "мій");
   assert.ok(a.w.warnings.some((m) => m.includes("merge check failed")));
-  const b = await seededWorld({ targeted: () => [] });
-  await b.s2.save([pin("a", { text: "мій" })]);
-  assert.equal(upsertsOf(b.w).length, 1);
+  assert.equal(a.s2.load()[0].text, "мій");
+});
+
+test("воскресіння: пін, який колега видалив, не пишеться назад, зникає з load(), другий save його теж не вставляє; новий пін пишеться", async () => {
+  const { w, s2, seen, st } = await seededWorld({ targeted: () => [] });
+  await s2.save([pin("a", { text: "мій" }), pin("new")]);
+  assert.equal(w.targetedCalls().length, 1);
+  assert.deepEqual(plain(upsertsOf(w)[0].rows.map((r) => r.id)), ["new"], "лише новий; `a` видалено колегою");
+  assert.deepEqual(plain(s2.load().map((c) => c.id)), ["new"]);
+  assert.deepEqual(plain(seen.at(-1).map((c) => c.id)), ["new"], "споживачі бачать зникнення");
+  assert.deepEqual(snapOf(st).rows.map((r) => r.id), ["new"]);
+  await s2.save([pin("a", { text: "ще раз" }), pin("new")]);       // коментатор тримає `a` як _pending і шле знову
+  assert.equal(upsertsOf(w).length, 1, "видалений id фільтрується завжди");
+  assert.deepEqual(plain(s2.load().map((c) => c.id)), ["new"]);
+});
+
+test("воскресіння: усі змінені рядки видалені колегою — upsert не робиться", async () => {
+  const { w, s2 } = await seededWorld({ targeted: () => [] });
+  await s2.save([pin("a", { text: "мій" })]);
+  assert.equal(upsertsOf(w).length, 0);
+  assert.deepEqual(plain(s2.load()), []);
+});
+
+test("наздоганяюче читання: невдале чи витіснене — перепланується через TTL; витіснене читання realtime його не вбиває", async () => {
+  const a = await seededWorld();
+  a.w.opts.failSelect = true;
+  a.w.runTimers();
+  await settle();
+  assert.equal(a.w.selectCalls().length, 2, "спроба була й впала");
+  const again = a.w.pending();
+  assert.equal(again.length, 1, "перепланувано");
+  assert.equal(again[0].ms, TTL);
+  a.w.opts.failSelect = false;
+  a.w.runTimers();
+  await settle();
+  assert.equal(a.w.selectCalls().length, 3);
+  assert.equal(a.w.pending().length, 0, "вдале читання — кінець");
+  const c = await seededWorld();
+  c.w.opts.failSelect = true;                             // невдале realtime-читання теж не скасовує наздоганяючого
+  await fireOnly(c.w, { eventType: "UPDATE", new: row("a", { text: "чуже" }) }, 120, 1);
+  assert.equal(c.w.selectCalls().length, 2);
+  assert.ok(c.w.pending().some((t) => t.ms === TTL - 30000), "наздоганяюче досі чекає");
+  const b = await seededWorld();
+  b.w.opts.manualSelect = true;
+  const catchT = b.w.pending().find((t) => t.ms === TTL - 30000);
+  catchT.live = false; catchT.fn();                       // наздоганяюче вилетіло й чекає відповіді
+  b.w.channels[1].handlers[0].cb({ eventType: "UPDATE", new: row("a", { text: "чуже" }) });
+  b.w.pending().find((t) => t.ms === 120).fn();            // realtime-читання витісняє його (seq)
+  await settle();
+  b.w.pendingSelects[0]({ data: [row("a")], error: null });  // відповідь витісненого
+  await settle();
+  assert.equal(b.w.pending().filter((t) => t.ms === TTL).length, 1, "витіснене наздоганяюче перепланувано");
+});
+
+test("черга save: два записи одного рядка, у першого повільна звірка — upsert-и йдуть у порядку викликів, у кеші новіший", async () => {
+  const { w, s2 } = await seededWorld({ gateTargeted: true, targeted: () => [row("a")] });
+  const p1 = s2.save([pin("a", { text: "перший" })]);
+  const p2 = s2.save([pin("a", { text: "другий" })]);
+  for (let i = 0; i < 30 && w.pendingTargeted.length + upsertsOf(w).length < 2; i += 1) {
+    await settle();
+    const r = w.pendingTargeted.pop();                    // відповідаємо з КІНЦЯ: без черги другий випередив би перший
+    if (r) r();
+  }
+  await Promise.all([p1, p2]);
+  assert.deepEqual(plain(upsertsOf(w).map((u) => u.rows[0].text)), ["перший", "другий"]);
+  assert.equal(s2.load()[0].text, "другий");
+  await s2.save([pin("a", { text: "другий" })]);
+  assert.equal(upsertsOf(w).length, 2, "written тримає новіший рядок");
+});
+
+test("черга save: відмова одного запису не ламає черги; промис кожного — власний", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a")], storage: st, failUpserts: 3 });
+  const s = w.create();
+  await s.ready;
+  const p1 = s.save([pin("a", { text: "х" })]);
+  const p2 = s.save([pin("a", { text: "у" })]);
+  const r1 = drive(w, p1).then(() => "ok", () => "fail");
+  assert.equal(await r1, "fail");
+  assert.equal(await drive(w, p2).then(() => "ok", () => "fail"), "ok");
+  assert.equal(upsertsOf(w).at(-1).rows[0].text, "у");
+});
+
+test("злиття: стан закриття — одна одиниця (status+resolved_v+resolve_reason): мішаної трійки не буває", async () => {
+  const base = { status: "resolved", resolved_v: 2, resolve_reason: "R" };
+  const theirs = row("a", { status: "open", resolved_v: null, resolve_reason: null });
+  const st = fakeStorage();
+  const w = world({ rows: [row("a", base)], storage: st, targeted: () => [theirs] });
+  await w.create().ready;
+  w.clock += 10;
+  const s2 = w.create();
+  await s2.ready;
+  /* Ми змінили лише причину; вони перевідкрили (змінили всю трійку). Обидві сторони змінили трійку → наша ЦІЛА. */
+  await s2.save([pin("a", { status: "resolved", resolvedV: 2, resolveReason: "R2" })]);
+  const r = upsertsOf(w)[0].rows[0];
+  assert.deepEqual([r.status, r.resolved_v, r.resolve_reason], ["resolved", 2, "R2"]);
+  /* Ми правили лише текст (трійка = база) → їхня трійка ЦІЛА. */
+  const w2 = world({ rows: [row("a", base)], storage: fakeStorage(), targeted: () => [theirs] });
+  await w2.create().ready;
+  w2.clock += 10;
+  const t2 = w2.create();
+  await t2.ready;
+  await t2.save([pin("a", { ...{ status: "resolved", resolvedV: 2, resolveReason: "R" }, text: "мій" })]);
+  const r2 = upsertsOf(w2)[0].rows[0];
+  assert.deepEqual([r2.status, r2.resolved_v, r2.resolve_reason, r2.text], ["open", null, null, "мій"]);
+});
+
+test("звірка один раз: два save одного рядка до повного читання — один цільовий select", async () => {
+  const { w, s2 } = await seededWorld({ targeted: () => [row("a")] });
+  await s2.save([pin("a", { text: "1" })]);
+  await s2.save([pin("a", { text: "2" })]);
+  assert.equal(w.targetedCalls().length, 1);
+  assert.equal(upsertsOf(w).length, 2);
+  await s2.save([pin("a", { text: "2" }), pin("b")]);
+  assert.equal(w.targetedCalls().length, 1, "`b` без written — звіряти нема з чим, а `a` уже звірено");
 });
 
 test("syncSnap: екземпляр, чий знімок чужий-новіший, не затирає його своїми рядками (рядки й t — другого)", async () => {

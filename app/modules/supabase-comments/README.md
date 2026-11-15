@@ -79,10 +79,15 @@ socket operation — shorter than the core's own 5 s and 10 s, so a slow project
   show up to 2 minutes late, realtime covers everything else.
   Staleness is bounded at 2 minutes by one **catch-up read**: a seeded adapter schedules a single background full read for the
   moment the snapshot expires (cancelled by any earlier full read or `close()`, never repeated), so a change that landed while nobody
-  in the tab was subscribed, and a «team down» state, show up at that read at the latest. Writes made before the adapter's first own
+  in the tab was subscribed, shows up at that read at the latest (a failed or superseded catch-up read is retried after another 2 minutes).
+  A seeded adapter does not show the «team down» strip for an outage that starts after the snapshot was taken (nothing re-reads
+  `loadError` after `ready`); saves still retry through the combined store. Writes made before the adapter's first own
   full read are not blind: `save` first fetches only the changed ids and merges field by field (and `meta` key by key) with a
   three-way rule — base is the last known row, ours the outgoing one, theirs the remote one; if both sides changed a field, ours
-  wins. A failed check falls back to a plain upsert, a row deleted remotely is written as is. Instances of one tab share the
+  wins. A failed check falls back to a plain upsert. A row that the successful check finds deleted remotely is **not** re-inserted: it is
+  dropped from the cache and remembered as gone, and later saves filter it out even if the commenter still holds it as pending. The
+  closing state (`status`, `resolved_v`, `resolve_reason`) is merged as one unit. Own saves run one after another (a queue), and an
+  id already checked is not checked again before the first full read. Instances of one tab share the
   snapshot, and a stale instance never overwrites a newer read. Over ~2,000,000 characters the snapshot is not stored; on a quota error
   the adapter drops its own keys and retries once; without `sessionStorage` it behaves as before. No long-lived storage is used.
 * **`loadError`** — a getter on the browser store: a string while the initial read failed (quota, network), `null` after a successful

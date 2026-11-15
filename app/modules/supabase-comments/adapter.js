@@ -26,7 +26,8 @@
  *     власного запису в realtime (рядок збігається з `written`) нового читання не планує; `refresh()` у межах TTL мережі не
  *     торкається. Застарілість обмежена 2 хв: засіяний адаптер робить ОДНЕ фонове «наздоганяюче» читання через `TTL - вік`
  *     (скасовується будь-яким повним читанням чи `close()`; далі realtime підписаний без прогалини) — тож і зміна, що
- *     випала в проміжок між рамками, і «команда впала» зʼявляються щонайбільше за 2 хв. Запис ДО першого власного повного
+ *     випала в проміжок між рамками, зʼявляється щонайбільше за 2 хв. Засіяний адаптер НЕ показує смугу «команда впала» для збою, що почався
+ *     після знімка (`loadError` читає лише `checkLoad` дуал-сховища, раз після `ready`); записи й далі ретраяться через дуал-сховище. Запис ДО першого власного повного
  *     читання (`seeded && !freshRead`) не сліпий: `save` спершу питає в бази лише змінені id (`in('id', …)`) і зливає
  *     поле-за-полем (і ключ-за-ключем `meta`) трійкою база(`written`)/наше/їхнє; обидва змінили — наше (як до кешу).
  *     Знімок спільний для рамок вкладки: `syncSnap` пише, лише якщо `t` у сховищі — наш (інакше затер би новіше читання).
@@ -152,6 +153,9 @@
     var snapT = null;
     var seeded = false;                      // кеш засіяно знімком (а не власним читанням)
     var freshRead = false;                   // цей екземпляр уже завершив власне вдале повне читання
+    var gone = {};                           // id, які колега видалив (знайдено цільовим select-ом): ніколи не пишемо їх назад
+    var checked = {};                        // id, уже звірені цільовим select-ом: після нашого злитого запису авторитетні
+    var chain = Promise.resolve();           // черга власних save: запис N+1 починається після завершення N
     var catchTimer = null;                   // одноразове наздоганяюче читання засіяного екземпляра
     function fresh() {
       if (snapT === null) return false;
@@ -199,21 +203,28 @@
        поля подвійне сховище не знало б, що команда лежить, і порожній кеш виглядав би «командних нема». Скидається
        першим вдалим читанням. */
     var loadError = null;
-    function fetchAll() {
+    /* Наздоганяюче читання, що не вдалось чи було витіснене, не вмирає: ще одна спроба через TTL (не частіше одного разу на 2 хв). */
+    function scheduleCatch(ms) {
+      if (closed || freshRead || catchTimer !== null) return;
+      catchTimer = setTimeout(function () { catchTimer = null; fetchAll(true); }, ms);
+    }
+    function fetchAll(fromCatch) {
       if (closed) return Promise.resolve();  // подія realtime після close() нічого не питає в бази
-      if (catchTimer !== null) { clearTimeout(catchTimer); catchTimer = null; }   // повне читання вже відбувається: наздоганяти нічого
       var mine = ++seq;
+      var lost = function () { if (fromCatch === true) scheduleCatch(CACHE_TTL_MS); };
       return Promise.resolve(client.from(TABLE).select('*').eq('project_id', channel).order('id')).then(function (res) {
-        if (closed || mine !== seq) return;
-        if (res.error) { loadError = String(res.error.message || res.error); warn('fetch failed', res.error); return; }
+        if (closed || mine !== seq) { lost(); return; }
+        if (res.error) { loadError = String(res.error.message || res.error); warn('fetch failed', res.error); lost(); return; }
         loadError = null;
         freshRead = true;
+        if (catchTimer !== null) { clearTimeout(catchTimer); catchTimer = null; }   // повне читання вдалось: наздоганяти нічого
+        (res.data || []).forEach(function (r) { delete gone[r.id]; });
         cache = (res.data || []).map(rowToComment);
         written = {};
         cache.forEach(function (c) { written[c.id] = stable(commentToRow(c, channel)); });
         if (ss) { snapT = Date.now(); writeSnap(ss, snapKey, snapT, res.data || []); }
         emit();
-      }).catch(function (e) { loadError = String((e && e.message) || e); warn('fetch failed', e); });
+      }).catch(function (e) { loadError = String((e && e.message) || e); warn('fetch failed', e); lost(); });
     }
 
     /* Подія realtime → перечитування через `REFETCH_MS`; нова подія в цей час посуває термін, а не додає запит. */
@@ -260,7 +271,7 @@
         seeded = true;
         /* Наздоганяюче читання: без нього засіяний екземпляр не побачив би зміни, що сталась, коли в вкладці ніхто не слухав
            realtime (проміжок між рамками, чи користувач був на іншій задачі). Одне, на кінець життя знімка. */
-        catchTimer = setTimeout(function () { catchTimer = null; fetchAll(); }, CACHE_TTL_MS - age);
+        catchTimer = setTimeout(function () { catchTimer = null; fetchAll(true); }, CACHE_TTL_MS - age);
       }
     }
     var ready = seeded ? Promise.resolve().then(function () { if (!closed) emit(); }) : fetchAll();
@@ -278,6 +289,11 @@
     function pick(b, o, t) { return same(o, b) ? t : (same(t, b) ? o : o); }
     function mergeRow(base, ours, theirs) {
       var out = {};
+      /* Стан закриття (`status`, `resolved_v`, `resolve_reason`) — ОДНА одиниця: змішана трійка (статус колеги з причиною нашою)
+         була б неузгодженою. Правило те саме: наша трійка = база → їхня; їхня = база → наша; обидві змінено → наша. */
+      var tri = function (r) { return { status: r.status, resolved_v: r.resolved_v, resolve_reason: r.resolve_reason }; };
+      var win = pick(tri(base), tri(ours), tri(theirs));
+      out.status = win.status; out.resolved_v = win.resolved_v; out.resolve_reason = win.resolve_reason;
       Object.keys(ours).concat(Object.keys(theirs), Object.keys(base)).forEach(function (k) {
         if (k === 'id' || k === 'project_id' || k in out) return;
         if (k === 'meta' && ours.meta && theirs.meta && base.meta) {
@@ -297,21 +313,67 @@
       return out;
     }
     /* Запис ДО першого власного повного читання: `written` може бути зі старого знімка, тож змінені рядки звіряємо з базою
-       (лише їхні id) і зливаємо. Рядок, якого в базі вже нема (колега видалив), пишемо як є — як до кешу. Збій запиту — звичайний
-       запис (користувача не блокуємо). Повертає масив рядків до upsert-а. */
+       (лише їхні id, і лише ті, що ще не звірені) і зливаємо. Рядок, якого в базі вже нема (колега видалив) при ВДАЛОМУ запиті,
+       вважаємо видаленим: не воскрешаємо (див. `gone`). Збій запиту — звичайний запис (користувача не блокуємо).
+       Повертає {rows: рядки до upsert-а, gone: id видалених колегою}. */
     function precheck(changed) {
-      var ids = changed.map(function (r) { return r.id; });
+      var ids = changed.filter(function (r) { return !checked[r.id] && written[r.id] !== undefined; }).map(function (r) { return r.id; });
+      if (!ids.length) return Promise.resolve({ rows: changed, gone: [] });
       return Promise.resolve().then(function () { return client.from(TABLE).select('*').in('id', ids).eq('project_id', channel); }).then(function (res) {
-        if (res.error) { warn('merge check failed', res.error); return changed; }
-        var remote = {};
+        if (res.error) { warn('merge check failed', res.error); return { rows: changed, gone: [] }; }
+        var remote = {}, goneIds = [];
         (res.data || []).forEach(function (r) { remote[r.id] = r; });
-        return changed.map(function (r) {
-          if (!remote[r.id] || written[r.id] === undefined) return r;
+        ids.forEach(function (id) { checked[id] = true; });
+        var rows = [];
+        changed.forEach(function (r) {
+          if (ids.indexOf(r.id) < 0 || written[r.id] === undefined) { rows.push(r); return; }
+          if (!remote[r.id]) { goneIds.push(r.id); return; }
           var theirs = commentToRow(rowToComment(remote[r.id]), channel);
-          if (stable(theirs) === written[r.id]) return r;
-          return mergeRow(JSON.parse(written[r.id]), r, theirs);
+          rows.push(stable(theirs) === written[r.id] ? r : mergeRow(JSON.parse(written[r.id]), r, theirs));
         });
-      }).catch(function (e) { warn('merge check failed', e); return changed; });
+        return { rows: rows, gone: goneIds };
+      }).catch(function (e) { warn('merge check failed', e); return { rows: changed, gone: [] }; });
+    }
+
+    function doSave(comments) {
+      var dropped = false;
+      var keep = function (c) { if (gone[c.id]) { dropped = true; return false; } return true; };
+      comments = comments.filter(keep);          // видалене колегою не воскрешаємо, навіть якщо коментатор тримає його як _pending
+      var rows = comments.map(function (c) { return commentToRow(c, channel); });
+      /* Запис РІЗНИЦЕЮ (Deai 0.27.0): лише рядки, яких база ще не має в такому вигляді. Застарілий список одного вікна вже не
+         перетирає чужого закриття чи доручення в РЕШТІ рядків; два записи в ОДИН рядок — виграє останній. */
+      var changed = rows.filter(function (r) { return written[r.id] !== stable(r); });
+      if (!changed.length) { cache = comments.slice(); seq++; syncSnap(); if (dropped) emit(); return Promise.resolve(); }
+      var pre = seeded && !freshRead ? precheck(changed) : Promise.resolve({ rows: changed, gone: [] });
+      return pre.then(function (chk) {
+        if (chk.gone.length) {
+          chk.gone.forEach(function (id) { gone[id] = true; delete written[id]; });
+          comments = comments.filter(keep);
+        }
+        var out = chk.rows;
+        if (!out.length) { cache = comments.slice(); seq++; syncSnap(); if (dropped) emit(); return null; }
+        return upsert(out, 0).then(function (err) { return [out, err]; });
+      }).then(function (pair) {
+        if (!pair) return;
+        var out = pair[0], err = pair[1];
+        cache = comments.slice();            // оптимістичний кеш: запис не губиться, навіть якщо база не відповіла
+        seq++;                               // а відповідь, що вже летіла до запису, його не затре
+        if (!err) {
+          var adopted = false, mergedBy = {};
+          out.forEach(function (r) {
+            var mine = null;
+            for (var k = 0; k < changed.length; k++) if (changed[k].id === r.id) mine = changed[k];
+            if (mine && stable(r) !== stable(mine)) { mergedBy[r.id] = r; adopted = true; }
+          });
+          if (adopted) cache = cache.map(function (c) { return mergedBy[c.id] ? rowToComment(mergedBy[c.id]) : c; });
+          out.forEach(function (r) { written[r.id] = stable(r); });
+          syncSnap();
+          if (adopted || dropped) emit();    // споживачі беруть злитий стан (чужа зміна не губиться, видалене зникає)
+          return;
+        }
+        warn('save failed after retries', err);
+        throw new Error('supabase save failed: ' + err.message);
+      });
     }
 
     var store = {
@@ -324,31 +386,13 @@
       refresh: function () { return fresh() ? Promise.resolve() : fetchAll(); },
       /* Живі оновлення: CommentLayer підписується тут; realtime → fetchAll → emit. */
       subscribe: function (fn) { if (typeof fn === 'function') listeners.push(fn); },
+      /* Власні save йдуть ЧЕРГОЮ: цільова звірка додає круг до бази, і без черги старіший запис міг би дійти після новішого й
+         лишити в базі старий текст. `changed` і звірка рахуються в момент виконання, проти `written`, що лишив попередній save;
+         відмова одного не ламає черги, а промис кожного виклику — його власний. */
       save: function (comments) {
-        var rows = comments.map(function (c) { return commentToRow(c, channel); });
-        /* Запис РІЗНИЦЕЮ (Deai 0.27.0): лише рядки, яких база ще не має в такому вигляді. Застарілий список одного вікна вже не
-           перетирає чужого закриття чи доручення в РЕШТІ рядків; два записи в ОДИН рядок — виграє останній. */
-        var changed = rows.filter(function (r) { return written[r.id] !== stable(r); });
-        if (!changed.length) { cache = comments.slice(); seq++; syncSnap(); return Promise.resolve(); }
-        var pre = seeded && !freshRead ? precheck(changed) : Promise.resolve(changed);
-        return pre.then(function (out) {
-          return upsert(out, 0).then(function (err) { return [out, err]; });
-        }).then(function (pair) {
-          var out = pair[0], err = pair[1];
-          cache = comments.slice();          // оптимістичний кеш: запис не губиться, навіть якщо база не відповіла
-          seq++;                             // а відповідь, що вже летіла до запису, його не затре
-          if (!err) {
-            var adopted = false, mergedBy = {};
-            out.forEach(function (r, i) { if (stable(r) !== stable(changed[i])) { mergedBy[r.id] = r; adopted = true; } });
-            if (adopted) cache = cache.map(function (c) { return mergedBy[c.id] ? rowToComment(mergedBy[c.id]) : c; });
-            out.forEach(function (r) { written[r.id] = stable(r); });
-            syncSnap();
-            if (adopted) emit();             // споживачі беруть злитий стан (чужа зміна не губиться)
-            return;
-          }
-          warn('save failed after retries', err);
-          throw new Error('supabase save failed: ' + err.message);
-        });
+        var p = chain.then(function () { return doSave(comments); });
+        chain = p.catch(function () { /* черга йде далі */ });
+        return p;
       },
       /* Жорстке видалення: upsert-збереження рядків не прибирає, тож видалення — окремий шлях. */
       remove: function (ids) {
