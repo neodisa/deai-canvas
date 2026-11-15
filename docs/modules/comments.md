@@ -104,6 +104,8 @@ key, `folder_ok`, the output-folder rule of **publish** modules; a `comments` mo
 
 **Write by difference.** Prefer sending only the rows that changed since the last read or write in `save`: the layer calls `save` with the whole array on every change, and a service with a traffic quota pays for every row (`supabase-comments` 1.3.0 compares canonical JSON and sends nothing when nothing changed).
 
+**Cache between frame reloads.** The workplace reloads the frame on every page, state or iteration click, and every reload creates a new store: keep the last successful full read of the channel for a short time (`supabase-comments` 1.3.0 uses the tab's `sessionStorage` for 2 minutes), update it on your own writes without extending its life, and skip the re-read when the realtime echo is your own write.
+
 **`GET /api/comment-news?task=<id>`** (0.27.0) returns `{supported, items, error?}` — the `recent` items of the task's channel (at most 200, open only). On a provider failure it answers `{supported: true, items: [], error}`; the client then neither counts nor writes its «seen» baseline. The shell polls it only for the open tabs of the current space (not the active one): when the set of open tabs changes, when the active task or space changes, and — at most once per 30 s — on window focus, visibility and a 90 s timer.
 
 Timeouts: `client_config` and `check` get 5 s (then `check-timeout`), `list` and `resolve` 10 s. Time out your own requests

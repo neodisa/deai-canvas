@@ -69,6 +69,15 @@ socket operation — shorter than the core's own 5 s and 10 s, so a slow project
   keys, because `jsonb` reorders keys of `meta`); nothing changed, no request.
 * **Realtime of its own channel only** — the subscription is on the whole table (a DELETE event carries only the key), so the callback
   drops events of other channels instead of re-reading.
+* **A channel snapshot between frame reloads** — the workplace reloads its frame on every page, state or iteration click, and each
+  reload used to run a full `select *` of the channel (up to ~700 KB, 75% of it the inline `meta.shot`; columns cannot be trimmed
+  because `save` writes whole rows). The adapter now keeps the last **successful** full read in the tab's `sessionStorage`
+  (`deai-comments:v1:<url host>:<channel>` → `{t, rows}`) for 2 minutes: a fresh snapshot seeds the cache with no network read
+  (realtime still subscribes). Own `save`/`remove` update the stored rows but **not** `t`, so a full read still happens at least once
+  per 2 minutes. The realtime echo of an own write (the row equals what the adapter already wrote) does not schedule a re-read.
+  `refresh()` inside the 2 minutes does no request; the trade-off: a colleague's change that lands exactly in a frame-reload gap may
+  show up to 2 minutes late, realtime covers everything else. Over ~2,000,000 characters the snapshot is not stored; on a quota error
+  the adapter drops its own keys and retries once; without `sessionStorage` it behaves as before. No long-lived storage is used.
 * **`loadError`** — a getter on the browser store: a string while the initial read failed (quota, network), `null` after a successful
   read. The combined store treats a string as «team down»: a strip, no addressee chips, pins go local. It is read once per layer: if the
   team falls later, the chips stay until reload.
