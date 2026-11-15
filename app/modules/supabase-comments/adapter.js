@@ -25,8 +25,9 @@
  *     знімка, але НЕ `t` (інакше власні записи вічно продовжували б його життя, і повного читання не було б ніколи); луна
  *     власного запису в realtime (рядок збігається з `written`) нового читання не планує; `refresh()` у межах TTL мережі не
  *     торкається. Застарілість обмежена 2 хв: засіяний адаптер робить ОДНЕ фонове «наздоганяюче» читання через `TTL - вік`
- *     (скасовується будь-яким повним читанням чи `close()`; далі realtime підписаний без прогалини) — тож і зміна, що
- *     випала в проміжок між рамками, зʼявляється щонайбільше за 2 хв. Засіяний адаптер НЕ показує смугу «команда впала» для збою, що почався
+ *     (скасовується лише ВДАЛИМ повним читанням чи `close()`; невдале чи витіснене наздоганяюче читання повторюється раз на TTL,
+ *     доки одне не вдасться; далі realtime підписаний без прогалини) — тож і зміна, що випала в проміжок між рамками,
+ *     зʼявляється щонайбільше за 2 хв. Порожнє читання-«пустушка» помітить id як видалений (`gone`) до наступного повного читання (≤ ~2 хв). Засіяний адаптер НЕ показує смугу «команда впала» для збою, що почався
  *     після знімка (`loadError` читає лише `checkLoad` дуал-сховища, раз після `ready`); записи й далі ретраяться через дуал-сховище. Запис ДО першого власного повного
  *     читання (`seeded && !freshRead`) не сліпий: `save` спершу питає в бази лише змінені id (`in('id', …)`) і зливає
  *     поле-за-полем (і ключ-за-ключем `meta`) трійкою база(`written`)/наше/їхнє; обидва змінили — наше (як до кешу).
@@ -45,6 +46,7 @@
   var ATTEMPTS = 3;                          // спроб запису; між ними 300, 600 мс (після останньої чекати нема чого)
   var REFETCH_MS = 120;                      // згладжування подій realtime: одне перечитування на серію подій
   var CACHE_TTL_MS = 120000;                 // вік знімка каналу в sessionStorage, до якого повного читання не потрібно
+  var NET_TIMEOUT_MS = 20000;                // скільки чекаємо відповіді бази на запис чи звірку: напівмертве зʼєднання не вішає чергу
   var CACHE_PREFIX = 'deai-comments:v1:';
   var CACHE_MAX_CHARS = 2000000;             // більший знімок не зберігаємо (ліміт sessionStorage ~5 МБ на всі ключі origin-а)
 
@@ -276,8 +278,22 @@
     }
     var ready = seeded ? Promise.resolve().then(function () { if (!closed) emit(); }) : fetchAll();
 
+    /* Відповідь бази АБО помилка `timeout` через NET_TIMEOUT_MS (напівмертве зʼєднання інакше вішало б усю чергу save). Таймер
+       знімається при завершенні й при close(); пізня відповідь після таймауту ігнорується. */
+    function raced(make) {
+      return new Promise(function (resolve, reject) {
+        var t = null, done = false;
+        function fin(fn, v) { if (done) return; done = true; if (t !== null) { clearTimeout(t); t = null; } netPending.splice(netPending.indexOf(abort), 1); fn(v); }
+        function abort(msg) { fin(resolve, { error: { message: msg } }); }
+        netPending.push(abort);
+        t = setTimeout(function () { t = null; abort('timeout'); }, NET_TIMEOUT_MS);
+        Promise.resolve().then(make).then(function (v) { fin(resolve, v); }, function (e) { fin(reject, e); });
+      });
+    }
+    var netPending = [];                     // незавершені запити з таймером: close() здає їх помилкою, а не лишає висіти
+
     function upsert(rows, attempt) {
-      return Promise.resolve(client.from(TABLE).upsert(rows, { onConflict: 'id' })).then(function (res) {
+      return raced(function () { return client.from(TABLE).upsert(rows, { onConflict: 'id' }); }).then(function (res) {
         if (!res.error) return null;
         if (attempt + 1 >= ATTEMPTS) return res.error;
         return sleep(300 * (attempt + 1)).then(function () { return upsert(rows, attempt + 1); });
@@ -319,7 +335,7 @@
     function precheck(changed) {
       var ids = changed.filter(function (r) { return !checked[r.id] && written[r.id] !== undefined; }).map(function (r) { return r.id; });
       if (!ids.length) return Promise.resolve({ rows: changed, gone: [] });
-      return Promise.resolve().then(function () { return client.from(TABLE).select('*').in('id', ids).eq('project_id', channel); }).then(function (res) {
+      return raced(function () { return client.from(TABLE).select('*').in('id', ids).eq('project_id', channel); }).then(function (res) {
         if (res.error) { warn('merge check failed', res.error); return { rows: changed, gone: [] }; }
         var remote = {}, goneIds = [];
         (res.data || []).forEach(function (r) { remote[r.id] = r; });
@@ -335,9 +351,9 @@
       }).catch(function (e) { warn('merge check failed', e); return { rows: changed, gone: [] }; });
     }
 
-    function doSave(comments) {
+    function doSave(comments, fl) {
       var dropped = false;
-      var keep = function (c) { if (gone[c.id]) { dropped = true; return false; } return true; };
+      var keep = function (c) { if (gone[c.id]) { dropped = true; fl.dropped = true; return false; } return true; };
       comments = comments.filter(keep);          // видалене колегою не воскрешаємо, навіть якщо коментатор тримає його як _pending
       var rows = comments.map(function (c) { return commentToRow(c, channel); });
       /* Запис РІЗНИЦЕЮ (Deai 0.27.0): лише рядки, яких база ще не має в такому вигляді. Застарілий список одного вікна вже не
@@ -388,10 +404,15 @@
       subscribe: function (fn) { if (typeof fn === 'function') listeners.push(fn); },
       /* Власні save йдуть ЧЕРГОЮ: цільова звірка додає круг до бази, і без черги старіший запис міг би дійти після новішого й
          лишити в базі старий текст. `changed` і звірка рахуються в момент виконання, проти `written`, що лишив попередній save;
-         відмова одного не ламає черги, а промис кожного виклику — його власний. */
+         відмова одного не ламає черги, а промис кожного виклику — його власний. Запис, що стоїть у черзі за повільним, починається
+         лише після нього; якщо рамка вивантажиться раніше, його надішле з браузерної копії `_pending` коментатора наступне
+         завантаження. Після save, що відкинув видалене колегою, ще раз повідомляємо на наступному тіку: перше сповіщення
+         йшло, поки пін ще `_pending`, і коментатор лишив би його на екрані. */
       save: function (comments) {
-        var p = chain.then(function () { return doSave(comments); });
-        chain = p.catch(function () { /* черга йде далі */ });
+        var fl = { dropped: false };
+        var p = chain.then(function () { return doSave(comments, fl); });
+        var after = function () { if (fl.dropped && !closed) setTimeout(function () { if (!closed) emit(); }, 0); };
+        chain = p.then(after, after);
         return p;
       },
       /* Жорстке видалення: upsert-збереження рядків не прибирає, тож видалення — окремий шлях. */
@@ -411,6 +432,7 @@
         listeners.length = 0;
         if (catchTimer !== null) { clearTimeout(catchTimer); catchTimer = null; }
         if (refetchTimer !== null) { clearTimeout(refetchTimer); refetchTimer = null; }
+        netPending.slice().forEach(function (abort) { abort('closed'); });
         /* removeChannel лише залишає канал; сокет realtime (з серцебиттям) закриває `disconnect`. Обидва — без відмов назовні. */
         var left;
         try { left = Promise.resolve(client.removeChannel(realtime)); } catch (e) { left = Promise.resolve(); }

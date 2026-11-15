@@ -109,6 +109,7 @@ function world(opts = {}) {
         },
         upsert(rows, o) {
           w.calls.push({ op: "upsert", table, rows, opts: o });
+          if (w.opts.hangUpserts > 0) { w.opts.hangUpserts -= 1; return new Promise(() => {}); }   // завислий запит
           const fail = w.opts.failUpserts > 0;
           if (fail) w.opts.failUpserts -= 1;
           return reply({ data: null, error: fail ? { message: "upsert boom" } : null });
@@ -342,7 +343,7 @@ test("save: два збої підряд — третя спроба вдала;
   await s.ready;
   await drive(w, s.save([pin("a")]));
   assert.equal(w.calls.filter((c) => c.op === "upsert").length, 3);
-  assert.deepEqual(w.delays, [300, 600]);
+  assert.deepEqual(w.delays.filter((d) => d !== 20000), [300, 600]);   // 20000 — запобіжний таймаут запиту
   assert.deepEqual(s.load().map((c) => c.id), ["a"]);
 });
 
@@ -352,7 +353,7 @@ test("save: після трьох збоїв — відмова з тексто�
   await s.ready;
   await assert.rejects(drive(w, s.save([pin("a")])), (e) => e.name === "Error" && /supabase save failed: upsert boom/.test(e.message) && !e.message.includes(KEY));
   assert.equal(w.calls.filter((c) => c.op === "upsert").length, 3);
-  assert.deepEqual(w.delays, [300, 600], "після останньої невдалої спроби чекати нема чого");
+  assert.deepEqual(w.delays.filter((d) => d !== 20000), [300, 600], "після останньої невдалої спроби чекати нема чого");
   assert.deepEqual(s.load().map((c) => c.id), ["a"], "локальний кеш не губить запис, який SDK ще повторить сам");
   assert.ok(w.warnings.some((m) => m.includes("upsert boom")));
   for (const m of [...w.warnings, ...w.logs]) assert.ok(!m.includes(KEY), "ключ у консолі");
@@ -1242,4 +1243,59 @@ test("syncSnap: екземпляр, чий знімок чужий-новіши�
   assert.equal(snap.t, t2);
   assert.deepEqual(snap.rows.map((r) => r.id), ["a", "b"], "рядки B, а не старіші A");
   assert.equal(snap.rows[0].text, "текст a");
+});
+
+/* ------------------------------------------------------------------------------------- таймаут мережі й повторне сповіщення */
+
+/** Виконати лише таймери із затримкою `ms`. */
+const runMs = (w, ms) => { for (const t of w.pending().filter((x) => x.ms === ms)) { t.live = false; t.fn(); } };
+
+test("таймаут: завислий upsert відхиляє save після 3 спроб; наступний у черзі save виконується й вдається; таймери не течуть", async () => {
+  const w = world({ rows: [row("a")], storage: fakeStorage(), hangUpserts: 3 });
+  const s = w.create();
+  await s.ready;
+  const p1 = s.save([pin("a", { text: "х" })]);
+  const p2 = s.save([pin("a", { text: "у" })]);
+  let first = null;
+  p1.then(() => { first = "ok"; }, (e) => { first = e.message; });
+  for (let i = 0; i < 60 && first === null; i += 1) {
+    await settle();
+    runMs(w, 20000); runMs(w, 300); runMs(w, 600);        // таймаут завислої спроби, потім затримка повтору
+  }
+  assert.match(first, /timeout/);
+  await drive(w, p2);
+  assert.equal(upsertsOf(w).at(-1).rows[0].text, "у", "наступний запис пройшов");
+  assert.equal(w.pending().length, 0, "після завершення живих таймерів нема");
+});
+
+test("таймаут: завислий precheck → звичайний upsert (як помилка звірки)", async () => {
+  const { w, s2 } = await seededWorld({ gateTargeted: true });
+  const p = s2.save([pin("a", { text: "мій" })]);
+  for (let i = 0; i < 20 && !upsertsOf(w).length; i += 1) { await settle(); runMs(w, 20000); }
+  await p;
+  assert.equal(upsertsOf(w)[0].rows[0].text, "мій");
+  assert.ok(w.warnings.some((m) => m.includes("merge check failed")));
+});
+
+test("close() здає завислий запит, а не лишає таймер", async () => {
+  const { w, s2 } = await seededWorld({ gateTargeted: true });
+  const p = s2.save([pin("a", { text: "мій" })]);
+  await settle();
+  s2.close();
+  await p.catch(() => {});
+  assert.equal(w.pending().filter((t) => t.ms === 20000).length, 0);
+});
+
+test("повторне сповіщення: після save, що відкинув видалене колегою, підписник на наступному тіку отримує список без нього", async () => {
+  const { w, s2, seen } = await seededWorld({ targeted: () => [] });
+  await s2.save([pin("a", { text: "мій" }), pin("new")]);
+  await settle();
+  const n = seen.length;
+  assert.ok(w.pending().some((t) => t.ms === 0), "друге сповіщення заплановано");
+  runMs(w, 0);
+  assert.equal(seen.length, n + 1);
+  assert.deepEqual(plain(seen.at(-1).map((c) => c.id)), ["new"]);
+  const ok = await seededWorld();
+  await ok.s2.save([pin("a", { text: "x" })]);
+  assert.ok(!ok.w.pending().some((t) => t.ms === 0), "без видаленого — другого сповіщення нема");
 });

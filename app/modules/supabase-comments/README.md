@@ -78,8 +78,8 @@ socket operation — shorter than the core's own 5 s and 10 s, so a slow project
   `refresh()` inside the 2 minutes does no request; the trade-off: a colleague's change that lands exactly in a frame-reload gap may
   show up to 2 minutes late, realtime covers everything else.
   Staleness is bounded at 2 minutes by one **catch-up read**: a seeded adapter schedules a single background full read for the
-  moment the snapshot expires (cancelled by any earlier full read or `close()`, never repeated), so a change that landed while nobody
-  in the tab was subscribed, shows up at that read at the latest (a failed or superseded catch-up read is retried after another 2 minutes).
+  moment the snapshot expires (cancelled only by a successful full read or by `close()`; a failed or superseded catch-up read is retried once per TTL until one succeeds), so a change that landed while nobody
+  in the tab was subscribed, shows up at that read at the latest (an empty transient read can mark an id as deleted until the next full read, about 2 minutes at most). Writes and the merge check time out after 20 s, so a half-open connection cannot hang the save queue: an upsert timeout follows the usual failure path (retries, then the save rejects and the combined store retries), a check timeout falls back to a plain upsert.
   A seeded adapter does not show the «team down» strip for an outage that starts after the snapshot was taken (nothing re-reads
   `loadError` after `ready`); saves still retry through the combined store. Writes made before the adapter's first own
   full read are not blind: `save` first fetches only the changed ids and merges field by field (and `meta` key by key) with a
