@@ -41,11 +41,29 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
 const settle = () => new Promise((r) => setImmediate(r));
 const AUTH_OFF = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } };
 
+/** Підставний `sessionStorage`: `quota` — скільки перших `setItem` кидає QuotaExceededError (Infinity — завжди). */
+function fakeStorage({ quota = 0 } = {}) {
+  const m = new Map();
+  const st = {
+    m, touched: 0, quota,
+    getItem(k) { st.touched++; return m.has(k) ? m.get(k) : null; },
+    setItem(k, v) {
+      st.touched++;
+      if (st.quota > 0) { st.quota--; throw new Error("QuotaExceededError"); }
+      m.set(k, String(v));
+    },
+    removeItem(k) { st.touched++; m.delete(k); },
+    key(i) { return [...m.keys()][i] ?? null; },
+    get length() { return m.size; },
+  };
+  return st;
+}
+
 /**
  * Світ. Параметри: `rows` — що віддає SELECT (масив або функція від номера запиту); `failSelect` (відповідь із помилкою),
  * `rejectSelect` (запит ВІДХИЛЯЄТЬСЯ), `manualSelect` (SELECT-и чекають: `w.pendingSelects[i]({data, error})`), `failUpserts`
  * (перші N upsert-ів падають), `failDelete`, `removeChannel` (`"ok"` | `"reject"` | `"throw"`), `disconnect` (`"ok"` | `"throw"`),
- * `upload` (відповідь підставного `fetch` на завантаження скріншота: `"ok"` | `"fail"` | `"reject"`).
+ * `storage` (підставний sessionStorage), `upload` (відповідь підставного `fetch` на завантаження скріншота: `"ok"` | `"fail"` | `"reject"`).
  * Результат: `sandbox`, `calls`, `channels`, `removedChannels`, `disconnects`, `created`, `delays` (затримки всіх таймерів),
  * `timers`, `warnings`, `logs`.
  */
@@ -135,6 +153,14 @@ function world(opts = {}) {
     clearTimeout: (id) => { const t = w.timers.find((x) => x.id === id); if (t) t.live = false; },
     console: { warn: (...a) => w.warnings.push(a.join(" ")), log: (...a) => w.logs.push(a.join(" ")), error: (...a) => w.logs.push(a.join(" ")) },
   };
+  /* Знімок каналу (0.27.0): підставні `sessionStorage` (`opts.storage`: обʼєкт з `fakeStorage()` або "throw" — доступ кидає),
+     керований годинник `w.clock` (адаптер читає лише `Date.now`) і «чорна скринька» `localStorage`, яку ніхто не має торкатися. */
+  w.clock = 1_000_000;
+  sandbox.Date = { now: () => w.clock };
+  w.localStorage = fakeStorage();
+  sandbox.localStorage = w.localStorage;
+  if (opts.storage === "throw") Object.defineProperty(sandbox, "sessionStorage", { get() { throw new Error("storage blocked"); } });
+  else if (opts.storage) sandbox.sessionStorage = opts.storage;
   sandbox.window = sandbox;                               // `window.DeaiComments = …` у браузері — глобальний обʼєкт
   w.before = new Set(Object.keys(sandbox));
   vm.createContext(sandbox);
@@ -702,4 +728,250 @@ test("запис різницею: коментар без необовʼязк�
   const c = pin("b"); delete c.author;
   await s2.save([c]);
   assert.equal(upserts(w2).length, 0, "відсутній author проти null з бази");
+});
+
+/* ------------------------------------------------------------------------------------------ знімок каналу (sessionStorage) */
+
+const SNAP_KEY = `deai-comments:v1:abcdefghijkl.supabase.co:${CHANNEL}`;
+const TTL = 120000;
+const snapOf = (st, key = SNAP_KEY) => JSON.parse(st.getItem(key));
+const upsertsOf = (w) => w.calls.filter((c) => c.op === "upsert");
+const fire = async (w, ev, i = 0) => { w.channels[i].handlers[0].cb(ev); w.runTimers(); await settle(); };
+
+test("знімок: другий create у межах TTL на тому ж url+каналі — 0 select; той самий load() і written (save без змін — без upsert)", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a"), row("b")], storage: st });
+  const s1 = w.create();
+  await s1.ready;
+  assert.equal(w.selectCalls().length, 1);
+  w.clock += TTL - 1;
+  const seen = [];
+  const s2 = w.create({ onChange: (c) => seen.push(c.map((x) => x.id)) });
+  await s2.ready;
+  assert.equal(w.selectCalls().length, 1, "засіяно знімком — читання з бази нема");
+  assert.deepEqual(plain(s2.load()), plain(s1.load()));
+  assert.equal(s2.loadError, null);
+  assert.deepEqual(plain(seen), [["a", "b"]], "onChange повідомляється й при засіванні");
+  assert.equal(w.channels.length, 2, "realtime підписується як завжди");
+  assert.equal(w.channels[1].subscribed, 1);
+  await s2.save([pin("a"), pin("b")]);
+  assert.equal(upsertsOf(w).length, 0, "written засіяно: нічого не змінено — нічого не пишемо");
+  await s2.save([pin("a", { text: "нове" }), pin("b")]);
+  assert.equal(upsertsOf(w).length, 1);
+  assert.deepEqual(upsertsOf(w)[0].rows.map((r) => r.id), ["a"]);
+});
+
+test("знімок: після TTL — рівно одне читання (і знімок оновлено)", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a")], storage: st });
+  await w.create().ready;
+  w.clock += TTL;
+  await w.create().ready;
+  assert.equal(w.selectCalls().length, 2);
+  assert.equal(snapOf(st).t, w.clock, "вдале читання продовжує знімок");
+});
+
+test("знімок: інший канал чи інший хост url — окремі ключі, по одному читанню", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a")], storage: st });
+  await w.create().ready;
+  await w.create({ channel: "deai/space-1/task-8" }).ready;
+  await w.create({ url: "https://zzzzzzzzzzzz.supabase.co" }).ready;
+  assert.equal(w.selectCalls().length, 3);
+  assert.equal(st.length, 3);
+  assert.ok(!JSON.stringify([...st.m.keys()]).includes(KEY), "ключ не потрапляє в ім'я запису");
+});
+
+test("знімок: невдале перше читання нічого не пише; свіжий знімок не стирає і наступне читання (refresh) його не псує", async () => {
+  const st = fakeStorage();
+  const w1 = world({ failSelect: true, storage: st });
+  const s0 = w1.create();
+  await s0.ready;
+  assert.equal(st.length, 0, "невдача — запису нема");
+  const w = world({ rows: [row("a")], storage: st });
+  const s1 = w.create();
+  await s1.ready;
+  const before = st.getItem(SNAP_KEY);
+  w.opts.failSelect = true;
+  w.clock += TTL;                                  // знімок застарів → refresh читає й падає
+  await s1.refresh();
+  assert.equal(st.getItem(SNAP_KEY), before, "невдале читання не торкається знімка");
+  w.clock = 1_000_000 + 10;                        // а свіжий знімок переживає падіння іншого адаптера
+  w.opts.failSelect = false;
+  const w3 = world({ failSelect: true, storage: st });
+  w3.clock = w.clock;
+  const s3 = w3.create();
+  await s3.ready;
+  assert.equal(w3.selectCalls().length, 0, "свіжий знімок засіяв — читання не було");
+  assert.equal(st.getItem(SNAP_KEY), before);
+});
+
+test("знімок: save і remove оновлюють рядки знімка, але НЕ t", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a"), row("b")], storage: st });
+  const s = w.create();
+  await s.ready;
+  const t0 = snapOf(st).t;
+  w.clock += 5000;
+  await s.save([pin("a", { text: "нове" }), pin("b"), pin("c")]);
+  let snap = snapOf(st);
+  assert.equal(snap.t, t0, "save не продовжує життя знімка");
+  assert.deepEqual(snap.rows.map((r) => [r.id, r.text]), [["a", "нове"], ["b", "текст b"], ["c", "текст c"]]);
+  w.clock += 5000;
+  await s.remove(["b"]);
+  snap = snapOf(st);
+  assert.equal(snap.t, t0, "remove теж");
+  assert.deepEqual(snap.rows.map((r) => r.id), ["a", "c"]);
+});
+
+test("знімок: save без змін теж не чіпає t; невдалий save знімок не оновлює", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a")], storage: st, failUpserts: 99 });
+  const s = w.create();
+  await s.ready;
+  const raw = st.getItem(SNAP_KEY);
+  w.clock += 100;
+  await drive(w, s.save([pin("a", { text: "x" })])).catch(() => {});
+  assert.equal(st.getItem(SNAP_KEY), raw, "база не прийняла — знімок не бреше");
+  await s.save([pin("a")]);                                // кеш = прочитане → без змін
+  assert.equal(snapOf(st).t, 1_000_000);
+});
+
+test("луна власного запису не планує перечитування; чужа зміна — планує", async () => {
+  const w = world({ rows: [row("a")] });
+  const s = w.create();
+  await s.ready;
+  await s.save([pin("a", { text: "моє" })]);
+  const mine = row("a", { text: "моє" });
+  await fire(w, { eventType: "UPDATE", new: mine });
+  assert.equal(w.selectCalls().length, 1, "луна власного upsert-а");
+  await fire(w, { eventType: "UPDATE", new: row("a", { text: "чуже" }) });
+  assert.equal(w.selectCalls().length, 2, "чужа зміна");
+  await fire(w, { eventType: "UPDATE", new: { id: "a", project_id: CHANNEL } });
+  assert.equal(w.selectCalls().length, 3, "обрізані стовпці не збігаються");
+  await fire(w, { eventType: "INSERT" });
+  assert.equal(w.selectCalls().length, 4, "без new — як раніше");
+  await fire(w, { eventType: "INSERT", new: row("z") });
+  assert.equal(w.selectCalls().length, 5, "невідомий id");
+});
+
+test("refresh: у межах TTL — без select; після TTL — з select", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a")], storage: st });
+  const s = w.create();
+  await s.ready;
+  w.clock += TTL - 1;
+  await s.refresh();
+  assert.equal(w.selectCalls().length, 1);
+  w.clock += 1;
+  await s.refresh();
+  assert.equal(w.selectCalls().length, 2);
+  await s.refresh();
+  assert.equal(w.selectCalls().length, 2, "знімок знову свіжий");
+});
+
+test("refresh: у засіяного адаптера теж за t знімка", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a")], storage: st });
+  await w.create().ready;
+  w.clock += TTL - 10;
+  const s2 = w.create();
+  await s2.ready;
+  await s2.refresh();
+  assert.equal(w.selectCalls().length, 1);
+  w.clock += 10;
+  await s2.refresh();
+  assert.equal(w.selectCalls().length, 2);
+});
+
+test("знімок: помилка квоти на setItem — не кидає, чистить наші ключі, одна повторна спроба; адаптер працює", async () => {
+  const st = fakeStorage({ quota: 1 });
+  st.m.set(`deai-comments:v1:other:chan`, JSON.stringify({ t: 1_000_000, rows: [] }));
+  st.m.set("чужий-ключ", "1");
+  const w = world({ rows: [row("a")], storage: st });
+  const s = w.create();
+  await s.ready;
+  assert.deepEqual(s.load().map((c) => c.id), ["a"]);
+  assert.ok(st.getItem(SNAP_KEY), "повторна спроба вдалася");
+  assert.equal(st.getItem("deai-comments:v1:other:chan"), null, "інші наші ключі прибрано");
+  assert.equal(st.getItem("чужий-ключ"), "1", "чужі ключі не чіпаємо");
+  const st2 = fakeStorage({ quota: Infinity });
+  const w2 = world({ rows: [row("a")], storage: st2 });
+  const s2 = w2.create();
+  await s2.ready;
+  await s2.save([pin("a", { text: "x" })]);
+  assert.deepEqual(s2.load().map((c) => c.text), ["x"]);
+  assert.equal(st2.length, 0);
+});
+
+test("знімок: sessionStorage, що кидає при доступі, — адаптер працює як раніше (кожен create читає, refresh читає)", async () => {
+  const w = world({ rows: [row("a")], storage: "throw" });
+  const s1 = w.create();
+  await s1.ready;
+  const s2 = w.create();
+  await s2.ready;
+  assert.equal(w.selectCalls().length, 2);
+  await s2.refresh();
+  assert.equal(w.selectCalls().length, 3);
+  await s2.save([pin("a", { text: "x" })]);
+  await s2.remove(["a"]);
+  assert.deepEqual(s2.load(), []);
+});
+
+test("знімок: методи storage, що кидають, не валять адаптер", async () => {
+  const st = fakeStorage();
+  for (const m of ["getItem", "setItem", "removeItem"]) st[m] = () => { throw new Error("boom"); };
+  const w = world({ rows: [row("a")], storage: st });
+  const s = w.create();
+  await s.ready;
+  await s.save([pin("a", { text: "x" })]);
+  await s.remove(["a"]);
+  assert.equal(s.loadError, null);
+});
+
+test("знімок: нічого не пишеться в localStorage", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a")], storage: st });
+  const s = w.create();
+  await s.ready;
+  await s.save([pin("a", { text: "x" })]);
+  await s.remove(["a"]);
+  await s.refresh();
+  await w.create().ready;
+  assert.equal(w.localStorage.touched, 0);
+  assert.equal(w.localStorage.length, 0);
+});
+
+test("знімок: завеликий (> 2 000 000 символів) не зберігається, а старий запис ключа прибирається", async () => {
+  const st = fakeStorage();
+  st.m.set(SNAP_KEY, JSON.stringify({ t: 1, rows: [row("old")] }));
+  const big = row("a", { html_snapshot: { outerHTML: "x".repeat(2_100_000) } });
+  const w = world({ rows: [big], storage: st });
+  const s = w.create();
+  await s.ready;
+  assert.equal(s.load().length, 1, "кеш у памʼяті є");
+  assert.equal(st.getItem(SNAP_KEY), null);
+  await w.create().ready;
+  assert.equal(w.selectCalls().length, 2, "знімка нема — читаємо знову");
+});
+
+test("знімок: зіпсований запис ігнорується й видаляється; застарілі чужі знімки прибираються при записі", async () => {
+  const st = fakeStorage();
+  st.m.set(SNAP_KEY, "{не json");
+  st.m.set("deai-comments:v1:old:x", JSON.stringify({ t: 1_000_000 - TTL - 1, rows: [] }));
+  st.m.set("deai-comments:v1:young:x", JSON.stringify({ t: 1_000_000 - 5, rows: [] }));
+  const w = world({ rows: [row("a")], storage: st });
+  const s = w.create();
+  assert.equal(st.getItem(SNAP_KEY), null, "зіпсований запис прибрано одразу");
+  await s.ready;
+  assert.equal(w.selectCalls().length, 1);
+  assert.equal(st.getItem("deai-comments:v1:old:x"), null, "застарілий прибрано");
+  assert.ok(st.getItem("deai-comments:v1:young:x"), "свіжий лишився");
+  for (const bad of [{ t: "x", rows: [] }, { t: 1, rows: "x" }, { t: 1_000_000, rows: [{ noid: 1 }] }]) {
+    st.m.set(SNAP_KEY, JSON.stringify(bad));
+    const w2 = world({ rows: [row("a")], storage: st });
+    w2.clock = 1_000_000;
+    await w2.create().ready;
+    assert.equal(w2.selectCalls().length, 1, JSON.stringify(bad));
+  }
 });

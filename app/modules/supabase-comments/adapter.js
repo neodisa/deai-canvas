@@ -17,6 +17,14 @@
  *     давав би `select *` зі знімками HTML у кожному відкритому вікні — урок квоти трафіку 21.10.2026);
  *   · запис різницею (0.27.0): `save` шле upsert лише рядків, що відрізняються від останнього прочитаного чи записаного знімка
  *     (порівняння — канонічним JSON із сортованими ключами: `jsonb` переставляє ключі `meta`); нема змін — нема запиту.
+ *   · знімок каналу між перезавантаженнями рамки (0.27.0): робоче місце ЛІГИ перезавантажує рамку на кожен клік сторінки/стану/
+ *     ітерації, і кожне перезавантаження створювало новий адаптер із повним `select *` (до ~700 КБ на канал: 75% — вбудований
+ *     `meta.shot`; стовпці обрізати не можна — `save` пише рядки цілком). Тому останнє ВДАЛЕ повне читання лежить у
+ *     `sessionStorage` вкладки (ключ `deai-comments:v1:<хост url>:<канал>`, значення `{t, rows}`) і живе `CACHE_TTL_MS` (2 хв):
+ *     свіжий знімок засіває кеш без читання з бази, realtime підписується як завжди. Власні `save`/`remove` оновлюють рядки
+ *     знімка, але НЕ `t` (інакше власні записи вічно продовжували б його життя, і повного читання не було б ніколи); луна
+ *     власного запису в realtime (рядок збігається з `written`) нового читання не планує; `refresh()` у межах TTL мережі не
+ *     торкається. Без `sessionStorage` (чи коли він кидає) адаптер поводиться як раніше. Сховище, що переживає вкладку, не використовується навмисно.
  * Клієнт supabase-js створюється БЕЗ автентифікації користувача (`persistSession`, `autoRefreshToken`, `detectSessionInUrl` —
  * вимкнені): за замовчуванням кожен `create()` запускав би інтервал оновлення токена, `BroadcastChannel`, записи в
  * сховище браузера й слухачі вікна, які `close()` не знімав би (а «Огляд» створює сховище на кожен запуск).
@@ -29,6 +37,9 @@
   var TABLE = 'comments';
   var ATTEMPTS = 3;                          // спроб запису; між ними 300, 600 мс (після останньої чекати нема чого)
   var REFETCH_MS = 120;                      // згладжування подій realtime: одне перечитування на серію подій
+  var CACHE_TTL_MS = 120000;                 // вік знімка каналу в sessionStorage, до якого повного читання не потрібно
+  var CACHE_PREFIX = 'deai-comments:v1:';
+  var CACHE_MAX_CHARS = 2000000;             // більший знімок не зберігаємо (ліміт sessionStorage ~5 МБ на всі ключі origin-а)
 
   /* Рядок таблиці → коментар CommentLayer. `project_id` і `created_at` лишаються в базі. */
   function rowToComment(r) {
@@ -66,6 +77,50 @@
     return JSON.stringify(v === undefined ? null : v);
   }
 
+  /* sessionStorage вкладки або null: сам доступ до `window.sessionStorage` може кидати (заблоковані дані сайту). */
+  function snapStorage() {
+    try { return window.sessionStorage || null; } catch (e) { return null; }
+  }
+
+  /* Знімок за ключем → {t, rows} або null; зіпсований запис видаляється. Кожен доступ — у try/catch. */
+  function readSnap(ss, key) {
+    try {
+      var raw = ss.getItem(key);
+      if (raw == null) return null;
+      var o = JSON.parse(raw);
+      var ok = o && typeof o.t === 'number' && isFinite(o.t) && Array.isArray(o.rows) &&
+        o.rows.every(function (r) { return r && typeof r === 'object' && r.id != null; });
+      if (ok) return o;
+      ss.removeItem(key);
+    } catch (e) { try { ss.removeItem(key); } catch (e2) { /* нема що робити */ } }
+    return null;
+  }
+
+  function snapKeys(ss) {
+    var keys = [];
+    for (var i = 0; i < ss.length; i++) { var k = ss.key(i); if (k && k.indexOf(CACHE_PREFIX) === 0) keys.push(k); }
+    return keys;
+  }
+
+  /* Записати знімок {t, rows}. Завеликий — не зберігаємо й прибираємо старий; квота — чистимо всі наші ключі й одна повторна
+     спроба; решту мовчки здаємо. Заодно вичищаємо чужі знімки старші за TTL. */
+  function writeSnap(ss, key, t, rows) {
+    try {
+      var val = JSON.stringify({ t: t, rows: rows });
+      if (val.length > CACHE_MAX_CHARS) { ss.removeItem(key); return; }
+      var now = Date.now();
+      snapKeys(ss).forEach(function (k) {
+        if (k === key) return;
+        var o = readSnap(ss, k);
+        if (!o || now - o.t >= CACHE_TTL_MS || o.t > now) ss.removeItem(k);
+      });
+      try { ss.setItem(key, val); } catch (e) {
+        snapKeys(ss).forEach(function (k) { ss.removeItem(k); });
+        ss.setItem(key, val);
+      }
+    } catch (e) { /* знімок — лише оптимізація */ }
+  }
+
   function create(cfg) {
     if (!cfg || typeof cfg.channel !== 'string' || !cfg.channel) throw new Error('DeaiComments.create: cfg.channel must be a non-empty string');
     var sb = window.supabase;
@@ -83,6 +138,24 @@
     var SHOT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/;      // той самий білий список, що `_AGENT_ID` ядра
     var bucket = typeof cfg.shotsBucket === 'string' && /^[a-z0-9][a-z0-9_-]{0,62}$/.test(cfg.shotsBucket) ? cfg.shotsBucket : '';
     var base = String(cfg.url).replace(/\/+$/, '');
+
+    /* Знімок каналу (див. шапку). `snapT` — мітка останнього вдалого повного читання (власного чи засіяного); null — читання
+       ще не було. Без sessionStorage `ss` = null, і нічого з цього не діє. */
+    var ss = snapStorage();
+    var snapKey = CACHE_PREFIX + String(cfg.url).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[\/?#]/)[0].toLowerCase() + ':' + channel;
+    var snapT = null;
+    function fresh() {
+      if (snapT === null) return false;
+      var age = Date.now() - snapT;
+      return age >= 0 && age < CACHE_TTL_MS;
+    }
+    /* Власний запис чи видалення: рядки знімка = новий кеш, `t` — той, що вже лежить у сховищі (життя знімка не продовжуємо). */
+    function syncSnap() {
+      if (!ss || snapT === null) return;
+      var o = readSnap(ss, snapKey);
+      if (!o) return;
+      writeSnap(ss, snapKey, o.t, cache.map(function (c) { return commentToRow(c, channel); }));
+    }
 
     /* Скріншот піна → Storage (`<bucket>/comment-shots/<id>.jpg`, upsert); результат — публічна адреса або null. Форма
        адрес і заголовків — як у старого адаптера ЛІГИ: її бере картка Teams із `meta.shotUrl`. Ніколи не кидає. */
@@ -127,6 +200,7 @@
         cache = (res.data || []).map(rowToComment);
         written = {};
         cache.forEach(function (c) { written[c.id] = stable(commentToRow(c, channel)); });
+        if (ss) { snapT = Date.now(); writeSnap(ss, snapKey, snapT, res.data || []); }
         emit();
       }).catch(function (e) { loadError = String((e && e.message) || e); warn('fetch failed', e); });
     }
@@ -150,10 +224,33 @@
     }
 
     var realtime = client.channel('cl-' + channel)
-      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, function (p) { if (relevant(p)) scheduleFetch(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, function (p) { if (relevant(p) && !ownEcho(p)) scheduleFetch(); })
       .subscribe();
 
-    var ready = fetchAll();
+    /* Луна власного запису: INSERT/UPDATE, чий новий рядок (після того ж перетворення, що й при читанні) збігається з тим, що
+       адаптер уже має в `written`, — нового читання не варте (кожен власний save інакше давав би повний `select *`). Усе інше,
+       зокрема відсутній `new` чи обрізані стовпці, не збігається й перечитується, як раніше. DELETE іде через `relevant`. */
+    function ownEcho(p) {
+      try {
+        var n = p && p.new;
+        if (!n || n.id == null || (p.eventType !== 'INSERT' && p.eventType !== 'UPDATE')) return false;
+        return written[n.id] === stable(commentToRow(rowToComment(n), channel));
+      } catch (e) { return false; }
+    }
+
+    /* Свіжий знімок засіває кеш без читання з бази: `ready` здається, `onChange` усе одно повідомляється (як після читання). */
+    var seeded = false;
+    if (ss) {
+      var snap = readSnap(ss, snapKey);
+      var age = snap ? Date.now() - snap.t : -1;
+      if (snap && age >= 0 && age < CACHE_TTL_MS) {
+        cache = snap.rows.map(rowToComment);
+        cache.forEach(function (c) { written[c.id] = stable(commentToRow(c, channel)); });
+        snapT = snap.t;
+        seeded = true;
+      }
+    }
+    var ready = seeded ? Promise.resolve().then(function () { if (!closed) emit(); }) : fetchAll();
 
     function upsert(rows, attempt) {
       return Promise.resolve(client.from(TABLE).upsert(rows, { onConflict: 'id' })).then(function (res) {
@@ -167,8 +264,10 @@
       ready: ready,
       get loadError() { return loadError; },
       load: function () { return cache; },
-      /* Примусове перечитування (його кличе «Огляд» при поверненні на нього). */
-      refresh: function () { return fetchAll(); },
+      /* Перечитування (його кличе «Огляд» при поверненні на нього). У межах TTL знімка мережі не торкається: компроміс —
+         зміна колеги, що потрапила рівно в проміжок між перезавантаженнями рамки, зʼявиться до 2 хв із запізненням; решту
+         закриває realtime. Поза TTL (чи без знімка) — повне читання. */
+      refresh: function () { return fresh() ? Promise.resolve() : fetchAll(); },
       /* Живі оновлення: CommentLayer підписується тут; realtime → fetchAll → emit. */
       subscribe: function (fn) { if (typeof fn === 'function') listeners.push(fn); },
       save: function (comments) {
@@ -176,11 +275,11 @@
         /* Запис РІЗНИЦЕЮ (Deai 0.27.0): лише рядки, яких база ще не має в такому вигляді. Застарілий список одного вікна вже не
            перетирає чужого закриття чи доручення в РЕШТІ рядків; два записи в ОДИН рядок — виграє останній. */
         var changed = rows.filter(function (r) { return written[r.id] !== stable(r); });
-        if (!changed.length) { cache = comments.slice(); seq++; return Promise.resolve(); }
+        if (!changed.length) { cache = comments.slice(); seq++; syncSnap(); return Promise.resolve(); }
         return upsert(changed, 0).then(function (err) {
           cache = comments.slice();          // оптимістичний кеш: запис не губиться, навіть якщо база не відповіла
           seq++;                             // а відповідь, що вже летіла до запису, його не затре
-          if (!err) { changed.forEach(function (r) { written[r.id] = stable(r); }); return; }
+          if (!err) { changed.forEach(function (r) { written[r.id] = stable(r); }); syncSnap(); return; }
           warn('save failed after retries', err);
           throw new Error('supabase save failed: ' + err.message);
         });
@@ -193,6 +292,7 @@
           cache = cache.filter(function (c) { return ids.indexOf(c.id) < 0; });
           ids.forEach(function (id) { delete written[id]; });
           seq++;
+          if (!res.error) syncSnap();
         });
       },
       close: function () {
