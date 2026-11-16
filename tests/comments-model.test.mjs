@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FILTERS, assignedToClaude, audOf, commentSections, matchQuery, openCount, shotSrc } from "../app/comments-model.js";
+import { FILTERS, assignedToClaude, audOf, commentSections, filterCounts, forClaude, matchQuery, openCount, shotSrc } from "../app/comments-model.js";
 
 const C = (o) => ({ id: o.id, n: o.n, text: o.text || "", author: o.author || "Автор А", ts: o.ts || "",
   status: o.status || "open", scope: o.scope || "current", where: "here", meta: o.meta || {} });
@@ -73,14 +73,26 @@ test("audOf: без _aud — локальний; assignedToClaude — лише m
   assert.equal(assignedToClaude({ meta: { assignee: "claude" } }), true);
   assert.equal(assignedToClaude({ meta: { assignee: "ann" } }), false);
   assert.equal(assignedToClaude({}), false);
-  assert.deepEqual(FILTERS, ["all", "local", "project"]);
+  assert.deepEqual(FILTERS, ["local", "project", "all"], "порядок вкладок — рішення власника 16.11.2026");
 });
 
-test("commentSections: фільтр адресата local / project / all", () => {
-  const ids = (f) => { const s = commentSections(MIX, { filter: f }); return [...s.open, ...s.closed].map((c) => c.id).sort(); };
-  assert.deepEqual(ids("all"), ["l1", "l2", "p1", "p2"]);
-  assert.deepEqual(ids("local"), ["l1", "l2"]);
-  assert.deepEqual(ids("project"), ["p1", "p2"]);
+const ASG = { comments: [...MIX.comments, A("p3", 5, "project", { meta: { assignee: "claude" } })] };
+
+test("commentSections: «Для Claude» = локальні + доручені командні; «Команда» — усі командні", () => {
+  const ids = (f) => { const s = commentSections(ASG, { filter: f }); return [...s.open, ...s.closed].map((c) => c.id).sort(); };
+  assert.deepEqual(ids("all"), ["l1", "l2", "p1", "p2", "p3"]);
+  assert.deepEqual(ids("local"), ["l1", "l2", "p3"]);
+  assert.deepEqual(ids("project"), ["p1", "p2", "p3"]);
+  assert.equal(forClaude(A("x", 9, "project", { meta: { assignee: "claude" } })), true);
+  assert.equal(forClaude(A("x", 9, "project")), false);
+  assert.equal(forClaude(A("x", 9)), true);
+});
+
+test("filterCounts: відкриті поточні за правилом вкладки; fresh — відкриті нові командні; пошук не враховано", () => {
+  const snap = { comments: [...ASG.comments, A("e1", 6, "project", { scope: "earlier" }), A("q", 7, "project")] };
+  assert.deepEqual(filterCounts(snap, new Set(["q", "p2", "l1"])), { local: 3, project: 3, all: 5, fresh: 1 });
+  assert.deepEqual(filterCounts(snap), { local: 3, project: 3, all: 5, fresh: 0 });
+  assert.deepEqual(filterCounts(null), { local: 0, project: 0, all: 0, fresh: 0 });
 });
 
 test("commentSections: «нові» не дублюються у «Відкритих»; закритий у fresh не потрапляє", () => {

@@ -23,9 +23,12 @@ export function matchQuery(c, query) {
 export const audOf = (c) => (c && c._aud === "project" ? "project" : "local");
 /** Доручено Claude (`meta.assignee`, спека Б-Р6) — те саме правило, що `for_agent` у `serve.py`. */
 export const assignedToClaude = (c) => !!(c && c.meta && c.meta.assignee === "claude");
-/** Фільтр панелі «Усі / Для Claude / Команда». */
-export const FILTERS = ["all", "local", "project"];
-const passFilter = (c, f) => (f === "local" || f === "project" ? audOf(c) === f : true);
+/** Вкладки фільтра панелі — у ЦЬОМУ порядку (рішення власника 16.11.2026: основна робота — з Claude, «Усі» — третя). */
+export const FILTERS = ["local", "project", "all"];
+/** «Для Claude» — те, що Claude бере в роботу: локальні + доручені йому командні. Те саме правило, що `for_agent`
+ *  у `app/serve.py` і `bin/inbox.py` за замовчуванням; інакше вкладка обіцяла б більше або менше, ніж бачить агент. */
+export const forClaude = (c) => audOf(c) === "local" || assignedToClaude(c);
+const passFilter = (c, f) => (f === "local" ? forClaude(c) : f === "project" ? audOf(c) === "project" : true);
 
 /** `{fresh, open, earlier, closed}`: «нові від команди» (набір `fresh`, лише відкриті), відкриті поточні (без нових),
  *  відкриті попередніх ітерацій, закриті поточні. */
@@ -46,6 +49,19 @@ export function commentSections(snapshot, { query = "", filter = "all", fresh = 
 /** Відкриті поточні — число на кнопці острівця. */
 export function openCount(snapshot) {
   return list(snapshot).filter((c) => c.status === "open" && c.scope === "current").length;
+}
+
+/** Числа на вкладках фільтра: відкриті поточні за правилом кожної вкладки (пошук НЕ враховано — числа про сторінку,
+ *  а не про запит) і `fresh` — відкриті нові командні (той самий відбір, що розділ «Нові від команди»). */
+export function filterCounts(snapshot, fresh = null) {
+  const all = list(snapshot);
+  const cur = all.filter((c) => c.status === "open" && c.scope === "current");
+  return {
+    local: cur.filter(forClaude).length,
+    project: cur.filter((c) => audOf(c) === "project").length,
+    all: cur.length,
+    fresh: all.filter((c) => c.status === "open" && audOf(c) === "project" && !!(fresh && fresh.has(c.id))).length,
+  };
 }
 
 /** `src` мініатюри або `null`: лише растрові `data:image/…;base64,` і `http(s)://` (не `javascript:`, не `data:text/html`). */
