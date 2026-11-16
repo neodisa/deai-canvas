@@ -597,7 +597,7 @@ text. The full list is in `CHANGELOG.md`, 0.8.0.
 
 **Updates.** The canvas checks the release tags `vX.Y.Z` of the remote it was installed from (`git ls-remote`, read-only; first
 check shortly after start, then every 6 hours). When a newer tag exists, a pill appears in the bar; it opens «What's new» (the
-CHANGELOG sections of the new releases) and the button to update. Updating fetches the tag, fast-forwards the checkout, runs a smoke test
+CHANGELOG sections of the new releases) and the button to update, as a popover under the pill (from ⌘K it is a centred card). Updating fetches the tag, fast-forwards the checkout, runs a smoke test
 and restarts; on a failed smoke test it goes back to the previous commit. It refuses, with the command to run by hand, when
 the folder is not a git checkout, has local edits, a detached head or local commits. Windows: the update applies, the restart is manual.
 - `DEAI_NO_UPDATE_CHECK=1` turns the update checks and the background feedback retries off (no network from them; a feedback
@@ -616,8 +616,8 @@ After that the in-app button (the pill in the bar → «What's new» → update)
 mirror is optional: clone from it instead, and the updater honours the clone's own `core.sshCommand` (0.24.0), so a mirror behind
 its own SSH key works without any global setting.
 
-**Feedback.** The button «Відгук» (and ⌘K «Баг / ідея») opens a dialog: kind, text, optional contact, and a preview of the diagnostics
-that will be sent. Nothing leaves the machine before you press send.
+**Feedback.** The button «Відгук» opens a popover above it (⌘K «Баг / ідея» opens the same form as a centred card): kind, text, optional contact, and a preview of the diagnostics
+that will be sent. A closed popover keeps your draft until it is sent. Nothing leaves the machine before you press send.
 - *Collected, if you leave it on:* the Deai version, the operating system and Python version, the language, the kind of space and the ids of
   its built-in modules (own modules show as `own`), the task, iteration and page ids, the last 50 server errors (the exception type and the application
   frame only, no messages) and the last 20 errors of the page, and, if you tick it, the screenshot of the current page (webp or png up to 2 MB).
