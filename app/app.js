@@ -13,6 +13,7 @@ import { flatten as flattenTree, pathOf, topIds, visibleIds, visibleRows, statsO
 import { canMove } from './page-order.js';
 import { readFlow, shotKey, shotVersion, stateQuery } from './flow-model.js';
 import { flowLayout } from './flow-layout.js';
+import { confirmHTML } from './inline-confirm.js';
 import { ask, askChoice, askForm, askYesNo, tell, tellError } from './ask.js';
 import { composeDeleteNote, deleteDialogModel, resolveDrop, shouldCommitDrop, shouldRefreshPanel, vanishedFolders, zoneOfHit, groupTargetIds, pageMenuItems, runSequential, treeBusyGate, treeTarget as pickTreeTarget } from './tree-actions.js';
 import {
@@ -5187,7 +5188,7 @@ async function togglePagePublish(pageId) {
 /* Видалення — ОДНА дорога для одного й багатьох вузлів (`deleteDialogModel`):
    питання зі списком того, що зникне (до 30 назв + «…і ще N»); «прибрати лише
    теку, вміст підняти» — лише для однієї цілі з дітьми. Скасування — нічого. */
-async function deleteNodes(ids) {
+async function deleteNodes(ids, { confirmed = false } = {}) {
   const it = picked;                  // фіксуємо ДО await — ідіома `freshen()`
   /* Зайнято — кажемо ДО діалогу: інакше людина підтвердила б видалення й
      втратила його на «дерево зайняте». */
@@ -5196,7 +5197,7 @@ async function deleteNodes(ids) {
   if (!model) return;
   let mode = 'all';
   if (model.kind === 'yesno') {
-    if (!(await askYesNo(t('menuDeletePageConfirm'), { yes: t('menuDeleteYes'), danger: true }))) return;
+    if (!confirmed && !(await askYesNo(t('menuDeletePageConfirm'), { yes: t('menuDeleteYes'), danger: true }))) return;
   } else {
     const names = model.more ? [...model.names, t('delMore', model.more)] : model.names;
     const choices = [{ a: 'all', label: t('delAll'), danger: true }];
@@ -5286,7 +5287,26 @@ function pageMenu(anchor, pageId) {
   on('focus', () => PANEL_ACTIONS.focus(pageId));
   on('kind', () => toggleKind(pageId));
   on('pub', () => togglePagePublish(pageId));
-  on('delete', () => deleteNodes(multi ? [...panelSel] : [pageId]));
+  /* «Видалити» (етап В): для одного вузла без дітей меню саме стає питанням — підтвердження там, де дія.
+     Тека з вмістом чи кілька вузлів — темна картка з переліком (`askChoice`), як було: перелік у меню не вміщається. */
+  const delBtn = m.querySelector('[data-a="delete"]');
+  if (delBtn) delBtn.onclick = (ev) => {
+    const ids = multi ? [...panelSel] : [pageId];
+    const model = deleteDialogModel(panelPages, ids);
+    if (!model || model.kind !== 'yesno') { close(); deleteNodes(ids); return; }
+    ev.stopPropagation();
+    const name = f?.page.name || '';
+    const titleKey = kind === 'state' ? 'cfmDelState' : (kind === 'folder' ? 'cfmDelFolder' : 'cfmDelPage');
+    m.classList.add('cv-ctx--confirm');
+    m.innerHTML = confirmHTML({ title: t(titleKey, name), yes: t('menuDeleteYes'), no: t('cfmNo'),
+      yesAttrs: 'data-a="delyes"', noAttrs: 'data-a="delno"' });
+    /* Клік усередині питання — не «повз»: інакше документний слухач закрив би меню раніше за кнопку. */
+    m.addEventListener('click', (e) => e.stopPropagation());
+    m.querySelector('[data-a="delno"]').onclick = () => close();
+    m.querySelector('[data-a="delyes"]').onclick = () => { close(); deleteNodes(ids, { confirmed: true }); };
+    positionCtxMenu(m, anchor);
+    m.querySelector('.cfm-no')?.focus();
+  };
 }
 
 // ===== Режим «Огляд» — bird-view холст (T-23) =====

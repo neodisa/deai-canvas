@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { classesIn, hasRule } from "./_css-classes.mjs";
 
-const FILES = ["ask.js", "feedback-view.js", "update-view.js", "space-dialogs.js", "trust-view.js"];
+const FILES = ["ask.js", "feedback-view.js", "update-view.js", "space-dialogs.js", "trust-view.js", "inline-confirm.js"];
 /** Маркери без власного стилю — лише з причиною (заповнити після першого прогону, перевіривши кожен grep-ом). */
 const NO_STYLE = new Map([
   ["up-p", "абзац опису змін; вигляд дає тегове правило `.up .up-notes p`"],

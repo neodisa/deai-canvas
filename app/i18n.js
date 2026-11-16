@@ -117,6 +117,11 @@ const UK = {
   // переписує з нуля План B, тому їх ключі сюди не йдуть — див. стелю
   // охоронця літералів.
   errFailed: (msg) => `Не вдалося: ${msg}`,
+  // Вбудоване підтвердження (етап В, `inline-confirm.js`): лише питання, без пояснень
+  cfmNo: 'Ні',
+  cfmDelPage: (n) => `Видалити сторінку «${n}»?`,
+  cfmDelState: (n) => `Видалити стан «${n}»?`,
+  cfmDelFolder: (n) => `Видалити теку «${n}»?`,
   // Заголовки помилок дій (етап В, `tellError`): що саме не вдалося; причина від сервера — під ним.
   errTDupIter: 'Не вдалося дублювати ітерацію',
   errTOpenTask: 'Не вдалося відкрити задачу',
@@ -1423,6 +1428,11 @@ const EN = {
   flowEdgeSelf: (from, to) => `edge "${from} → ${to}": arrow to itself — discarded`,
 
   errFailed: (msg) => `Failed: ${msg}`,
+  // In-place confirmation (stage В, `inline-confirm.js`): the question only, no explanations
+  cfmNo: 'No',
+  cfmDelPage: (n) => `Delete page «${n}»?`,
+  cfmDelState: (n) => `Delete state «${n}»?`,
+  cfmDelFolder: (n) => `Delete folder «${n}»?`,
   // Action error titles (stage В, `tellError`): what exactly failed; the server reason goes under it.
   errTDupIter: 'Could not duplicate the iteration',
   errTOpenTask: 'Could not open the task',
