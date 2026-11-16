@@ -3,6 +3,14 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [Unreleased]
+
+### Ліцензія
+- Ліцензія змінюється з MIT на **FSL-1.1-MIT** (Functional Source License 1.1 з майбутньою MIT): користуватись, змінювати й
+  поширювати можна для будь-якої мети, крім конкурентного використання (комерційного продукту чи сервісу, що замінює Deai
+  Canvas або має суттєво схожі функції). Кожна версія через два роки після виходу стає MIT. Версії до 0.28.2 включно
+  випущені під MIT і лишаються MIT. `commenter/` і `supabase.min.js` — під власними ліцензіями MIT, як були.
+
 ## [0.28.2] — 16.11.2026
 
 ### Виправлено

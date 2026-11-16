@@ -64,7 +64,7 @@ The screenshots show a made-up budgeting app on demo data. `node ops/readme-shot
 
 ## Status
 
-Version 0.28.2 (16.11.2026), pre-1.0, MIT. The start script and the launcher are macOS-first; see the Roadmap for the
+Version 0.28.2 (16.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
 cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Feature reference
@@ -834,4 +834,14 @@ migrated; a partial migration is final; the copies of the credentials are in the
 
 ## License
 
-MIT © neodisa
+Deai Canvas is licensed under the [Functional Source License, Version 1.1, MIT Future License](LICENSE.md)
+(FSL-1.1-MIT), © 2026 neodisa.
+
+- You may use, copy, modify and redistribute it for any purpose except a **Competing Use**: making it available to
+  others in a commercial product or service that substitutes for Deai Canvas or offers the same or substantially
+  similar functionality. The [license text](LICENSE.md) is what counts; this is a summary.
+- Internal use, non-commercial education and research, and professional services for a client who uses it for a
+  permitted purpose are explicitly allowed.
+- Each version becomes **MIT** two years after it is released.
+- Versions up to and including **0.28.2** were released under the MIT License and stay MIT.
+- `commenter/` (CommentLayer) and `app/modules/supabase-comments/supabase.min.js` keep their own MIT licenses.
