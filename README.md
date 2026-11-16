@@ -1,31 +1,73 @@
 # Deai Canvas
 
-**A local workspace for prototypes made with AI.** An agent (Claude Code or any other)
-writes HTML mockups; Deai Canvas turns them into something you can review and ship:
-iterations, a bird's-eye overview of every screen, user-flow maps, a design-token
-inspector, comments addressed straight to the agent, and password-protected preview
-links for your team.
+**A local workspace for reviewing the HTML mockups an AI agent writes.** The agent (Claude Code or any
+other) makes the pages. Deai Canvas keeps every iteration, shows all screens at once, lets you point at an
+element and tell the agent what to change, and publishes a protected preview for your team.
 
-> **Status — v0.20.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
-> Spaces (several projects on one machine) and the first **modules** are in: publishing to
-> a folder or to your own Vercel account, design-system tokens from a CSS file, team
-> comments on your own Supabase (or any service, through a small module), and **git sync** —
-> iterations to and from any git repository, GitHub or GitLab or your own server — work in any
-> space. A **wizard** creates a space and takes you through its modules and a first task, and a
-> **Settings** screen manages the modules afterwards — no command line. Your own Vercel can be reached with a token
-> or with the `vercel login` of the computer. The in-house publishing and comments of the legacy space now run on these same
-> modules, and so does the **team dashboard** (the «Team» tab of «Tasks»): any space can get it through the
-> `supabase-dashboard` module and its own Supabase project, and the **issue tracker** (task statuses from Jira Cloud) through
-> the `jira-tracker` module, and the **Teams notifications** (a card in a Teams channel for every new comment, and the
-> silence switch) through the `supabase-teams` module and the same Supabase project as the comments. The legacy space
-> runs on all of these modules too; what is left of it is the `integrations` flag (stage 4d). The old «profile» of a task
-> is now a general **track of a space** (a folder, a repository and a design system per line of work, described in
-> `space.json`), and the core no longer tells the in-house setup from a module by a string (since 0.21 there is no implicit
-> provider at all: a role without an explicit enabled record is off), and a test or demo run (`DC_TASKS_FILE`) never reads the credentials of the machine. Since 0.17 the legacy space moves its
-> tracker, dashboard and Teams config, since 0.18 its comments and git sync, and since 0.19 its publishing, into explicit modules of its own by itself, since 0.20 its tracks are explicit for good (no implicit adapter in the runtime), and since 0.21 the last originals (the git key, the preview password) are copied and **no original is read any more** (the root of `tasks.json`, the environment, `pipeline-feedback`) — credentials are entered on the Settings screen — all with a backup (see *LIGA migration*). A space can carry **its own modules** in `<space>/modules/`; their code runs only
-> after you trust it. See *Roadmap*.
+![Deai Canvas: the workplace with the page tree, a mockup, pinned comments and the agent status](docs/screenshots/hero.png)
 
-## What it does
+## Why
+
+- **The agent rewrites, you need to compare.** Every pass is kept as an iteration: a frozen, editable copy you can rename,
+  duplicate and open next to the others.
+- **A mockup is many screens, not one.** The Overview shows every page and state as a grid of full-page snapshots at desktop,
+  tablet and mobile widths. The Flow view lays the same screens out as a user flow with arrows.
+- **"Make this button smaller" needs an address.** Pin a comment on the element itself. The agent reads the pins, fixes the
+  page and closes each pin with a note about what it did.
+- **Hand-made values drift from the design system.** The inspector shows spacing, type and colour of any element, and, if you
+  connect a CSS file of tokens, whether each value is on the system. The tuner turns tweaks into a change request for the agent.
+- **The team needs a link, not a build.** Publish the iterations you marked to a folder or to your own Vercel account,
+  optionally behind a password. Team comments can live on your own Supabase.
+- **You want to know what the agent is doing.** The island at the bottom of the window shows its status; each open task is a tab
+  with a state dot.
+- **Local first.** Mockups, comments and snapshots are files on your disk. Publishing, team comments, git sync and the rest
+  are modules you connect yourself.
+
+## Features
+
+- **Iterations** with notes, rename, duplicate and a marker for what goes into the preview.
+- **Pages and states** as a tree of any depth: pages, folders, states; filter, drag and drop.
+- **Overview**: a zoomable grid of full-page snapshots (Playwright), re-shot incrementally; desktop, tablet and mobile widths.
+- **Flow map**: screens and arrows described in `flow.json`, dragged into place on the canvas.
+- **Comments panel** for Claude or for the team: pins on elements, search, closed pins with the agent's note, carry-over from
+  earlier iterations.
+- **Inspector and tuner**: a DevTools-style overlay with a ruler, token check against your design system, and a change request
+  for the agent.
+- **Agent status**: a state in the island and a dot on every task tab.
+- **Tasks screen**: search, sort, tags, issue-tracker statuses and a team dashboard if you connect them.
+- **Publish** to a folder or to your own Vercel account, with an optional password gate.
+- **Git sync**: send an iteration to any git repository and pull a colleague's changes back as a new iteration.
+- **Spaces, wizard and Settings**: several projects on one machine; modules are connected and checked from the UI.
+- **Modules**: built-in ones for publishing, tokens, team comments, git, dashboard, tracker and Teams notifications; your
+  own in `<space>/modules/`, run only after you trust them.
+- **To Figma**: copies the live mockup to the clipboard for pasting into Figma.
+- **App**: installable as a PWA; ⌘K palette; English and Ukrainian UI.
+
+## Screenshots
+
+The screenshots show a made-up budgeting app on demo data. `node ops/readme-shots.mjs` regenerates them.
+
+![Overview: every page and state of an iteration as a grid of snapshots, with comment counts](docs/screenshots/overview.png)
+*Overview: all pages and states of an iteration at once, with the number of open comments on each.*
+
+![Flow map: screens connected by arrows with the user action on each](docs/screenshots/flow.png)
+*Flow map: screens as a user flow; pages that are not in the flow are grouped below.*
+
+![Comments panel next to the mockup](docs/screenshots/comments.png)
+*Comments: pins on elements, the list for Claude, and a closed pin with the agent's note.*
+
+![Tasks screen with four task cards](docs/screenshots/tasks.png)
+*Tasks: every task of a space with its latest frame, tags and iteration count.*
+
+![A published preview of the mockup](docs/screenshots/preview.png)
+*Published preview: the same pages behind an optional password, ready to share by link.*
+
+## Status
+
+Version 0.28.2 (16.11.2026), pre-1.0, MIT. The start script and the launcher are macOS-first; see the Roadmap for the
+cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
+
+## Feature reference
 
 | | |
 |---|---|
@@ -635,9 +677,9 @@ that will be sent. A closed popover keeps your draft until it is sent. Nothing l
 ```
 app/          server (serve.py, stdlib only) + UI (ES modules, no build step)
 app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments, supabase-dashboard, jira-tracker, supabase-teams, git-sync); the core is app/deai_modules.py
-docs/         design notes and the guides for module authors (docs/modules/authoring.md, docs/modules/comments.md)
+docs/         design notes and the guides for module authors (docs/modules/authoring.md, docs/modules/comments.md); docs/screenshots/ is the README images
 bin/          CLI tools: snapshots, pages, state, inbox
-ops/          macOS launcher, feedback collector SQL (Design Canvas.app), preview gate tools
+ops/          macOS launcher, feedback collector SQL (Design Canvas.app), preview gate tools, ops/readme-shots.mjs (regenerates docs/screenshots on demo data)
 flows/demo    example flow
 tests/        unit, Python and live (Playwright) tests
 ```
