@@ -22,7 +22,7 @@ import { seedPins, shootAll, t45Task } from "./_t45-fixture.mjs";
 const PORT_BASE = 26100;
 const SEEDED_PORT_BASE = 26200;
 const TWO_IT_PORT_BASE = 26300;
-const DELETE_PORT_BASE = 26400;
+const DELETE_PORT_BASE = 26500;
 const PAGE = () => `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:40px">
 <main><h1 id="t">Заголовок</h1><p id="p">Абзац для коментаря</p></main></body></html>`;
 
