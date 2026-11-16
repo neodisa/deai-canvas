@@ -226,6 +226,7 @@ const PANEL_SOURCES = [
      `examined` у `tests/i18n-literals.test.mjs`. */
   { file: "app/shell-inspect.js", marker: /export function inspectHTML\s*\(/ },
   { file: "app/vendor/insp-report.js", marker: /export function reportHTML\s*\(/ },
+  { file: "app/insp-panel.js", marker: /export function panelHTML\s*\(/ },
 ];
 
 /* `document.` — саме з крапкою: звернення до макета завжди йде через ЧЛЕНА
@@ -262,8 +263,8 @@ test("ні панель, ні її рендерер не торкаються DO
   /* Підлога — ЛІТЕРАЛ, а не `PANEL_SOURCES.length`: інакше порожній список сам
      себе й підтвердив би, і охоронець лишився б зеленим, не глянувши в жоден
      файл. */
-  assert.equal(seen, 2,
-    `просканованих сирців ${seen}, а не 2 — список порожній або обірваний`);
+  assert.equal(seen, 3,
+    `просканованих сирців ${seen}, а не 3 — список порожній або обірваний`);
 });
 
 /* ── ПІДВАЛ панелі (Task 15, перебудований у T-39) ─────────────────────────

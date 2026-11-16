@@ -8,6 +8,8 @@ import path from "node:path";
    документ малює НАСПРАВДІ, і другий опис тієї самої розмітки тут розійшовся б
    із першим рівно так, як розходились два описи звіту до 17.09.2026. */
 import { measureHTML, reportHTML } from "../app/vendor/insp-report.js";
+import { panelHTML } from "../app/insp-panel.js";
+import { FULL_MODEL, MIN_MODEL } from "./_insp-fixtures.mjs";
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "app");
 const CSS_PATH = path.join(APP, "styles.css");
@@ -624,9 +626,26 @@ function renderedClasses({ tunable, measure }) {
    `extra` — рендерери, які малюють ЛИШЕ в цей документ (вкладка «Тюнер» —
    розмітка `shell-inspect.js`); з них класи знімаються з тексту, як і
    раніше. */
+/** Класи, які малює нова панель властивостей: усі гілки моделі (повна, найменша, grid, розкриті сторони). */
+function panelClasses() {
+  const out = new Set();
+  const full = FULL_MODEL();
+  const grid = FULL_MODEL();
+  grid.layout = { kind: "grid", dir: "row", ax: -1, ay: -1, gap: full.layout.gap };
+  const sides = FULL_MODEL();
+  const side = (p) => ({ ...full.size.w, props: [p], id: p });
+  sides.spacing = { ...sides.spacing, sides: true, forced: true,
+    pad: { top: side("padding-top"), right: side("padding-right"), bottom: side("padding-bottom"), left: side("padding-left") },
+    mar: { top: side("margin-top"), right: side("margin-right"), bottom: side("margin-bottom"), left: side("margin-left") } };
+  for (const m of [full, MIN_MODEL(), grid, sides]) {
+    for (const c of classesInMarkup(panelHTML(m))) out.add(c);
+  }
+  return out;
+}
+
 const DOCUMENTS = [
   { name: "права панель оболонки", css: () => readCss(),
-    render: { tunable: true, measure: true },
+    render: { tunable: true, measure: true }, panel: true,
     extra: [path.join(APP, "shell-inspect.js")] },
   { name: "shadow-корінь оверлея (сторінка без канваса)", css: readOverlayCss,
     render: { tunable: false, measure: false }, extra: [] },
@@ -638,6 +657,7 @@ function drawnClasses(doc) {
   for (const file of doc.extra) {
     for (const c of classesInMarkup(readFileSync(file, "utf8"))) drawn.add(c);
   }
+  if (doc.panel) for (const c of panelClasses()) drawn.add(c);
   return drawn;
 }
 
@@ -762,6 +782,14 @@ test("ручки тюнера існують РІВНО в тому докуме
   assert.ok(!overlay.includes("<input"),
     "у shadow-корені оверлея не сміє лишитись ЖОДНОГО поля вводу: там немає "
       + "ні делегації, ні моделі тюнера, тобто нікому їх слухати");
+});
+
+test("жоден клас insp-panel.js не лишився поза фікстурами — вокабуляр сирця = вокабуляр рендеру", () => {
+  const source = classesInMarkup(readFileSync(path.join(APP, "insp-panel.js"), "utf8"));
+  assert.ok(source.size > 10, "екстрактор не знайшов класів у insp-panel.js");
+  const unrendered = [...source].filter((c) => !panelClasses().has(c)).sort();
+  assert.deepEqual(unrendered, [],
+    `у insp-panel.js є класи, яких не малює жодна фікстура: ${unrendered.join(", ")} — допиши фікстуру в tests/_insp-fixtures.mjs`);
 });
 
 /* B2 (ревʼю): напрямні рівнів — це background-image рядка; шорткат

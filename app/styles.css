@@ -34,6 +34,10 @@
      токен — `--accent` (діалоги на білому). */
   --sel-ink:#2F6B52;
   --bad:#F37373;
+  /* Синій «змінено / вибрано» панелі властивостей і оверлея; моно-шрифт імен елементів. */
+  --pick:#3D8BFF;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+```
   /* `--bad` — для ТЕМНОЇ поверхні оболонки (на білому дає 2.8:1 — для рамки поля замало).
      На світлій картці діалогу — `--bad-ink` (5.4:1 на `--card`), як `--sel-ink` до `--sel`. */
   --bad-ink:#c2362e;
@@ -1321,6 +1325,78 @@ body.with-panel.panel-collapsed.with-cmt .cv-hud{width:calc(100% - var(--panel-r
 .insp-tabs{padding:8px 10px 0}
 .insp-body{flex:1;min-height:0;overflow:auto;padding:10px}
 .insp-hint{margin:0;font-size:12px;color:var(--dim);line-height:1.5}
+/* ── Панель властивостей (0.29.0, етап Г) ─────────────────────────────────
+   Вигляд — затверджений прототип. ⛔ Висота поля СТАЛА (`--h-sm`): нічого не переноситься, довге усікається — те саме
+   правило, яке T-39 вивів для звіту. Стан — атрибутами `data-*` на `.insp-f`. */
+.insp-path{display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:8px 10px 0;
+  font:11.5px/1.3 var(--mono);color:var(--dim)}
+.insp-pb{border:0;background:none;padding:2px 3px;border-radius:4px;color:var(--dim);cursor:pointer;font:inherit}
+.insp-pb:hover{background:var(--s3);color:var(--hi)}
+.insp-el{display:flex;align-items:center;gap:8px;padding:6px 10px 10px;border-bottom:1px solid var(--line)}
+.insp-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font:600 13px/1.3 var(--mono);color:var(--hi)}
+.insp-off{flex:none;margin-left:auto;padding:1px 7px;border-radius:999px;background:none;cursor:pointer;
+  border:1px solid color-mix(in srgb,var(--open) 45%,transparent);color:var(--open);font:inherit;font-size:11px}
+.insp-off:hover{background:color-mix(in srgb,var(--open) 14%,transparent)}
+.insp-sec{display:grid;gap:6px;padding:10px 10px 12px;border-bottom:1px solid var(--line)}
+.insp-sh{display:flex;align-items:center;min-height:var(--h-xs);font-size:11.5px;font-weight:600;color:var(--hi)}
+.insp-ib{display:inline-grid;place-items:center;flex:none;width:var(--h-xs);height:var(--h-xs);margin-left:auto;
+  border:0;border-radius:var(--r-sm);background:none;color:var(--dim);cursor:pointer}
+.insp-ib:hover{background:var(--s4);color:var(--hi)}
+.insp-ib[aria-pressed="true"]{background:var(--s4);color:var(--hi)}
+.insp-ib:disabled{cursor:default}
+.insp-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.insp-row--1{grid-template-columns:1fr}
+.insp-f{position:relative;display:flex;align-items:center;height:var(--h-sm);min-width:0;
+  border:1px solid transparent;border-radius:var(--r-sm);background:var(--s0)}
+.insp-f:hover{border-color:var(--line2)}
+.insp-f:focus-within{border-color:var(--sel)}
+.insp-f[data-tuned]::before{content:"";position:absolute;left:-6px;top:50%;width:4px;height:4px;margin-top:-2px;
+  border-radius:50%;background:var(--pick)}
+.insp-f[data-miss]{border-style:dashed;border-color:var(--open)}
+.insp-fl{flex:none;display:inline-grid;place-items:center;min-width:24px;height:100%;padding:0 4px;
+  color:var(--dim);font-size:11px;cursor:ew-resize;user-select:none;touch-action:none}
+.insp-fl .ico{color:var(--dim)}
+.insp-fi{flex:1;min-width:0;height:100%;border:0;background:none;padding:0 2px;outline:none;
+  font:inherit;font-size:12px;font-variant-numeric:tabular-nums;color:var(--hi)}
+select.insp-fi{padding:0 6px}
+select.insp-fi option{background:var(--s1)}
+.insp-f[data-off] .insp-fi{color:var(--open)}
+.insp-tok{flex:none;max-width:56%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 7px 0 2px;
+  font:10.5px/1 var(--mono);color:var(--dim)}
+.insp-tok[data-off]{color:var(--open)}
+.insp-snap{flex:none;height:20px;margin-right:4px;padding:0 6px;border-radius:4px;background:none;cursor:pointer;
+  border:1px solid color-mix(in srgb,var(--open) 50%,transparent);color:var(--open);
+  font:10.5px/1 var(--mono);white-space:nowrap;max-width:46%;overflow:hidden;text-overflow:ellipsis}
+.insp-snap:hover{background:color-mix(in srgb,var(--open) 14%,transparent)}
+.insp-sw{flex:none;width:14px;height:14px;margin:0 4px 0 7px;border-radius:3px;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.insp-ro{flex:1;min-width:0;padding:0 7px;font-size:12px;color:var(--mid);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.insp-edges{display:grid;grid-template-columns:44px 1fr 44px;grid-template-rows:22px 30px 22px;align-items:center;
+  justify-items:center;padding:4px;border-radius:var(--r-sm);background:var(--s0);
+  font:11px/1 var(--mono);color:var(--mid);font-variant-numeric:tabular-nums}
+.insp-e-box{grid-column:2;grid-row:2;width:100%;height:100%;display:grid;place-items:center;overflow:hidden;
+  white-space:nowrap;border:1px solid var(--line2);border-radius:3px;color:var(--dim);font-size:10.5px}
+.insp-e-t{grid-column:2;grid-row:1}
+.insp-e-b{grid-column:2;grid-row:3}
+.insp-e-l{grid-column:1;grid-row:2}
+.insp-e-r{grid-column:3;grid-row:2}
+.insp-al{display:grid;grid-template-columns:auto 1fr;gap:6px;align-items:start}
+.insp-al-side{display:grid;gap:6px}
+.insp-dirs{display:flex;gap:2px;padding:2px;height:var(--h-sm);border-radius:var(--r-sm);background:var(--s0)}
+.insp-dir{display:inline-grid;place-items:center;width:28px;border:0;border-radius:4px;background:none;
+  color:var(--dim);cursor:pointer}
+.insp-dir[aria-pressed="true"]{background:var(--s3);color:var(--hi)}
+.insp-align{display:grid;grid-template-columns:repeat(3,1fr);width:62px;height:62px;padding:4px;
+  border-radius:var(--r-sm);background:var(--s0)}
+.insp-cell{display:grid;place-items:center;border:0;background:none;cursor:pointer;padding:0}
+.insp-cell::after{content:"";width:3px;height:3px;border-radius:50%;background:var(--lo)}
+.insp-cell:hover::after{background:var(--mid)}
+.insp-cell[aria-pressed="true"]::after{width:12px;height:4px;border-radius:2px;background:var(--pick)}
+.insp-ps{color:var(--dim);padding:0 1px}
+.insp-pb:focus-visible,.insp-ib:focus-visible,.insp-cell:focus-visible,.insp-dir:focus-visible,
+.insp-snap:focus-visible,.insp-off:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
 /* ── Звіт інспектора (T-39) ───────────────────────────────────────────────
    Джерело вигляду — ДРУГИЙ затверджений макет, `docs/proto/tuner-panel.html`,
    варіант А. Крихти лишились із прототипу оболонки (`docs/proto/shell.html`,
