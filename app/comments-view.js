@@ -3,7 +3,7 @@
  * `BAR_ACTIONS` (делегація з `#cmt-panel` в `app.js`). Класи — лише `cmt-*`: `pin`/`cp`/`cbadge` належать коментатору
  * (`tests/principle6.test.mjs`). Тексти людей — лише через `esc()`; мініатюра — лише з `shotSrc`.
  */
-import { FILTERS, assignedToClaude, audOf, commentSections, openCount, shotSrc } from "./comments-model.js";
+import { FILTERS, assignedToClaude, audOf, commentSections, filterCounts, openCount, shotSrc } from "./comments-model.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
@@ -11,7 +11,7 @@ import { t } from "./i18n.js";
 // Службове значення, яким коментатор закриває вручну (`commenter/src/comment-layer.js`, `resolveComment`): не текст людини.
 const MANUAL_REASON = "resolved manually";
 
-const btn = (act, val, label, icon) => `<button type="button" class="cmt-act" data-act="${act}" data-val="${esc(val)}"`
+const btn = (act, val, label, icon) => `<button type="button" class="${icon ? "cmt-ib" : "cmt-act"}" data-act="${act}" data-val="${esc(val)}"`
   + ` aria-label="${esc(label)}" title="${esc(label)}">${icon ? ico(icon) : esc(label)}</button>`;
 
 /** Де був елемент (`meta.ctx` коментатора: `{ active: [кроки/вкладки], heading }`) — для піна, якого зараз нема на екрані;
@@ -36,7 +36,8 @@ function cardHTML(c, st, kind) {
   const aud = st.dual
     ? `<span class="cmt-aud cmt-aud--${audOf(c)}">${esc(t(audOf(c) === "project" ? "cmtAudTeam" : "cmtAudLocal"))}</span>` : "";
   const badge = st.dual && assignedToClaude(c) ? `<span class="cmt-badge">${esc(t("cmtAssignedBadge"))}</span>` : "";
-  const head = `<header class="cmt-head"><span class="cmt-n">${esc(c.n)}</span><span class="cmt-who">${esc(c.author || "")}</span>`
+  const num = `<span class="cmt-n${st.dual && audOf(c) === "local" ? " cmt-n--local" : ""}">${esc(c.n)}</span>`;
+  const head = `<header class="cmt-head">${num}<span class="cmt-who">${esc(c.author || "")}</span>`
     + `${aud}${badge}${modeTag(m)}<span class="cmt-when">${esc(c.ts || t("cmtNoTime"))}</span></header>`;
   const body = c.id === st.editingId
     ? `<textarea class="cmt-edit" data-val="${esc(c.id)}" aria-label="${esc(t("cmtEdit"))}">${esc(c.text || "")}</textarea>`
@@ -84,29 +85,37 @@ function foldHTML(key, title, items, st, kind) {
     + (open ? items.map((c) => cardHTML(c, st, kind)).join("") : "") + "</section>";
 }
 
-/** st: {snapshot, query, selectedId, editingId, expanded:{earlier,closed}, filter:'all'|'local'|'project', dual, teamDown, fresh:Set|null, down} */
+const FILTER_KEY = { local: "cmtFLocal", project: "cmtFTeam", all: "cmtFAll" };
+const HINT_KEY = { local: "cmtFHintLocal", project: "cmtFHintTeam", all: "cmtFHintAll" };
+
+/** st: {snapshot, query, selectedId, editingId, expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down} */
 export function commentsPanelHTML(st) {
-  const total = openCount(st.snapshot);
-  const FILTER_KEY = { all: "cmtFAll", local: "cmtFLocal", project: "cmtFTeam" };
-  const seg = st.dual
-    ? `<div class="cmt-ch" role="group" aria-label="${esc(t("cmtFilter"))}">`
-      + FILTERS.map((f) => `<button type="button" data-act="cmtfilter" data-val="${f}" aria-pressed="${(st.filter || "all") === f}">`
-        + `${esc(t(FILTER_KEY[f]))}</button>`).join("") + "</div>"
-    : "";
+  const filter = FILTERS.includes(st.filter) ? st.filter : "local";
   const hidden = !!(st.snapshot && st.snapshot.pinsHidden);
-  const pins = `<button type="button" class="icon-btn" data-act="cmtpins" aria-pressed="${hidden}"`
+  const pins = `<button type="button" class="icob" data-act="cmtpins" aria-pressed="${hidden}"`
     + ` aria-label="${esc(t("cmtPins"))}" title="${esc(t("cmtPins"))}">${ico("eye")}</button>`;
-  const top = `<div class="insp-top cmt-top"><span class="panel-title">${esc(t("cmtTitle"))}</span>`
-    + `<span class="cmt-total">${total}</span>${seg}${pins}`
-    + `<button type="button" class="icon-btn" data-act="comments" aria-label="${esc(t("cmtClose"))}" title="${esc(t("cmtClose"))}">${ico("x")}</button></div>`;
+  const close = `<button type="button" class="icob" data-act="comments" aria-label="${esc(t("cmtClose"))}" title="${esc(t("cmtClose"))}">${ico("x")}</button>`;
+  // Без командного каналу фільтра нема — тоді число відкритих лишається в шапці.
+  const total = st.dual ? "" : `<span class="cmt-total">${openCount(st.snapshot)}</span>`;
+  const top = `<div class="insp-top cmt-top">${ico("comment")}<span class="panel-title">${esc(t("cmtTitle"))}</span>${total}${pins}${close}</div>`;
   const search = `<div class="cmt-search"><input type="search" id="cmt-q" value="${esc(st.query || "")}"`
     + ` placeholder="${esc(t("cmtSearch"))}" aria-label="${esc(t("cmtSearch"))}"></div>`;
+  let seg = "";
+  if (st.dual) {
+    const n = filterCounts(st.snapshot, st.fresh);
+    seg = `<div class="cmt-filter" role="group" aria-label="${esc(t("cmtFilter"))}">`
+      + FILTERS.map((f) => `<button type="button" data-act="cmtfilter" data-val="${f}" aria-pressed="${filter === f}">`
+        + `<span>${esc(t(FILTER_KEY[f]))}</span><span class="cmt-fn">${n[f]}</span>`
+        + (f === "project" && n.fresh ? `<span class="cmt-fnew" title="${esc(t("cmtNewTitle"))}">+${n.fresh}</span>` : "")
+        + "</button>").join("") + "</div>"
+      + `<p class="cmt-fhint">${esc(t(HINT_KEY[filter]))}</p>`;
+  }
   const down = st.teamDown ? `<p class="cmt-teamdown" role="alert">${esc(t("cmtTeamDown", st.teamDown))}</p>` : "";
   let body;
   if (!st.snapshot) {
     body = st.down ? `<p class="cmt-down" role="alert">${esc(t("cmtDown", st.down))}</p>` : `<p class="insp-hint">${esc(t("cmtLoading"))}</p>`;
   } else {
-    const s = commentSections(st.snapshot, { query: st.query, filter: st.dual ? st.filter : "all", fresh: st.fresh });
+    const s = commentSections(st.snapshot, { query: st.query, filter: st.dual ? filter : "all", fresh: st.fresh });
     const none = !s.fresh.length && !s.open.length && !s.earlier.length && !s.closed.length;
     // Коментарі є, але запит чи активний фільтр адресата сховали всі — «нема збігів», а не «ще немає».
     const hasAny = Array.isArray(st.snapshot.comments) && st.snapshot.comments.length > 0;
@@ -119,5 +128,5 @@ export function commentsPanelHTML(st) {
     body = empty + fresh + open + foldHTML("earlier", t("cmtEarlier"), s.earlier, st, "earlier")
       + foldHTML("closed", t("cmtClosed"), s.closed, st, "closed");
   }
-  return `${top}${search}${down}<div class="insp-body cmt-body">${body}</div>`;
+  return `${top}${search}${seg}${down}<div class="insp-body cmt-body">${body}</div>`;
 }

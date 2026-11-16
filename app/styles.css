@@ -37,6 +37,9 @@
   /* `--bad` — для ТЕМНОЇ поверхні оболонки (на білому дає 2.8:1 — для рамки поля замало).
      На світлій картці діалогу — `--bad-ink` (5.4:1 на `--card`), як `--sel-ink` до `--sel`. */
   --bad-ink:#c2362e;
+  /* Колір піна «для Claude» (`LOCAL_PIN_COLOR` у `app.js`, `DUAL_AUDIENCES_JS` у `serve.py`): номер картки в панелі
+     фарбується тим самим, щоб пін і картка читались як одне. Звіряє `tests/comments-view-css.test.mjs`. */
+  --local-pin:#7C6CF0;
   /* Кольори просторів (Deai 1.0, етап 1): шість ПРИГЛУШЕНИХ тонів однакової
      світлості, щоб жоден не кричав у смузі й усі читались і на темній поверхні
      оболонки, і на білій картці діалогу — тому значення ОДНАКОВІ для всіх тем.
@@ -1850,9 +1853,21 @@ body:not(.home-open) .cn-drawer{display:none}
 
 /* Панель «Коментарі» (0.26.0): та сама права панель, що й інспектор (`.insp`); вони взаємно виключні. */
 .cmt-top .cmt-total{font-size:11px;color:var(--dim);margin-right:auto}
-.cmt-ch{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
-.cmt-ch button{border:0;background:none;color:var(--dim);cursor:pointer;font-size:11px;min-height:var(--h-sm);padding:0 10px}
-.cmt-ch button[aria-pressed="true"]{background:var(--sel-tint-2);color:var(--hi)}
+.cmt-top>.ico{color:var(--dim)}
+.cmt-filter{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;margin:8px 10px 0;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
+.cmt-filter button{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;height:var(--h-sm);padding:0 6px;border:0;border-left:1px solid var(--line);background:none;color:var(--dim);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+.cmt-filter button:first-child{border-left:0}
+.cmt-filter button:hover{color:var(--hi)}
+.cmt-filter button[aria-pressed="true"]{background:var(--sel-tint-2);color:var(--hi)}
+.cmt-filter button:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
+.cmt-fn{font-size:11px;font-variant-numeric:tabular-nums}
+.cmt-fnew{min-width:15px;padding:0 4px;border-radius:999px;background:var(--open);color:var(--on-sel);font-size:10px;font-weight:600;line-height:15px;text-align:center;box-sizing:border-box}
+.cmt-fhint{margin:6px 12px 0;font-size:11px;line-height:1.4;color:var(--dim)}
+.cmt-n--local{background:var(--local-pin);color:#fff}
+.cmt-ib{display:inline-grid;place-items:center;width:var(--h-xs);height:var(--h-xs);flex:none;border:0;border-radius:var(--r-sm);background:none;color:var(--mid);cursor:pointer}
+.cmt-ib:hover{background:var(--s4);color:var(--hi)}
+.cmt-ib:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.cmt-acts>.cmt-ib:first-child,.cmt-acts>.cmt-act+.cmt-ib{margin-left:auto}
 .cmt-search{padding:8px 10px 0}
 .cmt-search input{width:100%;box-sizing:border-box;background:var(--s1);color:var(--hi);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;font-size:12px}
 .cmt-search input:focus{outline:none;border-color:var(--sel)}
@@ -1863,7 +1878,8 @@ body:not(.home-open) .cn-drawer{display:none}
 .cmt-card{background:var(--s3);border:1px solid var(--line);border-radius:8px;padding:9px 10px;margin-bottom:8px;font-size:12px;color:var(--hi)}
 .cmt-card--sel{border-color:var(--sel);background:var(--sel-tint)}
 .cmt-card--closed{color:var(--dim)}
-.cmt-head{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+.cmt-head{display:flex;align-items:center;flex-wrap:wrap;gap:4px 6px;margin-bottom:5px}
+.cmt-who,.cmt-aud,.cmt-badge,.cmt-when{white-space:nowrap}
 .cmt-n{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 4px;box-sizing:border-box;border-radius:999px;background:var(--sel);color:var(--on-sel);font-size:11px;font-weight:600}
 .cmt-who{font-weight:600}
 .cmt-when{margin-left:auto;font-size:11px;color:var(--dim)}

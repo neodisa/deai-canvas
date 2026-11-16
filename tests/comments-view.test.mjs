@@ -9,7 +9,7 @@ const C = (o) => ({ id: o.id, n: o.n, text: o.text || "т", author: o.author || 
   status: o.status || "open", scope: o.scope || "current", where: o.where || "here", iter: o.iter || "3",
   resolvedV: o.resolvedV ?? null, resolveReason: o.resolveReason ?? null, meta: o.meta || {} });
 const base = (over = {}) => ({ snapshot: { version: "3", iteration: "3", comments: [] }, query: "", selectedId: null,
-  editingId: null, expanded: { earlier: false, closed: false }, filter: "all", dual: false, teamDown: null, fresh: null, down: null, ...over });
+  editingId: null, expanded: { earlier: false, closed: false }, filter: "local", dual: false, teamDown: null, fresh: null, down: null, ...over });
 
 test("порожньо — запрошення; немає знімка — завантаження; є відмова — її текст", () => {
   assert.match(commentsPanelHTML(base()), /Коментарів ще немає/);
@@ -61,15 +61,52 @@ test("попередні й закриті згорнуті: заголовок 
   assert.match(open, /Іт\.2/);
 });
 
-test("фільтр адресата — лише коли є командний постачальник (dual); активний — aria-pressed", () => {
+test("фільтр — окремим рядком під пошуком, порядок Для Claude · Команда · Усі, з числами; без dual — нема", () => {
   assert.equal(commentsPanelHTML(base()).includes('data-act="cmtfilter"'), false);
-  assert.equal(commentsPanelHTML(base()).includes('data-act="cmtch"'), false);
-  const html = commentsPanelHTML(base({ dual: true, filter: "project" }));
-  assert.match(html, /data-act="cmtfilter" data-val="all" aria-pressed="false"/);
-  assert.match(html, /data-act="cmtfilter" data-val="local" aria-pressed="false"/);
-  assert.match(html, /data-act="cmtfilter" data-val="project" aria-pressed="true"/);
+  assert.equal(commentsPanelHTML(base()).includes('class="cmt-filter"'), false);
+  assert.equal(commentsPanelHTML(base()).includes('data-act="cmtch"'), false, "перемикача каналу більше нема (поправка 10)");
+  const comments = [
+    { ...C({ id: "l", n: 1 }), _aud: "local" },
+    { ...C({ id: "p", n: 2 }), _aud: "project" },
+    { ...C({ id: "a", n: 3, meta: { assignee: "claude" } }), _aud: "project" },
+  ];
+  const html = commentsPanelHTML(base({ dual: true, filter: "project", fresh: new Set(["p"]), snapshot: { iteration: "3", comments } }));
+  const order = [...html.matchAll(/data-act="cmtfilter" data-val="(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual(order, ["local", "project", "all"]);
+  assert.match(html, /data-val="local" aria-pressed="false"><span>Для Claude<\/span><span class="cmt-fn">2<\/span><\/button>/);
+  assert.match(html, /data-val="project" aria-pressed="true"><span>Команда<\/span><span class="cmt-fn">2<\/span><span class="cmt-fnew"[^>]*>\+1<\/span><\/button>/);
+  assert.match(html, /data-val="all" aria-pressed="false"><span>Усі<\/span><span class="cmt-fn">3<\/span><\/button>/);
+  assert.ok(html.indexOf('id="cmt-q"') < html.indexOf('class="cmt-filter"'), "фільтр — під пошуком, не в шапці");
+  assert.match(html, /<p class="cmt-fhint">Спільні коментарі\. Їх бачать колеги в превʼю\. Claude бере лише доручені\.<\/p>/);
   assert.match(html, /aria-label="Кому"/);
-  assert.equal(html.includes('data-act="cmtch"'), false, "перемикача каналу більше нема (поправка 10)");
+  assert.equal(html.includes("cmt-total"), false, "з фільтром числа у вкладках, не в шапці");
+  assert.equal(commentsPanelHTML(base({ dual: true, filter: "local" })).includes("cmt-fnew"), false, "без нових мітки нема");
+});
+
+test("невідоме значення фільтра — вкладка «Для Claude»", () => {
+  const html = commentsPanelHTML(base({ dual: true, filter: "сміття" }));
+  assert.match(html, /data-val="local" aria-pressed="true"/);
+  assert.match(html, /<p class="cmt-fhint">Те, що Claude візьме в роботу/);
+});
+
+test("шапка: іконка, назва, кнопки icob; icon-btn більше нема; без dual — число в шапці", () => {
+  const html = commentsPanelHTML(base({ snapshot: { iteration: "3", comments: [C({ id: "a", n: 1 })] } }));
+  assert.equal(html.includes("icon-btn"), false);
+  assert.match(html, /<button type="button" class="icob" data-act="cmtpins"/);
+  assert.match(html, /<button type="button" class="icob" data-act="comments"/);
+  assert.match(html, /<div class="insp-top cmt-top"><svg[^>]*>.*?<\/svg><span class="panel-title">Коментарі<\/span><span class="cmt-total">1<\/span>/s);
+});
+
+test("картка: номер локального — фіолетовий лише з dual; бейдж «Доручено Claude»; іконкові дії — cmt-ib", () => {
+  const comments = [{ ...C({ id: "l", n: 1 }), _aud: "local" }, { ...C({ id: "a", n: 2, meta: { assignee: "claude" } }), _aud: "project" }];
+  const dual = commentsPanelHTML(base({ dual: true, filter: "all", snapshot: { iteration: "3", comments } }));
+  assert.match(dual, /<span class="cmt-n cmt-n--local">1<\/span>/);
+  assert.match(dual, /<span class="cmt-n">2<\/span>/);
+  assert.match(dual, /<span class="cmt-badge">Доручено Claude<\/span>/);
+  assert.match(dual, /class="cmt-act" data-act="cmtshow"/);
+  for (const act of ["cmtedit", "cmtres", "cmtdel"]) assert.match(dual, new RegExp(`class="cmt-ib" data-act="${act}"`));
+  const single = commentsPanelHTML(base({ snapshot: { iteration: "3", comments: [C({ id: "l", n: 1 })] } }));
+  assert.match(single, /<span class="cmt-n">1<\/span>/, "без командного каналу піни не фіолетові — і номер теж");
 });
 
 test("смуга падіння командного: причина екранована; без причини смуги нема", () => {
@@ -80,7 +117,7 @@ test("смуга падіння командного: причина екран�
 });
 
 const D = (o) => ({ ...C(o), ...(o.aud ? { _aud: o.aud } : {}) });
-const dual = (comments, over = {}) => commentsPanelHTML(base({ dual: true, snapshot: { iteration: "3", comments }, ...over }));
+const dual = (comments, over = {}) => commentsPanelHTML(base({ dual: true, filter: "all", snapshot: { iteration: "3", comments }, ...over }));
 
 test("адресат і бейдж доручення — лише в dual", () => {
   const cs = [D({ id: "a", n: 1, aud: "project", meta: { assignee: "claude" } }), D({ id: "b", n: 2 })];
@@ -109,7 +146,7 @@ test("розділ «Нові від команди»: з числом, над �
   assert.match(html, /<h3 class="cmt-h cmt-h--new">Нові від команди <span>1<\/span><\/h3>/);
   assert.ok(html.indexOf("cmt-sec--new") < html.indexOf('aria-label="Відкриті"'));
   assert.equal((html.match(/data-cid="n1"/g) || []).length, 1);
-  assert.equal(commentsPanelHTML(base({ dual: true, snapshot: { iteration: "3", comments: [D({ id: "o1", n: 1 })] } })).includes("cmt-sec--new"), false);
+  assert.equal(commentsPanelHTML(base({ dual: true, filter: "all", snapshot: { iteration: "3", comments: [D({ id: "o1", n: 1 })] } })).includes("cmt-sec--new"), false);
 });
 
 test("лише «нові» — не «порожньо»", () => {
