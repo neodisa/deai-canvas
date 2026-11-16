@@ -10,7 +10,8 @@
 import {
   declsFor, describe, describeAll, ds, invalidate, loadSpaceTokens, pickWinner, setDsProfile, trail, label,
 } from './inspector-dom.js';
-import { between, measure } from './inspector-measure.js';
+import { between } from './inspector-measure.js';
+import { altTarget, nextPin } from './inspector-nav.js';
 import { reportHTML } from './insp-report.js';
 import { pickDsColors } from './inspector-core.js';
 /* Свій екземпляр i18n — неминучий: оверлей живе в ДОКУМЕНТІ МАКЕТА, тобто в
@@ -83,7 +84,7 @@ const INLINE_RULE = '[style]';
  *  безглуздя, а дизайнер побачив би число, якого в макеті немає. */
 const OVERLAY_HOSTS = '[data-canvas-inspector],[data-comment-layer]';
 
-/** Напрямки лінійки — той самий порядок і ті самі імена, що в `measure`. */
+/** Слоти ліній відстаней Alt. */
 const DIRS = ['top', 'right', 'bottom', 'left'];
 
 /** Екранування ВСЬОГО, що вставляється в розмітку. Імена класів, значення
@@ -192,29 +193,6 @@ function finiteRect(r) {
   return !!r && DIRS.every((s) => Number.isFinite(r[s]));
 }
 
-/** Внутрішній край елемента: інсет на border і padding, тобто та сама межа, від
- *  якої дизайнер відміряє відступи в макеті.
- *
- *  `null`, якщо коробки нема або вона вивернулась. Це не параноя: `display:contents`
- *  коробки не створює (`getBoundingClientRect` → 0,0,0,0), а computed `padding`
- *  у такого елемента лишається заявленим — інсет дав би `right < left`, і
- *  `measure` кинув би «вивернутий», поваливши лінійку на цілком нормальному
- *  макеті з обгорткою-`display:contents`. */
-function innerBox(host) {
-  const r = host.getBoundingClientRect();
-  if (!finiteRect(r)) return null;
-  const cs = getComputedStyle(host);
-  const n = (v) => parseFloat(v) || 0;
-  const box = {
-    top: r.top + n(cs.borderTopWidth) + n(cs.paddingTop),
-    right: r.right - n(cs.borderRightWidth) - n(cs.paddingRight),
-    bottom: r.bottom - n(cs.borderBottomWidth) - n(cs.paddingBottom),
-    left: r.left + n(cs.borderLeftWidth) + n(cs.paddingLeft),
-  };
-  if (box.right - box.left <= 0 || box.bottom - box.top <= 0) return null;
-  return box;
-}
-
 /** Просвіт між плашкою й тим, від чого вона відʼїхала (кінець напрямної, край
  *  екрана, сусідня плашка). Три пікселі: більше — і число відривається від своєї
  *  напрямної, менше — і читається як приклеєне. */
@@ -257,12 +235,6 @@ const STYLE = `
   .hl,.hl-pad{position:fixed;pointer-events:none;z-index:2147483000;box-sizing:border-box}
   .hl{background:rgba(246,178,107,.28);outline:1px dashed rgba(214,120,0,.9)}
   .hl-pad{background:rgba(147,196,125,.35);outline:1px solid rgba(56,118,29,.7)}
-  .tip{position:fixed;z-index:2147483001;max-width:340px;pointer-events:none;
-    background:#151a2d;color:#e7ecf5;border:1px solid #2b3350;border-radius:8px;
-    padding:8px 10px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
-    box-shadow:0 8px 28px rgba(0,0,0,.45)}
-  .tip b{color:#8fb7ff;font-weight:600}
-  .tip .dim{color:#8b93ab}
   .btn{position:fixed;left:12px;bottom:16px;z-index:2147483002;
     display:inline-flex;align-items:center;gap:7px;padding:9px 13px;cursor:pointer;
     background:#151a2d;color:#e7ecf5;border:1px solid #2b3350;border-radius:9px;
@@ -274,33 +246,28 @@ const STYLE = `
      живе в панелі оболонки, а клавіша M працює скрізь), тож і підстрибувати
      нема від чого. (Лапок-зворотних тут не ставити: це шаблонний рядок.) */
   .btn.on{background:#025cff;border-color:#025cff}
-  /* Лінійка. pointer-events:none тут не косметика: плашка лежить РІВНО в
-     зазорі, який міряє, тобто просто під курсором. Якби вона ловила події,
-     ховер зіскакував би на неї, _pageEl вертав би null — і лінійка міряла б
-     не те, на що дизайнер показує. Той самий клас помилки, що оверлей у
-     кандидатах. (Бекслеші й лапки-зворотні тут не ставити: це шаблонний рядок.) */
+  /* Етап Г. Кольори оверлея — константи: документ макета токенів оболонки не бачить. Синій — вибір і наведення
+     (так само, як у прототипі), червоний — відстані Alt. */
+  .o-hov,.o-sel,.o-tgt{position:fixed;pointer-events:none;box-sizing:border-box;z-index:2147483000}
+  .o-hov{outline:1px solid #3D8BFF}
+  .o-sel{outline:2px solid #3D8BFF}
+  .o-tgt{outline:1px dashed #F2554B}
+  .o-tag,.o-size{position:fixed;pointer-events:none;z-index:2147483002;padding:1px 6px;background:#3D8BFF;
+    color:#fff;white-space:nowrap;font:600 10.5px/16px ui-monospace,SFMono-Regular,Menlo,monospace}
+  .o-tag{transform:translateY(-100%);border-radius:3px 3px 0 0}
+  .o-tag.below{transform:none;border-radius:0 0 3px 3px}
+  .o-size{transform:translateX(-50%);margin-top:6px;border-radius:4px}
+  /* Лінії й числа відстаней. pointer-events:none не косметика: число лежить рівно в зазорі під курсором, і якби
+     воно ловило події, ховер зіскакував би на нього. */
   .rul,.rg,.rlab{pointer-events:none}
   .rg{position:fixed;z-index:2147483001;box-sizing:border-box}
-  .rg.v{border-left:1px dashed #025cff}
-  .rg.h{border-top:1px dashed #025cff}
-  /* Контейнерна напрямна ІНАКША за сусідську: інакше видно тільки «скільки», а
-     не «до чого» — а це половина відповіді. */
-  .rg.box.v{border-left-style:dotted;border-left-color:#d67800}
-  .rg.box.h{border-top-style:dotted;border-top-color:#d67800}
-  .rlab{position:fixed;z-index:2147483002;padding:1px 5px;border-radius:4px;
-    transform:translate(-50%,-50%);white-space:nowrap;
-    font:600 11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
-    background:#025cff;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.35)}
-  .rlab.box{background:#2a1c05;color:#ffc98f;border:1px solid #d67800}
-  /* Перекриття — окремий вид, і воно мусить ВИГЛЯДАТИ інакше: «12», подане так
-     само, як зазор, дизайнер прочитає як відступ. */
-  .rg.lap.v{border-left:1px solid #d93025}
-  .rg.lap.h{border-top:1px solid #d93025}
-  .rlab.lap{background:#2a0606;color:#ffb4ad;border:1px solid #d93025}
-  /* Якір парного виміру: стійке підсвічування, яке НЕ зникає, коли дивишся на
-     інші елементи — інакше не видно, від чого рахується відстань. */
-  .anch{position:fixed;pointer-events:none;z-index:2147483000;box-sizing:border-box;
-    outline:2px solid #025cff;background:rgba(2,92,255,.10)}
+  .rg.v{border-left:1px solid #F2554B}
+  .rg.h{border-top:1px solid #F2554B}
+  .rg.lap.v{border-left-style:dotted}
+  .rg.lap.h{border-top-style:dotted}
+  .rlab{position:fixed;z-index:2147483002;padding:1px 5px;border-radius:4px;transform:translate(-50%,-50%);
+    white-space:nowrap;background:#F2554B;color:#fff;font:600 10.5px/16px ui-monospace,SFMono-Regular,Menlo,monospace}
+  .rlab.lap{outline:1px dotted #fff}
   .panel{position:fixed;right:16px;top:16px;width:320px;max-height:calc(100vh - 32px);
     overflow:auto;z-index:2147483001;background:#151a2d;color:#e7ecf5;
     border:1px solid #2b3350;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.5);
@@ -347,8 +314,7 @@ const STYLE = `
   .insp-sw{flex:none;width:11px;height:11px;border-radius:2px;border:1px solid #4b5573}
   /* Вирок крапкою — ті самі три рівні, що в панелі оболонки, і тут вони
      законні: малює їх reportHTML, тобто рівно той код, який читає цей
-     документ. (Три правила .insp-kind* тут стояли до 18.09.2026 і були
-     протилежним випадком — бейдж лінійки, якого цей файл не імпортує.) */
+     документ. */
   .insp-dot{flex:none;width:7px;height:7px;border-radius:50%}
   .insp-dot--tok{background:#6ad09d}
   .insp-dot--hard{background:#fbbc55}
@@ -367,11 +333,8 @@ const STYLE = `
   .insp-dot--offds{background:transparent;box-shadow:inset 0 0 0 2px #8a929c}
   .insp-note{margin:0 0 8px;color:#8a929c}
   .insp-warn{margin:0 0 8px;color:#ffc98f}
-  /* Чого тут НЕМАЄ і чому. Бейджа виду виміру (.insp-kind*) у цьому корені не
-     буває: його малює kindBadge() з measureHTML(), а цей файл імпортує з
-     insp-report.js РІВНО reportHTML — підсумок лінійки їде в панель оболонки,
-     не сюди. Разом із ним тут немає й каркаса dl/dt/dd: після T-39 на ньому
-     лишився тільки підсумок лінійки, а звіт про елемент малюється полями.
+  /* Чого тут НЕМАЄ і чому. Бейджа виду виміру й каркаса dl/dt/dd тут немає: лінійку прибрано (0.29.0),
+     а звіт про елемент малюється полями.
      Ручок тюнера (.insp-num/.insp-pick/.insp-unit) теж немає — і теж не через
      забуті правила: рендерер їх у цьому документі не малює взагалі
      (прапорець tunable, див. _renderPanel). Правило без розмітки гірше за
@@ -405,15 +368,13 @@ function panelFacts(el) {
 
 const Inspector = {
   on: false,
-  mode: 'cascade',  // 'cascade' — каскад і токени, 'ruler' — відстані до сусідів
   pinned: null,
   hover: null,
   /* `(on) => void` — ЄДИНИЙ сигнал стану назовні. Кличе його тільки `_emit`,
-     і не лише на увімкнення/вимкнення: так само на зміну РЕЖИМУ (кнопка
-     режимів, клавіша `M`) і на зміну ЗВІТУ про запінений елемент (новий пін,
+     і не лише на увімкнення/вимкнення: так само на зміну ЗВІТУ про запінений елемент (новий пін,
      зняття піна, перечитування звіту після виходу курсора). Аргумент — і далі
      `on`, бо історично він так і читався; усе інше підписник бере з `report()`
-     і полів `on`/`mode`. Що НЕ є подією: рух курсора. Ховер у сигнатуру не
+     і поля `on`. Що НЕ є подією: рух курсора. Ховер у сигнатуру не
      входить (див. `_emit`), тож підписатись сюди дешево. */
   onChange: null,
 
@@ -442,12 +403,13 @@ const Inspector = {
      хром сам (`setChrome(false)` на кожне завантаження макета, `app.js`). */
   _chrome: true,
 
-  /* Підсумок лінійки, який ЩОЙНО намальовано (`_setMeas`), і його підпис для
-     `_emit`. Не «те, що можна порахувати на запит»: панель мусить показувати
-     рівно ті числа, що стоять на напрямних, а другий перерахунок на інший
-     момент часу дав би інші. */
-  _meas: null,
-  _measSig: '',
+  /* Alt утримується: показуємо відстані від вибраного до цілі. `_altEl` — ціль, вибрана клавішами (Alt+← → ↑),
+     перебиває ховер, поки курсор не зрушить на інший елемент. `yieldEsc` — колбек оболонки: поки відкрите питання,
+     поповер чи форма, Esc належить їм, а не драбині. */
+  alt: false,
+  _altEl: null,
+  _panelSeq: -1,
+  yieldEsc: null,
 
   init() {
     if (this._host) return this;
@@ -493,8 +455,11 @@ const Inspector = {
     box.innerHTML = `
       <div class="hl hidden"></div>
       <div class="hl-pad hidden"></div>
-      <div class="anch hidden"></div>
-      <div class="tip hidden"></div>
+      <div class="o-hov hidden"></div>
+      <div class="o-tag hidden"></div>
+      <div class="o-sel hidden"></div>
+      <div class="o-size hidden"></div>
+      <div class="o-tgt hidden"></div>
       <div class="rul hidden">${DIRS.map((d) =>
         `<div class="rg hidden" data-ruler-line="${d}"></div>`
         + `<div class="rlab hidden" data-ruler-label="${d}"></div>`).join('')}</div>
@@ -503,8 +468,11 @@ const Inspector = {
     this._host = host;
     this._hl = sh.querySelector('.hl');
     this._pad = sh.querySelector('.hl-pad');
-    this._anch = sh.querySelector('.anch');
-    this._tip = sh.querySelector('.tip');
+    this._hov = sh.querySelector('.o-hov');
+    this._tag = sh.querySelector('.o-tag');
+    this._selb = sh.querySelector('.o-sel');
+    this._size = sh.querySelector('.o-size');
+    this._tgt = sh.querySelector('.o-tgt');
     this._btn = sh.querySelector('.btn');
     this._btn.onclick = () => this.toggle();
     /* Розміткові дефолти підписів — через `t()`, а не літералами в шаблоні.
@@ -545,6 +513,8 @@ const Inspector = {
     window.addEventListener('mousedown', (e) => this._onDown(e), true);
     window.addEventListener('click', (e) => this._onDown(e), true);
     window.addEventListener('keydown', (e) => this._onKey(e), true);
+    window.addEventListener('keyup', (e) => { if (e.key === 'Alt') this.setAlt(false); }, true);
+    window.addEventListener('blur', () => this.setAlt(false));
     window.addEventListener('scroll', () => this._schedule(), true);
     window.addEventListener('resize', () => { invalidate(); this._schedule(); });
 
@@ -588,29 +558,6 @@ const Inspector = {
     if (this.pinned) this._tuned();
   },
 
-  /** Режим оверлея. Це РЕЖИМ, а не другий інструмент: ховер, `deepTarget`,
-   *  Escape, перемалювання на скрол і ресайз уже написані й перевірені один
-   *  раз — другий оверлей дублював би їх усі. */
-  setMode(m) {
-    this.mode = m === 'ruler' ? 'ruler' : 'cascade';
-    /* Підсвітки власного чипа режимів тут більше немає — чипа немає теж
-       (17.09.2026): видимий перемикач живе в панелі оболонки, а на голій
-       сторінці режим перемикає клавіша `M`. Усе, що лишилось, — перемалювати
-       й сказати про це нагору. */
-    this._paint(this.pinned || this.hover);
-    /* `_paint` вище вже сигналить, і цей виклик у нормальному ході — порожній.
-       Стоїть він тут не «про всяк випадок», а тому що інакше подія про зміну
-       РЕЖИМУ трималася б на побічному ефекті чужого методу: досить комусь у
-       Task 8 забрати з `_paint` малювання панелі разом із сигналом — і клавіша
-       `M` мовчки перестала б доходити до батьківського вікна, а сам оверлей
-       виглядав би цілком справним. Ціна порожнього виклику — одне порівняння
-       рядків. */
-    this._emit();
-    return this;
-  },
-
-  toggleMode() { return this.setMode(this.mode === 'ruler' ? 'cascade' : 'ruler'); },
-
   /** Сховати/показати ВЛАСНИЙ хром оверлея — кнопку і плаваюче вікно звіту.
    *  Канвас тримає і перемикач, і звіт у своїй правій панелі (у макеті вони
    *  заважали й губились серед його ж інтерфейсу) і кличе `setChrome(false)`
@@ -634,7 +581,7 @@ const Inspector = {
    * `lang`, і перемикання мови в канвасі до нього б не дійшло. Мова одна —
    * батьківська; сюди приїжджають уже перекладені рядки.
    *
-   * Ключі мапи — це ключі СЛОВНИКА (`inspector`, `inspCascade`, `inspRuler`),
+   * Ключі мапи — це ключі СЛОВНИКА (`inspector`),
    * а вузли позначені `data-lbl` із тим самим ключем. Зайвий рівень імен
    * («btn», «mode1») був би третім словником між двома наявними, і кожен
    * новий підпис коштував би правку в трьох місцях замість одного атрибута.
@@ -915,7 +862,7 @@ const Inspector = {
    * Звіт змінився, хоч пін той самий — розбудити батька.
    *
    * Без цього рядка панель лишалась би зі СТАРИМ числом, і фіча провалювалась
-   * би мовчки. `_emit` порівнює сигнатуру `on|mode|_pinSeq|_measSig`, а
+   * би мовчки. `_emit` порівнює сигнатуру `on|_pinSeq`, а
    * кручення ручки не міняє в ній нічого: ні режиму, ні піна інлайн-стиль не
    * чіпає. Самого `_paint` теж не досить — він рахує покоління ЛИШЕ коли
    * змінився САМ елемент (`pinned !== _pinWas`), а тут елемент той самий.
@@ -934,43 +881,6 @@ const Inspector = {
     this._paint(this.pinned);
   },
 
-  /**
-   * Серіалізовний підсумок ЛІНІЙКИ, або null. Симетрично до `report()`, з
-   * тією ж межею: жодного вузла DOM назовні — панель живе в іншому документі.
-   *
-   * Віддає те, що намальовано ОСТАННІМ (`_setMeas`), а не рахує наново, і це
-   * головне рішення тут: геометрію в цьому інструменті рахують в ОДНОМУ місці
-   * (`_ruler`/`_pair`), тож панель і напрямні на макеті — два показники одного
-   * виміру, а не два виміри. Перерахунок «на запит» стався б на іншу мить
-   * (курсор уже зрушив, сторінка вже прокрутилась) і дав би числа, яких на
-   * макеті ніхто не бачив.
-   *
-   * Форма — див. докстрінг `measureHTML` (`insp-report.js`), який її й читає:
-   *   { mode: 'nearest' | 'pair', kind, rows: [{ key, px, kind }] }
-   * `mode` розрізняє дві живі механіки лінійки (чотири найближчі сусіди без
-   * якоря — і вимір «якір ↔ ховер»), бо одна одну не заміняє, і подати їх
-   * панелі однаковими означало б збрехати, на яке саме питання відповідь.
-   * Полів понад те, що рахують `measure()`/`between()`, тут немає жодного.
-   */
-  measure() {
-    return this._meas;
-  },
-
-  /** Запамʼятати намальований підсумок і його підпис для `_emit`.
-   *
-   *  Підпис — на ОКРУГЛЕНИХ числах, тобто рівно на тому, що показується. На
-   *  сирих дробових кожен піксель прокрутки на дробовій розкладці міняв би
-   *  сигнатуру, і панель перемальовувалась би щокадру заради 15.98 → 15.99 —
-   *  разом із виділенням тексту, яке дизайнер у ній щойно зробив (та сама
-   *  причина, з якої в сигнатурі немає ховера). */
-  _setMeas(meas) {
-    this._meas = meas;
-    this._measSig = meas
-      ? `${meas.mode}:${meas.kind || ''}:` + meas.rows
-        .map((r) => `${r.key}${Math.round(r.px)}${r.kind || ''}`).join(',')
-      : '';
-  },
-
   /** Запінити предка за індексом крихти. Індекс — у тому самому масиві,
    *  що віддав `report()`; іншого джерела в панелі немає й бути не мусить.
    *
@@ -985,8 +895,7 @@ const Inspector = {
   pinAt(i) {
     const el = this._crumbEls && this._crumbEls[Number(i)];
     if (!el || !el.isConnected) return;
-    this.pinned = el;
-    this._paint(el);
+    this._setPin(el);
   },
 
   set(on) {
@@ -995,7 +904,7 @@ const Inspector = {
     /* Чип режимів стояв тут до 17.09.2026 — він єдиний жив ПОЗА `setChrome`,
        бо в канвасі режим треба було чимось перемикати. Тепер перемикач є в
        панелі оболонки, і окремий виняток із хрому більше не потрібен. */
-    if (!this.on) { this.pinned = null; this.hover = null; this._paint(null); }
+    if (!this.on) { this.pinned = null; this.hover = null; this.alt = false; this._altEl = null; this._paint(null); }
     // Гасимо режим коментування, щоб його панель не висіла даремно.
     if (this.on && window.CommentLayer && typeof window.CommentLayer.setCommentMode === 'function') {
       window.CommentLayer.setCommentMode(false);
@@ -1019,22 +928,12 @@ const Inspector = {
    * (а це `getComputedStyle` по пʼятьох групах) і переписував би `innerHTML`
    * панелі — разом із виділенням тексту, яке дизайнер у ній щойно зробив.
    *
-   * У сигнатурі рівно те, від чого залежить вигляд панелі: `on`, `mode`,
-   * покоління ЗВІТУ (`_pinSeq` — тобто і зміна запіненого елемента, і
-   * перечитування звіту про нього) і, з 17.09.2026, підпис намальованого
-   * підсумку ЛІНІЙКИ.
-   *
-   * Лінійка додана в сигнатуру не для повноти. У режимі лінійки числа
-   * міняються від РУХУ КУРСОРА (вимір «якір ↔ ховер») і від ПРОКРУТКИ —
-   * тобто саме від того, про що `_emit` мовчить у каскаді. Без цього поля
-   * панель показувала б числа, зняті в мить входу в режим, і мовчки
-   * розходилася б із напрямними на макеті — найгірша можлива несправність
-   * інструмента вимірювання. Ховер як такий у сигнатуру НЕ входить і тут:
-   * входить результат виміру, і поки числа ті самі (курсор їздить по одному
-   * елементу, прокрутка не зрушила рамок) подія не народжується.
+   * У сигнатурі рівно те, від чого залежить вигляд панелі: `on` і покоління ЗВІТУ (`_pinSeq` — тобто і зміна
+   * запіненого елемента, і перечитування звіту про нього). Ховер і Alt у сигнатуру НЕ входять: вони міняють лише
+   * малювання оверлея, а не звіт.
    */
   _emit() {
-    const sig = `${this.on}|${this.mode}|${this._pinSeq}|${this._measSig}`;
+    const sig = `${this.on}|${this._pinSeq}`;
     if (sig === this._lastSig) return;
     /* Запис ДО виклику, не після: колбек батька має повне право змінити стан
        у відповідь (клік по крихті → `pinAt` → `_paint` → знову сюди), і зі
@@ -1052,6 +951,59 @@ const Inspector = {
     try { this.onChange(this.on); } catch (e) { this._lastSig = null; }
   },
 
+  _navParent(el) {
+    const p = el && el.parentElement;
+    return p && p !== document.documentElement ? p : null;
+  },
+  /** Діти/сусіди без власних хостів оверлея й коментатора. */
+  _kids(el) {
+    return Array.from((el && el.children) || []).filter((n) => !n.matches(OVERLAY_HOSTS));
+  },
+  _api() {
+    return { parentOf: (n) => this._navParent(n), childrenOf: (n) => this._kids(n) };
+  },
+  /** Єдина точка зміни вибору (клік, Esc/Enter/← →, крихта). `reveal` — докрутити до елемента (клавіші, не клік). */
+  _setPin(el, reveal = false) {
+    this.pinned = el || null;
+    this._altEl = null;
+    this._pinLeftFor = null;
+    if (reveal && el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    this._paint(this.pinned || this.hover);
+  },
+  /** Утримання Alt. Не міняє стану панелі оболонки — лише малює, тож `_emit` не кличемо. */
+  setAlt(on) {
+    const next = !!on && this.on;
+    if (next === this.alt) return this;
+    this.alt = next;
+    if (!next) this._altEl = null;
+    this._draw();
+    return this;
+  },
+  /**
+   * Клавіша для драбини. Кличе і власний `_onKey` (фокус у рамці), і оболонка (`inspShellKey`, фокус в оболонці) —
+   * одна логіка на обидва шляхи. Повертає true, якщо клавішу споживано. Esc поступається, коли `yieldEsc()` каже,
+   * що є відкрите питання/форма.
+   */
+  handleKey(key, mods = {}) {
+    if (!this.on) return false;
+    if (mods.alt) {
+      if (!this.pinned) return false;
+      const tgt = altTarget(key, this.pinned, this._altEl, this._api());
+      if (key === 'ArrowUp' || key === 'ArrowLeft' || key === 'ArrowRight') {
+        if (tgt) this._altEl = tgt;
+        this._draw();
+        return true;
+      }
+      return false;
+    }
+    if (key === 'Escape' && typeof this.yieldEsc === 'function' && this.yieldEsc()) return false;
+    const step = nextPin(key, this.pinned, this._api());
+    if (!step) return false;
+    if (step.off) { this.set(false); return true; }
+    this._setPin(step.pin, true);
+    return true;
+  },
+
   /** Елемент сторінки під курсором, або null — якщо це наш чи чужий оверлей. */
   _pageEl(e) {
     /* `node`, а не `t`: `t` у цьому файлі — функція перекладу (`../i18n.js`). */
@@ -1067,27 +1019,12 @@ const Inspector = {
     const el = this._pageEl(e);
     if (!el) return;                       // над чужим оверлеєм — не втручаємось
     e.stopPropagation();
-    this._pt = { x: e.clientX, y: e.clientY };
-    if (this.pinned) {
-      /* У режимі лінійки пін — це ЯКІР, а не заморозка: ховер лишається живим,
-         і лінійка показує відстань МІЖ якорем і тим, на що дивишся. Так просив
-         дизайнер, і так працює референс (VisBug). Перевірка J раніше стерегла
-         протилежне — переписана. */
-      if (this.mode === 'ruler') {
-        if (el !== this.hover) { this.hover = el; this._paint(this.pinned); }
-        return;
-      }
-      // Пінування нічого не перемикає — крім одного: коли курсор нарешті
-      // зійшов із запіненого елемента, його :hover згас, і звіт треба
-      // перечитати (див. _repaintPinned). Рівно ОДИН перемальунок на вихід:
-      // _pinLeftFor памʼятає, для якого саме елемента ми це вже зробили,
-      // тож повернення курсора назад знову озброює перевірку, а зміна
-      // запіненого елемента скидає її сама собою.
-      if (el === this.pinned || this.pinned.contains(el)) this._pinLeftFor = null;
-      else if (this._pinLeftFor !== this.pinned) { this._pinLeftFor = this.pinned; this._repaintPinned(); }
-      return;
-    }
-    if (el !== this.hover) { this.hover = el; this._paint(el); } else { this._place(); }
+    if (el !== this.hover) { this.hover = el; this._altEl = null; this._paint(this.pinned || el); }
+    if (!this.pinned) return;
+    /* Коли курсор нарешті зійшов із запіненого елемента, його :hover згас, і звіт треба перечитати
+       (`_repaintPinned`). Рівно ОДИН перемальунок на вихід. */
+    if (el === this.pinned || this.pinned.contains(el)) this._pinLeftFor = null;
+    else if (this._pinLeftFor !== this.pinned) { this._pinLeftFor = this.pinned; this._repaintPinned(); }
   },
 
   /** Перечитати запінений елемент, коли курсор його ПОКИНУВ.
@@ -1101,9 +1038,6 @@ const Inspector = {
   _repaintPinned() {
     const el = this.pinned;
     if (!el) return;
-    // У режимі лінійки перечитувати нічого: каскадної панелі там немає, а
-    // геометрія від того, куди пішов курсор, не залежить.
-    if (this.mode === 'ruler') return;
     const top = this._panel.scrollTop;
     /* Сигнал батькові звідси — ДОДАНО понад план Task 4, свідомо. Весь сенс
        цього методу в тому, що звіт, знятий у мить піна, НЕПРАВДИВИЙ (див.
@@ -1126,6 +1060,7 @@ const Inspector = {
       this._panel.scrollTop = top;
     } finally {
       this._pinSeq += 1;
+      this._panelSeq = this._pinSeq;
       this._emit();
     }
   },
@@ -1142,37 +1077,30 @@ const Inspector = {
     e.stopPropagation();
     e.preventDefault();
     if (e.type !== 'click') return;
-    this.pinned = this.pinned === el ? null : el;
-    this._paint(this.pinned || el);
+    /* mousedown гасимо (`preventDefault`), тож фокус лишався б на кнопці оболонки, яка щойно вмикала інспектор, —
+       і Enter/стрілки падали б на неї (Enter вимикав би інспектор). Фокус рамки віддаємо явно. */
+    try { window.focus(); } catch (err) { /* чужий контекст — лишаємо як є */ }
+    this._setPin(this.pinned === el ? null : el);
   },
 
   _onKey(e) {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    // Набір тексту (у т.ч. в полі comment-layer усередині його shadow DOM)
-    // не має вмикати інспектор і не має ловитись Esc.
+    if (e.key === 'Alt') {
+      if (this.on) { this.setAlt(true); e.preventDefault(); }
+      return;
+    }
+    if (e.metaKey || e.ctrlKey) return;
+    // Набір тексту (у т.ч. в полі comment-layer усередині його shadow DOM) не має ні вмикати інспектор, ні ловитись.
     if (isEditable(deepTarget(e)) || isEditable(activeDeep())) return;
-    // Регексп, а не чотири порівняння: та сама форма, що рядком нижче для `M`
-    // — і рівно з тієї ж причини, з якої та форма там уже стоїть. Кирилична
-    // розкладка мусить працювати, але кирилиця в СТРОКОВОМУ літералі — це
-    // майбутнє спрацювання охоронця i18n (він свідомо не заглядає в регекспи,
-    // бо там кирилиця означає розкладку клавіші, а не напис для людини).
-    if (/^[iIшШ]$/.test(e.key)) {
+    // Регексп, а не чотири порівняння: кирилична розкладка мусить працювати, а кирилиця в СТРОКОВОМУ літералі —
+    // майбутнє спрацювання охоронця i18n (він не заглядає в регекспи).
+    if (!e.altKey && /^[iIшШ]$/.test(e.key)) {
       this.toggle(); e.stopPropagation(); e.preventDefault(); return;
     }
-    // Режим перемикає ТІЛЬКИ ввімкнений інспектор: інакше `M` у вимкненому
-    // стані з'їдалася б у макета даремно (а вмикати нею інспектор — сюрприз).
-    if (this.on && /^[mMьЬ]$/.test(e.key)) {
-      this.toggleMode(); e.stopPropagation(); e.preventDefault(); return;
-    }
-    if (!this.on || e.key !== 'Escape') return;
-    // Драбинка: спершу з лінійки в каскад, тоді знімаємо пін, і лише тоді гасимо.
-    /* Драбинка: у лінійці спершу знімаємо ЯКІР (він тепер несе сенс режиму), і
-       лише наступним Escape виходимо в каскад. */
-    if (this.mode === 'ruler' && this.pinned) { this.pinned = null; this._paint(this.hover); }
-    else if (this.mode === 'ruler') this.setMode('cascade');
-    else if (this.pinned) { this.pinned = null; this._paint(this.hover); }
-    else this.set(false);
-    e.stopPropagation();
+    if (!this.on) return;
+    const nav = e.key === 'Escape' || e.key === 'Enter' || e.key === 'ArrowLeft'
+      || e.key === 'ArrowRight' || e.key === 'ArrowUp';
+    if (!nav) return;
+    if (this.handleKey(e.key, { alt: e.altKey })) { e.stopPropagation(); e.preventDefault(); }
   },
 
   /** Не більше ОДНОГО перерахунку на кадр (як обіцяє спека). Слухач scroll
@@ -1194,167 +1122,7 @@ const Inspector = {
    *  колбек батька там не кличеться жодного разу. */
   _reflow() {
     if (!this.on) return;
-    try {
-      const el = this.pinned || this.hover;
-      if (!this._frame(el)) { this._hide(); return; }
-      // Лінійка це чиста геометрія, тобто саме те, що скрол і ресайз ламають:
-      // перерахунок тут обовʼязковий, і він у межах кадру (виміряно: 0.9 мс на
-      // найважчій сторінці демо, 954 елементи).
-      if (this.mode === 'ruler') { this._ruler(el); return; }
-      this._place();
-    } finally { this._emit(); }
-  },
-
-  _hide() {
-    [this._hl, this._pad, this._tip, this._panel, this._rul, this._anch]
-      .forEach((n) => n && n.classList.add('hidden'));
-    /* Сховані напрямні — це відсутній вимір, а не старий: лишити тут числа
-       означало б показувати в панелі відстані до елемента, якого на екрані
-       вже немає. */
-    this._setMeas(null);
-  },
-
-  /**
-   * Кандидати в сусіди для `el`: видимі елементи документа з коробкою.
-   *
-   * Виключення тут, а не в `measure`: чистий модуль про DOM не знає й знати не
-   * мусить. Прибрати будь-який рядок цього фільтра — і лінійка почне показувати
-   * числа, яких у макеті немає:
-   *
-   *  — сам елемент, його ПРЕДКИ і НАЩАДКИ. Правило «повністю містить ціль» у
-   *    `measure` це майже покриває, але саме що МАЙЖЕ: батько, з якого дитина
-   *    вилізла (`position:relative`, `top:50px`), цілі вже не містить — і без
-   *    цього рядка ставав би її «сусідом зверху»;
-   *  — ОВЕРЛЕЇ (наш і comment-layer): міряти відстань до власного інструмента
-   *    безглуздо. Сьогодні обидва хости нульового розміру й їх однаково відсіяв
-   *    би фільтр порожніх — але це збіг верстки, а не контракт: у
-   *    `body{display:grid}` хост дістає коробку рядка;
-   *  — НЕВИДИМЕ. На живій сторінці блогу це 246 елементів із 693 (виміряно):
-   *    згорнуті меню, схований пошук. Показати відстань до `visibility:hidden`
-   *    означає збрехати про зазор, який дизайнер бачить очима;
-   *  — порожні коробки й непридатні числа (`NaN`/`Infinity` з SVG): останнє
-   *    `measure` не пропустив би, а КИНУВ, і замість пропуску одного елемента
-   *    лінійка зникла б цілком.
-   */
-  _candidates(el) {
-    const nodes = [];
-    const rects = [];
-    for (const cand of document.querySelectorAll('*')) {
-      if (cand === el || el.contains(cand) || cand.contains(el)) continue;
-      if (cand.closest(OVERLAY_HOSTS)) continue;
-      if (typeof cand.checkVisibility === 'function' && !cand.checkVisibility(
-        { visibilityProperty: true, opacityProperty: true, contentVisibilityAuto: true })) continue;
-      const r = cand.getBoundingClientRect();
-      if (!finiteRect(r) || r.right - r.left <= 0 || r.bottom - r.top <= 0) continue;
-      nodes.push(cand);
-      rects.push(r);
-    }
-    return { nodes, rects };
-  },
-
-  /** Внутрішній край КОНТЕЙНЕРА цілі, або null (контейнера немає).
-   *
-   *  Контейнер — той, чиї межі тримають елемент: для `fixed` це вьюпорт (батько
-   *  в потоці може бути де завгодно вище, і його край не пояснює нічого), для
-   *  `absolute` — коробка, від якої елемент відлічує свої `top/left`, для решти
-   *  — батько. Обгортки без власної коробки (`display:contents`) проходимо далі
-   *  вгору: контейнером вони не є. */
-  _containerBox(el) {
-    const pos = getComputedStyle(el).position;
-    if (pos === 'fixed') return viewportBox();
-    let host = pos === 'absolute' ? el.offsetParent : el.parentElement;
-    while (host && host.nodeType === 1) {
-      const box = innerBox(host);
-      if (box) return box;
-      host = host.parentElement;
-    }
-    return pos === 'absolute' ? viewportBox() : null;
-  },
-
-  /** Намалювати лінійку для елемента: пунктирна напрямна в кожен бік і плашка з
-   *  цілим числом на ній (дробові пікселі — справа `measure`, Р5).
-   *
-   *  Три проходи, і порядок тут не стилістика: розкласти плашки не можна, не
-   *  знаючи їхнього РОЗМІРУ, а розмір залежить від числа, яке саме зараз і
-   *  пишеться. Тому спершу всі записи, потім усі читання, потім знову записи —
-   *  інакше кожна плашка коштувала б окремий forced layout, а це кадр скролу
-   *  (`_reflow` крутиться на кожній події прокрутки). */
-  _ruler(el) {
-    /* Є якір і курсор на ІНШОМУ елементі — міряємо між ними. Немає якоря —
-       чотири найближчі, як було: обидві механіки корисні, тому одна не заміняє
-       другу. */
-    if (this.mode === 'ruler' && this.pinned && this.hover
-        && this.hover !== this.pinned) {
-      this._pair(this.pinned, this.hover);
-      return;
-    }
-    this._anch.classList.add('hidden');   // без якоря його рамки бути не мусить
-    /* `tr`, а не `t`: імʼя `t` у цьому файлі віддане функції перекладу
-       (`../i18n.js` — імпорт приходить разом із прибиранням власного хрому),
-       і локальний прямокутник з таким іменем тихо затуляв би її для всієї
-       функції. */
-    const tr = el.getBoundingClientRect();
-    if (!finiteRect(tr)) { this._rul.classList.add('hidden'); this._setMeas(null); return; }
-    const { rects } = this._candidates(el);
-    const box = this._containerBox(el);
-    const found = measure(tr, rects, box);
-    this._rul.classList.remove('hidden');
-    const plan = [];
-    /* Підсумок для панелі збирається ТУТ, з тих самих `hit`, що йдуть на
-       плашки, — не другим проходом по геометрії: два проходи це два трохи
-       різні числа про те саме. */
-    const rows = [];
-    for (const dir of DIRS) {
-      const hit = found[dir];
-      const line = this._rline[dir];
-      const lab = this._rlab[dir];
-      if (!hit) { line.classList.add('hidden'); lab.classList.add('hidden'); continue; }
-      rows.push({ key: dir, px: hit.px, kind: hit.kind });
-      const other = hit.kind === 'container' ? box : rects[hit.index];
-      const vert = dir === 'top' || dir === 'bottom';
-      /* Напрямна стоїть посередині СМУГИ ПЕРЕТИНУ цілі й знайденого — саме там,
-         де зазор існує. Для контейнера смуга це сама ціль. */
-      const lo = vert ? Math.max(tr.left, other.left) : Math.max(tr.top, other.top);
-      const hi = vert ? Math.min(tr.right, other.right) : Math.min(tr.bottom, other.bottom);
-      const mid = (lo + hi) / 2;
-      /* Край, до якого веземо: у сусіда це край, ОБЕРНЕНИЙ до цілі, у
-         контейнера — край ТОГО САМОГО боку (його межа, а не протилежна). */
-      const near = hit.kind === 'container' ? other[dir]
-        : other[{ top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[dir]];
-      const from = Math.min(tr[dir], near);
-      const px = (v) => `${v}px`;
-      line.className = `rg ${vert ? 'v' : 'h'}${hit.kind === 'container' ? ' box' : ''}`;
-      Object.assign(line.style, vert
-        ? { left: px(mid), top: px(from), width: '0px', height: px(hit.px) }
-        : { left: px(from), top: px(mid), width: px(hit.px), height: '0px' });
-      lab.className = `rlab${hit.kind === 'container' ? ' box' : ''}`;
-      lab.textContent = String(Math.round(hit.px));
-      lab.setAttribute('data-kind', hit.kind);
-      lab.setAttribute('data-ruler-label', dir);   // парний режим міняє ключ — вертаємо свій
-      lab.classList.remove('hidden');
-      /* `away` — куди «від елемента» по осі вимірювання: вгору й ліворуч це
-         мінус, униз і праворуч плюс. */
-      plan.push({ lab, vert, mid, gap: hit.px, edge: tr[dir],
-                  away: dir === 'top' || dir === 'left' ? -1 : 1 });
-    }
-    /* `kind: null` — тут його НЕМАЄ на весь вимір: кожен напрямок знайшов
-       своє (сусіда чи межу контейнера), і спільного виду в чотирьох чисел
-       просто не існує. Виставляємо ДО виходу «нема чого малювати»: порожній
-       набір — теж чесна відповідь, і панель мусить бачити саме її, а не
-       попередній вимір. */
-    this._setMeas({ mode: 'nearest', kind: null, rows });
-    if (!plan.length) return;
-    for (const p of plan) {
-      const r = p.lab.getBoundingClientRect();
-      p.len = p.vert ? r.height : r.width;    // розмір ПО ОСІ вимірювання
-      p.thick = p.vert ? r.width : r.height;  // …і впоперек неї
-    }
-    this._spread(plan);
-    for (const p of plan) {
-      Object.assign(p.lab.style, p.vert
-        ? { left: `${p.mid}px`, top: `${p.at}px` }
-        : { left: `${p.at}px`, top: `${p.mid}px` });
-    }
+    try { this._draw(); } finally { this._emit(); }
   },
 
   /** Парний вимір: відстань між ЯКОРЕМ (клік) і тим, на що дивишся.
@@ -1371,24 +1139,9 @@ const Inspector = {
     const a = anchor.getBoundingClientRect();
     const b = target.getBoundingClientRect();
     if (!finiteRect(a) || !finiteRect(b)) {
-      this._rul.classList.add('hidden'); this._setMeas(null); return;
+      this._rul.classList.add('hidden'); return;
     }
     const res = between(a, b);
-    /* Підсумок для панелі — з того самого `res`, що йде на напрямні.
-       `kind` у парного виміру ОДИН на весь вимір (так його й рахує `between`),
-       тому він нагорі, а не в кожному рядку. Ключ рядка — той самий, що ключ
-       плашки нижче: для вкладення це БІК (дизайнер читає «зверху 9»), для
-       решти боку не існує взагалі, і чесно назвати можна лише вісь. */
-    this._setMeas({
-      mode: 'pair',
-      kind: res.kind,
-      rows: res.guides.map((g) => ({
-        key: res.kind === 'inside' ? g.from.side : g.axis, px: g.px,
-      })),
-    });
-    Object.assign(this._anch.style, { left: `${a.left}px`, top: `${a.top}px`,
-                                      width: `${a.width}px`, height: `${a.height}px` });
-    this._anch.classList.remove('hidden');
     this._rul.classList.remove('hidden');
     for (const d of DIRS) {
       this._rline[d].classList.add('hidden');
@@ -1411,12 +1164,12 @@ const Inspector = {
       const band = vert
         ? cross(a.left, a.right, b.left, b.right, a.left, a.right)
         : cross(a.top, a.bottom, b.top, b.bottom, a.top, a.bottom);
-      line.className = `rg ${vert ? 'v' : 'h'}${res.kind === 'overlap' ? ' lap' : ' box'}`;
+      line.className = `rg ${vert ? 'v' : 'h'}${res.kind === 'overlap' ? ' lap' : ''}`;
       Object.assign(line.style, vert
         ? { left: px(band), top: px(lo), width: '0px', height: px(g.px) }
         : { left: px(lo), top: px(band), width: px(g.px), height: '0px' });
       line.classList.remove('hidden');
-      lab.className = `rlab${res.kind === 'overlap' ? ' lap' : ' box'}`;
+      lab.className = `rlab${res.kind === 'overlap' ? ' lap' : ''}`;
       lab.textContent = String(Math.round(g.px));
       lab.setAttribute('data-kind', res.kind);
       /* Ключ плашки: для вкладення це бік (дизайнер читає «зверху 9»), для
@@ -1499,9 +1252,77 @@ const Inspector = {
     }
   },
 
-  /** Підсвітка margin-боксу і padding-боксу. false — показувати нічого. */
-  _frame(el) {
-    if (!el || !el.isConnected) return false;
+  _hide() {
+    [this._hl, this._pad, this._hov, this._tag, this._selb, this._size, this._tgt, this._rul, this._panel]
+      .forEach((n) => n && n.classList.add('hidden'));
+  },
+
+  /** Коробка-рамка за прямокутником. */
+  _place(box, r) {
+    Object.assign(box.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+    box.classList.remove('hidden');
+  },
+
+  _paint(el) {
+    if (this.pinned !== this._pinWas) { this._pinWas = this.pinned; this._pinSeq += 1; }
+    /* `finally`: якщо малювання впало на чужому макеті (воно ходить по живому DOM), батько все одно мусить
+       дізнатись про стан. */
+    try {
+      this._draw();
+      /* Плаваюче вікно звіту (сторінка без канваса) — лише коли змінився ЗВІТ (`_pinSeq`), а не на кожен рух
+         курсора: `report()` коштує ~6 мс, а ховер при піні тепер теж малює. */
+      if (this._panelSeq !== this._pinSeq) {
+        this._panelSeq = this._pinSeq;
+        if (this.pinned && this.pinned.isConnected) this._renderPanel();
+        else this._panel.classList.add('hidden');
+      }
+    } finally { this._emit(); }
+  },
+
+  /**
+   * Малювання за станом: наведення (рамка + ярлик), вибір (рамка 2 px + «W × H»), а з Alt — відстані від вибраного до
+   * цілі (ховер, а немає — клавішна ціль чи батько) через `between`. Лише геометрія: сигнал назовні — у `_paint`.
+   */
+  _draw() {
+    const pin = this.pinned && this.pinned.isConnected ? this.pinned : null;
+    const hov = this.hover && this.hover.isConnected && this.hover !== pin ? this.hover : null;
+    if (!pin && !hov) { this._hide(); return; }
+    const alt = this.alt && !!pin;
+    const hide = (...ns) => ns.forEach((n) => n.classList.add('hidden'));
+    const px = (v) => `${v}px`;
+    /* Коробка margin/padding (DevTools-оверлей, v1.19) — для наведеного, а немає — для вибраного; під Alt ховається,
+       щоб не плутати з лініями відстаней. */
+    const boxEl = alt ? null : (hov || pin);
+    if (boxEl) this._box(boxEl); else hide(this._hl, this._pad);
+    const hr = hov && !alt ? hov.getBoundingClientRect() : null;
+    if (hr && finiteRect(hr)) {
+      this._place(this._hov, hr);
+      this._tag.textContent = label(hov);
+      const below = hr.top < 18;
+      Object.assign(this._tag.style, { left: px(hr.left), top: px(below ? hr.bottom : hr.top) });
+      this._tag.classList.toggle('below', below);
+      this._tag.classList.remove('hidden');
+    } else hide(this._hov, this._tag);
+    const pr = pin ? pin.getBoundingClientRect() : null;
+    if (pr && finiteRect(pr)) {
+      this._place(this._selb, pr);
+      if (alt) hide(this._size);
+      else {
+        this._size.textContent = `${Math.round(pr.width)} × ${Math.round(pr.height)}`;
+        Object.assign(this._size.style, { left: px(pr.left + pr.width / 2), top: px(pr.bottom) });
+        this._size.classList.remove('hidden');
+      }
+    } else hide(this._selb, this._size);
+    if (!alt) { hide(this._tgt, this._rul); return; }
+    const tgt = (this._altEl && this._altEl.isConnected ? this._altEl : null) || hov || this._navParent(pin);
+    const tr = tgt ? tgt.getBoundingClientRect() : null;
+    if (!tr || !finiteRect(tr) || !pr || !finiteRect(pr)) { hide(this._tgt, this._rul); return; }
+    this._place(this._tgt, tr);
+    this._pair(pin, tgt);
+  },
+
+  /** Підсвітка margin-боксу і padding-боксу (DevTools-оверлей, v1.19). */
+  _box(el) {
     const r = el.getBoundingClientRect();
     const cs = getComputedStyle(el);
     const n = (v) => parseFloat(v) || 0;
@@ -1519,62 +1340,6 @@ const Inspector = {
     });
     this._hl.classList.remove('hidden');
     this._pad.classList.remove('hidden');
-    this._rect = r;
-    this._cs = cs;
-    return true;
-  },
-
-  /**
-   * Намалювати підсвітку + вміст тултипа для елемента (null — сховати все) і
-   * СКАЗАТИ про це батьківському вікну.
-   *
-   * Обгортка навколо `_draw`, а не лічильник у трьох місцях самого малювання,
-   * і причина конкретна: `_draw` виходить достроково у двох гілках
-   * (`_frame` не дав коробки; режим лінійки). Лічильник у кінці тіла
-   * пропустив би найважливіший випадок — `set(false)` знімає пін і кличе
-   * `_paint(null)`, тобто вихід саме через `_hide()`. `_pinWas` лишився б
-   * указувати на старий елемент, і наступний пін ТОГО САМОГО елемента
-   * (найчастіший сценарій: вимкнув інспектор, увімкнув, клацнув туди ж)
-   * не змінив би сигнатуру — панель батька лишилась би порожньою.
-   */
-  _paint(el) {
-    if (this.pinned !== this._pinWas) {
-      this._pinWas = this.pinned;
-      this._pinSeq += 1;
-    }
-    /* `finally`: якщо малювання впало на чужому макеті (а воно ходить по
-       живому CSSOM), батько все одно мусить дізнатись про стан — мовчазний
-       сигнал розійшовся б із реальністю назавжди, бо наступного `_paint` без
-       руху курсора може не бути. Виняток `finally` не ковтає. */
-    try { this._draw(el); } finally { this._emit(); }
-  },
-
-  /** Власне малювання. Кличеться ЛИШЕ з `_paint` — саме він рахує покоління
-   *  звіту й сигналить назовні. */
-  _draw(el) {
-    if (!this._frame(el)) { this._hide(); return; }
-    // Режим лінійки: ні тултипа, ні каскадної панелі. Тултип ходить за курсором
-    // рівно там, де лежать плашки, а панель (320px праворуч) накриває той самий
-    // макет, у якому дизайнер зараз читає праву напрямну.
-    if (this.mode === 'ruler') {
-      this._tip.classList.add('hidden');
-      this._panel.classList.add('hidden');
-      this._ruler(el);
-      return;
-    }
-    this._rul.classList.add('hidden');
-    /* Напрямні сховано — отже, виміру немає. Лишити тут числа означало б
-       показувати в панелі лінійку, вимкнену на самому макеті. */
-    this._setMeas(null);
-    const r = this._rect;
-    const cs = this._cs;
-    this._tip.innerHTML = `<b>${esc(label(el))}</b> <span class="dim">${Math.round(r.width)} × ${Math.round(r.height)}</span><br>`
-      + `<span class="dim">font</span> ${esc(cs.fontWeight)} ${esc(cs.fontSize)}/${esc(cs.lineHeight)} ${esc(cs.fontFamily.split(',')[0])}<br>`
-      + `<span class="dim">color</span> ${esc(cs.color)}`;
-    this._tip.classList.remove('hidden');
-    this._place();
-    if (this.pinned) { this._tip.classList.add('hidden'); this._renderPanel(); }
-    else this._panel.classList.add('hidden');
   },
 
   /**
@@ -1616,14 +1381,6 @@ const Inspector = {
     this._panel.classList.remove('hidden');
   },
 
-  _place() {
-    const pt = this._pt || { x: 20, y: 20 };
-    const b = this._tip.getBoundingClientRect();
-    const x = Math.min(pt.x + 16, window.innerWidth - b.width - 8);
-    const y = Math.min(pt.y + 18, window.innerHeight - b.height - 8);
-    this._tip.style.left = `${Math.max(8, x)}px`;
-    this._tip.style.top = `${Math.max(8, y)}px`;
-  },
 };
 
 window.CanvasInspector = Inspector;

@@ -7,7 +7,7 @@ import path from "node:path";
 /* Рендерери звіту — СПРАВЖНІ, не копія їхньої розмітки: розділ E питає, що
    документ малює НАСПРАВДІ, і другий опис тієї самої розмітки тут розійшовся б
    із першим рівно так, як розходились два описи звіту до 17.09.2026. */
-import { measureHTML, reportHTML } from "../app/vendor/insp-report.js";
+import { reportHTML } from "../app/vendor/insp-report.js";
 import { panelHTML } from "../app/insp-panel.js";
 import { FULL_MODEL, MIN_MODEL } from "./_insp-fixtures.mjs";
 
@@ -463,7 +463,7 @@ test("обрізання тексту не висить на плоскій кр
    E. Кожен клас, який малює ДОКУМЕНТ, стилізований у ЙОГО таблиці стилів
    -------------------------------------------------------------------
    Список класів НЕ переписаний руками. Класи звіту знімаються з РЕЗУЛЬТАТУ
-   справжніх рендерерів (`reportHTML`/`measureHTML` кличуться тут же, на
+   справжніх рендерерів (`reportHTML` кличеться тут же, на
    пейлоадах нижче), класи вкладки «Тюнер» — регекспом по `shell-inspect.js`.
    Так завтрашній новий клас сам потрапляє під перевірку, а не лишається
    нестилізованим до першого живого скріншота.
@@ -481,8 +481,7 @@ test("обрізання тексту не висить на плоскій кр
 
    ⛔ НАБОРИ КЛАСІВ У ДВОХ ДОКУМЕНТІВ РІЗНІ, і зводити їх до спільного не
    можна. Ручки тюнера (`tunable`, див. `reportHTML`) малюються лише там, де
-   їх є кому провести, тобто в оболонці; підсумок лінійки (`measureHTML`) теж
-   їде лише в оболонку. Тому перевірка формулюється так: КОЖЕН клас, який ЦЕЙ
+   їх є кому провести, тобто в оболонці. Тому перевірка формулюється так: КОЖЕН клас, який ЦЕЙ
    документ справді малює, має правило в ТІЙ таблиці, яку цей документ читає.
    Спільний список зробив би одне з двох — або вимагав би від оверлея правил
    під розмітку, якої в ньому немає, або пропускав би ручки оболонки.
@@ -599,25 +598,12 @@ const REPORT_CASES = [
     ] } },
 ];
 
-const MEASURE_CASES = [
-  { mode: "nearest", kind: null, rows: [
-    { key: "top", px: 12, kind: "element" },
-    { key: "left", px: 24, kind: "container" },
-  ] },
-  { mode: "pair", kind: "overlap", rows: [{ key: "x", px: 3, kind: null }] },
-];
-
 /** Що НАСПРАВДІ малює документ: рендеримо тими самими викликами, якими його
  *  малює сам документ, і знімаємо класи з результату. */
-function renderedClasses({ tunable, measure }) {
+function renderedClasses({ tunable }) {
   const out = new Set();
   for (const p of REPORT_CASES) {
     for (const c of classesInMarkup(reportHTML(p, { tunable }))) out.add(c);
-  }
-  if (measure) {
-    for (const m of MEASURE_CASES) {
-      for (const c of classesInMarkup(measureHTML(m))) out.add(c);
-    }
   }
   return out;
 }
@@ -651,7 +637,7 @@ const DOCUMENTS = [
     alsoDrawn: ["insp-hint"],
     extra: [path.join(APP, "shell-inspect.js"), path.join(APP, "insp-panel.js")] },
   { name: "shadow-корінь оверлея (сторінка без канваса)", css: readOverlayCss,
-    render: { tunable: false, measure: false }, extra: [] },
+    render: { tunable: false }, extra: [] },
 ];
 
 /** Усе, що документ справді малює: рендер плюс розмітка «своїх» файлів. */
@@ -740,21 +726,21 @@ test("жоден клас звіту не лишився поза рендеро
      Регексп по тексту читає й коментарі, тож приклад атрибута `class` у
      докстрінгу теж стане «класом» — і це не вада, а причина, чому в
      `insp-report.js` імена класів виписані повними літералами в кожній гілці
-     (див. коментарі в `row()` і `kindBadge()`). Розійшлись набори — виправляти
+     (див. коментарі в `row()` і `dotHTML()`). Розійшлись набори — виправляти
      треба пейлоади, а не цю перевірку. */
   const source = classesInMarkup(
     readFileSync(path.join(APP, "vendor", "insp-report.js"), "utf8"));
   assert.ok(source.size > 0, "екстрактор не знайшов жодного class=\"…\" у insp-report.js");
-  /* `reportHTML` ще вміє `tunable: true` (ручки) і `measureHTML` (бейдж виміру) — їхній код у файлі лишається, поки
-     Task 3 не прибере вимір; вокабуляр звіряється з УСІМА гілками рендера, а не з однією. */
+  /* `reportHTML` вміє `tunable: true` (ручки) і `tunable: false` (власна панель оверлея) — вокабуляр звіряється
+     з ОБОМА гілками рендера, а не з однією. Бейджа виміру більше немає (лінійку прибрано, 0.29.0). */
   const rendered = new Set([
-    ...renderedClasses({ tunable: true, measure: true }),
-    ...renderedClasses({ tunable: false, measure: false }),
+    ...renderedClasses({ tunable: true }),
+    ...renderedClasses({ tunable: false }),
   ]);
   const unrendered = [...source].filter((c) => !rendered.has(c)).sort();
   assert.deepEqual(unrendered, [],
     "у розмітці insp-report.js є класи, яких не малює ЖОДЕН пейлоад: "
-      + `${unrendered.join(", ")} — допиши пейлоад у REPORT_CASES/MEASURE_CASES, `
+      + `${unrendered.join(", ")} — допиши пейлоад у REPORT_CASES, `
       + "інакше ці класи не перевіряє ніхто");
 });
 

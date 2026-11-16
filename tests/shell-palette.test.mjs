@@ -222,13 +222,14 @@ test("текст із даних екранується (data-стан не см
   assert.ok(!html.includes("<img src=x"), "неекранований текст доїхав до розмітки");
 });
 
-test("keysHTML: підкладка, довідка і клавіші I/M/Esc/⌘K", () => {
+test("keysHTML: підкладка, довідка і клавіші I/Alt/Esc/⌘K", () => {
   const html = keysHTML();
   assert.match(html, /class="scrim" data-act="closeoverlay"/);
   assert.match(html, /data-stop="1"/);
   assert.match(html, /<kbd>⌘K<\/kbd>/);
   assert.match(html, /<kbd>Esc<\/kbd>/);
   assert.match(html, /<kbd>I<\/kbd>/);
+  assert.match(html, /<kbd>Alt<\/kbd>/);
 });
 
 /* ── кожна підказка клавіші має обробник ─────────────────────────────────
@@ -249,7 +250,7 @@ test("keysHTML: підкладка, довідка і клавіші I/M/Esc/⌘
  *
  * Читаються ТРИ файли, і кожен — бо він справді власник частини підказок:
  *   · `app/app.js` — акорди оболонки (`⌘K`, `?`, `⌥M`, `⌘\`, `Esc`);
- *   · `app/vendor/inspector.js` — `I` (увімкнути) і `M` (каскад/лінійка).
+ *   · `app/vendor/inspector.js` — `I` (увімкнути), `Alt` і `Enter` (відстані, дочірній).
  *     Це вендор, чіпати його заборонено, але ЧИТАТИ — саме те, що робить
  *     перевірку не «повіримо на слово»: якщо інспектор загубить свою
  *     прив'язку, охоронець упаде разом із ним;

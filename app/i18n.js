@@ -494,19 +494,6 @@ const UK = {
   // `inspectHTML`), тож замість чисел тут коротка підказка, що саме показує
   // оверлей у кожному режимі.
   kEsc: 'Закрити / вийти рівнем вище',
-  // T-39: вкладка називається «Стилі», а не «Каскад» — вибір власника.
-  // Значення в розмітці (`data-val="cascade"`) лишилось тим самим: воно
-  // адресує РЕЖИМ ОВЕРЛЕЯ (`CanvasInspector.mode`), а не підпис кнопки.
-  inspCascade: 'Стилі',
-  inspRuler: 'Лінійка',
-  inspCascadeHint: 'Наведи або клікни елемент макета — токени й каскад CSS '
-    + 'покаже сам оверлей поруч із курсором.',
-  inspRulerHint: 'Клікни елемент, щоб зробити його якорем, тоді наведи на '
-    + 'сусідній — відстань між ними покаже лінійка на макеті.',
-  inspKeysIntro: 'у макеті:',
-  inspKeyToggle: 'увімкнути / вимкнути',
-  inspKeyMode: 'стилі / лінійка',
-  inspKeyExit: 'вихід',
 
   // Task 1 Плану B (тюнер+звіт інспектора) — заголовки секцій і бейджі
   // звіту (`app/vendor/insp-report.js`). Значення взяті ДОСЛІВНО з рядків,
@@ -667,30 +654,11 @@ const UK = {
   inspTunerNotApplied: 'Не лягло на цю сторінку: елемента за цим селектором тут '
     + 'немає. Правка лишається в пакеті для Клода.',
 
-  // Task 7 Плану B — числа ЛІНІЙКИ в панелі (`measureHTML`,
-  // `app/vendor/insp-report.js`). Дві механіки лінійки (обидві живі, одна
-  // одну не заміняє) названі окремо, бо дизайнер мусить бачити, ЯКА саме
-  // відповідь перед ним: чотири найближчі сусіди — це не те саме, що
-  // відстань між якорем і тим, на що він дивиться.
-  inspMeasNear: 'Найближчі сусіди',
-  inspMeasPair: 'Якір → елемент',
-  // Напрямки — рівно ті чотири, що віддає `measure()` (`inspector-measure.js`).
+  // Підписи сторін для панелі властивостей (`app/insp-model.js`).
   inspDirTop: 'Зверху',
   inspDirRight: 'Праворуч',
   inspDirBottom: 'Знизу',
   inspDirLeft: 'Ліворуч',
-  // Осі — для розкладів, у яких «боку» не існує (зазор, діагональ, перекриття):
-  // `between()` там називає саме вісь, і вигадувати бік означало б збрехати.
-  inspAxisX: 'По X',
-  inspAxisY: 'По Y',
-  // Види виміру. Перші два — `kind` із `measure()`, решта — `kind` із
-  // `between()`. Жодного слова понад те, що ці функції насправді рахують.
-  inspKindElement: 'сусід',
-  inspKindContainer: 'контейнер',
-  inspKindInside: 'усередині',
-  inspKindDiagonal: 'діагональ',
-  inspKindGap: 'зазор',
-  inspKindOverlap: 'перекриття',
 
   // Task 6 Плану B — палітра команд (`app/shell-palette.js`). Більшість
   // значень узято дослівно з прототипу (`docs/proto/shell.html`, обʼєкти
@@ -1372,7 +1340,9 @@ const UK = {
   cmtModeMultiBare: 'кілька елементів',
   tabsNav: 'Відкриті задачі',
   islandNav: 'Інструменти',
-  inspectorKey: 'Інспектор · I',
+  inspectorKey: 'Інспектор · I · Alt — відстані · Esc / ↵ — батько / дочірній · ← → — сусід',
+  inspKeyAlt: 'Відстані до сусіда',
+  inspKeyChild: 'Дочірній елемент',
   claudeTab_working: 'Claude працює',
   claudeTab_waiting: 'Claude чекає на вас',
   claudeTab_blocked: 'Claude заблоковано',
@@ -1741,19 +1711,6 @@ const EN = {
 
   // Task 5 of Plan B — see the UK block for provenance (prototype vs new).
   kEsc: 'Close / step one level out',
-  // T-39: the tab is called «Styles» now — the owner's pick. `data-val` in
-  // the markup still says "cascade": it addresses the OVERLAY MODE, not the
-  // caption.
-  inspCascade: 'Styles',
-  inspRuler: 'Ruler',
-  inspCascadeHint: 'Hover or click an element in the layout — the overlay '
-    + 'itself shows its CSS cascade and tokens next to the cursor.',
-  inspRulerHint: 'Click an element to anchor it, then hover a neighbour — '
-    + 'the ruler on the layout shows the distance between them.',
-  inspKeysIntro: 'in the layout:',
-  inspKeyToggle: 'toggle on / off',
-  inspKeyMode: 'styles / ruler',
-  inspKeyExit: 'exit',
 
   // Task 1 of Plan B (inspector tuner+report) — see the UK block for
   // provenance: verbatim from the strings that used to live in
@@ -1863,23 +1820,11 @@ const EN = {
   inspTunerNotApplied: 'Not applied on this page: no element matches this '
     + 'selector here. The change stays in the package for Claude.',
 
-  // Task 7 of Plan B — ruler readings in the panel; see the UK block for why
-  // the two ruler modes are named apart and why no wording goes beyond what
-  // `measure()`/`between()` actually compute.
-  inspMeasNear: 'Nearest neighbours',
-  inspMeasPair: 'Anchor → element',
+  // Side captions for the properties panel (`app/insp-model.js`).
   inspDirTop: 'Top',
   inspDirRight: 'Right',
   inspDirBottom: 'Bottom',
   inspDirLeft: 'Left',
-  inspAxisX: 'Along X',
-  inspAxisY: 'Along Y',
-  inspKindElement: 'neighbour',
-  inspKindContainer: 'container',
-  inspKindInside: 'inside',
-  inspKindDiagonal: 'diagonal',
-  inspKindGap: 'gap',
-  inspKindOverlap: 'overlap',
 
   // Task 6 of Plan B — see the UK block for provenance (prototype vs new).
   iterations: 'Iterations',
@@ -2530,7 +2475,9 @@ const EN = {
   cmtModeMultiBare: 'several elements',
   tabsNav: 'Open tasks',
   islandNav: 'Tools',
-  inspectorKey: 'Inspector · I',
+  inspectorKey: 'Inspector · I · Alt — distances · Esc / ↵ — parent / child · ← → — neighbour',
+  inspKeyAlt: 'Distances to a neighbour',
+  inspKeyChild: 'Child element',
   claudeTab_working: 'Claude is working',
   claudeTab_waiting: 'Claude is waiting for you',
   claudeTab_blocked: 'Claude is blocked',

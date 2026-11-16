@@ -6293,6 +6293,9 @@ frame.addEventListener('load', () => {
        Штовхаємо на завантаження макета: кожне завантаження — новий документ,
        тобто новий екземпляр оверлея. */
     api.setLabels({ inspector: t('inspector') });
+    /* Esc поступається відкритому питанню/поповеру/формі оболонки (`askUp()`, палітра, модальні): драбина інспектора
+       — найнижча сходинка Esc. */
+    api.yieldEsc = () => shellModalOpen();
     /* Накручене — НАЗАД на макет (Task 17). Тут і тільки тут: документ щойно
        народився, і це перша мить, коли є на що накладати. До `api.onChange`
        нижче — щоб панель, яку розбудить найближчий сигнал, малювалась уже по
@@ -6512,6 +6515,23 @@ const inspScrubEnd = () => {
 };
 inspEl.addEventListener('pointerup', inspScrubEnd);
 inspEl.addEventListener('pointercancel', inspScrubEnd);
+
+/* Клавіші інспектора, коли фокус в ОБОЛОНЦІ, а не в рамці: Alt, Esc, Enter, ← →, Alt+←/→/↑. Рамка слухає їх сама
+   (`_onKey` оверлея); тут — той самий `handleKey`, одна логіка на обидва шляхи. Стрілки й Enter віддаємо лише коли
+   нічого не сфокусовано (`target === body`): на кнопці чи в дереві шарів вони належать їм. Поле вводу, питання, палітра
+   й дропдаун — теж не наші. */
+function inspShellKey(ev) {
+  const api = inspectorApi();
+  if (!api || !api.on || mode === 'canvas' || homeOpen) return;
+  if (ev.isComposing || ev.defaultPrevented || ev.metaKey || ev.ctrlKey) return;
+  if (shellModalOpen() || openDd || cnDrawer || typingIn(ev, document)) return;
+  if (ev.key === 'Alt') { api.setAlt(true); return; }
+  if (ev.target !== document.body) return;
+  if (api.handleKey(ev.key, { alt: ev.altKey })) ev.preventDefault();
+}
+document.addEventListener('keydown', inspShellKey);
+document.addEventListener('keyup', (ev) => { if (ev.key === 'Alt') inspectorApi()?.setAlt(false); });
+window.addEventListener('blur', () => inspectorApi()?.setAlt(false));
 
 /* Делегація панелі «Коментарі» — окремий слухач (контейнер `#cmt-panel` живе поза `#bar`), як у `#insp-panel`. */
 cmtEl.addEventListener('click', (ev) => {

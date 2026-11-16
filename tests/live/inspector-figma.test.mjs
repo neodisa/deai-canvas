@@ -92,3 +92,86 @@ test("T2-proof. клік → панель властивостей із назв
   const p = await waitPkg(page, dir, (x) => editOf(x, "gap"), "правка gap");
   assert.equal(editOf(p, "gap").to, "13px");
 });
+/** Лінії відстаней в оверлеї: усередині shadow-кореня рамки. */
+const altLines = (page) => page.evaluate(() => {
+  const doc = document.getElementById("frame").contentDocument;
+  const sh = doc.querySelector("[data-canvas-inspector]").shadowRoot;
+  return sh.querySelectorAll(".rul:not(.hidden) .rg:not(.hidden)").length;
+});
+
+test("T3-proof. Alt показує відстані, відпущений Alt — ні; Alt+→ переводить ціль на сусіда", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#a");
+  assert.equal(await altLines(page), 0, "без Alt ліній немає");
+  await page.keyboard.down("Alt");
+  assert.ok(await altLines(page) > 0, "з Alt є лінії до батька");
+  await page.keyboard.up("Alt");
+  assert.equal(await altLines(page), 0, "відпущений Alt прибирає лінії");
+
+  await page.keyboard.down("Alt");
+  await page.keyboard.press("ArrowRight");
+  const ok = await page.evaluate(() => {
+    const f = document.getElementById("frame");
+    const sh = f.contentDocument.querySelector("[data-canvas-inspector]").shadowRoot;
+    const tgt = sh.querySelector(".o-tgt").getBoundingClientRect();
+    const b = f.contentDocument.getElementById("b").getBoundingClientRect();
+    return Math.abs(tgt.left - b.left) < 1 && Math.abs(tgt.width - b.width) < 1;
+  });
+  await page.keyboard.up("Alt");
+  assert.equal(ok, true, "ціль Alt — сусід #b");
+});
+
+/** Видимість шару оверлея (`hl` — коробка margin, `hl-pad` — padding) у shadow-корені рамки. */
+const layerShown = (page, cls) => page.evaluate((c) => {
+  const doc = document.getElementById("frame").contentDocument;
+  const n = doc.querySelector("[data-canvas-inspector]").shadowRoot.querySelector(`.${c}`);
+  return !!n && !n.classList.contains("hidden");
+}, cls);
+
+test("T3-proof. коробка margin/padding: наведення без Alt — видима, під Alt — схована", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#a");
+  const b = await page.frameLocator("#frame").locator("#b").boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.waitForFunction(() => {
+    const api = document.getElementById("frame").contentWindow.CanvasInspector;
+    return !!(api.hover && api.hover.id === "b");
+  }, null, { timeout: 3000 });
+  assert.equal(await layerShown(page, "hl"), true, "без Alt шар margin видимий");
+  assert.equal(await layerShown(page, "hl-pad"), true, "без Alt шар padding видимий");
+  await page.keyboard.down("Alt");
+  const hidden = [await layerShown(page, "hl"), await layerShown(page, "hl-pad")];
+  await page.keyboard.up("Alt");
+  assert.deepEqual(hidden, [false, false], "під Alt шари margin/padding сховані");
+});
+
+test("T3-proof. драбина: Enter — дитина, ← → — сусід, Esc — батько, далі зняти вибір, далі вимкнути", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#card");
+  await page.keyboard.press("Enter");
+  assert.equal(await pinnedId(page), "a", "Enter → перший дочірній");
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await pinnedId(page), "b", "→ → сусід");
+  await page.keyboard.press("Escape");
+  assert.equal(await pinnedId(page), "card", "Esc → батько");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  assert.equal(await pinnedId(page), null, "на корені вибір знято");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.evaluate(() => document.getElementById("frame").contentWindow.CanvasInspector.on), false,
+    "без вибору Esc вимикає інспектор");
+});
+
+test("T3-proof. фокус в оболонці: ← → і Alt ідуть тим самим handleKey", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#a");
+  await page.evaluate(() => { document.getElementById("frame").blur(); document.body.focus(); });
+  assert.equal(await page.evaluate(() => document.activeElement === document.body), true, "фокус у тілі оболонки");
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await pinnedId(page), "b", "→ з оболонки веде до сусіда");
+  await page.keyboard.down("Alt");
+  const lines = await altLines(page);
+  await page.keyboard.up("Alt");
+  assert.ok(lines > 0, "Alt з оболонки малює відстані");
+});

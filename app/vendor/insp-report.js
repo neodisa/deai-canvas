@@ -305,7 +305,7 @@ function fieldTitle(d, tuned, full, knob, snap) {
  * класами, і це не смак. Охоронець css-guards витягує імена класів регекспом
  * по атрибуту class У САМОМУ СИРЦІ, тож інтерполяція всередині нього лишила б
  * йому шматок шаблону замість імені (про це попереджають коментарі в
- * `dotHTML` і `kindBadge`). Три незалежні модифікатори дали б вісім повних
+ * `dotHTML`). Три незалежні модифікатори дали б вісім повних
  * літералів класу на одне поле; атрибут стану лишає `class="insp-f"` і
  * переносить розгалуження в CSS (`.insp-f[data-tuned]`), де воно й читається
  * як стан. Той самий прийом уже живе в оболонці — `.seg button[aria-pressed=true]`.
@@ -569,99 +569,4 @@ export function reportHTML(payload, { tunable = false } = {}) {
   return `<div class="insp-crumbs">${crumbs}</div>`
     + warn(payload.blocked, "inspBlocked") + warn(payload.partial, "inspPartial")
     + dsNote(payload.dsInfo) + secs;
-}
-
-/* ── Лінійка: числа в панель ────────────────────────────────────────────────
-   НАПРЯМНІ лишаються на макеті — лінію й плашку можна намалювати лише поверх
-   того, що міряють. Сюди їде тільки числовий підсумок.
-
-   Обидві механіки лінійки живі й одна одну не заміняє (`_ruler`,
-   `inspector.js`), тому панель мусить показувати обидві ЧЕСНО, а не звести їх
-   до спільного знаменника:
-     · `measure()` — чотири найближчі, по одному на напрямок, у кожного свій
-       `kind` ('element' | 'container');
-     · `between()` — одна відповідь про пару «якір ↔ елемент», у неї ОДИН
-       `kind` ('inside' | 'diagonal' | 'gap' | 'overlap') на весь вимір і від
-       одної до чотирьох напрямних усередині.
-   Звідси й форма payload (`m`): `kind` пари стоїть НАГОРІ, а `kind` сусіда —
-   у рядку. Дублювати вид пари в кожен її рядок було б вигадкою: `between()`
-   такого поля не рахує, і читалось би це як «у кожної напрямної свій вид». */
-
-/** Підписи рядків. Ключі — рівно ті, які кладе оверлей: чотири напрямки з
- *  `measure()` і дві осі з `between()` (бік у діагоналі/зазорі/перекритті не
- *  існує, тому там вісь — єдина правда, яку є що назвати). */
-const ROW_KEY = { top: "inspDirTop", right: "inspDirRight",
-  bottom: "inspDirBottom", left: "inspDirLeft",
-  x: "inspAxisX", y: "inspAxisY" };
-
-/** Види виміру → ключ словника. Той самий прийом, що `TITLE_KEY`: невідомий
- *  вид віддає сам себе, а не валить увесь звіт через `t()`. */
-const KIND_KEY = { element: "inspKindElement", container: "inspKindContainer",
-  inside: "inspKindInside", diagonal: "inspKindDiagonal",
-  gap: "inspKindGap", overlap: "inspKindOverlap" };
-
-const kindText = (k) => (KIND_KEY[k] ? t(KIND_KEY[k]) : k);
-
-/**
- * Бейдж виду виміру. Кольори — НЕ однакові, і не довільні:
- *   · 'overlap' → `--bad`. Це єдиний вид, що несе ваду: блоки налазять один на
- *     одного. Оверлей уже малює його червоним (`.rlab.lap`), тож панель і
- *     макет читаються як одне.
- *   · 'container' → `--open` (бурштин). Той самий звʼязок: контейнерна
- *     напрямна на макеті помаранчева (`.rg.box`), і бейдж повторює саме її.
- *   · решта ('element', 'gap', 'inside', 'diagonal') → `--dim`. Це просто
- *     прочитані відстані, а не вироки. Пофарбувати 'diagonal' застереженням
- *     означало б додати сенс, якого `between()` не рахує: діагональ каже лише,
- *     що спільної смуги немає й одного числа не існує, а не що це погано.
- *   `--lo` тут не буде НІКОЛИ: 3.87:1 на `--s1`, нижче за AA (охоронець
- *   `tests/css-guards.test.mjs`, розділ A).
- *
- * Класи виписані ПОВНИМИ літералами в кожній гілці, а не зібрані з шматків:
- * охоронець css-guards витягує список класів регекспом по атрибуту `class`, і
- * інтерполяція в ньому лишила б йому `${…}` замість імені класу. (Цей самий
- * рядок його вже й ловив: регексп читає й коментарі, тож приклад атрибута в
- * докстрінгу він теж приймає за розмітку.)
- */
-function kindBadge(kind) {
-  const text = esc(kindText(kind));
-  if (kind === "overlap") return `<span class="insp-kind insp-kind--bad">${text}</span>`;
-  if (kind === "container") return `<span class="insp-kind insp-kind--box">${text}</span>`;
-  return `<span class="insp-kind">${text}</span>`;
-}
-
-/**
- * `measureHTML(m)` — підсумок лінійки, payload на вході, рядок HTML на виході.
- *
- * `m`:
- *   mode: 'nearest' | 'pair' — яка з двох механік дала ці числа.
- *   kind: для 'pair' — вид усього виміру ('inside' | 'diagonal' | 'gap' |
- *     'overlap', тобто `between().kind`); для 'nearest' — `null`.
- *   rows: [{ key, px, kind }] — рівно ті напрямні, які оверлей НАМАЛЮВАВ.
- *     `key` — напрямок ('top'…'left') для 'nearest' і бік або вісь для 'pair'
- *     (`between()` сам вирішує, що з них має сенс). `px` — СИРІ дробові
- *     пікселі, як їх віддає геометрія; `kind` рядка ('element' | 'container')
- *     заповнений лише для 'nearest'.
- *
- * Округлення — тут, і це не дрібниця: Р5 (`inspector-measure.js`) лишає його
- * плашці, тобто тому, хто показує. Панель — друга плашка тих самих чисел, і
- * округлює вона так само, як та, що на макеті, — інакше дизайнер побачив би
- * «16» на напрямній і «15.98» у панелі й не знав би, кому вірити.
- *
- * Нічого не виміряно (`null`, порожні `rows`) -> `""`, а не порожня таблиця:
- * панель (`app/shell-inspect.js`) саме за порожнім рядком вирішує показати
- * підказку «клікни елемент, щоб зробити його якорем».
- */
-export function measureHTML(m) {
-  if (!m || !Array.isArray(m.rows) || !m.rows.length) return "";
-  const head = esc(t(m.mode === "pair" ? "inspMeasPair" : "inspMeasNear"))
-    + (m.mode === "pair" && m.kind ? kindBadge(m.kind) : "");
-  /* `px` — літерал, а не словниковий ключ: це позначення одиниці, однакове в
-     обох мовах, той самий виняток, що `<kbd>I</kbd>`/`<kbd>Esc</kbd>` у
-     `shell-inspect.js`. */
-  const rows = m.rows.map((r) => {
-    const name = ROW_KEY[r.key] ? t(ROW_KEY[r.key]) : r.key;
-    const badge = m.mode === "pair" ? "" : kindBadge(r.kind);
-    return `<dt>${esc(name)}</dt><dd>${esc(Math.round(r.px))} px${badge}</dd>`;
-  }).join("");
-  return `<section class="insp-spec"><h6>${head}</h6><dl>${rows}</dl></section>`;
 }

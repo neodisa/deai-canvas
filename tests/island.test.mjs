@@ -23,7 +23,7 @@ test("«Задачі» / «Налаштування»: лише баг", () => {
 
 test("інспектор — перемикач: aria-pressed за станом; імена й підказки з клавішею", () => {
   const on = islandToolsHTML({ screen: "task", mode: "layout", inspectorOn: true });
-  assert.match(on, /data-act="inspector" aria-pressed="true" aria-label="Інспектор" title="Інспектор · I"/);
+  assert.match(on, /data-act="inspector" aria-pressed="true" aria-label="Інспектор" title="Інспектор · I · Alt — відстані · Esc \/ ↵ — батько \/ дочірній · ← → — сусід"/);
   assert.match(on, /data-act="feedback" aria-label="Баг \/ ідея" title="Баг \/ ідея"/);
   assert.match(islandToolsHTML({ screen: "task", mode: "layout", inspectorOn: false }), /aria-pressed="false"/);
 });

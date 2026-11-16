@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { measureHTML, reportHTML } from "../app/vendor/insp-report.js";
+import { reportHTML } from "../app/vendor/insp-report.js";
 import { GROUPS } from "../app/vendor/inspector-dom.js";
 
 const D = (o = {}) => ({ prop: "gap", computed: "8px", raw: "var(--sp-2)",
@@ -443,85 +443,6 @@ test("без tunable значення лишається ЧЕСНИМ ТЕКСТ
   assert.match(reportHTML(P()), /insp-dot--tok/, "вирок не залежить від ручок");
   assert.match(reportHTML(P()), /title="gap · 8px · --sp-2"/,
     "і походження в титулі теж: воно про значення, а не про ручку");
-});
-
-/* ── measureHTML: числа лінійки ────────────────────────────────────────────
-   Той самий контракт, що в `reportHTML`: payload на вході, рядок на виході,
-   жодного DOM. Payload сюди кладе оверлей із того, що САМ намалював
-   напрямними (`_setMeas`, `app/vendor/inspector.js`), тому перевірки нижче
-   говорять полями `measure()`/`between()` (`inspector-measure.js`) і нічим
-   іншим: вигаданий `kind` тут був би вигаданим і там. */
-
-const M = (o = {}) => ({ mode: "nearest", kind: null,
-  rows: [{ key: "top", px: 12, kind: "element" }], ...o });
-
-test("лінійка: без виміру — порожній рядок, а не порожня таблиця", () => {
-  assert.equal(measureHTML(null), "");
-  assert.equal(measureHTML(undefined), "");
-  assert.equal(measureHTML(M({ rows: [] })), "",
-    "нічого не виміряно — панель мусить показати підказку, а не пусту рамку");
-});
-
-test("лінійка: чотири найближчі — напрямок, число і вид у кожному рядку", () => {
-  const h = measureHTML(M({ rows: [
-    { key: "top", px: 25, kind: "element" },
-    { key: "left", px: 16, kind: "container" },
-  ] }));
-  assert.match(h, /<dt>Зверху<\/dt><dd>25 px/);
-  assert.match(h, /<dt>Ліворуч<\/dt><dd>16 px/);
-  assert.match(h, /insp-kind">сусід</, "сусід мусить бути названий");
-  assert.match(h, /insp-kind--box">контейнер</, "межа контейнера — окремим видом");
-});
-
-test("лінійка: дві механіки мають РІЗНІ заголовки — вони відповідають на різне", () => {
-  const near = measureHTML(M());
-  const pair = measureHTML(M({ mode: "pair", kind: "gap",
-    rows: [{ key: "x", px: 24 }] }));
-  const head = (h) => h.match(/<h6>([\s\S]*?)<\/h6>/)[1];
-  assert.notEqual(head(near), head(pair));
-});
-
-test("лінійка: вид ПАРНОГО виміру стоїть у заголовку, а не в кожному рядку", () => {
-  const h = measureHTML(M({ mode: "pair", kind: "inside", rows: [
-    { key: "top", px: 9 }, { key: "right", px: 9 },
-  ] }));
-  assert.equal((h.match(/insp-kind/g) || []).length, 1,
-    "`between()` рахує ОДИН вид на весь вимір — повторити його в рядках означало б "
-    + "показати, ніби в кожної напрямної свій");
-  assert.match(h.match(/<h6>([\s\S]*?)<\/h6>/)[1], /усередині/);
-});
-
-test("лінійка: перекриття фарбується інакше за зазор — це єдина вада серед видів", () => {
-  const lap = measureHTML(M({ mode: "pair", kind: "overlap",
-    rows: [{ key: "x", px: 12 }] }));
-  const gap = measureHTML(M({ mode: "pair", kind: "gap",
-    rows: [{ key: "x", px: 12 }] }));
-  assert.match(lap, /insp-kind--bad/);
-  assert.doesNotMatch(gap, /insp-kind--bad/, "звичайний зазор вадою не є");
-});
-
-test("лінійка: осі підписані осями — боку в зазорі/діагоналі не існує", () => {
-  const h = measureHTML(M({ mode: "pair", kind: "diagonal",
-    rows: [{ key: "x", px: 60 }, { key: "y", px: 40 }] }));
-  assert.match(h, /<dt>По X<\/dt><dd>60 px/);
-  assert.match(h, /<dt>По Y<\/dt><dd>40 px/);
-});
-
-test("лінійка: дробові пікселі округлює панель — як і плашка на макеті (Р5)", () => {
-  const h = measureHTML(M({ rows: [{ key: "top", px: 15.98, kind: "element" }] }));
-  assert.match(h, /<dd>16 px/);
-  assert.doesNotMatch(h, /15\.98/,
-    "сирі дробові в панелі розійшлися б із числом на напрямній");
-});
-
-test("лінійка: невідомий ключ і невідомий вид не валять усю панель", () => {
-  const h = measureHTML(M({ rows: [{ key: "хтозна", px: 5, kind: "новий" }] }));
-  assert.match(h, /insp-spec/);
-  assert.match(h, /5 px/);
-});
-
-test("лінійка: секція та сама, що у звіту — один каркас, не два", () => {
-  assert.match(measureHTML(M()), /<section class="insp-spec"><h6>/);
 });
 
 /* ── Рядок про ДС: токени ПРОСТОРУ (етап 2а, Task 7) ───────────────────────

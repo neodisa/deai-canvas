@@ -553,7 +553,7 @@ export function paletteHTML(actions, query, cursor) {
  * Фактичний стан ЗАРАЗ — і кожен рядок нижче має живого власника:
  *   · `⌘K`, `?`, `⌥M`, `⌘\`, `Esc` — `app.js` (обробники `keydown` у секції
  *     ⌘K-палітри; `⌥M`/`⌘\` дописані 02.09.2026 саме через цей аудит);
- *   · `I` і `M` — `vendor/inspector.js` (`_onKey`). Вони працюють, поки
+ *   · `I`, `Alt`, `↵` — `vendor/inspector.js` (`_onKey`); `Alt` і `↵` ще й `app.js` (`inspShellKey`). Вони працюють, поки
  *     фокус у РАМЦІ макета: інспектор слухає своє `window` і за межі iframe
  *     не виходить — те саме структурне обмеження, що вже описане в `app.js`
  *     («Драбинка Escape»);
@@ -580,7 +580,7 @@ export function keysHTML() {
         ${row(t("kPalette"), "⌘K")}${row(t("kKeys"), "?")}${row(t("kMode"), "⌥M")}
         ${row(t("kPanel"), "⌘\\")}${row(t("kClean"), "⇧⌘\\")}${row(t("kEsc"), "Esc")}</dl></div>
       <div><h6>${esc(t("keysLayout"))}</h6><dl>
-        ${row(t("kInspector"), "I")}${row(`${t("inspCascade")} / ${t("inspRuler")}`, "M")}
+        ${row(t("kInspector"), "I")}${row(t("inspKeyAlt"), "Alt")}${row(t("inspKeyChild"), "↵")}
         ${row(t("cmtTitle"), "C")}${row(t("cmtPins"), "H")}</dl></div>
     </div>
   </div></div>`;
