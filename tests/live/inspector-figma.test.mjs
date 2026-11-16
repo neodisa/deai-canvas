@@ -131,6 +131,12 @@ const layerShown = (page, cls) => page.evaluate((c) => {
 test("T3-proof. коробка margin/padding: наведення без Alt — видима, під Alt — схована", async (t) => {
   const { page } = await boot(t);
   await pin(page, "#a");
+  // Вибраний елемент коробки не має: заливка margin/padding лягала на нього й спотворювала кольори, які дизайнер
+  // саме крутить у панелі (знайдено на знімку 16.11.2026). Курсор лежить на вибраному — ховера іншого елемента нема.
+  await page.waitForFunction(() => !!document.getElementById("frame").contentWindow.CanvasInspector.pinned,
+    null, { timeout: 3000 });
+  assert.deepEqual([await layerShown(page, "hl"), await layerShown(page, "hl-pad")], [false, false],
+    "на вибраному без наведення шари margin/padding сховані");
   const b = await page.frameLocator("#frame").locator("#b").boundingBox();
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
   await page.waitForFunction(() => {

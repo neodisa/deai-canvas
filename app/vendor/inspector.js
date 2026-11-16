@@ -1290,9 +1290,10 @@ const Inspector = {
     const alt = this.alt && !!pin;
     const hide = (...ns) => ns.forEach((n) => n.classList.add('hidden'));
     const px = (v) => `${v}px`;
-    /* Коробка margin/padding (DevTools-оверлей, v1.19) — для наведеного, а немає — для вибраного; під Alt ховається,
-       щоб не плутати з лініями відстаней. */
-    const boxEl = alt ? null : (hov || pin);
+    /* Коробка margin/padding (DevTools-оверлей, v1.19) — лише для НАВЕДЕНОГО. Вибраний лишається чистим, з синьою
+       рамкою: заливка коробки лягала на нього й спотворювала кольори, які дизайнер саме крутить у панелі. Під Alt
+       ховається, щоб не плутати з лініями відстаней. */
+    const boxEl = alt ? null : hov;
     if (boxEl) this._box(boxEl); else hide(this._hl, this._pad);
     const hr = hov && !alt ? hov.getBoundingClientRect() : null;
     if (hr && finiteRect(hr)) {
