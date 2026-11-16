@@ -94,6 +94,39 @@ const TABBABLE = 'a[href],button,input:not([type=hidden]),select,textarea,[tabin
 const tabbables = (root) => [...root.querySelectorAll(TABBABLE)]
   .filter((el) => !el.disabled && el.tabIndex >= 0 && !el.closest('[hidden]'));
 
+/**
+ * Текст питання → `{title, body}` (етап В): перший рядок — заголовок картки, решта — пояснення під ним.
+ * Двокрапка в кінці заголовка — спадок підписів поля (`'Нова назва сторінки:'`), у заголовку вона зайва.
+ */
+export function splitTitle(text) {
+  const s = String(text ?? '');
+  const i = s.indexOf('\n');
+  const title = (i < 0 ? s : s.slice(0, i)).trim().replace(/:\s*$/, '');
+  return { title, body: i < 0 ? '' : s.slice(i + 1).trim() };
+}
+
+const POP_GAP = 10;   // від якоря до картки
+const POP_EDGE = 8;   // від картки до краю вікна
+
+/**
+ * Де стати поповеру (етап В). `a` — прямокутник якоря (`getBoundingClientRect()`), `w`×`h` — розмір картки,
+ * `vw`×`vh` — вікно, `place` — бажане `'above'|'below'`. По горизонталі — центр над якорем, але не ближче
+ * `POP_EDGE` до країв; не влазить із бажаного боку, а з другого влазить — перевертається; ніде — притискається.
+ * `tip` — x хвостика відносно картки (на центр якоря), у межах картки з запасом 12 px.
+ */
+export function popPlace(a, w, h, vw, vh, place = 'below') {
+  const cx = a.left + a.width / 2;
+  const left = Math.max(POP_EDGE, Math.min(vw - w - POP_EDGE, cx - w / 2));
+  const above = a.top - POP_GAP - h;
+  const below = a.bottom + POP_GAP;
+  let p = place === 'above' ? 'above' : 'below';
+  if (p === 'above' && above < POP_EDGE && below + h <= vh - POP_EDGE) p = 'below';
+  else if (p === 'below' && below + h > vh - POP_EDGE && above >= POP_EDGE) p = 'above';
+  const top = p === 'above' ? Math.max(POP_EDGE, above) : Math.max(POP_EDGE, Math.min(vh - h - POP_EDGE, below));
+  const tip = Math.max(12, Math.min(w - 12, cx - left));
+  return { left: Math.round(left), top: Math.round(top), tip: Math.round(tip), place: p };
+}
+
 /* Сталий id можна тримати саме тому, що оверлей у DOM завжди один (див. `open`
    вище). Він потрібен, щоб `<label>` показував НА поле: підпис, привʼязаний у
    нікуди, не фокусує поле кліком і не читається зчитувачем як його назва. */
