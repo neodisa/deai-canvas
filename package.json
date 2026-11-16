@@ -10,7 +10,7 @@
     "playwright": "^1.62.1"
   },
   "license": "FSL-1.1-MIT",
-  "version": "0.28.2",
+  "version": "0.29.0",
   "engines": {
     "node": ">=20"
   }

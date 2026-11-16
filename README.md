@@ -31,8 +31,8 @@ element and tell the agent what to change, and publishes a protected preview for
 - **Flow map**: screens and arrows described in `flow.json`, dragged into place on the canvas.
 - **Comments panel** for Claude or for the team: pins on elements, search, closed pins with the agent's note, carry-over from
   earlier iterations.
-- **Inspector and tuner**: a DevTools-style overlay with a ruler, token check against your design system, and a change request
-  for the agent.
+- **Inspector and tuner**: a Figma-like property panel (size, auto layout, spacing, fill, stroke, text) with token chips and
+  off-system values, distances while Alt is held, and a change request for the agent.
 - **Agent status**: a state in the island and a dot on every task tab.
 - **Tasks screen**: search, sort, tags, issue-tracker statuses and a team dashboard if you connect them.
 - **Publish** to a folder or to your own Vercel account, with an optional password gate.
@@ -64,7 +64,7 @@ The screenshots show a made-up budgeting app on demo data. `node ops/readme-shot
 
 ## Status
 
-Version 0.28.2 (16.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
+Version 0.29.0 (16.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
 cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Feature reference
@@ -75,7 +75,7 @@ cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELO
 | **Pages & states** | A tree of pages, folders and states (any depth), with a filter and drag-and-drop. |
 | **Overview** | All pages of an iteration as a zoomable grid of full-page snapshots (Playwright), re-shot incrementally when a page changes. Desktop / tablet / mobile widths. |
 | **Flow** | Arrange screens as a user flow with arrows (`flow.json`). |
-| **Inspector & tuner** | DevTools-style overlay: spacing, typography, colours, a ruler, and — if you connect your design tokens (a CSS file, see *Modules*) — whether each value is on-system. The tuner turns tweaks into a change request for the agent. |
+| **Inspector & tuner** | A Figma-like property panel for any element — size, distances to the parent, auto layout, spacing, fill, stroke and radius, text — with a token chip next to each value and, if you connect your design tokens (a CSS file, see *Modules*), off-system values marked with a «to DS» snap. Hold Alt for distances; Esc / Enter / ← → walk the tree. Every tweak is live and goes into a change request for the agent. |
 | **Comments** | Pin comments on any element (via [CommentLayer](https://github.com/neodisa/CommentLayer)); a local channel for the agent, an optional team channel on your own service — Supabase or anything else — through a `comments` module (canvas, Overview, published previews, the agent's `inbox`). See *Comments*. |
 | **Agent status** | Shows what the agent is doing right now and which pages it just changed. |
 | **Publish** | Build a static preview of the iterations you marked and publish it to a folder or to your own Vercel account (any space), optionally behind a password gate. |
