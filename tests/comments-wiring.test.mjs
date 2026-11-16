@@ -33,7 +33,12 @@ test("cmtfilter: лише значення з FILTERS, вибір памʼята
   assert.match(a, /if \(!FILTERS\.includes\(f\)\) return;/, "довільне значення не мусить потрапити ні в стан, ні в localStorage");
   assert.match(a, /localStorage\.setItem\('dc-cmt-filter', f\)/);
   assert.ok(a.indexOf("FILTERS.includes") < a.indexOf("cmtFilter = f"));
-  assert.match(src, /localStorage\.getItem\('dc-cmt-filter'\); return FILTERS\.includes\(v\) \? v : 'all'/, "збережене сміття читається як «all»");
+  assert.match(src, /localStorage\.getItem\('dc-cmt-filter'\); return FILTERS\.includes\(v\) \? v : 'local'/, "немає чи сміття — вкладка «Для Claude» (рішення власника 16.11.2026)");
+});
+
+test("«Огляд»: аудиторія «Claude» має підказку під чипом, як і «Команді»", () => {
+  assert.match(src, /\{ id: 'local', label: t\('audChipLocal'\), icon: 'bot', color: LOCAL_PIN_COLOR, private: true, note: t\('audChipLocalNote'\) \}/);
+  assert.match(src, /\{ id: 'project', label: t\('audChipTeam'\), icon: 'team', note: t\('audChipTeamNote'\) \}/);
 });
 
 test("cmtassign / cmtunassign ставлять і знімають доручення Claude через setMeta", () => {

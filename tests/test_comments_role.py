@@ -1932,16 +1932,17 @@ class DualPagesTest(PagesEnv):
         """Підписи чипів у `DUAL_AUDIENCES_JS` — парні до `audChip*` у `app/i18n.js` (сервер не бачить JS-словника)."""
         with open(os.path.join(os.path.dirname(serve.__file__), 'i18n.js'), encoding='utf-8') as fh:
             src = fh.read()
-        keys = ('audChipLocal', 'audChipTeam', 'audChipTeamNote')
+        keys = ('audChipLocal', 'audChipTeam', 'audChipLocalNote', 'audChipTeamNote')
         want = {}
         for key in keys:
             found = re.findall(rf"^\s*{key}:\s*'([^']*)'", src, re.M)
             self.assertEqual(len(found), 2, key)
             want[key] = found
         for i, lang in enumerate(('uk', 'en')):
-            line = re.search(rf"var {lang} = \{{ local: '([^']*)', team: '([^']*)', note: '([^']*)' \}};", serve.DUAL_AUDIENCES_JS)
+            line = re.search(rf"var {lang} = \{{ local: '([^']*)', team: '([^']*)', localNote: '([^']*)', note: '([^']*)' \}};", serve.DUAL_AUDIENCES_JS)
             self.assertIsNotNone(line, lang)
             self.assertEqual(line.groups(), tuple(want[k][i] for k in keys), lang)
+        self.assertIn("private: true, note: L.localNote }", serve.DUAL_AUDIENCES_JS)
 
     def test_one_audience_only_when_the_team_is_down(self):
         self.assertIn('audiences: store.teamDown ? auds.slice(0, 1) : auds', serve.DUAL_COMMENT_SNIPPET)

@@ -124,8 +124,8 @@ let lastFrameSrc = null;   // адреса рамки на момент попе
 let cmtTool = null;   // `CommentLayer.tool()` поточного виду для острівця (режими коментування, поправка 19)
 let cmtOpen = false, cmtSnap = null, cmtSel = null, cmtQuery = '', cmtEditing = null, cmtDraft = null, frameCmtReady = false;
 const cmtExpanded = { earlier: false, closed: false };
-/** Фільтр панелі «Усі / Для Claude / Команда» (Б2) — памʼятається на вікно. */
-let cmtFilter = (() => { try { const v = localStorage.getItem('dc-cmt-filter'); return FILTERS.includes(v) ? v : 'all'; } catch (e) { return 'all'; } })();
+/** Фільтр панелі «Для Claude / Команда / Усі» (Б2) — памʼятається на вікно; типова — «Для Claude». */
+let cmtFilter = (() => { try { const v = localStorage.getItem('dc-cmt-filter'); return FILTERS.includes(v) ? v : 'local'; } catch (e) { return 'local'; } })();
 /** Причина, з якої командні недоступні (`L.store.teamDown`), або `null`. */
 let cmtTeamDown = null;
 /** «Нові від команди» цього відкриття панелі (поправка 13), id попереднього знімка (поправка 14), число нових для острівця. */
@@ -5309,7 +5309,7 @@ const ovc = overviewComments({
   },
   /* Аудиторії піна на «Огляді» (поправки 11, 12, 20): без командного каналу — одна (чипів нема). */
   audiences: () => (noTeamComments() ? [] : [
-    { id: 'local', label: t('audChipLocal'), icon: 'bot', color: LOCAL_PIN_COLOR, private: true },
+    { id: 'local', label: t('audChipLocal'), icon: 'bot', color: LOCAL_PIN_COLOR, private: true, note: t('audChipLocalNote') },
     { id: 'project', label: t('audChipTeam'), icon: 'team', note: t('audChipTeamNote') },
   ]),
   onArmed: (on) => { commentArmed = !!on; canvasEl.classList.toggle('cv-commenting', commentArmed); },
