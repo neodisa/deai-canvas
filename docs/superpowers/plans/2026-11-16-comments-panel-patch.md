@@ -16,12 +16,12 @@
 
 ## Ground rules (read before any step)
 
-- Repo `~/Liga Tools/deai-canvas-dev`, branch `fix/comments-panel-0.27.1` (already created from `main` d8e1b1c; the spec commit is on it).
+- Repo: this repository's root, branch `fix/comments-panel-0.27.1` (already created from `main` d8e1b1c; the spec commit is on it).
 - Commit ONLY like this, with explicit paths (never `git add -A`, never `--amend`, `stash`, `reset`, never checkout other branches):
   `git -c user.name=neodisa -c user.email=neodisa@users.noreply.github.com commit -m "<msg>" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- <paths>`
   (new files: `git add -- <path>` first).
 - Never stage `docs/superpowers/specs/2026-10-20-agents-in-canvas-design.md` or `docs/superpowers/specs/2026-11-09-agents-sdk-policy-addendum.md`.
-- Tests never touch ports 8765/4317, `~/Liga Tools/deai-canvas`, real `~/.deai`, `~/deai-published`, `~/deai-work`, `~/.gitconfig`, Teams, any real Supabase or Jira. Never set `DEAI_HOME`/`DC_TASKS_FILE`. Python via `python3 -B`.
+- Tests never touch ports 8765/4317, the owner's live install, real `~/.deai`, `~/deai-published`, `~/deai-work`, `~/.gitconfig`, Teams, any real Supabase or Jira. Never set `DEAI_HOME`/`DC_TASKS_FILE`. Python via `python3 -B`.
 - Processes: never `pkill`/`killall` by pattern, never `while pgrep -f …`; kill only by PID.
 - Live tests: ONE file at a time: `node --test tests/live/<file>.test.mjs`.
 - Every new guard is proven by mutation: break the code → the test goes red → restore byte-exact (`cmp` against a copy) → green. Report each mutation.
