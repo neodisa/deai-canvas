@@ -131,6 +131,8 @@ export function popPlace(a, w, h, vw, vh, place = 'below') {
    вище). Він потрібен, щоб `<label>` показував НА поле: підпис, привʼязаний у
    нікуди, не фокусує поле кліком і не читається зчитувачем як його назва. */
 const INPUT_ID = 'cv-ask-input';
+/* Заголовок картки — назва діалогу й поля для зчитувача; id сталий з тієї самої причини, що й `INPUT_ID`. */
+const TITLE_ID = 'cv-ask-title';
 
 /**
  * Спільне тіло всіх трьох. `kind`: `ask` — поле вводу, `yesno` — підтвердження,
@@ -142,7 +144,7 @@ const INPUT_ID = 'cv-ask-input';
  * піднявся» ніколи не читається як «користувач підтвердив». Дефолт руйнівної
  * дії — не робити її.
  */
-function overlay(text, kind, { value = '', readOnly = false, danger = false, yes = t('askOk'), details = [], choices = [], detailsLabel = '', form = null } = {}) {
+function overlay(text, kind, { value = '', readOnly = false, danger = false, yes = t('askOk'), details = [], choices = [], detailsLabel = '', form = null, error = false } = {}) {
   const cancelled = kind === 'yesno' ? false : (kind === 'tell' ? undefined : null);
   const isForm = kind === 'form';
   if (open) open.cancel();
@@ -162,22 +164,49 @@ function overlay(text, kind, { value = '', readOnly = false, danger = false, yes
        додатково прибирають самі викликачі: усе, що читається ПІСЛЯ `await`,
        вони знімають ДО нього (ідіома `freshen()`), бо коректність запису не
        сміє триматись на CSS. */
+    /* Поповер (етап В): форма біля кнопки, якою її відкрили, без підкладки — макет під нею живий. Якоря нема,
+       він схований чи відʼєднаний — звичайна модальна картка. */
+    const anchorEl = isForm && form.anchor && form.anchor.isConnected && form.anchor.getClientRects().length
+      ? form.anchor : null;
     const scrim = document.createElement('div');
-    scrim.className = 'cv-ask-scrim';
+    scrim.className = anchorEl ? 'cv-ask-pop' : 'cv-ask-scrim';
     /* Клік по підкладці навмисно НЕ закриває: половина питань тут — руйнівні,
        а промах повз коробку не є відповіддю на «видалити?». Виходи явні: Esc і
        кнопка. */
     const boxEl = document.createElement('div');
-    boxEl.className = isForm ? 'cv-ask cv-ask--form' : 'cv-ask';
+    boxEl.className = isForm ? (anchorEl ? 'cv-ask cv-ask--form cv-ask--pop' : 'cv-ask cv-ask--form') : 'cv-ask';
     scrim.appendChild(boxEl);
 
-    /* `<label>` лише там, де є що підписувати; у підтвердженні й повідомленні
-       це абзац тексту, а не назва поля. У формі заголовок і підписи полів — у
-       розмітці викликача (`form.build`), тож власного абзацу нема. */
-    const head = isForm ? null : document.createElement(kind === 'ask' ? 'label' : 'p');
-    if (head) {
-      head.textContent = text;
+    /* Заголовок і пояснення (етап В): перший рядок тексту — `<h2>`, решта — абзац під ним (`splitTitle`).
+       У формі заголовок — у розмітці викликача (`form.build`), тож тут нічого. */
+    if (!isForm) {
+      const { title, body } = splitTitle(text);
+      const head = document.createElement('h2');
+      head.className = 'cv-ask-title';
+      head.id = TITLE_ID;
+      if (error) {
+        /* Іконка — `<use>` на спрайт оболонки, а не імпорт `icons.js`: `ask.js` їде в публічне превʼю й мусить
+           тягнути лише `i18n.js`. Помилки (`tellError`) показує лише оболонка, де спрайт є. */
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'ico'); svg.setAttribute('width', '16'); svg.setAttribute('height', '16');
+        svg.setAttribute('aria-hidden', 'true');
+        const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        use.setAttribute('href', '#i-warn');
+        svg.appendChild(use);
+        head.appendChild(svg);
+      }
+      head.appendChild(document.createTextNode(title));
       boxEl.appendChild(head);
+      if (body) {
+        const p = document.createElement('p');
+        p.className = 'cv-ask-text';
+        p.textContent = body;
+        boxEl.appendChild(p);
+      }
+      boxEl.setAttribute('role', kind === 'tell' ? 'alertdialog' : 'dialog');
+      boxEl.setAttribute('aria-modal', 'true');
+      boxEl.setAttribute('aria-labelledby', TITLE_ID);
+      if (error) boxEl.classList.add('cv-ask--error');
     }
 
     /* Перелік того, що зачепить вибір, — над кнопками й під питанням: людина
@@ -200,9 +229,9 @@ function overlay(text, kind, { value = '', readOnly = false, danger = false, yes
 
     let input = null;
     if (kind === 'ask') {
-      head.htmlFor = INPUT_ID;
       input = document.createElement('input');
       input.id = INPUT_ID;
+      input.setAttribute('aria-labelledby', TITLE_ID);
       input.type = 'text';
       input.value = value;
       input.readOnly = readOnly;
@@ -253,6 +282,7 @@ function overlay(text, kind, { value = '', readOnly = false, danger = false, yes
     let formEl = null;
     let busy = false;
     let ctl = null;
+    let place = null; let onOutside = null; let onBlur = null;   // поповер (етап В), знімаються в `done`
     if (isForm) {
       boxEl.innerHTML = form.build();
       formEl = boxEl.querySelector('form');
@@ -311,6 +341,45 @@ function overlay(text, kind, { value = '', readOnly = false, danger = false, yes
     }
     document.body.appendChild(scrim);
 
+    if (anchorEl) {
+      /* Форма відгуку сама каже `aria-modal="true"`; поповер не модальний — макет під ним живий. */
+      formEl?.removeAttribute('aria-modal');
+      const tip = document.createElement('span');
+      tip.className = 'cv-ask-tip';
+      boxEl.appendChild(tip);
+      place = () => {
+        const r = popPlace(anchorEl.getBoundingClientRect(), boxEl.offsetWidth, boxEl.offsetHeight, innerWidth, innerHeight, form.place);
+        boxEl.style.left = `${r.left}px`;
+        boxEl.style.top = `${r.top}px`;
+        boxEl.dataset.place = r.place;
+        tip.style.left = `${r.tip}px`;
+      };
+      place();
+      addEventListener('resize', place);
+      /* Клік повз картку — відповідь «скасовано», як Esc. Клік по самому якорю теж закриває, і той самий клік
+         НЕ мусить відкрити форму знову: гасимо його одноразовим слухачем у capture на якорі (знімаємо за 600 мс,
+         якщо pointerdown так і не став кліком — перетягування). Під час відправки (`busy` / `aria-busy`) — нічого. */
+      onOutside = (e) => {
+        if (boxEl.contains(e.target)) return;
+        if (busy || formEl?.getAttribute('aria-busy') === 'true') return;
+        if (anchorEl.contains(e.target)) {
+          const swallow = (ev) => { ev.stopImmediatePropagation(); ev.preventDefault(); };
+          anchorEl.addEventListener('click', swallow, { capture: true, once: true });
+          setTimeout(() => anchorEl.removeEventListener('click', swallow, { capture: true }), 600);
+        }
+        done(cancelled);
+      };
+      document.addEventListener('pointerdown', onOutside, true);
+      /* Клік у макет — це клік в iframe: до `document` оболонки він не долітає, зате вікно оболонки втрачає фокус.
+         Ловимо `blur` і перевіряємо, що фокус пішов саме в рамку (а не в інше вікно ОС). */
+      onBlur = () => setTimeout(() => {
+        if (document.activeElement?.tagName !== 'IFRAME') return;
+        if (busy || formEl?.getAttribute('aria-busy') === 'true') return;
+        done(cancelled);
+      }, 0);
+      addEventListener('blur', onBlur);
+    }
+
     const done = (result) => {
       if (open !== api) return;      // уже закритий іншим шляхом
       open = null;
@@ -321,6 +390,9 @@ function overlay(text, kind, { value = '', readOnly = false, danger = false, yes
       const lost = !a || a === document.body || scrim.contains(a);
       scrim.remove();
       document.removeEventListener('keydown', onKey, true);
+      if (onOutside) document.removeEventListener('pointerdown', onOutside, true);
+      if (onBlur) removeEventListener('blur', onBlur);
+      if (place) removeEventListener('resize', place);
       focusBackTarget(lost, [opener, form?.focusBack?.()])?.focus({ preventScroll: true });
       resolve(result);
     };
@@ -371,6 +443,7 @@ function overlay(text, kind, { value = '', readOnly = false, danger = false, yes
     else if (input) { input.focus(); input.select(); }
     else if (formEl) {
       form.onMount?.(formEl, ctl);
+      place?.();   // розмір картки міг змінитись після `onMount`
       /* `data-autofocus` — поле, з якого форма хоче почати; без нього — перше текстове. */
       const first = formEl.querySelector('[data-autofocus]')
         ?? formEl.querySelector('input:not([type=hidden])') ?? formEl.querySelector('button');
@@ -379,6 +452,12 @@ function overlay(text, kind, { value = '', readOnly = false, danger = false, yes
     } else ok?.focus();
   });
 }
+
+/**
+ * Помилка дії (етап В): заголовок «що не вдалося», під ним причина (рядок сервера), іконка `warn`.
+ * Замість `tell(t('errFailed', e.message))` там, де відомо, ЩО саме не вдалося.
+ */
+export const tellError = (title, reason) => overlay(`${title}\n${reason ?? ''}`, 'tell', { error: true });
 
 /** Ввід рядка. `null` — скасування (як у `prompt()`). */
 export const ask = (question, value = '', { readOnly = false } = {}) =>
@@ -424,6 +503,8 @@ export const askChoice = (question, { details = [], choices = [], detailsLabel =
  *                        діалог закривається. Кинула — помилка показується так само
  *                        (`errFailed`). Без `onSubmit` відправка просто закриває діалог.
  *
+ *   `anchor`             кнопка-якір (етап В): є — поповер біля неї без підкладки, нема чи схована — модальна картка.
+ *   `place`              `'above'|'below'` — де від якоря стати (`popPlace`).
  *   `focusBack()`        запасний відкривач для фокуса після закриття (вузол, що його мала
  *                        людина, міг бути перемальований: смуга міняє `innerHTML` цілком) —
  *                        викликається ПРИ закритті, тож бачить свіжий DOM. Фокус вертається
@@ -436,5 +517,5 @@ export const askChoice = (question, { details = [], choices = [], detailsLabel =
  * Свідомо БЕЗ клавіші Enter-на-документі, як у `ask`: у формі Enter відправляє її
  * нативно, а свій обробник перебивав би вибір людини на кнопці «Скасувати».
  */
-export const askForm = (build, { onMount, onSubmit, focusBack } = {}) =>
-  overlay('', 'form', { form: { build, onMount, onSubmit, focusBack } });
+export const askForm = (build, { onMount, onSubmit, focusBack, anchor = null, place = 'below' } = {}) =>
+  overlay('', 'form', { form: { build, onMount, onSubmit, focusBack, anchor, place } });

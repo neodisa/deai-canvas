@@ -38,3 +38,30 @@ test("ask.js тягне лише i18n.js (його везе й публічне 
   const imports = [...src.matchAll(/^import .* from ["']([^"']+)["'];?$/gm)].map((m) => m[1]);
   assert.deepEqual(imports, ["./i18n.js"]);
 });
+
+import { tellError } from "../app/ask.js";
+
+test("заголовок — h2.cv-ask-title з id, пояснення — p.cv-ask-text; поле підписане заголовком", () => {
+  assert.match(src, /createElement\('h2'\)/);
+  assert.match(src, /className = 'cv-ask-title'/);
+  assert.match(src, /className = 'cv-ask-text'/);
+  assert.match(src, /setAttribute\('aria-labelledby', TITLE_ID\)/);
+  assert.equal(/htmlFor = INPUT_ID/.test(src), false, "підпис поля тепер — заголовок, не <label>");
+});
+
+test("tellError — повідомлення з класом помилки й іконкою зі спрайта, без імпорту icons.js", () => {
+  assert.equal(typeof tellError, "function");
+  assert.match(src, /export const tellError = \(title, reason\) =>/);
+  assert.match(src, /cv-ask--error/);
+  assert.match(src, /'#i-warn'/);
+});
+
+test("поповер: без підкладки, клас cv-ask-pop, закриття повз/якорем — але не під час busy", () => {
+  assert.match(src, /'cv-ask-pop'/);
+  assert.match(src, /popPlace\(/);
+  assert.match(src, /if \(busy \|\| formEl\?\.getAttribute\('aria-busy'\) === 'true'\) return;/);
+  assert.match(src, /addEventListener\('pointerdown', onOutside, true\)/);
+  assert.match(src, /removeEventListener\('pointerdown', onOutside, true\)/);
+  assert.match(src, /removeEventListener\('blur', onBlur\)/);
+  assert.match(src, /removeEventListener\('resize', place\)/);
+});

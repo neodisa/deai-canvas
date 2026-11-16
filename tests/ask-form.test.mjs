@@ -222,7 +222,7 @@ test("askForm: відкривач запамʼятовується ПІСЛЯ с
   assert.match(done, /focusBackTarget\(lost, \[opener, form\?\.focusBack\?\.\(\)\]\)\?\.focus\(\{ preventScroll: true \}\);/);
   assert.ok(done.indexOf("focusBackTarget(") < done.indexOf("resolve(result)"),
     "фокус повертається ДО resolve: продовження викликача (`.then`) бачить уже поставлений фокус і може його переставити");
-  assert.match(src, /askForm = \(build, \{ onMount, onSubmit, focusBack \} = \{\}\) =>\s*overlay\('', 'form', \{ form: \{ build, onMount, onSubmit, focusBack \} \}\)/);
+  assert.match(src, /askForm = \(build, \{ onMount, onSubmit, focusBack, anchor = null, place = 'below' \} = \{\}\) =>\s*overlay\('', 'form', \{ form: \{ build, onMount, onSubmit, focusBack, anchor, place \} \}\)/);
 });
 
 test("askForm: ctl.focus(імʼя) ставить aria-invalid на поле, ctl.error('') знімає з усіх; непорожня помилка не знімає", () => {
