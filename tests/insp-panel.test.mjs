@@ -206,3 +206,9 @@ test("у панелі немає рядка клавіш, <kbd>, підказо�
   const src = readFileSync(new URL("../app/insp-panel.js", import.meta.url), "utf8");
   assert.doesNotMatch(src.replace(/\/\*[\s\S]*?\*\//g, ""), /<kbd|<p /);
 });
+
+test("data-delta на полі розміру — лише коли delta не нуль (атрибут, не клас)", () => {
+  assert.match(fieldOf(W({ delta: 50 })), /<input[^>]*data-delta="50"/);
+  assert.doesNotMatch(fieldOf(W({})), /data-delta/);
+  assert.doesNotMatch(fieldOf(W({ delta: 0 })), /data-delta/);
+});

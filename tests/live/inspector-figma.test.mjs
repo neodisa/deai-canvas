@@ -21,7 +21,8 @@ body{margin:0;font:16px/24px sans-serif;background:#fff}
 #card{display:flex;gap:12px;padding:10px 14px;border:1px solid #dde3ee;border-radius:7px;background:#f6f8fc}
 #a{padding:6px 10px;background:#1f4fe0;color:#fff}
 #b{padding:6px 10px;background:#e0e0e0}
-</style></head><body><div id="wrap"><div id="card"><a id="a">One</a><a id="b">Two</a></div><p id="para">Hello</p></div></body></html>`;
+#cb{box-sizing:content-box;width:300px;height:40px;padding:10px 24px;border:1px solid #888}
+</style></head><body><div id="wrap"><div id="card"><a id="a">One</a><a id="b">Two</a></div><p id="para">Hello</p><div id="cb">Box</div></div></body></html>`;
 
 async function openInspector(browser, url) {
   const page = await browser.newPage({ viewport: VIEW });
@@ -77,6 +78,47 @@ async function boot(t) {
   return { dir, page: await openInspector(browser, url), url };
 }
 
+test("0. W/H панелі = РЕНДЕРЕНИЙ розмір (як ярлик оверлея); запис віднімає delta", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#cb");
+  const label = await page.evaluate(() => {
+    const sh = document.getElementById("frame").contentDocument.querySelector("[data-canvas-inspector]").shadowRoot;
+    return sh.querySelector(".o-size").textContent;
+  });
+  const [lw, lh] = label.split("×").map((x) => parseInt(x, 10));
+  const rendered = () => page.frameLocator("#frame").locator("#cb").evaluate((e) => [e.getBoundingClientRect().width, e.getBoundingClientRect().height]);
+  assert.deepEqual(await rendered(), [lw, lh], "ярлик показує рендерений розмір");
+  assert.equal(lw, 350, "300 + 2×24 + 2×1");
+  assert.equal(await fieldValue(page, "width"), String(lw), "W панелі = ширина з ярлика, а не CSS width");
+  assert.equal(await fieldValue(page, "height"), String(lh));
+  const w = '#insp-panel .insp-f[data-prop="width"] .insp-fi';
+  assert.equal(await page.locator(w).getAttribute("data-delta"), "50");
+  await page.fill(w, String(lw + 34));
+  await page.press(w, "Enter");
+  await waitPkg(page, dir, (p) => editOf(p, "width"), "правка width");
+  assert.equal((await rendered())[0], lw + 34, "відрендерена ширина виросла рівно на 34");
+  assert.equal(editOf(pkg(dir), "width").to, "334px", "у CSS лягло введене − delta");
+  assert.equal(await page.locator(w).getAttribute("data-delta"), "50", "delta стабільна й після перемальовки");
+  await page.focus(w);
+  await page.keyboard.press("ArrowUp");
+  await waitPkg(page, dir, (p) => editOf(p, "width")?.to === "335px", "↑ у відображених одиницях");
+  assert.equal((await rendered())[0], lw + 35);
+});
+
+test("0b. скраб підпису W теж віднімає delta: відрендерена ширина росте на показане значення", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#cb");
+  const box = await page.locator('#insp-panel .insp-f[data-prop="width"] .insp-fl').boundingBox();
+  const cx = box.x + box.width / 2; const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 30, cy, { steps: 10 });                // +10 у відображених одиницях
+  await page.mouse.up();
+  await waitPkg(page, dir, (p) => editOf(p, "width"), "правка width");
+  assert.equal(editOf(pkg(dir), "width").to, "310px", "350+10 показано → 310 у CSS");
+  assert.equal(await page.frameLocator("#frame").locator("#cb").evaluate((e) => e.getBoundingClientRect().width), 360);
+});
+
 test("T2-proof. клік → панель властивостей із назвою й розділами; поле gap пише макет і пакет", async (t) => {
   const { dir, page } = await boot(t);
   await pin(page, "#card");
@@ -93,6 +135,7 @@ test("T2-proof. клік → панель властивостей із назв
   assert.equal(editOf(p, "gap").to, "13px");
 });
 /** Лінії відстаней в оверлеї: усередині shadow-кореня рамки. */
+const fieldValue = (page, prop) => page.locator(`#insp-panel .insp-f[data-prop="${prop}"] .insp-fi`).inputValue();
 const altLines = (page) => page.evaluate(() => {
   const doc = document.getElementById("frame").contentDocument;
   const sh = doc.querySelector("[data-canvas-inspector]").shadowRoot;

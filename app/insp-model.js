@@ -111,7 +111,15 @@ export function buildModel(rep, opts = {}) {
     const f = mk(id, [prop], { lab: { t: lab }, name });
     if (!f) return null;
     const n = numOf(rows[prop].computed);
-    f.value = String(Math.round(n === null ? (fallback || 0) : n));
+    /* У Figma W/H — РЕНДЕРЕНИЙ розмір (той самий, що в ярлику оверлея). CSS-значення (`content-box` + padding + рамка)
+       від нього відрізняється на `delta`; поле його нюхає при записі й віднімає. */
+    const rendered = Number.isFinite(fallback) ? fallback : null;
+    if (rendered === null) { f.value = String(Math.round(n === null ? 0 : n)); return f; }
+    f.value = String(Math.round(rendered));
+    if (n !== null) {
+      const d = Math.round((rendered - n) * 10) / 10;
+      if (d !== 0) f.delta = d;
+    }
     return f;
   };
 

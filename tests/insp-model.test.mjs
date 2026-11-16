@@ -39,6 +39,22 @@ test("розмір береться зі звіту, а коли width: auto —
   assert.equal(auto.size.w.value, "120", "facts.w = 120");
 });
 
+test("W/H — РЕНДЕРЕНИЙ розмір (як ярлик оверлея); різниця з CSS-значенням — delta", () => {
+  const rep = withProps(REPORT(), { width: { computed: "716px" }, height: { computed: "40px" } });
+  rep.facts.w = 766; rep.facts.h = 82;
+  const m = buildModel(rep);
+  assert.equal(m.size.w.value, "766");
+  assert.equal(m.size.w.delta, 50);
+  assert.equal(m.size.h.value, "82");
+  assert.equal(m.size.h.delta, 42);
+  const eq = buildModel(REPORT());                                  // 120px / facts.w 120
+  assert.equal("delta" in eq.size.w, false, "рівні — без delta");
+  const frac = withProps(REPORT(), { width: { computed: "119.6px" } });
+  assert.equal(buildModel(frac).size.w.delta, 0.4, "округлення до 0.1");
+  const auto = buildModel(withProps(REPORT(), { width: { computed: "auto" } }));
+  assert.equal("delta" in auto.size.w, false, "не число — без delta");
+});
+
 test("батько зʼявляється лише коли є в facts", () => {
   assert.deepEqual(buildModel(REPORT()).edges, { parent: "div.cta", top: 0, right: 8, bottom: 0, left: 0 });
   const rep = REPORT(); rep.facts.parent = null;

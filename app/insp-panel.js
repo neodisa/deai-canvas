@@ -90,10 +90,11 @@ function fieldHTML(f) {
   }
   const min = f.min == null ? "" : ` data-min="${esc(f.min)}"`;
   const base = f.base == null ? "" : ` data-base="${esc(f.base)}"`;
+  const delta = f.delta ? ` data-delta="${esc(f.delta)}"` : "";
   const ph = f.mixed ? ` placeholder="${esc(t("inspMixed"))}"` : "";
   return `<div class="insp-f" ${wrap}${title}>${labelHTML(f)}`
     + `<input class="insp-fi" data-act="insptune" data-prop="${first}" data-props="${all}"`
-    + ` data-step="${esc(Number(f.step) || 1)}" data-unit="${esc(f.unit || "")}"${min}${base}`
+    + ` data-step="${esc(Number(f.step) || 1)}" data-unit="${esc(f.unit || "")}"${min}${base}${delta}`
     + ` value="${esc(f.value)}"${ph} aria-label="${esc(f.name)}" inputmode="decimal" autocomplete="off" spellcheck="false">`
     + `${tailHTML(f)}</div>`;
 }

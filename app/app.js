@@ -6250,7 +6250,9 @@ function inspCommit(el) {
   if (raw === '' || !Number.isFinite(n) || raw === el.defaultValue.trim()) return;
   const min = el.dataset.min === undefined ? null : Number(el.dataset.min);
   const v = min === null ? n : Math.max(min, n);
-  tuneWrite(props.map((p) => [p, tuneRound(v) + (el.dataset.unit || '')]));
+  /* W/H показують РЕНДЕРЕНИЙ розмір; у CSS іде «введене − delta» (рамка/відступи content-box). ↑/↓ і скраб теж
+     сходяться сюди й у `inspScrubApply`. */
+  tuneWrite(props.map((p) => [p, tuneRound(v - Number(el.dataset.delta || 0)) + (el.dataset.unit || '')]));
 }
 
 /** ↑/↓ у полі: крок поля (`data-step`) × множник (Shift = ×10). Порожнє поле (`normal`, «Різні») крокує від `data-base` або 0. */
@@ -6481,7 +6483,7 @@ inspEl.addEventListener('keydown', (ev) => {
 function inspScrubApply(s) {
   if (s.next === null || s.applied === s.next) return;
   s.applied = s.next;
-  tuneWrite(s.props.map((p) => [p, tuneRound(s.next) + s.unit]), { save: false });
+  tuneWrite(s.props.map((p) => [p, tuneRound(s.next - s.delta) + s.unit]), { save: false });
 }
 inspEl.addEventListener('pointerdown', (ev) => {
   const lab = ev.target.closest?.('[data-scrub]');
@@ -6493,7 +6495,7 @@ inspEl.addEventListener('pointerdown', (ev) => {
   inspScrub = { inp, props: String(inp.dataset.props || inp.dataset.prop).split(' '), x0: ev.clientX,
     v0: Number.isFinite(cur) ? cur : (Number(inp.dataset.base) || 0), step: Number(inp.dataset.step) || 1,
     min: inp.dataset.min === undefined ? null : Number(inp.dataset.min), unit: inp.dataset.unit || '',
-    next: null, applied: undefined, raf: 0 };
+    delta: Number(inp.dataset.delta || 0), next: null, applied: undefined, raf: 0 };
 });
 inspEl.addEventListener('pointermove', (ev) => {
   const s = inspScrub;
