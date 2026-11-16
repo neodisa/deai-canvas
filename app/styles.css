@@ -1322,7 +1322,6 @@ body.with-panel.panel-collapsed.with-cmt .cv-hud{width:calc(100% - var(--panel-r
 .insp-top{display:flex;align-items:center;gap:6px;height:40px;padding:0 6px 0 10px;
   border-bottom:1px solid var(--line);flex:none}
 .insp-top .panel-title{padding-left:0}
-.insp-tabs{padding:8px 10px 0}
 .insp-body{flex:1;min-height:0;overflow:auto;padding:10px}
 .insp-hint{margin:0;font-size:12px;color:var(--dim);line-height:1.5}
 /* ── Панель властивостей (0.29.0, етап Г) ─────────────────────────────────
@@ -1397,156 +1396,6 @@ select.insp-fi option{background:var(--s1)}
 .insp-ps{color:var(--dim);padding:0 1px}
 .insp-pb:focus-visible,.insp-ib:focus-visible,.insp-cell:focus-visible,.insp-dir:focus-visible,
 .insp-snap:focus-visible,.insp-off:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
-/* ── Звіт інспектора (T-39) ───────────────────────────────────────────────
-   Джерело вигляду — ДРУГИЙ затверджений макет, `docs/proto/tuner-panel.html`,
-   варіант А. Крихти лишились із прототипу оболонки (`docs/proto/shell.html`,
-   `.crumbline`), решта розкладки переписана.
-
-   ⛔ НЕСУЧЕ ПРАВИЛО ВСЬОГО БЛОКУ: висота поля СТАЛА, нічого не переноситься.
-   Зміряно на живому макеті до правки: накручений рядок розганявся з 16px до
-   44px, бо перекреслене «було», поле, «px» і бейдж вироку не влазили в
-   колонку 185px і переносились, — і все нижче зʼїжджало на 28px за КОЖНУ
-   правку. Це і є «скаче», на яке скаржився дизайнер. Тому тут: `height`
-   замість `min-height`, `white-space:nowrap` + `text-overflow:ellipsis` на
-   значеннях, одиниця ВСЕРЕДИНІ поля (ширина поля не залежить від довжини
-   значення) і вирок крапкою замість бейджа з іменем токена. */
-.insp-crumbs{display:flex;flex-wrap:wrap;gap:3px;align-items:center;
-  font-size:11.5px;color:var(--dim);margin-bottom:10px}
-.insp-crumbs button{border:0;background:none;color:var(--dim);cursor:pointer;
-  padding:2px 4px;border-radius:4px;font-size:11.5px}
-.insp-crumbs button:hover{background:var(--s3);color:var(--hi)}
-.insp-crumbs button:last-child{color:var(--hi);background:var(--s3)}
-.insp-spec{border-top:1px solid var(--line);padding:9px 0}
-.insp-spec:first-of-type{border-top:0;padding-top:0}
-/* Прототип малював заголовок секції `color:var(--lo)` — тут навмисно
-   `--dim`: живий охоронець у tests/css-guards.test.mjs забороняє `--lo` як
-   колір ТЕКСТУ (3.87:1 на --s1, нижче AA), лишаючи його межам і декору;
-   `--dim` (5.65:1) — той самий приглушений відтінок, але з контрастом,
-   що проходить. */
-.insp-spec h6{margin:0 0 7px;font-size:10.5px;letter-spacing:.06em;
-  text-transform:uppercase;color:var(--dim);font-weight:500}
-/* Поле. `height` — токеном сітки (--h-sm), а не числом: воно й є тією сталою
-   висотою, заради якої все переписано. */
-.insp-f{display:flex;align-items:center;gap:5px;min-width:0;
-  height:var(--h-sm);padding:0 6px;background:var(--s3);
-  border:1px solid transparent;border-radius:var(--r-sm)}
-.insp-f:hover{background:var(--s4)}
-.insp-f:focus-within{background:var(--s2);border-color:var(--sel)}
-/* Стан — АТРИБУТАМИ, не другим класом. Причина записана в `fieldHTML`
-   (`app/vendor/insp-report.js`): охоронець css-guards читає імена класів
-   регекспом по атрибуту `class` у сирці, тож три незалежні модифікатори
-   означали б вісім повних літералів класу на одне поле. Той самий прийом уже
-   живе в оболонці — `.seg button[aria-pressed=true]`. */
-.insp-f[data-wide]{grid-column:1/-1}
-/* Нема чого крутити — нема й відгуку на наведення: піднята підкладка обіцяє
-   контрол, якого в цьому полі немає. */
-.insp-f[data-ro]:hover{background:var(--s3)}
-/* «Я це крутив». Тінт акценту — той самий, що вже означає в цій панелі «наше,
-   інструментове». Перекресленого «було» поруч більше немає: воно в списку
-   змін у підвалі й у титулі поля. */
-.insp-f[data-tuned]{background:var(--sel-tint);border-color:var(--sel-tint-2)}
-.insp-f[data-tuned] .insp-num{color:var(--sel-text)}
-/* Той самий стан у САМОМУ полі звіту: поле лишається накрученим (правка
-   справжня), але число в ньому — сторінчине, недоторкане. Пунктир каже, що
-   бейдж «накручено» тут про ПАКЕТ, а не про те, що видно на макеті. */
-.insp-f[data-miss]{border-style:dashed;border-color:var(--open)}
-.insp-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-/* Чотири відступи однією смугою (прийом Figma): секція «Відступи» стиснулась
-   із восьми рядків до двох смуг. Поля тісніші за звичайні — на чотири
-   колонки в 288px інакше не лишається місця числу. */
-.insp-quad{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
-.insp-quad .insp-f{padding:0 4px;gap:3px}
-.insp-lbl{margin:0 0 4px;font-size:11px;color:var(--dim)}
-.insp-pairlbl{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 0 4px}
-.insp-pairlbl span{font-size:11px;color:var(--dim)}
-/* Проміжки між блоками — сусідськими селекторами, а не полем на кожному
-   блоці: перший блок секції не мусить відсувати заголовок. */
-.insp-grid + .insp-grid{margin-top:6px}
-.insp-grid + .insp-lbl,.insp-quad + .insp-lbl{margin-top:7px}
-.insp-grid + .insp-pairlbl,.insp-quad + .insp-pairlbl{margin-top:7px}
-.insp-ico{flex:none;width:13px;text-align:center;font-size:10.5px;color:var(--dim)}
-.insp-quad .insp-ico{width:auto}
-.insp-nm{flex:none;font-size:11.5px;color:var(--dim);white-space:nowrap}
-/* Довге значення УСІКАЄТЬСЯ, повне лежить у титулі поля. До T-39
-   `font-family` розповзався на три рядки — і рядок звіту ставав утричі
-   вищим за сусідні. */
-.insp-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;font-size:12px;color:var(--mid)}
-/* Крутилка більше не має власної рамки й ширини: рамка тепер у поля, а
-   ширина — уся, що лишилась. Нативні стрілки прибрані (у полі 62px вони
-   зʼїли б половину); крок дає клавіатура, і саме про неї каже титул. */
-.insp-num{flex:1;min-width:0;width:100%;padding:0;background:none;border:0;
-  color:var(--hi);font:inherit;font-size:12px;font-variant-numeric:tabular-nums;
-  outline:none;-moz-appearance:textfield}
-.insp-num::-webkit-outer-spin-button,
-.insp-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-/* Одиниця — праворуч від числа, ВСЕРЕДИНІ поля (прийом Figma). Саме це й
-   знімає танець ширини: поле однакове на «8px» і на «676.8px». */
-.insp-unit{flex:none;font-size:11px;color:var(--dim)}
-/* Пікер ПІДМІНЯЄ собою зразок (`.insp-sw`), а не стає поруч із ним: два
-   кольорові квадрати в одному полі читались би як два різні кольори.
-   `::-webkit-color-swatch` без рамки — інакше плитка всередині плитки. */
-.insp-pick{flex:none;width:16px;height:14px;padding:0;cursor:pointer;
-  background:none;border:1px solid var(--line2);border-radius:3px}
-.insp-pick::-webkit-color-swatch{border:0;border-radius:2px}
-.insp-pick::-webkit-color-swatch-wrapper{padding:0}
-.insp-sw{flex:none;width:12px;height:12px;border-radius:3px;
-  border:1px solid var(--line2)}
-/* Вирок КРАПКОЮ: зелена — токен, бурштинова — хардкод, сіра — не розібрали.
-   Імʼя токена й підказки переїхали в титул поля, і разом із ними — правило
-   честі: для `unlinked`/`unknown` імені там немає ніколи (`verdictText`,
-   `app/vendor/insp-report.js`).
-   `--lo` тут законний: це ТЛО декоративної крапки, а не колір тексту —
-   заборона розділу A охоронця css-guards стосується саме тексту. */
-.insp-dot{flex:none;width:7px;height:7px;border-radius:50%}
-.insp-dot--tok{background:var(--ok)}
-.insp-dot--hard{background:var(--open)}
-.insp-dot--unk{background:var(--lo)}
-/* T-40 — два вироки про ДИЗАЙН-СИСТЕМУ, і вага в них навмисно різна.
-   `--over` (перевизначений токен ДС) бере `--bad` — той самий червоний, що
-   «перекриття» в лінійці: це єдині два вироки, що кажуть про ВАДУ, і на
-   макетах перевизначення не буває нормою ніколи (виміряно: 110 у `courts`,
-   усі — розходження з ДС).
-   `--offds` — КІЛЬЦЕ, а не заливка: на лендінгу таких змінних законно сотні
-   (198 із 589 у `bf360`), і суцільна кольорова крапка на кожному другому
-   рядку перестала б бути сигналом — рівно те, що сталося з зеленою до T-40.
-   Кільце тримає той самий розмір 7px, тобто геометрія рядка не рухається. */
-.insp-dot--over{background:var(--bad)}
-.insp-dot--offds{background:transparent;box-shadow:inset 0 0 0 2px var(--dim)}
-/* Дорога назад у ДС — кнопка ОБГОРТАЄ крапку (чому саме так — `snapHTML`,
-   insp-report.js). Відʼємні поля зʼїдають зайві 7px ширини, тож поле не
-   розʼїжджається й у смузі відступів, де на кожне лишається ~45px. Висота
-   14px нижча за вміст рядка, тобто стала висота поля (несуче правило T-39)
-   не рухається. */
-.insp-snap{flex:none;display:flex;align-items:center;justify-content:center;
-  width:14px;height:14px;margin:-3px -4px -3px -3px;padding:0;border:0;
-  border-radius:4px;background:none;cursor:pointer}
-.insp-snap:hover{background:var(--s4)}
-.insp-snap:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
-/* Рядок про саму ДС — НЕ застереження: відсутність ДС у напрямку `seo` не
-   вада макета, а факт про задачу. Тому `--dim` (5.65:1 на --s1), а не
-   бурштиновий `--warn`-тон: бурштин тут читався б як «щось не так». */
-.insp-note{margin:0 0 10px;font-size:11.5px;line-height:1.45;color:var(--dim)}
-.insp-warn{margin:0 0 10px;font-size:11.5px;line-height:1.45;color:var(--open)}
-/* Підсумок ЛІНІЙКИ (`measureHTML`, insp-report.js) — єдине, що лишилось на
-   каркасі `dl`/`dt`/`dd`: там справді «підпис : число», по одному рядку на
-   напрямну, і ніякої розкладки полів. Звіт про елемент цей каркас покинув
-   разом із бейджами (T-39). */
-.insp-spec dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 10px;
-  align-items:baseline}
-.insp-spec dt{font-size:12px;color:var(--dim)}
-.insp-spec dd{margin:0;font-size:12px;color:var(--hi);text-align:right;
-  font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:anywhere}
-/* `text-transform:none` — бо бейдж виду виміру стоїть і в `h6`, а той увесь у
-   капітелі: без скидання «перекриття» кричало б гучніше за саме число.
-   Кольори: `--bad` перекриттю (єдиний вид, що несе ваду — і оверлей малює
-   його червоним), `--open` контейнерній межі (оверлей малює її помаранчевою,
-   `.rg.box`), решті `--dim` — це прочитані відстані, а не вироки. */
-.insp-kind{display:inline-block;margin-left:6px;padding:1px 5px;border-radius:4px;
-  font-size:11px;font-weight:400;letter-spacing:0;text-transform:none;
-  color:var(--dim);background:var(--s3)}
-.insp-kind--box{color:var(--open);background:rgba(251,188,85,.15)}
-.insp-kind--bad{color:var(--bad);background:rgba(243,115,115,.15)}
 /* ── Підвал панелі (T-39, `tuneFootHTML` у shell-inspect.js) ──────────────
    Список накрученого, записка Клоду й дві дії — прибиті до низу тієї самої
    вкладки, де крутять. Окремої вкладки «Тюнер» більше немає.
@@ -1630,16 +1479,6 @@ select.insp-fi option{background:var(--s1)}
   border-radius:var(--r-sm);background:none;color:var(--dim);font:inherit;
   font-size:12.5px;cursor:pointer}
 .insp-cancel:hover{color:var(--hi)}
-/* Клавіші — останній рядок підвалу, а не хвіст тіла: вони про макет, а не
-   про те, що зараз у списку, і прокручуватись разом зі звітом їм нема за чим.
-   Власної лінії згори не мають — її вже дає сам підвал; окрема лінія
-   зʼявляється тільки коли над ними щось є. */
-.insp-keys{margin:0;font-size:11px;color:var(--dim);line-height:1.6}
-.insp-acts + .insp-keys{margin-top:9px;border-top:1px solid var(--line);
-  padding-top:9px}
-.insp-keys kbd{background:var(--s3);border:1px solid var(--line2);border-radius:4px;
-  padding:1px 5px;font:inherit;font-size:11px;color:var(--hi)}
-
 /* Запит дерева в дорозі (`treePost`): дії панелі не приймають кліків, щоб другий
    запит не зіткнувся з першим на ревізії. Перегляд (скрол, hover) лишається. */
 .panel--busy .row-more,.panel--busy .icob,.panel--busy .row-caret{pointer-events:none}

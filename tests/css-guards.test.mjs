@@ -645,19 +645,23 @@ function panelClasses() {
 
 const DOCUMENTS = [
   { name: "права панель оболонки", css: () => readCss(),
-    render: { tunable: true, measure: true }, panel: true,
-    extra: [path.join(APP, "shell-inspect.js")] },
+    render: null, panel: true,
+    /* `insp-hint` малює не інспектор, а панель «Коментарі» (`comments-view.js`), яка ділить із ним CSS: перелік
+       явний, бо класи з сирця шаблонів `comments-view.js` екстрактор читає з шумом. */
+    alsoDrawn: ["insp-hint"],
+    extra: [path.join(APP, "shell-inspect.js"), path.join(APP, "insp-panel.js")] },
   { name: "shadow-корінь оверлея (сторінка без канваса)", css: readOverlayCss,
     render: { tunable: false, measure: false }, extra: [] },
 ];
 
 /** Усе, що документ справді малює: рендер плюс розмітка «своїх» файлів. */
 function drawnClasses(doc) {
-  const drawn = renderedClasses(doc.render);
+  const drawn = doc.render ? renderedClasses(doc.render) : new Set();
   for (const file of doc.extra) {
     for (const c of classesInMarkup(readFileSync(file, "utf8"))) drawn.add(c);
   }
   if (doc.panel) for (const c of panelClasses()) drawn.add(c);
+  for (const c of doc.alsoDrawn || []) drawn.add(c);
   return drawn;
 }
 
@@ -741,6 +745,8 @@ test("жоден клас звіту не лишився поза рендеро
   const source = classesInMarkup(
     readFileSync(path.join(APP, "vendor", "insp-report.js"), "utf8"));
   assert.ok(source.size > 0, "екстрактор не знайшов жодного class=\"…\" у insp-report.js");
+  /* `reportHTML` ще вміє `tunable: true` (ручки) і `measureHTML` (бейдж виміру) — їхній код у файлі лишається, поки
+     Task 3 не прибере вимір; вокабуляр звіряється з УСІМА гілками рендера, а не з однією. */
   const rendered = new Set([
     ...renderedClasses({ tunable: true, measure: true }),
     ...renderedClasses({ tunable: false, measure: false }),
@@ -767,7 +773,7 @@ test("ручки тюнера існують РІВНО в тому докуме
      скинути, а другий вхід у нього; перелік звужено свідомо, а не «щоб
      проходило». */
   const KNOBS = ["insptune", "insptunecolor"];
-  const panel = REPORT_CASES.map((p) => reportHTML(p, { tunable: true })).join("");
+  const panel = panelHTML(FULL_MODEL());
   const overlay = REPORT_CASES.map((p) => reportHTML(p, { tunable: false })).join("");
   for (const act of KNOBS) {
     assert.ok(panel.includes(`data-act="${act}"`),

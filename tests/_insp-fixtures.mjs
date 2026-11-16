@@ -58,3 +58,30 @@ export const FULL_MODEL = () => ({
   ls: F({ id: "ls", props: ["letter-spacing"], name: "Трекінг", lab: { i: "ls" }, value: "0", step: 0.1, min: null }),
   color: COLOR({ id: "textColor", props: ["color"], name: "Колір тексту", value: "FFFFFF", swatch: "#FFFFFF" }) },
 });
+
+/** Рядок звіту `describe()`. */
+export const D = (prop, computed, o = {}) => ({ prop, computed, raw: computed, token: null, tokenValue: null,
+  verdict: "unlinked", hint: [], ds: null, snap: null, ...o });
+
+/** Payload `report()` картки: flex-рядок, заливка, обведення, власний текст. `facts` — як віддасть оверлей. */
+export const REPORT = (o = {}) => ({
+  crumbs: ["body", "section.hero", "div.cta", "a.btn--primary"],
+  groups: {
+    box: [D("margin-top", "0px"), D("margin-right", "0px"), D("margin-bottom", "0px"), D("margin-left", "0px"),
+      D("padding-top", "12px", { verdict: "hardcode" }), D("padding-right", "20px", { verdict: "hardcode" }),
+      D("padding-bottom", "12px", { verdict: "hardcode" }), D("padding-left", "20px", { verdict: "hardcode" })],
+    layout: [D("display", "flex"), D("width", "120px"), D("height", "44px")],
+    flex: [D("flex-direction", "row"), D("align-items", "center"), D("justify-content", "flex-start"),
+      D("flex-wrap", "nowrap"), D("gap", "8px", { verdict: "token", token: "--sp-2", raw: "var(--sp-2)" })],
+    type: [D("font-family", '"Inter", sans-serif'), D("font-size", "14px", { verdict: "hardcode" }),
+      D("font-weight", "600"), D("line-height", "20px"), D("letter-spacing", "normal")],
+    color: [D("color", "rgb(255, 255, 255)", { verdict: "hardcode" }),
+      D("background-color", "rgb(31, 79, 224)", { verdict: "hardcode" }),
+      D("border-color", "rgb(31, 79, 224)"), D("border-width", "1px"), D("border-radius", "8px")],
+  },
+  blocked: false, partial: false, dsInfo: { profile: "united", known: true, commit: "abc", figma: "x" },
+  facts: { w: 120, h: 44, ownText: true,
+    parent: { name: "div.cta", top: 0, right: 8, bottom: 0, left: 0 },
+    extra: [D("border-style", "solid")], dsColors: { fill: null, line: null } },
+  ...o,
+});

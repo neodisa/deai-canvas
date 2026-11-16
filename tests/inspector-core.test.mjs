@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import {
   specificity, compareSpec, pickWinner,
   varsIn, splitTop, splitBox, normalizeValue, tokenIndex, verdict, splitTopLevel,
-  propFamilies, hintFor, valueShape, nameClaims, dsIndex, dsVerdict,
+  propFamilies, hintFor, valueShape, nameClaims, dsIndex, dsVerdict, pickDsColors,
 } from '../app/vendor/inspector-core.js';
 
 // специфічність: [id, клас/атрибут/псевдоклас, тег/псевдоелемент]
@@ -272,5 +272,22 @@ assert.strictEqual(dsVerdict(dsE, '--zzz', '#ffffff').state, 'off-ds');
 assert.deepStrictEqual(dsVerdict(dsE, null, '#ffffff'), { state: 'token', want: null });
 assert.deepStrictEqual(dsE.tokens.get('--a'), []);
 assert.strictEqual(dsE.byValue.size, 1, 'порожній список у зворотний індекс нічого не кладе');
+
+// кольори ДС для «+» біля заливки й обведення (етап Г): за імʼям токена, лише непрозорі #rrggbb
+{
+  const toks = new Map([
+    ['--color-text-100', ['#111111']],
+    // альфа-токен стоїть ПЕРЕД справжнім: без пропуску непрозорих-лише він би виграв
+    ['--color-surface-alpha', ['#FBFBFF1A']],
+    ['--color-surface-1', ['#F6F8FC']],
+    ['--color-border-subtle', ['#DDE3EE']],
+  ]);
+  assert.deepStrictEqual(pickDsColors(toks), {
+    fill: { token: '--color-surface-1', value: '#f6f8fc' },
+    line: { token: '--color-border-subtle', value: '#dde3ee' },
+  });
+  assert.deepStrictEqual(pickDsColors(new Map([['--a', ['#123456']]])), { fill: null, line: null });
+  assert.deepStrictEqual(pickDsColors(null), { fill: null, line: null });
+}
 
 console.log('inspector-core: OK');

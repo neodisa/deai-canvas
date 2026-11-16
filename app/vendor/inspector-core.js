@@ -459,6 +459,28 @@ export function dsIndex(profile, tokens) {
   return { known: true, profile, tokens: map, byValue };
 }
 
+/**
+ * Кольори ДС для кнопок «+» біля заливки й обведення (етап Г). В індексі ДС немає семантичних категорій, лише
+ * `імʼя → значення`, тому вибір — за імʼям: «поверхня» (surface|background|bg|canvas) і «лінія»
+ * (border|line|stroke|divider|outline). Береться ПЕРШИЙ токен з непрозорим значенням (`#rrggbb` після нормалізації);
+ * альфа-кольори пропускаються. Нема збігу — `null`, і викликач підставляє запасне значення.
+ */
+export function pickDsColors(tokens) {
+  const out = { fill: null, line: null };
+  if (!tokens || typeof tokens.entries !== 'function') return out;
+  const FILL = /(surface|background|bg|canvas)/i;
+  const LINE = /(border|line|stroke|divider|outline)/i;
+  for (const [name, values] of tokens.entries()) {
+    const hex = (Array.isArray(values) ? values : [values]).map(normalizeValue)
+      .find((v) => /^#[0-9a-f]{6}$/.test(v));
+    if (!hex) continue;
+    if (!out.fill && FILL.test(name)) out.fill = { token: name, value: hex };
+    if (!out.line && LINE.test(name)) out.line = { token: name, value: hex };
+    if (out.fill && out.line) break;
+  }
+  return out;
+}
+
 /* ── Токени ДС ПРОСТОРУ (етап 2а, Task 7) ──────────────────────────────────
 
    Окрім статичного знімка напрямку (`ds-tokens.js`, ключ — напрямок задачі)

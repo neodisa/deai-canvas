@@ -6,10 +6,11 @@ import path from "node:path";
 
 import { inspectHTML } from "../app/shell-inspect.js";
 import { stripComments } from "./_sources.mjs";
+import { FULL_MODEL, MIN_MODEL } from "./_insp-fixtures.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const S = (o = {}) => ({ shellMode: "layout", on: true, mode: "cascade", ...o });
+const S = (o = {}) => ({ shellMode: "layout", on: true, model: null, tune: null, tuneOther: 0, tuneMissing: [], ...o });
 
 /* ── коли панелі не місце ────────────────────────────────────────────────
    Той самий принцип, за яким зі смуги зникає кнопка інспектора в «Огляді»
@@ -30,58 +31,6 @@ test("«Макет» + інспектор увімкнений — панель 
   assert.notEqual(h, "");
 });
 
-/* ── перемикач режиму ────────────────────────────────────────────────────
-   Спека задачі: «перемикач режиму — видима кнопка, значення читаються
-   списком» — тобто `[data-act="insptab"]`, а не лише клавіша `M`. */
-
-test('перемикач режиму — це "[data-act=\\"insptab\\"]" з двома значеннями', () => {
-  const h = inspectHTML(S());
-  assert.match(h, /data-act="insptab" data-val="cascade"/);
-  assert.match(h, /data-act="insptab" data-val="ruler"/);
-  /* ⛔ РІВНО двома (T-39). Третя вкладка, «Тюнер», була вкладкою-не-режимом і
-     тягла за собою власний стан у `app.js` плюс механізм поколінь документа.
-     Її вміст переїхав у підвал «Стилів»; кнопка, що лишилась би тут, вела б у
-     нікуди. */
-  assert.equal((h.match(/data-act="insptab"/g) || []).length, 2);
-  assert.doesNotMatch(h, /data-val="tuner"/);
-});
-
-test("aria-pressed перемикача відповідає реальному режиму оверлея, не панелі самій по собі", () => {
-  const cascade = inspectHTML(S({ mode: "cascade" }));
-  const cascadeBtn = cascade.match(/<button data-act="insptab" data-val="cascade"[^>]*>/)[0];
-  const rulerBtnOff = cascade.match(/<button data-act="insptab" data-val="ruler"[^>]*>/)[0];
-  assert.match(cascadeBtn, /aria-pressed="true"/);
-  assert.match(rulerBtnOff, /aria-pressed="false"/);
-
-  const ruler = inspectHTML(S({ mode: "ruler" }));
-  const cascadeBtnOff = ruler.match(/<button data-act="insptab" data-val="cascade"[^>]*>/)[0];
-  const rulerBtn = ruler.match(/<button data-act="insptab" data-val="ruler"[^>]*>/)[0];
-  assert.match(cascadeBtnOff, /aria-pressed="false"/);
-  assert.match(rulerBtn, /aria-pressed="true"/);
-});
-
-/* ── підпис із клавішами ─────────────────────────────────────────────────
-   Пастка, на якій задача явно попереджає (і яка вже коштувала пʼять червоних
-   тестів у Task 4): текст кнопки/абзацу з багаторядкового шаблону несе
-   переніс рядка на початку. Тому нижче — `.includes()`/`match()` по
-   конкретному тегу, а не порівняння `textContent` без `.trim()`. */
-
-test("підпис із клавішами I, M, Esc є в розмітці — рівно тими іменами клавіш", () => {
-  const h = inspectHTML(S());
-  assert.match(h, /<kbd>I<\/kbd>/, "немає клавіші I");
-  assert.match(h, /<kbd>M<\/kbd>/, "немає клавіші M");
-  assert.match(h, /<kbd>Esc<\/kbd>/, "немає клавіші Esc");
-});
-
-test("підпис із клавішами не залежить від режиму — присутній і в каскаді, і в лінійці", () => {
-  for (const mode of ["cascade", "ruler"]) {
-    const h = inspectHTML(S({ mode }));
-    assert.match(h, /<kbd>I<\/kbd>/);
-    assert.match(h, /<kbd>M<\/kbd>/);
-    assert.match(h, /<kbd>Esc<\/kbd>/);
-  }
-});
-
 /* ── кнопка закриття ─────────────────────────────────────────────────────
    `data-act="inspector"` — ТА САМА дія, що кнопка смуги (не друга реалізація
    «увімкнено/вимкнено» поряд із першою, див. докстрінг модуля). */
@@ -91,111 +40,11 @@ test('кнопка закриття несе "[data-act=\\"inspector\\"]" — т
   assert.match(h, /<button class="icob" data-act="inspector"/);
 });
 
-/* ── контент залежить від режиму, а не завжди той самий рядок ─────────── */
-
-test("текст підказки різний у каскаді й лінійці", () => {
-  const cascade = inspectHTML(S({ mode: "cascade" }));
-  const ruler = inspectHTML(S({ mode: "ruler" }));
-  const hintOf = (h) => h.match(/<p class="insp-hint">([\s\S]*?)<\/p>/)[1].trim();
-  assert.notEqual(hintOf(cascade), hintOf(ruler));
-  assert.ok(hintOf(cascade).length > 0);
-  assert.ok(hintOf(ruler).length > 0);
-});
-
-/* ── звіт про елемент ────────────────────────────────────────────────────
-   Панель МАЛЮЄ звіт, але не рахує його: payload приїжджає готовим із
-   `CanvasInspector.report()` (оверлей усередині iframe — єдиний, хто бачить
-   живий DOM макета). Тому перевірки нижче дають готовий payload і дивляться
-   рівно на те, чи потрапив він у розмітку, — жодного DOM тут немає взагалі. */
-
-const REP = { crumbs: ["body", "div.card"],
-  groups: { box: [{ prop: "gap", computed: "8px", raw: "var(--sp-2)",
-    token: "--sp-2", tokenValue: "8px", verdict: "token", hint: [] }] },
-  blocked: false, partial: false };
-
-test("звіт із payload малюється В ПАНЕЛІ", () => {
-  const h = inspectHTML(S({ report: REP }));
-  assert.match(h, /insp-spec/);
-  assert.match(h, /--sp-2/);
-});
-
-test("без payload панель лишається (вкладки + підказка), але без секцій звіту", () => {
-  const h = inspectHTML(S({ report: null }));
-  assert.notEqual(h, "");
-  assert.doesNotMatch(h, /insp-spec/);
-  assert.match(h, /data-act="insptab"/);
-});
-
-test("панель не рахує нічого сама — лише те, що приїхало в payload", () => {
-  const h = inspectHTML(S({ report: { ...REP, groups: {} } }));
-  assert.doesNotMatch(h, /insp-spec/);
-});
-
-/* Лінійка міряє відстані МІЖ якорем і сусідом і малює їх на самому макеті;
-   каскад запіненого елемента до неї стосунку не має. Payload при цьому нікуди
-   не дівається (пін той самий), тож без цієї перевірки «звіт у лінійці» був би
-   помітний хіба на око. */
-test("у режимі лінійки звіту немає навіть із payload — там підказка", () => {
-  const h = inspectHTML(S({ mode: "ruler", report: REP }));
-  assert.doesNotMatch(h, /insp-spec/);
-  assert.match(h, /class="insp-hint"/);
-});
-
-test("підпис із клавішами лишається й тоді, коли тіло зайняв звіт", () => {
-  const h = inspectHTML(S({ report: REP }));
-  assert.match(h, /<kbd>I<\/kbd>/);
-  assert.match(h, /<kbd>M<\/kbd>/);
-  assert.match(h, /<kbd>Esc<\/kbd>/);
-});
-
-/* Крихти несуть ІНДЕКС, а не елемент: резолвити його буде сам оверлей
-   (`pinAt`), бо масив предків живий лише там. Тут — що індекс узагалі дійшов
-   до розмітки, інакше проводці (`BAR_ACTIONS.inspcrumb`) не було б із чим
-   працювати. */
-test("крихти звіту несуть індекс у data-val", () => {
-  const h = inspectHTML(S({ report: REP }));
-  assert.match(h, /data-act="inspcrumb" data-val="0"/);
-  assert.match(h, /data-act="inspcrumb" data-val="1"/);
-});
-
 /* ── заголовок панелі ────────────────────────────────────────────────── */
 
 test("заголовок панелі несе назву інспектора", () => {
   const h = inspectHTML(S());
   assert.match(h, /class="panel-title"/);
-});
-
-/* ── числа лінійки (Task 7) ───────────────────────────────────────────────
-   Симетрично до звіту: payload рахує оверлей (`CanvasInspector.measure()` —
-   він же й намалював ці напрямні на макеті), панель лише передає його в
-   `measureHTML`. Тут — що передала в потрібному режимі й не переплутала. */
-
-const MEAS = { mode: "nearest", kind: null,
-  rows: [{ key: "top", px: 25, kind: "element" }] };
-
-test("у лінійці панель показує ЧИСЛА, а не підказку", () => {
-  const h = inspectHTML(S({ mode: "ruler", measure: MEAS }));
-  assert.match(h, /25 px/);
-  assert.doesNotMatch(h, /class="insp-hint"/);
-});
-
-test("у лінійці показуються числа, а не каскад — навіть коли приїхали обидва", () => {
-  const h = inspectHTML(S({ mode: "ruler", measure: MEAS, report: REP }));
-  assert.match(h, /25 px/);
-  assert.doesNotMatch(h, /insp-crumbs/,
-    "крихти малює тільки каскадний звіт — у лінійці їм не місце");
-  assert.doesNotMatch(h, /--sp-2/, "токенів каскаду в лінійці бути не мусить");
-});
-
-test("у каскаді числа лінійки не показуються — навіть коли приїхали обидва", () => {
-  const h = inspectHTML(S({ mode: "cascade", measure: MEAS, report: REP }));
-  assert.doesNotMatch(h, /25 px/);
-  assert.match(h, /insp-crumbs/);
-});
-
-test("лінійка без виміру лишає підказку — порожній рядок не мусить дати німу панель", () => {
-  const h = inspectHTML(S({ mode: "ruler", measure: { ...MEAS, rows: [] } }));
-  assert.match(h, /class="insp-hint"/);
 });
 
 /* ── шлях до стану макета рівно один (Task 9) ─────────────────────────────
@@ -217,7 +66,7 @@ test("лінійка без виміру лишає підказку — пор�
    (`tests/_sources.mjs`) зробив би цей охоронець нездійсненним, тому спільним
    з ним лишається тільки забілювання коментарів. Ціна ручного переліку —
    третій рендерер панелі, який забудуть сюди дописати; проти неї стоїть
-   `seen === 2` і маркер на кожен файл. */
+   `seen === 3` і маркер на кожен файл. */
 const PANEL_SOURCES = [
   /* Маркер на кожен файл — те, що в ньому ТОЧНО є, і в коді, а не в коментарі.
      Без нього охоронець тихо зеленіє, щойно файл перейменують, спорожнять або
@@ -225,8 +74,8 @@ const PANEL_SOURCES = [
      «нічого не знайдено» читається як «порушень немає». Той самий свідок, що
      `examined` у `tests/i18n-literals.test.mjs`. */
   { file: "app/shell-inspect.js", marker: /export function inspectHTML\s*\(/ },
-  { file: "app/vendor/insp-report.js", marker: /export function reportHTML\s*\(/ },
   { file: "app/insp-panel.js", marker: /export function panelHTML\s*\(/ },
+  { file: "app/insp-model.js", marker: /export function buildModel\s*\(/ },
 ];
 
 /* `document.` — саме з крапкою: звернення до макета завжди йде через ЧЛЕНА
@@ -354,15 +203,14 @@ test("записка НЕ з коментатора: жодного сліду c
 });
 
 /* Порожній підвал — це три обіцянки дії, якої немає: «0 змін», порожній
-   список і кнопка «Надіслати», яка нічого не позначить. Тіло панелі в цьому
-   стані каже своє (підказка «наведи або клікни елемент»), і саме воно й
-   лишається — тобто порожній стан такий самий, як був до тюнера взагалі. */
+   список і кнопка «Надіслати», яка нічого не позначить. Порожній стан такий
+   самий, як був до тюнера взагалі: без підвалу й без підписів-пояснень. */
 test("порожній пакет НЕ малює підвалу — ні лічильника, ні записки, ні дій", () => {
   const h = inspectHTML(S({ tune: EMPTY() }));
   assert.doesNotMatch(h, /insp-tune-sum/);
   assert.doesNotMatch(h, /insptunenote/);
   assert.doesNotMatch(h, /insptuneready/);
-  assert.match(h, /class="insp-hint"/, "підказка тіла лишається на місці");
+  assert.doesNotMatch(h, /class="insp-foot"/, "порожнього підвалу немає зовсім");
 });
 
 test("записка, написана без жодної правки, підвал ТРИМАЄ", () => {
@@ -472,16 +320,23 @@ test("панель НЕ вирішує сама, що пакет готовий 
   }
 });
 
-/* Тюнер на макеті не малює нічого, а підвал стосується РІВНО тієї роботи, яку
-   роблять у «Стилях»: у лінійці дизайнер міряє відстані й не має чим цей
-   список поповнити. */
-test("у лінійці підвалу немає — там міряють, а не крутять", () => {
-  const h = inspectHTML(S({ mode: "ruler", tune: PKG(), measure: MEAS }));
-  assert.doesNotMatch(h, /insptuneready/);
-  assert.doesNotMatch(h, /insptunenote/);
-  assert.match(h, /25 px/, "а самі числа лінійки на місці");
+test("панель із моделлю малює панель властивостей, без моделі — лише шапку", () => {
+  const withModel = inspectHTML(S({ model: FULL_MODEL() }));
+  assert.match(withModel, /class="insp-name"/);
+  assert.match(withModel, /data-sec="size"/);
+  const bare = inspectHTML(S());
+  assert.match(bare, /class="insp-top"/);
+  assert.doesNotMatch(bare, /insp-sec/);
 });
 
-test("підпис із клавішами лишається й тоді, коли підвал повний", () => {
-  assert.match(inspectHTML(S({ tune: PKG() })), /<kbd>I<\/kbd>/);
+test("вкладок, підказок і рядка клавіш немає ніде", () => {
+  for (const model of [null, FULL_MODEL(), MIN_MODEL()]) {
+    const h = inspectHTML(S({ model, tune: PKG() }));
+    assert.doesNotMatch(h, /insptab|insp-tabs|insp-keys|<kbd|insp-hint/);
+  }
+});
+
+test("підвал зʼявляється лише коли є що показати — порожній блок із лінією не малюється", () => {
+  assert.doesNotMatch(inspectHTML(S({ model: MIN_MODEL() })), /class="insp-foot"/);
+  assert.match(inspectHTML(S({ model: MIN_MODEL(), tune: PKG() })), /class="insp-foot"/);
 });

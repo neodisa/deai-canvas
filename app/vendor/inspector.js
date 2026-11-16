@@ -8,10 +8,11 @@
    Це ВЕРХНІЙ шар: він тільки малює й ловить події. Жодного рішення про
    токени тут немає — усе, що показується, приходить з inspector-dom.js. */
 import {
-  declsFor, describeAll, invalidate, loadSpaceTokens, pickWinner, setDsProfile, trail, label,
+  declsFor, describe, describeAll, ds, invalidate, loadSpaceTokens, pickWinner, setDsProfile, trail, label,
 } from './inspector-dom.js';
 import { between, measure } from './inspector-measure.js';
 import { reportHTML } from './insp-report.js';
+import { pickDsColors } from './inspector-core.js';
 /* Свій екземпляр i18n — неминучий: оверлей живе в ДОКУМЕНТІ МАКЕТА, тобто в
    іншому модульному графі, ніж оболонка. Мову беремо зі сховища (`dc-lang`,
    origin спільний), а `setLabels` з батьківського вікна лишається сильнішим за
@@ -379,6 +380,29 @@ const STYLE = `
   .hidden{display:none !important}
 `;
 
+/**
+ * Те, чого немає в `describeAll`, але потрібно панелі властивостей (етап Г): розмір рамки, геометрія до батька,
+ * чи є власний текст, `border-style` (для «+» біля обведення) і кольори ДС (для «+» біля заливки й обведення).
+ * Усе — примітиви й плоскі обʼєкти: жодного вузла DOM (та сама межа, що в `report()`).
+ */
+function panelFacts(el) {
+  const r = el.getBoundingClientRect();
+  const doc = el.ownerDocument;
+  const par = el !== doc.body && el.parentElement && el.parentElement !== doc.documentElement ? el.parentElement : null;
+  let parent = null;
+  if (par) {
+    const p = par.getBoundingClientRect();
+    parent = { name: label(par), top: Math.round(r.top - p.top), right: Math.round(p.right - r.right),
+      bottom: Math.round(p.bottom - r.bottom), left: Math.round(r.left - p.left) };
+  }
+  let own = false;
+  for (const n of Array.from(el.childNodes || [])) {
+    if (n.nodeType === 3 && n.nodeValue.trim()) { own = true; break; }
+  }
+  return { w: Math.round(r.width), h: Math.round(r.height), parent, ownText: own,
+    extra: [describe(el, 'border-style')], dsColors: pickDsColors(ds().tokens) };
+}
+
 const Inspector = {
   on: false,
   mode: 'cascade',  // 'cascade' — каскад і токени, 'ruler' — відстані до сусідів
@@ -676,6 +700,8 @@ const Inspector = {
       /* Поіменно, як і решта: `dsInfo` — плоский обʼєкт примітивів, але
          розсипати сюди `...rep` однаково не можна (там `el`). */
       dsInfo: rep.dsInfo,
+      /* Поіменно, як і решта: усе плоске, жодного вузла. */
+      facts: panelFacts(this.pinned),
     };
   },
 

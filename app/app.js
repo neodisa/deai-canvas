@@ -45,6 +45,7 @@ import {
 import { createWizard } from './wizard.js';
 import { panelHTML } from './shell-panel.js';
 import { inspectHTML } from './shell-inspect.js';
+import { alignWrites, buildModel } from './insp-model.js';
 import {
   clearEdit, editCount, elementKey, emptyTune, fromPackage, markReady, packageJSON,
   setDs, setEdit, setNote,
@@ -2210,24 +2211,6 @@ const BAR_ACTIONS = {
     paintBar();
   },
 
-  // Перемикач «Каскад / Лінійка» правої панелі (Task 5 Плану B) — та сама
-  // дія, що клавіша `M` усередині iframe (`CanvasInspector.setMode`): контрол
-  // не заводить другого способу міняти режим, лише кличе ТОЙ САМИЙ метод API.
-  // Перемальовуємо ЛИШЕ панель (`paintInsp()`, не `paintBar()`): смуга режиму
-  // не показує, і перефарбовувати весь бар заради контролу, що на нього не
-  // впливає, — зайва робота, якої немає в жодній іншій дії цього масиву.
-  // T-39: вкладок знову дві, і кожна дорівнює режиму оверлея. Третя,
-  // «Тюнер», була вкладкою-не-режимом і саме тому тягла за собою окремий
-  // стан у цьому файлі (`inspTab`) плюс механізм поколінь документа, щоб
-  // відрізнити «натиснули M» від «рамка перезавантажилась». Її вміст
-  // переїхав у підвал вкладки «Стилі» — і разом із нею пішов увесь той стан.
-  insptab: (val) => {
-    const api = inspectorApi();
-    if (!api) return;
-    api.setMode(val);
-    paintInsp();
-  },
-
   /* Крихта предка. Індекс резолвить САМ оверлей (`pinAt`): масив предків
      живий лише там, і передавати сюди елементи означало б дати панелі
      другий шлях до DOM макета. */
@@ -2236,25 +2219,42 @@ const BAR_ACTIONS = {
     paintInsp();
   },
 
-  /* Ручки ТЮНЕРА в рядках звіту (Task 14). Усі три ведуть в ОДИН `tuneSet`:
-     «накрутити» — це одна дія, чим би її не зробили, і три шляхи до інлайн-
-     стилю розійшлися б у тому, що саме записано в пакет.
-     `paintInsp()` тут не кличемо жодна з них: панель перемальовує сам оверлей
-     через `_tuned` → `_emit` → `onChange`, і другий, явний виклик означав би
-     дві перемальовки на кожне натискання стрілки — разом із полем, у якому
-     дизайнер тримає палець. Властивість беремо з `data-prop`, а не з
-     `data-val`: `val` у крутилки зайнятий самим значенням. */
-  insptune: (val, el) => tuneField(el),
-  insptunecolor: (val, el) => tuneSet(el.dataset.prop, el.value),
-  /* ДОРОГА НАЗАД У ДС — крапка вироку, яку можна натиснути (`snapHTML`,
-     `app/vendor/insp-report.js`). Той самий `tuneSet`, що й решта ручок, і це
-     несуче: повернення до токена мусить лягти в пакет тим самим шляхом, що
-     будь-яка правка, інакше в інструменті зʼявився б другий, окремий канал до
-     Клода — і половина правил про пакет (чернетка/готово, збереження, «не
-     лягло») його б не стосувалась. Відрізняє його лише `snap`: він каже
-     читачеві, що дизайнер вибрав ТОКЕН, а не число. */
-  inspsnap: (val, el) => tuneSet(el.dataset.prop, el.dataset.val,
-    { token: el.dataset.token, value: el.dataset.val }),
+  /* Поле панелі властивостей. Застосування — на Enter і на `change` (див. слухачі панелі нижче), не на кожну
+     літеру: «Enter застосовує, Esc скасовує» (спека, розділ «Поле»). Усі шляхи ведуть в ОДИН `tuneSet` через
+     `tuneWrite`: «накрутити» — одна дія, чим би її не зробили, і різні шляхи до інлайн-стилю розійшлися б у тому,
+     що записано в пакет. `paintInsp()` тут не кличемо: панель перемальовує сам оверлей (`_tuned` → `_emit` →
+     `onChange`), і другий виклик означав би дві перемальовки на одну правку. */
+  insptune: (val, el) => inspCommit(el),
+  insptunecolor: (val, el) => inspCommit(el),
+  /* Кнопка «до ДС»: пише правку зі `snap` у КОЖНУ властивість поля (пара — дві). Повернення до токена мусить лягти
+     в пакет тим самим шляхом, що будь-яка правка; відрізняє його лише `snap` — він каже читачеві, що вибрано ТОКЕН. */
+  inspsnap: (val, el) => tuneWrite(String(el.dataset.props || el.dataset.prop).split(' ')
+    .map((p) => [p, el.dataset.val, { token: el.dataset.token, value: el.dataset.val }])),
+  /* «N поза ДС»: фокус на наступне бурштинове поле по колу. Курсор — модульна змінна, а не `activeElement`: клік по
+     самій кнопці забирає фокус, і «наступне від активного» щоразу давало б перше. */
+  inspnextoff: () => {
+    const list = [...inspEl.querySelectorAll('.insp-f[data-off]')];
+    if (!list.length) return;
+    inspOffAt = (inspOffAt + 1) % list.length;
+    const f = list[inspOffAt].querySelector('.insp-fi');
+    f?.focus();
+    f?.scrollIntoView?.({ block: 'nearest' });
+  },
+  inspalign: (val, el) => {
+    const [c, r] = String(val).split(',').map(Number);
+    tuneWrite(alignWrites(el.dataset.dir, c, r));
+  },
+  inspdir: (val) => tuneWrite([['flex-direction', val === 'column' ? 'column' : 'row']]),
+  /* «+»: заливка пише `background-color`; обведення — три довгі властивості (рядка `border` у звіті немає). Токен, якщо
+     колір узято з ДС, їде як `snap` (читач пакета бачить, що вибрано ТОКЕН). */
+  inspadd: (val, el) => {
+    const color = el.dataset.color || '';
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) return;
+    const snap = el.dataset.token ? { token: el.dataset.token, value: color } : null;
+    if (val === 'fill') tuneWrite([['background-color', color, snap]]);
+    else if (val === 'stroke') tuneWrite([['border-style', 'solid'], ['border-width', '1px'], ['border-color', color, snap]]);
+  },
+  inspsides: () => { inspSides = !inspSides; paintInsp(); },
 
   /* Ручки ПІДВАЛУ (Task 15, переїхав у T-39). Тіла — у `tuneDrop`/
      `tuneDropAll`/`tuneNote`/`tuneReady` поруч із `tuneSet`: усе, що міняє
@@ -5523,6 +5523,13 @@ function forgetMissing(sel, prop) {
    інлайном і записав би в пакет сам тюнер замість джерела значення. */
 let inspDecls = new Map();
 
+/* Стан панелі властивостей. `inspSides` — дизайнер розкрив сторони відступів («окремо»); `inspOffAt` — курсор кола
+   «N поза ДС» (скидається, коли вибрано інший елемент: `inspPinKey`); `inspScrub` — активне тягнення підпису. */
+let inspSides = false;
+let inspOffAt = -1;
+let inspPinKey = '';
+let inspScrub = null;
+
 /** Сторінка як МЕЖА видимості правок: правка з «Головної» не сміє потрапити
  *  в пакет «Пошуку». Ключ збирається так само, як уже збирає `glpush`
  *  (`${picked}/${pickedPage}`) — другий спосіб назвати ту саму сторінку
@@ -5601,13 +5608,13 @@ function tuneEdits() {
  * моделлю намалювала б рядок без позначки «накручено». Відмову відкочуємо, і
  * панель тоді не чіпаємо взагалі: у полі лишається те, що дизайнер набрав.
  */
-function tuneSet(prop, value, snap = null) {
+function tuneSet(prop, value, snap = null, opts = {}) {
   const api = inspectorApi();
   const decl = inspDecls.get(prop);
   const page = tunePage();
-  if (!api || !decl || !page) return;
+  if (!api || !decl || !page) return false;
   const ident = api.identity(prop);        // ⛔ ДО першого інлайн-запису
-  if (!ident) return;
+  if (!ident) return false;
   const key = elementKey(ident);
   const next = setEdit(tuneState, page, ident, decl, value, { snap });
   /* `setEdit` САМА прибирає правку, коли значення вернулось до початкового
@@ -5628,13 +5635,29 @@ function tuneSet(prop, value, snap = null) {
   if (!(kept ? api.applyTune(prop, value) : api.clearTune(prop))) {
     tuneState = was;
     if (wasMissing) tuneMissing = [...tuneMissing, { selector: key, prop }];
-    return;
+    return false;
   }
   /* Запис — ПІСЛЯ вдалого накладання і тільки після нього: пакет не сміє
      обіцяти Клоду зміну, якої дизайнер на макеті не побачив (браузер ковтає
      непридатне значення тихо, і саме тому `applyTune` віддає прапорець). */
-  saveTune();
+  if (opts.save !== false) saveTune();
+  return true;
 }
+
+/**
+ * Записати кілька властивостей одним жестом: `[[prop, value, snap?], …]`. Пара полів (↔) — дві правки, матриця — дві,
+ * «+» обведення — три. Запис пакета — ОДИН у кінці (`saveTune` зливає й так, але зайвий POST на кожну властивість
+ * жодного сенсу не має). `save:false` — для скрабу: пакет пишеться лише на відпусканні.
+ */
+function tuneWrite(list, opts = {}) {
+  let any = false;
+  for (const [prop, value, snap] of list) {
+    if (tuneSet(prop, value, snap || null, { save: false })) any = true;
+  }
+  if (any && opts.save !== false) saveTune();
+  return any;
+}
+
 
 /* ===== Канал тюнера на диск (Task 16) ===== */
 
@@ -6210,14 +6233,36 @@ function reapplyTune(api) {
  *  `0.30000000000000004` — ні на екран, ні в пакет для Клода. */
 const tuneRound = (n) => String(Math.round(n * 1000) / 1000);
 
-/** Значення з поля крутилки: число в полі (плюс зсув грубого кроку) і
- *  одиниця, яку поле несе з собою в `data-unit`.
- *  Порожнє чи недобране поле (`-`, `1.`) — ще НЕ значення: чіпати макет на
- *  півдорозі означало б блимати ним на кожній натиснутій цифрі. */
-function tuneField(el, delta = 0) {
-  const n = Number(el.value);
-  if (el.value === '' || !Number.isFinite(n)) return;
-  tuneSet(el.dataset.prop, tuneRound(n + delta) + (el.dataset.unit || ''));
+/** Застосувати поле панелі (Enter / change). Порожнє, недобране й незмінене — не значення; «Різні» порожнім не перетираємо. */
+function inspCommit(el) {
+  const props = String(el.dataset.props || el.dataset.prop || '').split(' ').filter(Boolean);
+  if (!props.length) return;
+  if (el.dataset.act === 'insptunecolor') {
+    let h = el.value.trim().replace(/^#/, '');
+    if (/^[0-9a-f]{3}$/i.test(h)) h = h.replace(/./g, '$&$&');
+    if (!/^[0-9a-f]{6}$/i.test(h) || h.toUpperCase() === el.defaultValue.toUpperCase()) return;
+    tuneWrite(props.map((p) => [p, `#${h.toUpperCase()}`]));
+    return;
+  }
+  if (el.tagName === 'SELECT') { tuneWrite(props.map((p) => [p, el.value])); return; }
+  const raw = el.value.trim().replace(',', '.');
+  const n = Number(raw);
+  if (raw === '' || !Number.isFinite(n) || raw === el.defaultValue.trim()) return;
+  const min = el.dataset.min === undefined ? null : Number(el.dataset.min);
+  const v = min === null ? n : Math.max(min, n);
+  tuneWrite(props.map((p) => [p, tuneRound(v) + (el.dataset.unit || '')]));
+}
+
+/** ↑/↓ у полі: крок поля (`data-step`) × множник (Shift = ×10). Порожнє поле (`normal`, «Різні») крокує від `data-base` або 0. */
+function inspStep(el, mult) {
+  const step = Number(el.dataset.step) || 1;
+  const cur = parseFloat(String(el.value).replace(',', '.'));
+  const base = Number.isFinite(cur) ? cur : (Number(el.dataset.base) || 0);
+  const min = el.dataset.min === undefined ? null : Number(el.dataset.min);
+  let v = Math.round((base + mult * step) * 100) / 100;
+  if (min !== null) v = Math.max(min, v);
+  el.value = String(v);
+  inspCommit(el);
 }
 
 /* `syncInspectorBtn()` більше не існує: старий бар мав фіксований `#insp-toggle`
@@ -6284,21 +6329,12 @@ frame.addEventListener('load', () => {
  * і на рух курсора не сигналить узагалі.
  */
 function paintInsp() {
+  /* Під час скрабу панель не перемальовується: оновлюється лише значення в самому полі (слухачі нижче). */
+  if (inspScrub) return;
   const api = inspectorApi();
-  /* Вкладка І Є режим оверлея (T-39): вкладок дві, режимів два, і сходяться
-     вони не випадково — «Стилі» показують те, що оверлей малює в каскаді,
-     «Лінійка» те, що він малює напрямними. Доти тут стояв цілий механізм
-     порівняння поколінь документа, бо третя вкладка («Тюнер») не була
-     режимом; він пішов разом із нею.
-     `overlayMode`, а не `mode`: модульний `mode` — це вид оболонки
-     (`canvas`/`layout`), і він потрібен нижче, у `shellMode`. Коротке імʼя
-     тут затінило б його мовчки, і панель назавжди лишилась би «в Макеті». */
-  const overlayMode = api ? api.mode : null;
-  const tab = overlayMode;
-  /* Звіт коштує `getComputedStyle` по пʼятьох групах на кожну перемальовку —
-     тобто на кожен поворот ручки, — тож питаємо його лише там, де він
-     малюється. */
-  const rep = api && api.on && tab === 'cascade' ? api.report() : null;
+  /* Звіт коштує `getComputedStyle` по пʼятьох групах на кожну перемальовку — тобто на кожен поворот ручки, — тож
+     питаємо його лише при увімкненому інспекторі. */
+  const rep = api && api.on ? api.report() : null;
   /* Рядки звіту — у мапу по властивості, для `tuneSet`. Знімаємо саме ТУТ, бо
      тут звіт уже порахований і ще не зіпсований накрученим: другий `report()`
      у мить кручення побачив би інлайн, який щойно поклав сам тюнер. */
@@ -6307,6 +6343,8 @@ function paintInsp() {
     for (const items of Object.values(rep.groups)) {
       for (const d of items) inspDecls.set(d.prop, d);
     }
+    /* `border-style` та інші властивості, яких немає в групах, але які пише «+» біля обведення. */
+    for (const d of (rep.facts && rep.facts.extra) || []) inspDecls.set(d.prop, d);
     /* Яка ДС стоїть за цими вироками — у стан пакета, а не в кожну правку:
        це факт про ЗАДАЧУ. Без нього читач пакета не відрізнить «жодного
        порушення» від «ДС для цього напрямку немає, тому й не перевіряли».
@@ -6327,10 +6365,11 @@ function paintInsp() {
      (десятки), а `report()` поруч — `getComputedStyle` по пʼятьох групах
      (6.2мс на важкому лендингу). */
   const tunePkg = packageJSON(tuneState, tunePage());
+  const pinKey = rep ? rep.crumbs.join('>') : '';
+  if (pinKey !== inspPinKey) { inspPinKey = pinKey; inspOffAt = -1; }
   const st = {
     shellMode: mode === 'canvas' ? 'overview' : 'layout',
     on: !!(api && api.on),
-    mode: api ? api.mode : 'cascade',
     tune: tunePkg,
     tuneOther: editCount(tuneState) - tunePkg.editCount,
     /* Що з пакета НЕ лягло на цей документ (`tuneMissing`). Окремим полем, а
@@ -6338,24 +6377,10 @@ function paintInsp() {
        факт про рамку, яка зараз на екрані. Без нього підвал малює правку, якої
        на макеті немає, рівно так само впевнено, як і всі інші. */
     tuneMissing,
-    /* Звіт рахує САМ оверлей (`report()`) усередині iframe — єдиний, хто
-       бачить живий DOM макета; сюди приїжджає готовий серіалізовний payload.
-       Питаємо лише при увімкненому інспекторі І лише в КАСКАДІ: `report()` це
-       `getComputedStyle` по пʼятьох групах, у лінійці панель його однаково не
-       малює (`inspectHTML`), а сигнали в лінійці приходять ще й з прокрутки —
-       тобто кадрами. При вимкненому інспекторі він і сам віддав би `null`
-       (`set(false)` знімає пін). */
-    /* `tuned` доліплює БАТЬКО, а не оверлей: модель тюнера живе тут (рамка
-       перезавантажується, вона — ні), і оверлей про неї не знає нічого. Для
-       рендерера це поле того самого payload, який він і так малює — рівно
-       тому, що рядок «накручено» і рядок «як є» відрізняються не даними про
-       каскад, а тим, чи дизайнер уже крутив цю властивість. */
-    report: rep ? { ...rep, tuned: tuneEdits() } : null,
-    /* Числа лінійки — симетрично, і теж від оверлея: це рівно той підсумок,
-       який він щойно намалював напрямними (`measure()`), а не другий
-       перерахунок геометрії. Дешевий (обʼєкт уже зібраний), але питаємо лише
-       в лінійці — у каскаді він `null` за визначенням. */
-    measure: api && api.on && api.mode === 'ruler' ? api.measure() : null,
+    /* Модель панелі: звіт рахує САМ оверлей (`report()`) усередині iframe — єдиний, хто бачить живий DOM макета, —
+       а чистий збирач (`insp-model.js`) робить із нього поля. `edits` доліплює БАТЬКО, а не оверлей: модель тюнера
+       живе тут (рамка перезавантажується, вона — ні), і оверлей про неї не знає нічого. */
+    model: rep ? buildModel(rep, { edits: tuneEdits(), sides: inspSides }) : null,
   };
   const html = inspectHTML(st);
   /* Прокрутку тіла панелі знімаємо ДО перезапису розмітки й вертаємо після.
@@ -6374,8 +6399,8 @@ function paintInsp() {
      спосіб роботи. Тримаємо пару «дія + властивість», а не сам вузол: до
      перемальовки той вузол не доживає, і `data-prop` є і в крутилки, і в
      кнопки скидання поруч.
-     Каретку НЕ відновлюємо свідомо: `selectionStart` на `type="number"` кидає,
-     а `focus()` і так лишає каретку в кінці — рівно там, де набирають далі. */
+     Поля — текстові, тож каретку теж відновлюємо (`selectionStart`): без цього курсор стрибав би в кінець
+     посеред набору. */
   const act = document.activeElement;
   const mine = act && act !== document.body && inspEl.contains(act) && act.dataset;
   /* Записка Клоду (Task 15) — другий контрол, який мусить пережити
@@ -6388,7 +6413,8 @@ function paintInsp() {
   const keep = mine && act.dataset.act === 'insptunenote'
     ? { act: 'insptunenote', prop: null, sel: [act.selectionStart, act.selectionEnd] }
     : (mine && act.dataset.act && act.dataset.prop
-      ? { act: act.dataset.act, prop: act.dataset.prop, sel: null } : null);
+      ? { act: act.dataset.act, prop: act.dataset.prop,
+        sel: act.tagName === 'INPUT' && act.type === 'text' ? [act.selectionStart, act.selectionEnd] : null } : null);
   inspEl.hidden = !html;
   document.body.classList.toggle('with-insp', !!html);
   inspEl.innerHTML = html;
@@ -6419,51 +6445,73 @@ inspEl.addEventListener('click', (ev) => {
      `TEXTAREA` поруч із `INPUT` не про майбутнє: записка Клоду (Task 15) — це
      `<textarea>`, і без цього рядка клік у неї йшов би в `BAR_ACTIONS` і
      переписував би модель тим самим текстом на кожну постановку каретки. */
-  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return;
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
   BAR_ACTIONS[el.dataset.act]?.(el.dataset.val, el, ev);
 });
 
-/* Крутилка — на КОЖНУ зміну поля: стрілка, набрана цифра, нативний спінер.
-   Саме це й означає «побачити зміну одразу», заради чого тюнер і пишеться в
-   інлайн-стиль. Дія — та сама з `BAR_ACTIONS`, не друга поруч. */
+/* Записка Клоду — на КОЖНУ літеру (власник просив «записується одразу»). Поля властивостей на `input` НЕ пишуть:
+   значення застосовує Enter або вихід із поля (`change`). */
 inspEl.addEventListener('input', (ev) => {
-  const el = ev.target.closest?.('[data-act="insptune"]');
-  if (el) BAR_ACTIONS.insptune(el.dataset.val, el, ev);
-  /* Записка Клоду — на КОЖНУ літеру, і це не забаганка: власник просив
-     «записується одразу». Окрема гілка, а не спільний `[data-act]`-пошук:
-     кожне поле цієї панелі має власне правило, коли його значення стає
-     правдою (крутилка — на `input`, пікер — на `change`), і зводити їх до
-     одного шляху означало б обрати одне з цих правил за всіх. */
   const note = ev.target.closest?.('[data-act="insptunenote"]');
   if (note) BAR_ACTIONS.insptunenote(note.value, note, ev);
 });
-
-/* Пікер — на `change`, тобто коли дизайнер ЗАКРИВ вибір кольору, а не на
-   кожен рух усередині нього. `input` під час перетягування перемальовував би
-   панель разом із самим `<input type="color">`, до якого прив'язане відкрите
-   вікно вибору, — тобто гасив би пікер під рукою. Ціна — колір їде на макет
-   на закритті вибору, а не за курсором; ціна протилежного рішення — вибір,
-   який неможливо довести до кінця. */
 inspEl.addEventListener('change', (ev) => {
-  const el = ev.target.closest?.('[data-act="insptunecolor"]');
-  if (el) BAR_ACTIONS.insptunecolor(el.dataset.val, el, ev);
+  const el = ev.target.closest?.('[data-act="insptune"],[data-act="insptunecolor"]');
+  if (el) inspCommit(el);
 });
-
-/* ГРУБИЙ крок: Shift + стрілка = удесятеро. Дрібний дає сам браузер (`step` у
-   розмітці крутилки), і для «підвинути на піксель» його досить — але шлях від
-   16px до 40px це 24 натискання, і саме там ручка стає болючою. Множник
-   живе тут, а базовий крок — у розмітці (`stepFor`, `insp-report.js`): два
-   числа в одному місці розійшлися б із тим, що показує спінер.
-   `preventDefault` обовʼязковий — інакше браузер додасть ще й СВІЙ крок, і
-   Shift давав би одинадцять замість десяти. */
+/* Enter застосовує, Esc скасовує введене й знімає фокус, ↑/↓ — ±1, Shift — ±10 (крок поля — `data-step`). */
 inspEl.addEventListener('keydown', (ev) => {
-  const el = ev.target.closest?.('[data-act="insptune"]');
-  if (!el || !ev.shiftKey) return;
+  const el = ev.target.closest?.('[data-act="insptune"],[data-act="insptunecolor"]');
+  if (!el || el.tagName !== 'INPUT') return;
+  if (ev.key === 'Enter') { ev.preventDefault(); inspCommit(el); return; }
+  if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); el.value = el.defaultValue; el.blur(); return; }
+  if (el.dataset.act !== 'insptune') return;
   const dir = ev.key === 'ArrowUp' ? 1 : (ev.key === 'ArrowDown' ? -1 : 0);
   if (!dir) return;
   ev.preventDefault();
-  tuneField(el, dir * (Number(el.step) || 1) * 10);
+  inspStep(el, dir * (ev.shiftKey ? 10 : 1));
 });
+
+/* Скраб: тягнути підпис поля вліво-вправо. 3 px руху — один крок, Shift — десять. Правка застосовується не частіше
+   разу на кадр (rAF), а пакет пишеться ОДИН раз — на відпусканні. Поки йде жест, панель не перемальовується
+   (`paintInsp` виходить рано): оновлюється лише значення в самому полі. */
+function inspScrubApply(s) {
+  if (s.next === null || s.applied === s.next) return;
+  s.applied = s.next;
+  tuneWrite(s.props.map((p) => [p, tuneRound(s.next) + s.unit]), { save: false });
+}
+inspEl.addEventListener('pointerdown', (ev) => {
+  const lab = ev.target.closest?.('[data-scrub]');
+  const inp = lab && lab.parentElement.querySelector('input[data-act="insptune"]');
+  if (!inp || ev.button !== 0) return;
+  ev.preventDefault();
+  lab.setPointerCapture(ev.pointerId);
+  const cur = parseFloat(String(inp.value).replace(',', '.'));
+  inspScrub = { inp, props: String(inp.dataset.props || inp.dataset.prop).split(' '), x0: ev.clientX,
+    v0: Number.isFinite(cur) ? cur : (Number(inp.dataset.base) || 0), step: Number(inp.dataset.step) || 1,
+    min: inp.dataset.min === undefined ? null : Number(inp.dataset.min), unit: inp.dataset.unit || '',
+    next: null, applied: undefined, raf: 0 };
+});
+inspEl.addEventListener('pointermove', (ev) => {
+  const s = inspScrub;
+  if (!s) return;
+  let v = Math.round((s.v0 + Math.round((ev.clientX - s.x0) / 3) * s.step * (ev.shiftKey ? 10 : 1)) * 100) / 100;
+  if (s.min !== null) v = Math.max(s.min, v);
+  s.inp.value = String(v);
+  s.next = v;
+  if (!s.raf) s.raf = requestAnimationFrame(() => { s.raf = 0; inspScrubApply(s); });
+});
+const inspScrubEnd = () => {
+  const s = inspScrub;
+  if (!s) return;
+  if (s.raf) { cancelAnimationFrame(s.raf); s.raf = 0; }
+  inspScrubApply(s);                       // останній кадр жесту
+  inspScrub = null;
+  if (s.applied !== undefined) saveTune(); // ОДИН запис пакета на весь жест; нічого не крутили — нічого й не пишемо
+  paintInsp();
+};
+inspEl.addEventListener('pointerup', inspScrubEnd);
+inspEl.addEventListener('pointercancel', inspScrubEnd);
 
 /* Делегація панелі «Коментарі» — окремий слухач (контейнер `#cmt-panel` живе поза `#bar`), як у `#insp-panel`. */
 cmtEl.addEventListener('click', (ev) => {
