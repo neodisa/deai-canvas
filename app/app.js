@@ -123,6 +123,7 @@ const inspEl = document.getElementById('insp-panel');
 const cmtEl = document.getElementById('cmt-panel');
 let lastFrameSrc = null;   // адреса рамки на момент попереднього `applyMode`: змінилась — вибір/редагування панелі коментарів старого документа скидаються
 let cmtTool = null;   // `CommentLayer.tool()` поточного виду для острівця (режими коментування, поправка 19)
+let cmtDelAsk = null;   // id картки, де показано питання «Видалити назавжди?» (етап В)
 let cmtOpen = false, cmtSnap = null, cmtSel = null, cmtQuery = '', cmtEditing = null, cmtDraft = null, frameCmtReady = false;
 const cmtExpanded = { earlier: false, closed: false };
 /** Фільтр панелі «Для Claude / Команда / Усі» (Б2) — памʼятається на вікно; типова — «Для Claude». */
@@ -1751,9 +1752,15 @@ function cmtDown() {
   if (mode === 'canvas') return null;
   try { return frame.contentDocument?.getElementById('cl-down')?.textContent || null; } catch (e) { return null; }
 }
+/* Клік повз питання в картці — «ні» (етап В). Capture: спрацює раніше за будь-який інший клік, що перемалює панель, а клік по
+   іншій кнопці картки після цього відпрацює як звичайно. Клік у макеті (iframe) сюди не долітає — питання лишається,
+   нічого не видаляючи. */
+document.addEventListener('click', (ev) => {
+  if (cmtDelAsk && !ev.target.closest?.('.cmt-acts--cfm')) { cmtDelAsk = null; paintComments(); }
+}, true);
 function paintComments() {
   const html = cmtOpen && !homeOpen ? commentsPanelHTML({ snapshot: cmtSnap, query: cmtQuery, selectedId: cmtSel,
-    editingId: cmtEditing, expanded: cmtExpanded, filter: cmtFilter, dual: !noTeamComments(), teamDown: cmtTeamDown,
+    editingId: cmtEditing, delAsk: cmtDelAsk, expanded: cmtExpanded, filter: cmtFilter, dual: !noTeamComments(), teamDown: cmtTeamDown,
     fresh: cmtFresh, down: cmtSnap ? null : cmtDown() }) : '';
   cmtTool = cmtOpen && !homeOpen ? readTool(cmtLayer()) : null;
   /* Фокус і каретку поля пошуку / редагування — назад після перезапису (той самий прийом, що в `paintInsp`). */
@@ -1845,7 +1852,7 @@ function setCommentsOpen(on) {
   /* Інспектор і коментарі — взаємно виключні: обидва ділять праву панель і обидва ловлять клік по макету. */
   if (on) { const api = inspectorApi(); if (api?.on) { api.set(false); paintBar(); } }
   cmtOpen = on;
-  if (!on) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtFresh.clear(); }
+  if (!on) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtFresh.clear(); }
   else {
     /* Маркер «бачив» посуваємо ОДРАЗУ на відкритті: нові стають розділом «Нові від команди» цього відкриття (поправка 13). */
     const key = cmtSeenKey();
@@ -1869,7 +1876,7 @@ function cmtViewSwitch() {
   if (cmtView === mode) return;
   const was = cmtView;
   cmtView = mode;
-  cmtSel = null; cmtEditing = null; cmtDraft = null;
+  cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null;
   cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news');
   if (mode === 'canvas') {
     if (was) try { const FL = frame.contentWindow?.CommentLayer; if (FL?.commentMode) FL.setCommentMode(false); } catch (e) {}
@@ -1890,7 +1897,7 @@ function cmtViewSwitch() {
 function dropFrameCmt({ sel = false } = {}) {
   frameCmtReady = false;
   if (mode !== 'canvas') { cmtSnap = null; cmtTeamDown = null; }
-  if (sel) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news'); }
+  if (sel) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news'); }
   paintComments();
 }
 /** Відкритий модальний шар оболонки (палітра/довідка, будь-який діалог `askForm`): клавіші C/H тоді не наші. */
@@ -1913,7 +1920,7 @@ function onCommentsEvent(src, m) {
     cmtSel = typeof m.id === 'string' ? m.id : null;
     if (!cmtOpen) setCommentsOpen(true); else paintComments();
   } else if (m.ev === 'mode') {
-    if (!m.on && cmtOpen) { cmtOpen = false; cmtSel = null; cmtEditing = null; cmtDraft = null; paintComments(); }
+    if (!m.on && cmtOpen) { cmtOpen = false; cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; paintComments(); }
     else if (m.on && !cmtOpen) { cmtOpen = true; paintComments(); }
   }
 }
@@ -2148,7 +2155,11 @@ const BAR_ACTIONS = {
   cmtshow: (id) => { cmtSel = id; cmtLayer()?.focus(id); paintComments(); },
   cmtres: (id) => { cmtLayer()?.resolveComment(id); },
   cmtreopen: (id) => { cmtLayer()?.reopenComment(id); },
-  cmtdel: (id) => { cmtLayer()?.removeComment(id); },
+  /* Кошик (етап В): спершу питання в картці, видаляє лише явне «Видалити». `{ confirmed: true }` — оболонка спитала сама,
+     коментатор не показує браузерний `confirm()`. */
+  cmtdel: (id) => { cmtDelAsk = id; paintComments(); cmtEl.querySelector('.cmt-acts--cfm .cfm-no')?.focus(); },
+  cmtdelyes: (id) => { if (cmtDelAsk !== id) return; cmtDelAsk = null; cmtLayer()?.removeComment(id, { confirmed: true }); paintComments(); },
+  cmtdelno: () => { cmtDelAsk = null; paintComments(); },
   cmtedit: (id) => { cmtEditing = id; cmtDraft = null; paintComments(); cmtEl.querySelector('.cmt-edit')?.focus(); },
   cmteditsave: (id) => {
     const ta = cmtEl.querySelector('.cmt-edit');
@@ -8039,6 +8050,8 @@ document.addEventListener('keydown', (ev) => {
   if (cmtFree && cmtOpen && !meta && !ev.altKey && !ev.shiftKey && (ev.key.toLowerCase() === 'h' || ev.code === 'KeyH')) {
     ev.preventDefault(); BAR_ACTIONS.cmtpins(); return;
   }
+  /* Esc при питанні «Видалити назавжди?» (етап В) знімає лише питання — панель лишається. */
+  if (cmtFree && cmtOpen && cmtDelAsk && ev.key === 'Escape') { cmtDelAsk = null; paintComments(); return; }
   if (cmtFree && cmtOpen && ev.key === 'Escape') { setCommentsOpen(false); return; }
 
   /* ⌥M (режим) і ⌘\ (панель шарів) — акорди із ЗАТВЕРДЖЕНОГО прототипу

@@ -280,3 +280,14 @@ test("проводка: paintTabs передає news і гасить число
   assert.match(src, /window\.addEventListener\('focus', \(\) => \{ pollTabNews\(\); \}\);/);
   assert.match(src, /setInterval\(pollTabNews, NEWS_EVERY_MS\)/);
 });
+
+test("кошик у картці (етап В): cmtdel питає, cmtdelyes видаляє з confirmed, cmtdelno знімає; Esc і клік повз знімають питання", () => {
+  assert.match(act("cmtdel"), /cmtDelAsk = id; paintComments\(\);/);
+  assert.equal(/removeComment/.test(act("cmtdel")), false, "кошик сам нічого не видаляє");
+  assert.match(act("cmtdelyes"), /if \(cmtDelAsk !== id\) return;/);
+  assert.match(act("cmtdelyes"), /removeComment\(id, \{ confirmed: true \}\)/);
+  assert.match(act("cmtdelno"), /cmtDelAsk = null; paintComments\(\);/);
+  assert.match(src, /if \(cmtFree && cmtOpen && cmtDelAsk && ev\.key === 'Escape'\) \{ cmtDelAsk = null; paintComments\(\); return; \}/);
+  assert.match(src, /if \(cmtDelAsk && !ev\.target\.closest\?\.\('\.cmt-acts--cfm'\)\) \{ cmtDelAsk = null; paintComments\(\); \}/);
+  assert.match(src, /editingId: cmtEditing, delAsk: cmtDelAsk,/);
+});

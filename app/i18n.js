@@ -123,6 +123,7 @@ const UK = {
   cfmDelState: (n) => `Видалити стан «${n}»?`,
   cfmDelFolder: (n) => `Видалити теку «${n}»?`,
   cfmDelIter: (l) => `Видалити ${l}?`,
+  cfmDelCmt: 'Видалити назавжди?',
   // Заголовки помилок дій (етап В, `tellError`): що саме не вдалося; причина від сервера — під ним.
   errTDupIter: 'Не вдалося дублювати ітерацію',
   errTOpenTask: 'Не вдалося відкрити задачу',
@@ -1435,6 +1436,7 @@ const EN = {
   cfmDelState: (n) => `Delete state «${n}»?`,
   cfmDelFolder: (n) => `Delete folder «${n}»?`,
   cfmDelIter: (l) => `Delete ${l}?`,
+  cfmDelCmt: 'Delete for good?',
   // Action error titles (stage В, `tellError`): what exactly failed; the server reason goes under it.
   errTDupIter: 'Could not duplicate the iteration',
   errTOpenTask: 'Could not open the task',

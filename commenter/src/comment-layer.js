@@ -1729,9 +1729,11 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       c._el = (m.el && m.score >= MATCH_THRESHOLD) ? m.el : null;
       this._persist(); this._render(); this._placePins();
     },
-    removeComment(id) {
+    removeComment(id, opts) {
       const c = this.comments.find((x) => x.id === id); if (!c) return;
-      if (typeof confirm === 'function' && !confirm('Delete this comment permanently?')) return;
+      // Оболонка Deai (етап В) питає сама — у картці своєї панелі — і передає `{ confirmed: true }`.
+      // Власна панель коментатора (сторінка без host, превʼю) — як було, з confirm().
+      if (!(opts && opts.confirmed === true) && typeof confirm === 'function' && !confirm('Delete this comment permanently?')) return;
       if (this.store.remove) this.store.remove([id]);          // hard-delete in backing store
       this.comments = this.comments.filter((x) => x.id !== id);
       this._persist(); this._render(); this._placePins();

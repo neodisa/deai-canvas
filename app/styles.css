@@ -1922,6 +1922,8 @@ body:not(.home-open) .cn-drawer{display:none}
 .cmt-shot{display:block;border:0;padding:0;margin:0 0 5px;background:none;cursor:zoom-in}
 .cmt-shot img{max-width:100%;max-height:120px;border-radius:4px;border:1px solid var(--line)}
 .cmt-acts{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.cmt-acts--cfm{display:block}
+.cmt-acts--cfm .cfm{margin-top:2px}
 .cmt-act{border:1px solid var(--line2);background:var(--s2);color:var(--hi);border-radius:6px;cursor:pointer;font-size:11px;padding:3px 7px;display:inline-flex;align-items:center;gap:4px}
 .cmt-act:hover{background:var(--s4)}
 .cmt-down{margin:0;font-size:12px;color:var(--open)}

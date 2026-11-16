@@ -5,6 +5,7 @@
  */
 import { FILTERS, assignedToClaude, audOf, commentSections, filterCounts, openCount, shotSrc } from "./comments-model.js";
 import { esc } from "./esc.js";
+import { confirmHTML } from "./inline-confirm.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 
@@ -63,7 +64,11 @@ function cardHTML(c, st, kind) {
     : "";
   const iter = kind === "earlier" && c.iter != null ? `<p class="cmt-iter">${esc(t("cmtIter", c.iter))}</p>` : "";
   let acts = "";
-  if (c.id !== st.editingId) {
+  if (c.id === st.delAsk) {
+    /* Кошик (етап В): рядок дій стає питанням «Видалити назавжди?» — підтвердження на місці, без нативного `confirm()`. */
+    acts = `<div class="cmt-acts cmt-acts--cfm">${confirmHTML({ title: t("cfmDelCmt"), yes: t("cmtDelete"), no: t("cmtCancel"),
+      yesAttrs: `data-act="cmtdelyes" data-val="${esc(c.id)}"`, noAttrs: 'data-act="cmtdelno"' })}</div>`;
+  } else if (c.id !== st.editingId) {
     if (kind === "open") acts = btn("cmtshow", c.id, t("cmtShow"))
       + (st.dual && audOf(c) === "project"
         ? btn(assignedToClaude(c) ? "cmtunassign" : "cmtassign", c.id, t(assignedToClaude(c) ? "cmtUnassign" : "cmtAssign")) : "")
@@ -87,7 +92,7 @@ function foldHTML(key, title, items, st, kind) {
 
 const FILTER_KEY = { local: "cmtFLocal", project: "cmtFTeam", all: "cmtFAll" };
 
-/** st: {snapshot, query, selectedId, editingId, expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down} */
+/** st: {snapshot, query, selectedId, editingId, delAsk (id картки з питанням «Видалити назавжди?»), expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down} */
 export function commentsPanelHTML(st) {
   const filter = FILTERS.includes(st.filter) ? st.filter : "local";
   const hidden = !!(st.snapshot && st.snapshot.pinsHidden);

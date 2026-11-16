@@ -330,3 +330,18 @@ test("Б2 ревʼю M4: коментарі є, але фільтр сховав
   assert.doesNotMatch(html, /Коментарів ще немає/);
   assert.match(dual([]), /Коментарів ще немає/);
 });
+
+test("кошик у картці: delAsk — рядок дій стає питанням, «Скасувати» перед «Видалити»", () => {
+  const html = commentsPanelHTML(base({ delAsk: "a", snapshot: { iteration: "3", comments: [C({ id: "a", n: 1 })] } }));
+  assert.match(html, /<div class="cmt-acts cmt-acts--cfm"><div class="cfm"/);
+  assert.match(html, /class="cfm-no" data-act="cmtdelno">Скасувати</);
+  assert.match(html, /class="cfm-yes" data-act="cmtdelyes" data-val="a">Видалити</);
+  assert.ok(html.indexOf('class="cfm-no"') < html.indexOf('class="cfm-yes"'));
+  assert.equal(html.includes('data-act="cmtdel"'), false);
+});
+
+test("кошик у картці: питання лише в тій картці, чий id у delAsk; інші мають звичайні дії", () => {
+  const html = commentsPanelHTML(base({ delAsk: "a", snapshot: { iteration: "3", comments: [C({ id: "a", n: 1 }), C({ id: "b", n: 2 })] } }));
+  assert.equal((html.match(/class="cfm"/g) || []).length, 1);
+  assert.match(html, /data-act="cmtdel" data-val="b"/);
+});
