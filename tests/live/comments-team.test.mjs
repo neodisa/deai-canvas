@@ -236,8 +236,10 @@ test("3: фільтр «Усі / Claude / Команда» — картки, в�
   await seedTeam(env, { id: "team-1", author: "Колега", text: "Командний", seq: 2 });
   await openShell(env);
   await openPanel(page);
-  await until(async () => (await cardIds(page)).length === 2, "обидві картки");
   const press = async (val) => { await page.click(`#cmt-panel [data-act="cmtfilter"][data-val="${val}"]`); };
+  /* 0.27.1: типова вкладка — «Для Claude» (недоручений командний там не видно), тож «обидві» — на вкладці «Усі». */
+  await press("all");
+  await until(async () => (await cardIds(page)).length === 2, "обидві картки");
 
   await press("local");
   await until(async () => JSON.stringify(await cardIds(page)) === '["loc-1"]', "лише локальна картка");
@@ -266,6 +268,8 @@ test("4: «Доручити Claude» → meta.assignee у memo, бейдж, /com
   const pin = await seedTeam(env, { id: "team-1", author: "Колега", text: "Командний" });
   await openShell(env);
   await openPanel(page);
+  /* 0.27.1: недоручений командний пін не в типовій вкладці «Для Claude» — дивимось на вкладці «Команда». */
+  await page.click('#cmt-panel [data-act="cmtfilter"][data-val="project"]');
   const card = `#cmt-panel .cmt-card[data-cid="${pin.id}"]`;
   await page.waitForSelector(card);
   assert.equal(await page.locator(`${card} .cmt-badge`).count(), 0);
@@ -321,6 +325,8 @@ test("5: пін колеги → «нових» на острівці, плаш�
   assert.match(await row.evaluate((el) => el.closest("[data-val], li, .row")?.textContent ?? ""), /Пошук/, "число в дереві не на сторінці піна");
 
   await page.click('.cv-notice[data-notice="cmt-news"] [data-act="cmtshownew"]');
+  /* 0.27.1: «Показати» відкриває панель на вкладці «Для Claude», де недорученого командного піна нема, — вкладка «Команда». */
+  await page.click('#cmt-panel [data-act="cmtfilter"][data-val="project"]');
   await page.waitForSelector("#cmt-panel:not([hidden]) .cmt-sec--new .cmt-card");
   assert.equal(await page.locator("#cmt-panel .cmt-sec--new .cmt-card").count(), 1);
   assert.equal(await newCount(page), null, "бейдж острівця лишився «новим» при відкритій панелі");
@@ -342,6 +348,7 @@ test("5б: пін колеги, що прийшов при ВІДКРИТІЙ п
   const { page, memo } = env;
   await openShell(env);
   await openPanel(page);
+  await page.click('#cmt-panel [data-act="cmtfilter"][data-val="project"]');   // 0.27.1: командні — на вкладці «Команда»
   await until(async () => (await lsGet(page, seenKey())) !== null, "маркер-база dc-seen");
 
   const fp = await fpOf(env, "poshuk", "#q");
@@ -488,6 +495,55 @@ test("9: /commented?ch=project напряму (без host) — ручка ко�
   assert.equal(st.teamDown, false);
   assert.equal(st.refreshLocal, "undefined");
   assert.equal(st.banner, false);
+});
+
+/* ── 10: латка 0.27.1 — типова вкладка, шапка, доручений командний у «Для Claude» ──────────────────── */
+
+test("10: типово «Для Claude»; фільтр під пошуком, заголовок не обрізано, кнопки шапки без білої плашки; доручений командний переходить у «Для Claude»; вкладка памʼятається", async (t) => {
+  const env = await boot(t);
+  const { page } = env;
+  await seedLocal(env, { id: "loc-1", author: "Фікстура", text: "Локальний" });
+  await seedTeam(env, { id: "team-1", author: "Колега", text: "Командний", seq: 2 });
+  await openShell(env);
+  assert.equal(await lsGet(page, "dc-cmt-filter"), null, "свіжий контекст: вкладка ще не вибрана");
+  await openPanel(page);
+  const tab = (val) => `#cmt-panel [data-act="cmtfilter"][data-val="${val}"]`;
+  const fn = (val) => page.locator(`${tab(val)} .cmt-fn`).textContent();
+
+  assert.equal(await page.getAttribute(tab("local"), "aria-pressed"), "true", "типова вкладка — «Для Claude»");
+  await until(async () => JSON.stringify(await cardIds(page)) === '["loc-1"]', "у «Для Claude» — лише локальна, недоручений командний не видно");
+  assert.equal(await fn("local"), "1");
+  assert.equal(await fn("project"), "1");
+  assert.equal(await fn("all"), "2");
+
+  const geo = await page.evaluate(() => {
+    const q = document.querySelector("#cmt-q").getBoundingClientRect();
+    const f = document.querySelector("#cmt-panel .cmt-filter").getBoundingClientRect();
+    const title = document.querySelector("#cmt-panel .panel-title");
+    const bg = (sel) => getComputedStyle(document.querySelector(sel)).backgroundColor;
+    return { qTop: q.top, fTop: f.top, fBottom: q.bottom, truncated: title.scrollWidth > title.clientWidth,
+      eye: bg('#cmt-panel [data-act="cmtpins"]'), close: bg('#cmt-panel [data-act="comments"]') };
+  });
+  assert.ok(geo.fTop >= geo.fBottom, "фільтр має стояти під полем пошуку");
+  assert.equal(geo.truncated, false, "заголовок панелі обрізано");
+  assert.equal(geo.eye, "rgba(0, 0, 0, 0)", "око в шапці має браузерну плашку");
+  assert.equal(geo.close, "rgba(0, 0, 0, 0)", "хрестик у шапці має браузерну плашку");
+
+  await page.click(tab("project"));
+  const card = '#cmt-panel .cmt-card[data-cid="team-1"]';
+  await page.waitForSelector(card);
+  await page.click(`${card} [data-act="cmtassign"]`);
+  await page.waitForSelector(`${card} [data-act="cmtunassign"]`);
+  await until(async () => (await fn("local")) === "2", "число «Для Claude» зросло");
+  assert.equal(await fn("project"), "1", "доручений лишається й у «Команді»");
+  await page.click(tab("local"));
+  await until(async () => JSON.stringify((await cardIds(page)).sort()) === '["loc-1","team-1"]', "доручений командний — у «Для Claude»");
+
+  await page.click(tab("all"));
+  await page.reload();
+  await page.waitForSelector('#hud [data-act="comments"]');
+  await openPanel(page);
+  assert.equal(await page.getAttribute(tab("all"), "aria-pressed"), "true", "остання вибрана вкладка не відновилась");
 });
 
 guardRealDeai("g: справжній ~/.deai не зʼявився і не змінився (ізоляція живих тестів)");
