@@ -180,8 +180,9 @@ test("перемикання задачі: накручене в А не теч�
   await bump(page, "padding-top");
   assert.equal(await shown(page, "#target", "padding-top"), "26px",
     "ручка не доїхала до макета — далі перевіряти нема чого");
-  const pkgA = await waitPkg(page, A.dir, 1);
-  assert.deepEqual(promised(pkgA), ["it1/holovna padding-top"]);
+  /* ↕ — пара: одна накрутка пише padding-top І padding-bottom (так само ↔ пише left+right). */
+  const pkgA = await waitPkg(page, A.dir, 2);
+  assert.deepEqual(promised(pkgA), ["it1/holovna padding-bottom", "it1/holovna padding-top"]);
 
   /* Перемикання. Ключ сторінки в задачі Б буде РІВНО той самий —
      `it1/holovna`, — тому все, що лишилось у памʼяті, лягло б на цей макет
@@ -203,15 +204,15 @@ test("перемикання задачі: накручене в А не теч�
   await turnInspectorOn(page);
   await pin(page, "#target");
   await bump(page, "padding-left");
-  const pkgB = await waitPkg(page, B.dir, 1);
-  assert.deepEqual(promised(pkgB), ["it1/holovna padding-left"],
+  const pkgB = await waitPkg(page, B.dir, 2);
+  assert.deepEqual(promised(pkgB), ["it1/holovna padding-left", "it1/holovna padding-right"],
     "пакет задачі Б приписує їй роботу, зроблену в задачі А");
 
   /* Запис у Б не зачепив файл А. Сама по собі ця перевірка слабка (на
      порожній памʼяті вона зелена теж) — вона лише відсікає найгрубіший
      варіант затирання, коли пакет Б лягає поверх А. Справжнє затирання ловить
      C нижче. */
-  assert.deepEqual(promised(pkg(A.dir)), ["it1/holovna padding-top"],
+  assert.deepEqual(promised(pkg(A.dir)), ["it1/holovna padding-bottom", "it1/holovna padding-top"],
     "робота задачі А затерта записом із задачі Б");
 
   /* C. ПОВЕРНЕННЯ в задачу А — і саме тут видно, що перемикач не просто
@@ -231,8 +232,8 @@ test("перемикання задачі: накручене в А не теч�
   await turnInspectorOn(page);
   await pin(page, "#target");
   await bump(page, "padding-left");
-  const backA = await waitPkg(page, A.dir, 2);
+  const backA = await waitPkg(page, A.dir, 4);
   assert.deepEqual(promised(backA),
-    ["it1/holovna padding-left", "it1/holovna padding-top"],
+    ["it1/holovna padding-bottom", "it1/holovna padding-left", "it1/holovna padding-right", "it1/holovna padding-top"],
     "нова правка в задачі А затерла попередню — канал не зберігає, а перезаписує");
 });

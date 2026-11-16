@@ -110,28 +110,11 @@
  *                        САМИМ звітом, а пін не зрушить. МУТАЦІЙНО
  *                        ПЕРЕВІРЕНО: перевірка червоніє. Тому дивимось не
  *                        лише на `pinned`, а й на ЗМІСТ звіту в панелі:
- *                        крихт меншає, і зʼявляється секція флексу, якої в
+ *                        крихт меншає, і зʼявляється поле gap (авто-лейаут), якого в
  *                        абзаці не було, — тобто панель показує звіт про
  *                        ІНШИЙ елемент, а не той самий.
- *   H (клавіша M)      — `api.onChange = paintBar`
- *                        (`frame.addEventListener('load')`, `app.js`) і
- *                        `paintInsp()` усередині `paintBar`. Клавіша `M`
- *                        живе ВСЕРЕДИНІ iframe, `keydown` назовні не спливає,
- *                        а опитування (300мс) знято 17.09.2026 — інших шляхів
- *                        до панелі немає ЖОДНОГО. МУТАЦІЙНО ПЕРЕВІРЕНО:
- *                        прибери `paintInsp()` із `paintBar()` — червоніє.
- *                        Тиснемо `M` при ЗАПІНЕНОМУ елементі, щоб та сама
- *                        перевірка стерегла й межу Task 5: у лінійці КАСКАДУ
- *                        не місце (вона міряє відстані), а в каскаді звіт
- *                        мусить повернутись.
- *                        ПЕРЕПИСАНО 17.09.2026 (Task 7): ознакою «каскаду
- *                        немає» було `.insp-spec` = 0, тобто «в лінійці
- *                        панель показує саму лише підказку». Це більше НЕ
- *                        контракт — у лінійці панель показує числа, і малює
- *                        їх той самий каркас `.insp-spec` (один каркас на
- *                        обидва, не два). Новою ознакою стали КРИХТИ: їх
- *                        малює рівно `reportHTML` і ніхто більше. Предмет
- *                        перевірки не змінився.
+ *   H (клавіша M)      — ВИДАЛЕНО у 0.29.0: режиму лінійки й клавіші M більше нема (її відсутність стереже сценарій 8
+ *                        у `inspector-figma.test.mjs`). Так само видалено L («у лінійці числа йдуть за курсором»).
  *   I (прокрутка)      — збереження `scrollTop` у `paintInsp` (`app.js`).
  *                        Друга подія на той самий пін — не рідкість, а
  *                        НОРМА: звіт, знятий у мить кліку, неправдивий, і
@@ -353,13 +336,13 @@ test("A. report() — плаский серіалізовний звіт, pinAt 
     };
   });
 
-  /* П'ять полів, а не чотири: T-40 додав `dsInfo` — під якою дизайн-системою
+  /* Шість полів: T-40 додав `dsInfo`, 0.29.0 — `facts` (розмір, батько, прапорець власного тексту: те, чого бракує панелі властивостей). T-40: `dsInfo` — під якою дизайн-системою
      прочитані вироки. Перелік лишається ЗАКРИТИМ і саме в цьому сенс
      перевірки: `describeAll` віддає ще й `el` (вузол DOM), і розсип `...rep`
      протягнув би його в інший документ. Нове поле проходить ту саму межу, що
      й решта, — самі примітиви (це доводить `structuredClone` нижче). */
-  assert.deepEqual(got.keys, ["blocked", "crumbs", "dsInfo", "groups", "partial"],
-    "у звіті рівно пʼять полів — жодного `el` з describeAll");
+  assert.deepEqual(got.keys, ["blocked", "crumbs", "dsInfo", "facts", "groups", "partial"],
+    "у звіті рівно шість полів — жодного `el` з describeAll");
   assert.equal(got.cloneErr, null,
     "structuredClone не мусить кидати: інакше у звіті є вузол DOM");
   assert.ok(Array.isArray(got.crumbs) && got.crumbs.length > 0, "крихти мусять бути");
@@ -509,8 +492,10 @@ test("D. курсор покинув запінений елемент — зв�
 
   const c = await counts(page);
   assert.equal((await state(page)).pinned, "target", "пін не мусить злітати від руху");
-  assert.equal(c.paints, 0,
-    `гілка піна в _onMove виходить до малювання, а _paint покликано ${c.paints} разів`);
+  /* 0.29.0: наведення при піні теж малює (рамка й ярлик НАВЕДЕНОГО — `_paint(this.pinned || el)` у `_onMove`), тож
+     перехід на інший елемент дає рівно один `_paint`. Предмет перевірки лишається: малювання НЕ є джерелом сигналу —
+     сигнал батькові дає лише вихід із піна (`hits`), а число `_paint` рівне числу змін елемента під курсором. */
+  assert.equal(c.paints, 1, `один перехід на інший елемент — один _paint, а покликано ${c.paints}`);
   assert.equal(c.hits, 1,
     "вихід курсора з піна перечитує звіт — батько мусить дізнатись, "
     + `РІВНО один раз, а onChange покликано ${c.hits} разів`);
@@ -523,6 +508,7 @@ test("D. курсор покинув запінений елемент — зв�
   }
   assert.equal((await counts(page)).hits, 1,
     "поки курсор гуляє ПОЗА піном, нових сигналів бути не мусить");
+  assert.equal((await counts(page)).paints, 3, "#ttl і назад на #a — ще дві зміни елемента під курсором (повтор на #a не зміна), тож два _paint");
 
   /* Межа «один сигнал на ПЕРЕТИН межі» перевіряється тільки поверненням:
      без нього зелений колір вище означав би й «сигнал буває рівно раз за все
@@ -538,8 +524,8 @@ test("D. курсор покинув запінений елемент — зв�
   await page.mouse.move(ax, ay);
   assert.equal((await counts(page)).hits, 2,
     "другий вихід за межі піна мусить дати ще РІВНО один сигнал");
-  assert.equal((await counts(page)).paints, 0,
-    "жодне з цих перетинань межі не мусить малювати підсвітку заново");
+  assert.equal((await counts(page)).paints, 5,
+    "повернення на пін і другий вихід — ще два _paint (зміна елемента під курсором), і жодного зайвого");
 });
 
 test("E. setLabels міняє підписи згори, а без нього лишаються дефолти розмітки", async (t) => {
@@ -713,6 +699,11 @@ test("F. падіння в ланцюжку не ховає стан назав�
   /* Третє місце — перечитування звіту після виходу курсора. Воно кличе
      `_renderPanel`, тобто той самий живий CSSOM, і заходять сюди рівно раз на
      вихід: пропущений тут сигнал — пропущений НАЗАВЖДИ. */
+  /* Падіння малювання вище лишило звіт про пін НЕ відрендереним (`_panelSeq` ≠ `_pinSeq`): без синхронізації перший
+     же `_paint` нового елемента під курсором сам перечитав би звіт і «зʼїв» підміну раніше за `_repaintPinned`
+     (0.29.0, `_paint` рендерить звіт на зміну покоління) — перевірка мірила б не те місце. Синхронізуємо явно. */
+  await page.evaluate(() => document.getElementById("frame").contentWindow.CanvasInspector._paint(
+    document.getElementById("frame").contentWindow.CanvasInspector.pinned));
   await page.evaluate(() => {
     const w = document.getElementById("frame").contentWindow;
     const api = w.CanvasInspector;
@@ -737,21 +728,15 @@ test("F. падіння в ланцюжку не ховає стан назав�
  *  звернення до `CanvasInspector` тут немає навмисно: панель мусить бути
  *  правдивою сама по собі, а не «правдивою, якщо перепитати оверлей». */
 const panelReport = (page) => page.evaluate(() => ({
-  crumbs: [...document.querySelectorAll('#insp-panel .insp-crumbs button')]
+  /* Крихти нової панелі: ПРЕДКИ — кнопки `.insp-pb` у `.insp-path`, сам вибраний — `.insp-name` (0.29.0; до того
+     всі троє стояли в `.insp-crumbs`). Збираємо в той самий список, що віддає `crumbs`: від кореня до елемента. */
+  crumbs: [...document.querySelectorAll("#insp-panel .insp-path .insp-pb"), ...document.querySelectorAll("#insp-panel .insp-name")]
     .map((b) => b.textContent.trim()),
-  specs: document.querySelectorAll("#insp-panel .insp-spec").length,
-  /* Імена властивостей — з `data-prop` полів (T-39). До перебудови під
-     затверджений макет вони стояли текстом у `<dt>`; тепер підпису в рядку
-     немає взагалі (стрілка в смузі відступів, спільний підпис над парою), і
-     єдина адреса властивості в розмітці — це атрибут. */
+  /* Розділи панелі властивостей (`data-sec`) — те, що колись були секціями звіту. */
+  specs: document.querySelectorAll("#insp-panel [data-sec]").length,
+  /* Імена властивостей — з `data-prop` полів: єдина адреса властивості в розмітці. */
   props: [...document.querySelectorAll("#insp-panel .insp-f[data-prop]")]
     .map((f) => f.dataset.prop),
-  /* Рядки ЛІНІЙКИ — окремим полем, і саме тому окремим: після T-39 каркас
-     `dl`/`dt`/`dd` лишився РІВНО за підсумком лінійки (там справді «підпис :
-     число»), а звіт про елемент малюється полями. Один список на двох більше
-     не відрізнив би «у лінійці є числа» від «у лінійці показують каскад». */
-  rows: [...document.querySelectorAll("#insp-panel .insp-spec dt")]
-    .map((d) => d.textContent.trim()),
 }));
 
 test("G. клік по крихті пінує предка — і звіт у панелі стає про НЬОГО", async (t) => {
@@ -767,7 +752,7 @@ test("G. клік по крихті пінує предка — і звіт у �
   assert.deepEqual(before.crumbs, ["body", "div", "p.card"],
     "панель мусить показати крихти запіненого елемента");
   assert.ok(before.specs > 0, "панель мусить показати секції звіту, а не саму лише підказку");
-  assert.equal(before.props.includes("flex-direction"), false,
+  assert.equal(before.props.includes("gap"), false,
     "в абзаці секції флексу бути не мусить — інакше наступна перевірка нічого не доводить");
 
   /* Крихта №1 — `div` (тобто `#wrap`, батько). Клік по НІЙ, а не виклик
@@ -783,62 +768,9 @@ test("G. клік по крихті пінує предка — і звіт у �
   const after = await panelReport(page);
   assert.deepEqual(after.crumbs, ["body", "div"],
     "після піна предка крихт меншає — панель мусить це показати");
-  assert.equal(after.props.includes("flex-direction"), true,
-    "`#wrap` — флекс-контейнер, тож у звіті мусить зʼявитись секція флексу: "
+  assert.equal(after.props.includes("gap"), true,
+    "`#wrap` — флекс-контейнер, тож у панелі мусить зʼявитись поле gap (авто-лейаут): "
     + "це і є доказ, що панель показує звіт про ІНШИЙ елемент, а не перемалювала старий");
-});
-
-test("H. клавіша M усередині iframe оновлює панель — подією, без опитування", async (t) => {
-  const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: WIRE_PORT_BASE + 2 });
-  t.after(() => child.kill());
-  const browser = await chromium.launch();
-  t.after(() => browser.close());
-  const page = await openInspector(browser, url);
-
-  await pinByClick(page, "#target");
-  assert.ok((await panelReport(page)).specs > 0, "у каскаді панель мусить показувати звіт");
-
-  /* Клавіша йде У ФОКУС iframe — саме тим шляхом, для якого раніше й стояло
-     опитування: `keydown` ловить `window` УСЕРЕДИНІ iframe у фазі capture і
-     за його межі не спливає. Після піна фокус у iframe уже є (клік), але
-     ставимо його явно — щоб перевірка не залежала від того, що саме зробив
-     попередній крок. */
-  const frame = page.frames().find((f) => f !== page.mainFrame());
-  assert.ok(frame, "не знайшов iframe макета");
-  await frame.evaluate(() => window.focus());
-  await page.keyboard.press("m");
-
-  assert.equal(await page.evaluate(() => document.getElementById("frame")
-    .contentWindow.CanvasInspector.mode), "ruler", "клавіша M мусить перемкнути режим оверлея");
-  assert.equal(await page.locator('#insp-panel [data-act="insptab"][data-val="ruler"]')
-    .getAttribute("aria-pressed"), "true",
-  "панель мусить побачити клавішу ОДРАЗУ: після Task 6 інших шляхів до неї немає — "
-    + "ні опитування, ні DOM-слухача, лише `onChange`");
-  /* Межа Task 5: у лінійці КАСКАДУ не місце — вона міряє відстані, і каскад
-     запіненого елемента до них стосунку не має. Пін при цьому нікуди не
-     дівся, тож payload звіту в стані панелі лишається — і без цієї перевірки
-     «звіт у лінійці» був би помітний хіба на око.
-
-     ПЕРЕПИСАНО 17.09.2026 (Task 7): до того тут стояло `specs === 0` — тобто
-     «в лінійці панель показує саму лише підказку». Це більше НЕ контракт: у
-     лінійці панель показує числа, і малює їх той самий каркас `.insp-spec`,
-     що й звіт (один каркас, не два — див. `measureHTML`). Тому предметом
-     лишається те саме («каскаду тут немає»), а ознакою стали КРИХТИ: їх малює
-     рівно `reportHTML` і ніхто більше. */
-  const inRuler = await panelReport(page);
-  assert.deepEqual(inRuler.crumbs, [],
-    "у режимі лінійки крихт бути не мусить — їх малює тільки каскадний звіт");
-  assert.equal(inRuler.props.length, 0,
-    `у лінійці не мусить бути ПОЛІВ каскаду, а бачу ${inRuler.props}`);
-  assert.ok(inRuler.rows.length > 0,
-    "зате числа лінійки мусять бути — інакше Task 7 не відбувся");
-
-  await page.keyboard.press("m");
-  assert.equal(await page.evaluate(() => document.getElementById("frame")
-    .contentWindow.CanvasInspector.mode), "cascade");
-  assert.ok((await panelReport(page)).specs > 0,
-    "повернення в каскад мусить повернути й звіт — той самий пін, та сама панель");
 });
 
 test("I. прокрутка панелі переживає перемальовку після виходу курсора", async (t) => {
@@ -971,7 +903,7 @@ test("K. сторінка БЕЗ канваса лишається зі свої
      той самий рендерер, що й панель оболонки, а не друга реалізація поруч. */
   assert.match(panel.html, /insp-spec/,
     "вікно мусить малювати той самий рендерер, що й панель — один звіт, не два");
-  assert.match(panel.html, /insp-crumbs/, "крихти теж із спільного рендерера");
+  assert.match(panel.html, /insp-crumbs/, "крихти теж із спільного рендерера (вікно без канваса лишилось на `insp-report.js`)");
 
   /* ⛔ Спільний рендерер — так, спільні РУЧКИ — ні, і це той самий контракт з
      іншого боку. Проводка тюнера (`data-act="insptune…"` → `BAR_ACTIONS`) і
@@ -997,39 +929,6 @@ test("K. сторінка БЕЗ канваса лишається зі свої
   /* А значення при цьому лишилось на екрані — відмова від ручки не сміє
      забрати те, заради чого звіт і читають. */
   assert.match(panel.html, /16px/, "замість ручки мусить лишитись чесний текст значення");
-});
-
-test("L. у лінійці числа в панелі йдуть за курсором — інакше вона тихо бреше", async (t) => {
-  const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: WIRE_PORT_BASE + 10 });
-  t.after(() => child.kill());
-  const browser = await chromium.launch();
-  t.after(() => browser.close());
-  const page = await openInspector(browser, url);
-
-  /* Режим перемикаємо кнопкою панелі — шляхом дизайнера. */
-  await page.click('#insp-panel [data-act="insptab"][data-val="ruler"]');
-  assert.equal((await state(page)).mode, "ruler", "режим мусить перемкнутись");
-
-  /** Числа, які панель показує ЗАРАЗ (те саме, що бачить дизайнер). */
-  const shown = () => page.evaluate(() =>
-    [...document.querySelectorAll("#insp-panel .insp-spec dd")].map((d) => d.textContent.trim()));
-
-  const [ax, ay] = await centerOf(page, "#a");
-  await page.mouse.move(ax, ay);
-  const onA = await shown();
-  assert.ok(onA.length > 0, "у лінійці панель мусить показувати числа, а не порожнечу");
-
-  /* Рух курсора на елемент з ІНШОЮ геометрією. Ні режим, ні пін при цьому не
-     міняються — тобто єдине, що може донести нові числа до панелі, це підпис
-     виміру в сигнатурі `_emit`. Прибери його звідти, і панель застрягне на
-     числах першого елемента, поки дизайнер возить курсором по макету. */
-  const [tx, ty] = await centerOf(page, "#ttl");
-  await page.mouse.move(tx, ty);
-  const onTtl = await shown();
-  assert.ok(onTtl.length > 0, "на другому елементі числа теж мусять бути");
-  assert.notDeepEqual(onTtl, onA,
-    `числа мусять піти за курсором: на #a ${onA}, на #ttl ${onTtl}`);
 });
 
 test("M. «Надіслати» ставить ready, будь-яка правка вертає draft, і підвал переживає перезавантаження", async (t) => {
@@ -1115,6 +1014,7 @@ test("M. «Надіслати» ставить ready, будь-яка правк
     "новий документ — новий інспектор, вимкнений (так задумано)");
   await page.click('#hud [data-act="inspector"]');
   await page.waitForSelector("#insp-panel .insp-send", { timeout: 15000 });
-  assert.equal(await page.locator('#insp-panel [data-act="insptunedrop"]').count(), 1,
+  /* ДВІ кнопки скидання: ↕ у панелі пише пару padding-top/bottom, тобто дві правки (до 0.29.0 було одне поле). */
+  assert.equal(await page.locator('#insp-panel [data-act="insptunedrop"]').count(), 2,
     "перезавантаження рамки знесло список змін — стан жив у документі макета");
 });

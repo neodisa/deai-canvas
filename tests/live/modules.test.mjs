@@ -329,16 +329,16 @@ async function pin(page, sel) {
   }, sel.slice(1), { timeout: 5000 });
 }
 
-/** Клас крапки вироку в полі й титул поля — те, що дизайнер бачить очима. */
-const dotOf = (page, prop) => page.evaluate((p) => {
+/** Вирок поля (`data-verdict` обгортки) й титул поля — те, що дизайнер бачить очима (0.29.0: крапки й рядка про ДС
+ *  у панелі властивостей нема, колір поля й чип — похідні від вироку). */
+const verdictOf = (page, prop) => page.evaluate((p) => {
   const f = document.querySelector(`#insp-panel .insp-f[data-prop="${p}"]`);
-  return f?.querySelector(".insp-dot")?.className ?? null;
+  return f ? f.getAttribute("data-verdict") : null;
 }, prop);
 const titleOf = (page, prop) => page.evaluate((p) => {
   const f = document.querySelector(`#insp-panel .insp-f[data-prop="${p}"]`);
   return f ? f.getAttribute("title") : null;
 }, prop);
-const noteOf = (page) => page.evaluate(() => document.querySelector("#insp-panel .insp-note")?.textContent ?? null);
 
 test("2: css-tokens через POST /api/module-enable — інспектор упізнає токен простору, що приїхав ПІСЛЯ пінування", async (t) => {
   const { dir } = taskFixture({ html: TOKEN_PAGE, pages: ["holovna"] });
@@ -404,8 +404,7 @@ test("2: css-tokens через POST /api/module-enable — інспектор у
 
   /* ДО відповіді: профіль без ДС — рядок про це словами, жодних вироків «повз ДС». */
   await pin(page, "#over");
-  assert.match(await noteOf(page), /Для напрямку «tool» дизайн-системи немає/, `рядок про ДС до токенів: ${await noteOf(page)}`);
-  assert.match(await dotOf(page, "color"), /insp-dot--tok\b/, "до токенів напрямок без ДС нікого не звинувачує");
+  assert.equal(await verdictOf(page, "color"), "token", "до токенів напрямок без ДС нікого не звинувачує");
   assert.equal(asked.length, 1, `запитів токенів до відповіді: ${asked.length} (рівно один на завантаження рамки)`);
 
   release();
@@ -414,24 +413,23 @@ test("2: css-tokens через POST /api/module-enable — інспектор у
   assert.ok(Date.now() - t0 < 6500, "відповідь тримали довше за тайм-аут інспектора (7 с): сценарій нічого не доводить");
 
   /* ПІСЛЯ: той самий пін перемальовується сам — без кліку. */
-  await page.waitForFunction(() => /Звірено з токенами простору \(файл tokens\.css\)/
-    .test(document.querySelector("#insp-panel .insp-note")?.textContent ?? ""), null, { timeout: 8000 });
-  assert.match(await dotOf(page, "color"), /insp-dot--over\b/,
+  await page.waitForFunction(() => document.querySelector('#insp-panel .insp-f[data-prop="color"]')
+    ?.getAttribute("data-verdict") === "overridden", null, { timeout: 8000 });
+  assert.equal(await verdictOf(page, "color"), "overridden",
     "--ink у макеті #222222, у файлі #111111: «перевизначено» має зʼявитись на запіненому без повторного кліку");
   assert.match(await titleOf(page, "color"), /#111111/, "титул поля мусить казати, що приписує ДС простору");
 
   await pin(page, "#off");
-  assert.match(await dotOf(page, "color"), /insp-dot--offds\b/, "--mine немає у файлі токенів — повз ДС");
+  assert.equal(await verdictOf(page, "color"), "off-ds", "--mine немає у файлі токенів — повз ДС");
   assert.match(await titleOf(page, "color"), /--mine/);
 
   await pin(page, "#ok");
-  assert.match(await dotOf(page, "color"), /insp-dot--tok\b/, "токен простору з тим самим значенням лишається зеленим");
-  assert.match(await noteOf(page), /tokens\.css/);
+  assert.equal(await verdictOf(page, "color"), "token", "токен простору з тим самим значенням лишається зеленим");
 
   /* Дорога назад у ДС і тюнер: хардкод, що дорівнює значенню токена, веде до `--brand`, а пакет Клоду
      несе, що дизайнер вибрав ТОКЕН, і з якого файла токени (`ds.source`). */
   await pin(page, "#hard");
-  assert.match(await dotOf(page, "color"), /insp-dot--hard\b/);
+  assert.equal(await verdictOf(page, "color"), "hardcode");
   const snap = await page.evaluate(() => {
     const b = document.querySelector('#insp-panel .insp-f[data-prop="color"] .insp-snap');
     return b ? { token: b.dataset.token, val: b.dataset.val } : null;

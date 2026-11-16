@@ -460,12 +460,13 @@ test("покрутив → рамка перезавантажилась → п�
      через `/api/tuner`, тобто тим самим каналом, яким його прочитає той, хто
      прийде за пакетом. */
   const pkg = async () => page.evaluate(() => fetch("/api/tuner").then((r) => r.json()));
-  const wanted = { prop: "padding-top", from: "16px", to: "17px" };
+  /* ↕ в панелі — ПАРА padding-top/bottom: одна стрілка пише дві правки (0.29.0; до того поле було одне). */
+  const wanted = [{ prop: "padding-bottom", from: "16px", to: "17px" }, { prop: "padding-top", from: "16px", to: "17px" }];
   const seen = (p) => (p.package?.elements || []).flatMap((el) => el.edits)
-    .map((e) => ({ prop: e.prop, from: e.from, to: e.to }));
-  for (let i = 0; i < 40 && !seen(await pkg()).length; i += 1) await page.waitForTimeout(50);
+    .map((e) => ({ prop: e.prop, from: e.from, to: e.to })).sort((a, b) => a.prop.localeCompare(b.prop));
+  for (let i = 0; i < 40 && seen(await pkg()).length < 2; i += 1) await page.waitForTimeout(50);
   const beforeReload = await pkg();
-  assert.deepEqual(seen(beforeReload), [wanted],
+  assert.deepEqual(seen(beforeReload), wanted,
     "правка не доїхала на диск — власник просив «записується одразу»");
   const rule = beforeReload.package.elements[0].edits[0].rule;
   assert.equal(rule, ".card",
@@ -486,7 +487,7 @@ test("покрутив → рамка перезавантажилась → п�
 
   /* L. Пакет ПІСЛЯ перезавантаження — той самий. Червоніє, щойно стан
      переїде в документ макета: він зникне разом із документом. */
-  assert.deepEqual(seen(await pkg()), [wanted],
+  assert.deepEqual(seen(await pkg()), wanted,
     "перезавантаження рамки стерло накручене — стан жив у документі макета");
 
   /* M. І МАКЕТ УСЕ ЩЕ ПОКАЗУЄ. Без цієї половини перевірка зеленіла б на
@@ -574,8 +575,11 @@ test("рядок звіту не росте й не зсуває сусідів 
     return {
       n: fs.length,
       heights: [...new Set(fs.map((f) => Math.round(f.getBoundingClientRect().height)))],
+      /* Позиція — у координатах ВМІСТУ тіла, а не екрана: після першої правки зʼявляється підвал, тіло вкорочується й
+         (панель властивостей довша за вікно) прокручується до поля у фокусі. Екранні `top` тоді їдуть усі разом, і
+         це не «рядок виріс», а чесна прокрутка. */
       tops: Object.fromEntries(fs.map((f) =>
-        [f.dataset.prop, Math.round(f.getBoundingClientRect().top)])),
+        [f.dataset.prop, Math.round(f.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop)])),
       /* Чи не ВИЛІЗ вміст за межі поля сталої висоти. Без цього рядка
          перевірка приймала б «рядок не росте» і тоді, коли він не росте лише
          тому, що зайве обрізано межею поля: значення, розрізане навпіл по
@@ -593,7 +597,8 @@ test("рядок звіту не росте й не зсуває сусідів 
   });
 
   const before = await snap();
-  assert.ok(before.n >= 15, `полів у звіті ${before.n} — звіт не намалювався`);
+  /* Пари (↔ ↕) склеїли відступи в два поля: 14 → не менше 12 (розмір, відступи, заливка, обведення, радіус, текст…). */
+  assert.ok(before.n >= 12, `полів у звіті ${before.n} — звіт не намалювався`);
   /* Довге значення в фікстурі саме заради цього рядка: стек шрифтів із семи
      імен у колонці ~288px — рівно те, що розповзалось на три рядки. */
   assert.deepEqual(before.clipped, [],

@@ -164,6 +164,8 @@ async function pin(page, sel) {
 }
 
 /** Крутнути ручку тюнера (Shift+↑ у полі властивості). */
+/* ↕ і ↔ в панелі властивостей — ПАРИ: одна накрутка пише дві правки (top+bottom, left+right), тож лічильники нижче
+   парні (0.29.0). */
 async function bump(page, prop) {
   const field = `#insp-panel [data-act="insptune"][data-prop="${prop}"]`;
   await page.locator(field).waitFor({ timeout: 5000 });
@@ -244,7 +246,7 @@ test("T1 висячий current на старті: екран лікується
   await turnInspectorOn(page);
   await pin(page, "#target");
   await bump(page, "padding-top");
-  await waitPkg(page, X.dir, 1);
+  await waitPkg(page, X.dir, 2);
 
   /* Реєстр вказує на простір, якого нема (ручна правка, видалений простір). */
   const regFile = path.join(server.deaiHome, "spaces.json");
@@ -267,10 +269,10 @@ test("T1 висячий current на старті: екран лікується
   await turnInspectorOn(page);
   await pin(page, "#target");
   await bump(page, "padding-left");
-  const p = await waitPkg(page, X.dir, 2);
+  const p = await waitPkg(page, X.dir, 4);
   assert.ok(tr.posts.length >= 1, "правка не записалась");
   assert.ok("base_rev" in tr.posts[0], "перший запис після лікування без base_rev: затер би пакет, якого вкладка не читала");
-  assert.deepEqual(props(p).sort(), ["padding-left", "padding-top"], "стара правка зникла з пакета: його не підхоплено з диска");
+  assert.deepEqual(props(p).sort(), ["padding-bottom", "padding-left", "padding-right", "padding-top"], "стара правка зникла з пакета: його не підхоплено з диска");
 });
 
 test("T2 агент (або інша вкладка) перемкнув ПРОСТІР, поки вкладка відкрита: render() скидає пер-просторовий стан і читає пакет нової задачі", async (t) => {
@@ -280,7 +282,7 @@ test("T2 агент (або інша вкладка) перемкнув ПРОС
   await turnInspectorOn(page);
   await pin(page, "#target");
   await bump(page, "padding-top");
-  await waitPkg(page, X.dir, 1);
+  await waitPkg(page, X.dir, 2);
 
   const tr = trackTuner(page);
   const sw = await postJson(url, "/api/space-switch", { id: "q" });
@@ -295,10 +297,10 @@ test("T2 агент (або інша вкладка) перемкнув ПРОС
   await turnInspectorOn(page);
   await pin(page, "#target");
   await bump(page, "padding-left");
-  const py = await waitPkg(page, Y.dir, 1);
+  const py = await waitPkg(page, Y.dir, 2);
   assert.ok("base_rev" in tr.posts[tr.posts.length - 1], "запис у новому просторі без base_rev");
-  assert.deepEqual(props(py), ["padding-left"], "правка з пакета ЧУЖОЇ задачі протекла в пакет Y");
-  assert.equal(pkg(X.dir).editCount, 1, "пакет задачі старого простору хтось чіпав");
+  assert.deepEqual(props(py).sort(), ["padding-left", "padding-right"], "правка з пакета ЧУЖОЇ задачі протекла в пакет Y");
+  assert.equal(pkg(X.dir).editCount, 2, "пакет задачі старого простору хтось чіпав");
   await spaceNameOnTasks(page, "Q");                          // смуга «Задач» теж показує новий простір
 });
 
@@ -308,7 +310,7 @@ test("T3 повтор після збою читання (смуга помил�
   await turnInspectorOn(page);
   await pin(page, "#target");
   await bump(page, "padding-top");
-  await waitPkg(page, X.dir, 1);
+  await waitPkg(page, X.dir, 2);
 
   const tasksFile = path.join(server.spaces[0].path, "tasks.json");
   const good = readFileSync(tasksFile, "utf8");
@@ -326,9 +328,9 @@ test("T3 повтор після збою читання (смуга помил�
   await turnInspectorOn(page);
   await pin(page, "#target");
   await bump(page, "padding-left");
-  const p = await waitPkg(page, X.dir, 2);
+  const p = await waitPkg(page, X.dir, 4);
   assert.ok("base_rev" in tr.posts[0], "запис після повтору без base_rev");
-  assert.deepEqual(props(p).sort(), ["padding-left", "padding-top"], "повтор затер пакет, що лежав на диску");
+  assert.deepEqual(props(p).sort(), ["padding-bottom", "padding-left", "padding-right", "padding-top"], "повтор затер пакет, що лежав на диску");
 });
 
 /* ═══════════════════════════ діалог простору: тека, зайнятість, помилки ═══════════════════════════ */

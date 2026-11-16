@@ -26,17 +26,8 @@
  *                         перевірка писалась негайною. Опитування знято
  *                         (Task 6) — негайність від цього не зайва, а
  *                         сильніша: тепер вона стереже сам синхронний шлях.
- *   B (перемикач        — клік по `[data-act="insptab"][data-val="ruler"]`
- *      режиму)            мусить змінити РЕЖИМ САМОГО ОВЕРЛЕЯ
- *                         (`CanvasInspector.mode`), а не лише підсвітку
- *                         кнопки в панелі. Запобіжник: рядок
- *                         `api.setMode(val)` у `BAR_ACTIONS.insptab`.
- *                         Мутація «прибери цей рядок, лиши тільки
- *                         `paintInsp()`» ловиться РІВНО цією перевіркою:
- *                         підсвітка помінялась би (панель перемальована зі
- *                         старим `state.mode`, бо `api.mode` не змінився —
- *                         тобто підсвітка НАСПРАВДІ лишилась би тією самою),
- *                         а `CanvasInspector.mode` — ні.
+ *   B, E (перемикач режиму, клавіша M) — ВИДАЛЕНО у 0.29.0: режимів і лінійки більше нема. Клавішу M («нічого не
+ *                         робить») стереже сценарій 8 у `inspector-figma.test.mjs`.
  *   C (Esc драбинкою)   — фізичний `Escape`, надісланий У ФОКУС iframe (де
  *                         й живе `_onKey`), з чистого стану (без піна, режим
  *                         каскад) мусить вимкнути інспектор ЦІЛКОМ — і
@@ -65,26 +56,6 @@
  *                         бере саме те, що ЦЕЙ round-trip обіцяє: цикл не
  *                         зламаний — після повернення бар усе ще вміє
  *                         відкрити інспектор і панель заново.
- *   E (клавіша M          — режим, змінений СПРАВЖНЬОЮ клавішею `M` УСЕРЕДИНІ
- *      усередині iframe)    iframe (не кліком по панелі), мусить дійти до
- *                         панелі. Несе це ПОДІЯ, а не опитування:
- *                         `setMode()` кличе `_emit()` (`inspector.js`,
- *                         Task 4), той — `onChange`, тобто `paintBar` →
- *                         `paintInsp`. `keydown` за межі iframe і далі не
- *                         спливає (capture на `window` усередині), тож
- *                         жодного DOM-слухача в батька тут немає й бути не
- *                         може — весь шлях тримається на одному колбеку.
- *                         Запобіжник: `api.onChange = paintBar`
- *                         (`frame.addEventListener('load')`, `app.js`) і
- *                         виклик `paintInsp()` у `paintBar` — прибери
- *                         будь-який із двох, і перевірка чекає на
- *                         `aria-pressed="true"` вічно (таймаут), бо БІЛЬШЕ
- *                         НІХТО не перемальовує панель після клавіші,
- *                         натиснутої не по ній. До 17.09.2026 запобіжником
- *                         тут був таймер `setInterval(…, 300)`; Task 4 дав
- *                         оверлею подію, і другий механізм на той самий стан
- *                         знято (Task 6) — два механізми на один стан рано
- *                         чи пізно розходяться.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -149,8 +120,8 @@ test("A. кнопка смуги відкриває панель і вмикає
   assert.equal(await page.evaluate(() => document.getElementById("frame")
     .contentWindow.CanvasInspector.on), true, "кнопка смуги мусить увімкнути й оверлей");
 
-  const tabs = await page.locator('#insp-panel [data-act="insptab"]').count();
-  assert.ok(tabs >= 2, `у панелі мусить бути перемикач режиму (два значення), а бачу ${tabs}`);
+  assert.equal(await page.locator('#insp-panel [data-act="insptab"]').count(), 0,
+    "вкладок режимів у панелі більше нема (лінійку прибрано, 0.29.0)");
   assert.ok(await page.locator('#insp-panel [data-act="inspector"]').count() >= 1,
     "у панелі немає кнопки закриття");
 
@@ -161,36 +132,6 @@ test("A. кнопка смуги відкриває панель і вмикає
   await page.locator("#insp-panel").waitFor({ state: "hidden", timeout: 3000 });
   assert.equal(await page.evaluate(() => document.getElementById("frame")
     .contentWindow.CanvasInspector.on), false, "кнопка закриття панелі мусить вимкнути й оверлей");
-});
-
-test("B. перемикач режиму панелі міняє РЕЖИМ ОВЕРЛЕЯ, а не лише підсвітку", async (t) => {
-  const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 10 });
-  t.after(() => child.kill());
-  const browser = await chromium.launch();
-  t.after(() => browser.close());
-  const page = await openCanvas(browser, url);
-
-  await page.click('#hud [data-act="inspector"]');
-  await page.locator("#insp-panel").waitFor({ state: "visible" });
-  assert.equal(await page.evaluate(() => document.getElementById("frame")
-    .contentWindow.CanvasInspector.mode), "cascade", "інспектор мусить починати в каскаді");
-  assert.equal(await page.locator('[data-act="insptab"][data-val="cascade"]').getAttribute("aria-pressed"), "true");
-
-  await page.click('#insp-panel [data-act="insptab"][data-val="ruler"]');
-  // Чекаємо на СПРАВЖНІЙ стан оверлея, а не на підсвітку панелі: підсвітка
-  // могла б перемалюватись і на зламаній проводці (стара `state.mode`, той
-  // самий рядок), тож саме тут і ловиться мутація «прибери `api.setMode`».
-  await page.waitForFunction(() => document.getElementById("frame")
-    .contentWindow.CanvasInspector.mode === "ruler", null, { timeout: 3000 });
-
-  assert.equal(await page.locator('[data-act="insptab"][data-val="ruler"]').getAttribute("aria-pressed"), "true");
-  assert.equal(await page.locator('[data-act="insptab"][data-val="cascade"]').getAttribute("aria-pressed"), "false");
-
-  // І назад — перевіряємо, що дія симетрична, а не «зробили один раз і забули».
-  await page.click('#insp-panel [data-act="insptab"][data-val="cascade"]');
-  await page.waitForFunction(() => document.getElementById("frame")
-    .contentWindow.CanvasInspector.mode === "cascade", null, { timeout: 3000 });
 });
 
 test("C. Escape у макеті вимикає інспектор драбинкою — панель зникає разом із ним", async (t) => {
@@ -279,42 +220,8 @@ test("D. «Огляд» ховає панель, навіть коли овер�
 
   await page.click('#hud [data-act="inspector"]');
   await page.locator("#insp-panel").waitFor({ state: "visible", timeout: 3000 });
-  assert.equal(await page.evaluate(() => document.getElementById("frame")
-    .contentWindow.CanvasInspector.on), true, "після повернення інспектор мусить УМІТИ ввімкнутись знову");
-});
-
-test("E. клавіша M УСЕРЕДИНІ iframe доходить до панелі ПОДІЄЮ", async (t) => {
-  const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 40 });
-  t.after(() => child.kill());
-  const browser = await chromium.launch();
-  t.after(() => browser.close());
-  const page = await openCanvas(browser, url);
-
-  await page.click('#hud [data-act="inspector"]');
-  await page.locator("#insp-panel").waitFor({ state: "visible" });
-  assert.equal(await page.locator('[data-act="insptab"][data-val="cascade"]').getAttribute("aria-pressed"), "true");
-
-  /* Фокус iframe БЕЗ кліку по вмісту — та сама причина, що в перевірці C
-     (клік пінує елемент і не заважає режиму, але тут річ у тім, щоб зміну
-     вніс РІВНО той шлях, заради якого й писана ця перевірка: клавіша,
-     натиснута не по нашій кнопці). */
-  const frame = page.frames().find((f) => f !== page.mainFrame());
-  assert.ok(frame, "не знайшов iframe макета");
-  await frame.evaluate(() => window.focus());
-  await page.keyboard.press("m");
-
-  /* Оверлей змінився одразу (перевірено й у tests/live/inspector.test.mjs);
-     тут головне — що ЦЕ побачила ПАНЕЛЬ, а не лише сам оверлей. І побачила
-     ТИМ САМИМ синхронним ланцюжком, що й у C: `_onKey` → `toggleMode` →
-     `setMode` → `_emit` → `onChange` (=`paintBar` → `paintInsp`). Тому
-     перевірка негайна, як A і C: поки тут стояло опитування (знято
-     17.09.2026, Task 6), таймаут на 2с був ЄДИНИМ чесним варіантом і
-     водночас ховав би будь-який розрив у ланцюжку — тепер розрив означає
-     «панель не оновиться ніколи», і бачимо ми це відразу. */
-  assert.equal(await page.evaluate(() => document.getElementById("frame")
-    .contentWindow.CanvasInspector.mode), "ruler", "клавіша M мусить змінити режим оверлея");
-  assert.equal(await page.locator('[data-act="insptab"][data-val="ruler"]').getAttribute("aria-pressed"),
-    "true", "панель мусить побачити клавішу M ОДРАЗУ — подією, а не опитуванням");
-  assert.equal(await page.locator('[data-act="insptab"][data-val="cascade"]').getAttribute("aria-pressed"), "false");
+  /* `?.`: у мить, коли макет щойно перезавантажується, `CanvasInspector` на мить зникає (одного разу з трьох
+     голе читання падало з TypeError) — чекаємо на стан, а не читаємо його наосліп. */
+  await page.waitForFunction(() => document.getElementById("frame")?.contentWindow?.CanvasInspector?.on === true,
+    null, { timeout: 3000 });
 });

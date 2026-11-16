@@ -119,49 +119,12 @@ test("0b. скраб підпису W теж віднімає delta: відре�
   assert.equal(await page.frameLocator("#frame").locator("#cb").evaluate((e) => e.getBoundingClientRect().width), 360);
 });
 
-test("T2-proof. клік → панель властивостей із назвою й розділами; поле gap пише макет і пакет", async (t) => {
-  const { dir, page } = await boot(t);
-  await pin(page, "#card");
-  assert.equal(await page.locator("#insp-panel .insp-name").textContent(), "div");
-  for (const s of ["size", "edges", "layout", "spacing", "fill", "stroke"]) {
-    assert.equal(await page.locator(`#insp-panel [data-sec="${s}"]`).count(), 1, `немає розділу ${s}`);
-  }
-  const gap = '#insp-panel .insp-f[data-prop="gap"] .insp-fi';
-  await page.focus(gap);
-  await page.keyboard.press("ArrowUp");
-  await page.waitForFunction(() => document.querySelector('#insp-panel .insp-f[data-prop="gap"] .insp-fi')?.value === "13");
-  assert.equal(await page.frameLocator("#frame").locator("#card").evaluate((el) => getComputedStyle(el).gap), "13px");
-  const p = await waitPkg(page, dir, (x) => editOf(x, "gap"), "правка gap");
-  assert.equal(editOf(p, "gap").to, "13px");
-});
 /** Лінії відстаней в оверлеї: усередині shadow-кореня рамки. */
 const fieldValue = (page, prop) => page.locator(`#insp-panel .insp-f[data-prop="${prop}"] .insp-fi`).inputValue();
 const altLines = (page) => page.evaluate(() => {
   const doc = document.getElementById("frame").contentDocument;
   const sh = doc.querySelector("[data-canvas-inspector]").shadowRoot;
   return sh.querySelectorAll(".rul:not(.hidden) .rg:not(.hidden)").length;
-});
-
-test("T3-proof. Alt показує відстані, відпущений Alt — ні; Alt+→ переводить ціль на сусіда", async (t) => {
-  const { page } = await boot(t);
-  await pin(page, "#a");
-  assert.equal(await altLines(page), 0, "без Alt ліній немає");
-  await page.keyboard.down("Alt");
-  assert.ok(await altLines(page) > 0, "з Alt є лінії до батька");
-  await page.keyboard.up("Alt");
-  assert.equal(await altLines(page), 0, "відпущений Alt прибирає лінії");
-
-  await page.keyboard.down("Alt");
-  await page.keyboard.press("ArrowRight");
-  const ok = await page.evaluate(() => {
-    const f = document.getElementById("frame");
-    const sh = f.contentDocument.querySelector("[data-canvas-inspector]").shadowRoot;
-    const tgt = sh.querySelector(".o-tgt").getBoundingClientRect();
-    const b = f.contentDocument.getElementById("b").getBoundingClientRect();
-    return Math.abs(tgt.left - b.left) < 1 && Math.abs(tgt.width - b.width) < 1;
-  });
-  await page.keyboard.up("Alt");
-  assert.equal(ok, true, "ціль Alt — сусід #b");
 });
 
 /** Видимість шару оверлея (`hl` — коробка margin, `hl-pad` — padding) у shadow-корені рамки. */
@@ -171,7 +134,7 @@ const layerShown = (page, cls) => page.evaluate((c) => {
   return !!n && !n.classList.contains("hidden");
 }, cls);
 
-test("T3-proof. коробка margin/padding: наведення без Alt — видима, під Alt — схована", async (t) => {
+test("T3b. коробка margin/padding: наведення без Alt — видима, під Alt — схована", async (t) => {
   const { page } = await boot(t);
   await pin(page, "#a");
   // Вибраний елемент коробки не має: заливка margin/padding лягала на нього й спотворювала кольори, які дизайнер
@@ -194,33 +157,177 @@ test("T3-proof. коробка margin/padding: наведення без Alt —
   assert.deepEqual(hidden, [false, false], "під Alt шари margin/padding сховані");
 });
 
-test("T3-proof. драбина: Enter — дитина, ← → — сусід, Esc — батько, далі зняти вибір, далі вимкнути", async (t) => {
-  const { page } = await boot(t);
-  await pin(page, "#card");
-  await page.keyboard.press("Enter");
-  assert.equal(await pinnedId(page), "a", "Enter → перший дочірній");
-  await page.keyboard.press("ArrowRight");
-  assert.equal(await pinnedId(page), "b", "→ → сусід");
-  await page.keyboard.press("Escape");
-  assert.equal(await pinnedId(page), "card", "Esc → батько");
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("Escape");
-  assert.equal(await pinnedId(page), null, "на корені вибір знято");
-  await page.keyboard.press("Escape");
-  assert.equal(await page.evaluate(() => document.getElementById("frame").contentWindow.CanvasInspector.on), false,
-    "без вибору Esc вимикає інспектор");
-});
+const POSTS = (page) => {
+  const log = [];
+  page.on("request", (r) => { if (r.method() === "POST" && r.url().includes("/api/tuner")) log.push(r.url()); });
+  return log;
+};
 
-test("T3-proof. фокус в оболонці: ← → і Alt ідуть тим самим handleKey", async (t) => {
+test("1. клік → панель із назвою й розділами; Esc → батько; Enter → дочірній; ← → — сусіди", async (t) => {
   const { page } = await boot(t);
   await pin(page, "#a");
-  await page.evaluate(() => { document.getElementById("frame").blur(); document.body.focus(); });
-  assert.equal(await page.evaluate(() => document.activeElement === document.body), true, "фокус у тілі оболонки");
+  assert.equal(await page.locator("#insp-panel .insp-name").textContent(), "a");
+  for (const s of ["size", "edges", "spacing", "fill", "stroke", "text"]) {
+    assert.equal(await page.locator(`#insp-panel [data-sec="${s}"]`).count(), 1, `немає розділу ${s}`);
+  }
+  assert.equal(await page.locator('#insp-panel [data-sec="layout"]').count(), 0,
+    "#a не flex-контейнер (він flex-елемент): авто-лейауту немає");
+  await page.keyboard.press("Escape");
+  assert.equal(await pinnedId(page), "card", "Esc вибирає батька");
+  await page.keyboard.press("Enter");
+  assert.equal(await pinnedId(page), "a", "Enter вибирає першого дочірнього");
   await page.keyboard.press("ArrowRight");
-  assert.equal(await pinnedId(page), "b", "→ з оболонки веде до сусіда");
-  await page.keyboard.down("Alt");
-  const lines = await altLines(page);
-  await page.keyboard.up("Alt");
-  assert.ok(lines > 0, "Alt з оболонки малює відстані");
+  assert.equal(await pinnedId(page), "b");
+  await page.keyboard.press("ArrowLeft");
+  assert.equal(await pinnedId(page), "a");
+  // Esc до кореня: card → wrap → body → зняти вибір → вимкнути
+  for (const want of ["card", "wrap", "body"]) {
+    await page.keyboard.press("Escape");
+    assert.equal(await pinnedId(page), want);
+  }
+  await page.keyboard.press("Escape");
+  assert.equal(await pinnedId(page), null, "на корені Esc знімає вибір");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.evaluate(() => document.getElementById("frame").contentWindow.CanvasInspector.on), false);
 });
+
+test("1b. ті самі клавіші працюють із фокусом в ОБОЛОНЦІ (пересилання)", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#a");
+  await page.locator("#insp-panel .insp-top").click();            // фокус ушов із рамки в оболонку
+  assert.equal(await page.evaluate(() => document.activeElement === document.body), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await pinnedId(page), "card");
+  await page.keyboard.press("Enter");
+  assert.equal(await pinnedId(page), "a");
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await pinnedId(page), "b");
+});
+
+test("1c. Esc поступається відкритому питанню оболонки", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#a");
+  await page.evaluate(() => {                                      // імітація відкритого питання: його тримає askUp()
+    const d = document.createElement("div"); d.className = "cv-ask-scrim"; document.body.appendChild(d);
+  });
+  await page.evaluate(() => document.getElementById("frame").contentWindow.focus());
+  await page.keyboard.press("Escape");
+  assert.equal(await pinnedId(page), "a", "поки є питання, Esc не піднімає вибір");
+});
+
+test("2. Alt → лінії відстаней; відпущений Alt → ліній нема; Alt+→ — сусід; blur знімає лінії", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#a");
+  await page.keyboard.down("Alt");
+  assert.ok(await altLines(page) > 0);
+  await page.keyboard.up("Alt");
+  assert.equal(await altLines(page), 0);
+  await page.keyboard.down("Alt");
+  await page.keyboard.press("ArrowRight");
+  const onB = await page.evaluate(() => {
+    const f = document.getElementById("frame");
+    const sh = f.contentDocument.querySelector("[data-canvas-inspector]").shadowRoot;
+    const g = sh.querySelector(".o-tgt").getBoundingClientRect();
+    const b = f.contentDocument.getElementById("b").getBoundingClientRect();
+    return Math.abs(g.left - b.left) < 1;
+  });
+  assert.equal(onB, true, "Alt+→: ціль — сусід #b");
+  await page.evaluate(() => document.getElementById("frame").contentWindow.dispatchEvent(new Event("blur")));
+  assert.equal(await altLines(page), 0, "втрата фокуса вікна прибирає лінії, навіть без keyup");
+  await page.keyboard.up("Alt");
+});
+
+test("3. ↑ у полі gap: +1 на макеті й у пакеті; Shift+↑ — +10", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#card");
+  const gap = '#insp-panel .insp-f[data-prop="gap"] .insp-fi';
+  assert.equal(await fieldValue(page, "gap"), "12");
+  await page.focus(gap);
+  await page.keyboard.press("ArrowUp");
+  await page.waitForFunction(() => document.querySelector('#insp-panel .insp-f[data-prop="gap"] .insp-fi').value === "13");
+  assert.equal(await page.frameLocator("#frame").locator("#card").evaluate((e) => getComputedStyle(e).gap), "13px");
+  await waitPkg(page, dir, (p) => editOf(p, "gap")?.to === "13px", "gap 13px");
+  await page.keyboard.press("Shift+ArrowUp");
+  await waitPkg(page, dir, (p) => editOf(p, "gap")?.to === "23px", "gap 23px");
+  assert.equal(await page.frameLocator("#frame").locator("#card").evaluate((e) => getComputedStyle(e).gap), "23px");
+});
+
+test("3b. пара ↔ пише ДВІ властивості; «Різні», коли сторони не рівні", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#card");                                        // padding: 10px 14px
+  assert.equal(await fieldValue(page, "padding-left"), "14");
+  const f = '#insp-panel .insp-f[data-prop="padding-left"] .insp-fi';
+  await page.fill(f, "20");
+  await page.press(f, "Enter");
+  const p = await waitPkg(page, dir, (x) => editOf(x, "padding-left") && editOf(x, "padding-right"), "обидві сторони");
+  assert.equal(editOf(p, "padding-left").to, "20px");
+  assert.equal(editOf(p, "padding-right").to, "20px");
+  // зробимо сторони різними через консоль макета й перечитаємо панель
+  await page.frameLocator("#frame").locator("#card").evaluate((e) => { e.style.setProperty("padding-left", "3px", "important"); });
+  await page.evaluate(() => document.getElementById("frame").contentWindow.CanvasInspector._tuned());
+  await page.waitForFunction(() => document.querySelector('#insp-panel .insp-f[data-prop="padding-top"]'));
+  assert.equal(await page.locator('#insp-panel [data-act="inspsides"]').isDisabled(), true,
+    "сторони різні — «окремо» розкрито само й не вимикається");
+});
+
+test("4. скраб підпису: значення міняється живцем, панель не перемальовується, пакет пишеться ОДИН раз", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#card");
+  const label = page.locator('#insp-panel .insp-f[data-prop="gap"] .insp-fl');
+  const box = await label.boundingBox();
+  await page.evaluate(() => { document.querySelector('#insp-panel .insp-f[data-prop="gap"] .insp-fi').dataset.keep = "1"; });
+  const posts = POSTS(page);
+  const cx = box.x + box.width / 2; const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 30, cy, { steps: 10 });                // 30 px = +10
+  assert.equal(await page.evaluate(() => document.querySelector('#insp-panel .insp-f[data-prop="gap"] .insp-fi')?.dataset.keep),
+    "1", "під час жесту панель не перемальовується цілком");
+  assert.equal(posts.length, 0, "під час жесту пакет не пишеться");
+  await page.mouse.up();
+  const p = await waitPkg(page, dir, (x) => editOf(x, "gap")?.to === "22px", "gap 22px");
+  assert.equal(editOf(p, "gap").to, "22px");
+  await page.waitForTimeout(300);
+  assert.equal(posts.length, 1, `пакет мусить писатись ОДИН раз за жест, а писався ${posts.length}`);
+  assert.equal(await page.frameLocator("#frame").locator("#card").evaluate((e) => getComputedStyle(e).gap), "22px");
+});
+
+test("7. «Надіслати Клоду» → status: ready на диску і «Готово» в панелі", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#card");
+  await page.focus('#insp-panel .insp-f[data-prop="gap"] .insp-fi');
+  await page.keyboard.press("ArrowUp");
+  await waitPkg(page, dir, (p) => p.status === "draft" && editOf(p, "gap"), "чернетка з правкою");
+  await page.click("#insp-panel .insp-send");
+  await waitPkg(page, dir, (p) => p.status === "ready", "status ready");
+  assert.equal(await page.locator("#insp-panel .insp-ready").count(), 1);
+});
+
+test("8. клавіша M нічого не робить: ні режиму, ні лінійки; панель незмінна", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#card");
+  const before = await page.locator("#insp-panel").innerHTML();
+  await page.keyboard.press("m");
+  const st = await page.evaluate(() => {
+    const api = document.getElementById("frame").contentWindow.CanvasInspector;
+    const sh = api._host.shadowRoot;
+    return { mode: api.mode, setMode: typeof api.setMode, ruler: sh.querySelectorAll(".rul:not(.hidden)").length };
+  });
+  assert.deepEqual(st, { mode: undefined, setMode: "undefined", ruler: 0 });
+  assert.equal(await page.locator("#insp-panel").innerHTML(), before);
+  assert.equal(await page.locator('#insp-panel [data-act="insptab"]').count(), 0);
+});
+
+/* ── Мутації (кожна знята: прибери запобіжник — перевірка червоніє) ─────────────────────────────────────────────────
+ *  1   handleKey Esc → `nextPin`/`_setPin` в `inspector.js`; прибери `_setPin(step.pin, true)` — Esc нічого не піднімає.
+ *  1b  `inspShellKey` в `app.js`; прибери `document.addEventListener('keydown', inspShellKey)` — фокус в оболонці глухий.
+ *  1c  `api.yieldEsc` у `load`-обробнику `app.js`; прибери рядок — Esc піднімає вибір попри питання.
+ *  2   `setAlt`/`_draw` + `keyup`/`blur` у `init()`; прибери `window.addEventListener('blur', …)` — лінії лишаються.
+ *  3   `inspStep` + `tuneWrite`; Shift-множник `(ev.shiftKey ? 10 : 1)` у keydown-слухачі панелі.
+ *  3b  `tuneWrite(props.map(…))` в `inspCommit`; лиши лише `props[0]` — `padding-right` не пишеться.
+ *  4   `inspScrubApply` з `{ save: false }` і `if (s.applied !== undefined) saveTune()` у `inspScrubEnd`; прибери
+ *      `{ save: false }` — POST на кожен кадр, `posts.length` > 1; прибери `if (inspScrub) return;` у `paintInsp` —
+ *      зникає `data-keep` (панель перемалювалась під час жесту).
+ *  7   `tuneReady` → `markReady`; лишається з T-39.
+ *  8   прибери `_onKey`-видалення M: поверни `toggleMode` — `api.mode` перестає бути `undefined`.
+ */

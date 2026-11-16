@@ -29,7 +29,7 @@
  *      шеним, не з         Візьми замість нього `computed` — і кожен токен,
  *      обчисленим)         записаний у ДС як `1rem`, стане «перевизначеним»
  *                         на сторінці, де він збігається дослівно.
- *   E (напрямок без ДС) — `known:false` у `ds()` + рядок `insp-note`.
+ *   E (напрямок без ДС) — `known:false` у `ds()` (рядок `insp-note` прибрано правилом Р3).
  *                         Прибери словник — і 572 законні змінні лендінга
  *                         стануть «повз ДС»; прибери рядок — і дизайнер
  *                         вирішить, що їх перевірили.
@@ -115,11 +115,10 @@ async function pin(page, sel) {
   }, sel.slice(1), { timeout: 3000 });
 }
 
-/** Клас крапки вироку в полі — тобто те, що дизайнер бачить очима. */
-const dotOf = (page, prop) => page.evaluate((p) => {
+/** Вирок поля — атрибут обгортки (`data-verdict`): колір поля й чип — похідні від нього. */
+const verdictOf = (page, prop) => page.evaluate((p) => {
   const f = document.querySelector(`#insp-panel .insp-f[data-prop="${p}"]`);
-  const dot = f && f.querySelector(".insp-dot");
-  return dot ? dot.className : null;
+  return f ? f.getAttribute("data-verdict") : null;
 }, prop);
 
 /** Титул поля — усе, чого в самому полі не видно (вирок, приписане ДС). */
@@ -162,8 +161,10 @@ async function withSpaceCanvas(body) {
 /** Токени простору приходять у ФОНІ: чекаємо, поки панель це покаже, інакше вирок читав би порожню ДС. */
 const tokensArrived = async (page) => {
   await pin(page, "#ok");
-  await page.waitForFunction(() => /Звірено з токенами простору/
-    .test(document.querySelector("#insp-panel .insp-note")?.textContent ?? ""), null, { timeout: 8000 });
+  /* Рядка «Звірено з токенами…» у панелі властивостей уже нема (правило Р3: без пояснювальних рядків) — чекаємо
+     саму ознаку звірки: токенне поле дістало вирок `token`. */
+  await page.waitForFunction(() => document.querySelector('#insp-panel .insp-f[data-prop="color"]')
+    ?.getAttribute("data-verdict") === "token", null, { timeout: 8000 });
 };
 
 async function withCanvas(profile, body) {
@@ -198,17 +199,17 @@ test("напрямок задачі доїжджає в документ мак�
 test("три різні вироки на трьох var() — а не одна зелена крапка на всі", async () => {
   await withSpaceCanvas(async (page) => {
     await tokensArrived(page);
-    assert.match(await dotOf(page, "color"), /insp-dot--tok\b/,
+    assert.equal(await verdictOf(page, "color"), "token",
       "токен ДС із правильним значенням мусить лишитись зеленим");
 
     await pin(page, "#off");
-    assert.match(await dotOf(page, "color"), /insp-dot--offds\b/,
+    assert.equal(await verdictOf(page, "color"), "off-ds",
       "--bf-ink немає в ДС: зелена крапка тут і означала б лише «автор "
       + "написав var()» — рівно вада, з якої T-40 почався");
     assert.match(await titleOf(page, "color"), /--bf-ink/);
 
     await pin(page, "#over");
-    assert.match(await dotOf(page, "color"), /insp-dot--over\b/,
+    assert.equal(await verdictOf(page, "color"), "overridden",
       "імʼя з ДС із чужим значенням — найтяжчий вирок: код виглядає "
       + "бездоганно, а поводиться інакше");
     const title = await titleOf(page, "color");
@@ -218,18 +219,15 @@ test("три різні вироки на трьох var() — а не одна 
   });
 });
 
-test("напрямок без ДС каже про це словами і не звинувачує нікого", async () => {
+test("напрямок без ДС не звинувачує нікого: жоден токен не «повз ДС»", async () => {
   await withCanvas("seo", async (page) => {
     await pin(page, "#off");
-    const note = await page.evaluate(() => {
-      const n = document.querySelector("#insp-panel .insp-note");
-      return n ? n.textContent : null;
-    });
-    assert.ok(note && note.includes("seo"),
-      "мовчазна відсутність звірки виглядає рівно як успішна звірка");
-    assert.match(await dotOf(page, "color"), /insp-dot--tok\b/,
-      "у напрямку без ДС жоден токен не сміє бути позначений «повз ДС»: "
-      + "сайтова тема живе поза ДС свідомо");
+    /* Рядок-пояснення «seo без ДС» з панелі прибрано (правило Р3); `dsInfo` лишається в пакеті тюнера (`pkg.ds`),
+       тож «каже про це словами» тепер стереже серверний тест пакета. Тут — друга половина: сайтова тема живе поза ДС
+       свідомо, і жоден її токен не сміє виглядати як порушення. */
+    const v = await verdictOf(page, "color");
+    assert.ok(v !== "off-ds" && v !== "overridden",
+      `у напрямку без ДС жоден токен не сміє бути «повз ДС»: вирок ${v}`);
   });
 });
 
@@ -238,7 +236,7 @@ test("крапка вироку веде НАЗАД у ДС — і поверн�
     await withSpaceCanvas(async (page, url) => {
       await tokensArrived(page);
       await pin(page, "#hard");
-      assert.match(await dotOf(page, "color"), /insp-dot--hard\b/);
+      assert.equal(await verdictOf(page, "color"), "hardcode");
       const snap = await page.evaluate(() => {
         const b = document.querySelector(
           '#insp-panel .insp-f[data-prop="color"] .insp-snap');
@@ -279,3 +277,37 @@ test("крапка вироку веде НАЗАД у ДС — і поверн�
       assert.equal(pkg.ds.known, true);
     });
   });
+
+test("5. «до ДС» на бурштиновому полі: правка зі snap лягає в пакет", async () => {
+  await withSpaceCanvas(async (page, url) => {
+    await tokensArrived(page);
+    await pin(page, "#hard");
+    assert.equal(await verdictOf(page, "color"), "hardcode");
+    assert.equal(await page.locator('#insp-panel .insp-f[data-prop="color"] .insp-tok').count(), 0, "хардкод чипа не має");
+    await page.click('#insp-panel .insp-f[data-prop="color"] .insp-snap');
+    await page.waitForFunction(() => document.querySelector('#insp-panel .insp-f[data-prop="color"][data-tuned]'),
+      null, { timeout: 3000 });
+    const body = await (await fetch(`${url}/api/tuner`)).json();
+    const edit = ((body.package || body).elements || []).flatMap((e) => e.edits).find((e) => e.prop === "color");
+    assert.equal(edit.snap.token, "--color-primary-400");
+    assert.ok(edit.snap.value);
+  });
+});
+
+test("6. «N поза ДС» веде фокус на бурштинові поля по колу", async () => {
+  await withSpaceCanvas(async (page) => {
+    await tokensArrived(page);
+    await pin(page, "#hard");
+    const total = await page.locator("#insp-panel .insp-f[data-off]").count();
+    assert.ok(total >= 2, `на хардкодній картці має бути щонайменше два бурштинові поля, а є ${total}`);
+    const btn = page.locator('#insp-panel [data-act="inspnextoff"]');
+    assert.match(await btn.textContent(), new RegExp(`^\\s*${total}\\b`), "лічильник = кількість бурштинових полів");
+    const focusedProp = () => page.evaluate(() => document.activeElement?.closest(".insp-f")?.dataset.prop ?? null);
+    const first = await page.evaluate(() => document.querySelector("#insp-panel .insp-f[data-off]").dataset.prop);
+    await btn.click();
+    assert.equal(await focusedProp(), first, "перший клік — перше бурштинове поле");
+    await btn.click();
+    const second = await page.evaluate(() => document.querySelectorAll("#insp-panel .insp-f[data-off]")[1].dataset.prop);
+    assert.equal(await focusedProp(), second, "другий клік — наступне");
+  });
+});
