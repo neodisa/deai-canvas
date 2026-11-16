@@ -5650,12 +5650,29 @@ function tuneSet(prop, value, snap = null, opts = {}) {
  * жодного сенсу не має). `save:false` — для скрабу: пакет пишеться лише на відпусканні.
  */
 function tuneWrite(list, opts = {}) {
-  let any = false;
+  const api = inspectorApi();
+  const page = tunePage();
+  const was = tuneState;
+  const wasMissing = tuneMissing;
+  const key = api && page ? elementKey(api.identity()) : null;
+  const done = [];
   for (const [prop, value, snap] of list) {
-    if (tuneSet(prop, value, snap || null, { save: false })) any = true;
+    if (tuneSet(prop, value, snap || null, { save: false })) { done.push(prop); continue; }
+    /* Дія атомарна: збій однієї властивості відкочує вже накладені в ЦІЙ дії — на макеті й у моделі. Інакше «+»
+       обведення лишав би стиль без ширини, а пакет — обіцянку, якої дизайнер не побачив. Відкат — той самий
+       `applyTune`/`clearTune`, що й у одиночного запису: правка, якої до дії не було, знімається, а що була — вертається. */
+    const prior = (key && was.pages[page] && was.pages[page][key] && was.pages[page][key].edits) || {};
+    for (const p of done) {
+      if (Object.prototype.hasOwnProperty.call(prior, p)) api.applyTune(p, prior[p].to);
+      else api.clearTune(p);
+    }
+    tuneState = was;
+    tuneMissing = wasMissing;
+    paintInsp();
+    return false;
   }
-  if (any && opts.save !== false) saveTune();
-  return any;
+  if (done.length && opts.save !== false) saveTune();
+  return done.length > 0;
 }
 
 
@@ -6249,10 +6266,12 @@ function inspCommit(el) {
   const n = Number(raw);
   if (raw === '' || !Number.isFinite(n) || raw === el.defaultValue.trim()) return;
   const min = el.dataset.min === undefined ? null : Number(el.dataset.min);
-  const v = min === null ? n : Math.max(min, n);
+  const delta = Number(el.dataset.delta || 0);
   /* W/H показують РЕНДЕРЕНИЙ розмір; у CSS іде «введене − delta» (рамка/відступи content-box). ↑/↓ і скраб теж
-     сходяться сюди й у `inspScrubApply`. */
-  tuneWrite(props.map((p) => [p, tuneRound(v - Number(el.dataset.delta || 0)) + (el.dataset.unit || '')]));
+     сходяться сюди й у `inspScrubApply`. Мінімум клампимо ПІСЛЯ віднімання: 10 при відступах 48 дає 0px, а не -38px,
+     яке браузер мовчки відкине. */
+  const css = min === null ? n - delta : Math.max(min, n - delta);
+  tuneWrite(props.map((p) => [p, tuneRound(css) + (el.dataset.unit || '')]));
 }
 
 /** ↑/↓ у полі: крок поля (`data-step`) × множник (Shift = ×10). Порожнє поле (`normal`, «Різні») крокує від `data-base` або 0. */
@@ -6335,8 +6354,12 @@ frame.addEventListener('load', () => {
  */
 function paintInsp() {
   /* Під час скрабу панель не перемальовується: оновлюється лише значення в самому полі (слухачі нижче). */
-  if (inspScrub) return;
   const api = inspectorApi();
+  /* Скраб, якому не прийшов pointerup (Esc вимкнув інспектор, вікно втратило фокус), не сміє заморозити панель до
+     перезавантаження: коли інспектор вимкнено чи панелі вже немає — жест кинуто, а те, що встигли накрутити, мусить
+     лягти в пакет одним записом. */
+  if (inspScrub && (!(api && api.on) || inspEl.hidden || !inspEl.isConnected)) inspScrubEnd();
+  if (inspScrub) return;
   /* Звіт коштує `getComputedStyle` по пʼятьох групах на кожну перемальовку — тобто на кожен поворот ручки, — тож
      питаємо його лише при увімкненому інспекторі. */
   const rep = api && api.on ? api.report() : null;
@@ -6483,7 +6506,8 @@ inspEl.addEventListener('keydown', (ev) => {
 function inspScrubApply(s) {
   if (s.next === null || s.applied === s.next) return;
   s.applied = s.next;
-  tuneWrite(s.props.map((p) => [p, tuneRound(s.next - s.delta) + s.unit]), { save: false });
+  const css = s.min === null ? s.next - s.delta : Math.max(s.min, s.next - s.delta);   // кламп ПІСЛЯ delta
+  tuneWrite(s.props.map((p) => [p, tuneRound(css) + s.unit]), { save: false });
 }
 inspEl.addEventListener('pointerdown', (ev) => {
   const lab = ev.target.closest?.('[data-scrub]');
@@ -6517,6 +6541,8 @@ const inspScrubEnd = () => {
 };
 inspEl.addEventListener('pointerup', inspScrubEnd);
 inspEl.addEventListener('pointercancel', inspScrubEnd);
+/* Захоплення вказівника могло зникнути без pointerup (елемент прибрано, вікно втратило фокус): жест закінчується й тоді. */
+inspEl.addEventListener('lostpointercapture', inspScrubEnd);
 
 /* Клавіші інспектора, коли фокус в ОБОЛОНЦІ, а не в рамці: Alt, Esc, Enter, ← →, Alt+←/→/↑. Рамка слухає їх сама
    (`_onKey` оверлея); тут — той самий `handleKey`, одна логіка на обидва шляхи. Стрілки й Enter віддаємо лише коли
@@ -6528,6 +6554,7 @@ function inspShellKey(ev) {
   if (ev.isComposing || ev.defaultPrevented || ev.metaKey || ev.ctrlKey) return;
   if (shellModalOpen() || openDd || cnDrawer || typingIn(ev, document)) return;
   if (ev.key === 'Alt') { api.setAlt(true); return; }
+  if (ev.shiftKey) return;                 // Shift+←/→ — виділення тексту, не навігація
   if (ev.target !== document.body) return;
   if (api.handleKey(ev.key, { alt: ev.altKey })) ev.preventDefault();
 }

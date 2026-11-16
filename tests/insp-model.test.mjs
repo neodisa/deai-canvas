@@ -50,7 +50,10 @@ test("W/H — РЕНДЕРЕНИЙ розмір (як ярлик оверлея)
   const eq = buildModel(REPORT());                                  // 120px / facts.w 120
   assert.equal("delta" in eq.size.w, false, "рівні — без delta");
   const frac = withProps(REPORT(), { width: { computed: "119.6px" } });
-  assert.equal(buildModel(frac).size.w.delta, 0.4, "округлення до 0.1");
+  assert.equal("delta" in buildModel(frac).size.w, false, "дробове округлення (<0.5px) — не delta");
+  const pad = withProps(REPORT(), { width: { computed: "99.6px" } });
+  pad.facts.w = 124;
+  assert.equal(buildModel(pad).size.w.delta, 24.4, "справжні відступи — delta з точністю до 0.1");
   const auto = buildModel(withProps(REPORT(), { width: { computed: "auto" } }));
   assert.equal("delta" in auto.size.w, false, "не число — без delta");
 });

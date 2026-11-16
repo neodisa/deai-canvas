@@ -22,7 +22,10 @@ body{margin:0;font:16px/24px sans-serif;background:#fff}
 #a{padding:6px 10px;background:#1f4fe0;color:#fff}
 #b{padding:6px 10px;background:#e0e0e0}
 #cb{box-sizing:content-box;width:300px;height:40px;padding:10px 24px;border:1px solid #888}
-</style></head><body><div id="wrap"><div id="card"><a id="a">One</a><a id="b">Two</a></div><p id="para">Hello</p><div id="cb">Box</div></div></body></html>`;
+#sc{box-sizing:content-box;width:200px;height:30px;padding:10px;transform:scale(.5);transform-origin:0 0}
+#nb{border:0 none #f00;padding:4px;color:#222}
+#fr{width:99.6px;height:20px;background:#ccc}
+</style></head><body><div id="wrap"><div id="card"><a id="a">One</a><a id="b">Two</a></div><p id="para">Hello</p><div id="cb">Box</div><div id="sc">Sc</div><div id="fr">Fr</div><span id="nb">Nb</span><input id="inp"></div></body></html>`;
 
 async function openInspector(browser, url) {
   const page = await browser.newPage({ viewport: VIEW });
@@ -316,6 +319,152 @@ test("8. клавіша M нічого не робить: ні режиму, н�
   assert.deepEqual(st, { mode: undefined, setMode: "undefined", ruler: 0 });
   assert.equal(await page.locator("#insp-panel").innerHTML(), before);
   assert.equal(await page.locator('#insp-panel [data-act="insptab"]').count(), 0);
+});
+
+
+const frameApi = (page) => page.evaluateHandle(() => document.getElementById("frame").contentWindow.CanvasInspector);
+
+test("R1. скраб, що не дочекався pointerup (Esc, інше вікно), не заморожує панель", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#card");
+  const box = await page.locator('#insp-panel .insp-f[data-prop="gap"] .insp-fl').boundingBox();
+  const cx = box.x + box.width / 2; const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 9, cy, { steps: 3 });
+  // pointerup не прийде: Esc вимикає інспектор, потім він вмикається знову й пінується інший елемент без жодного миші
+  await page.evaluate(() => {
+    const api = document.getElementById("frame").contentWindow.CanvasInspector;
+    api.set(false); api.set(true);
+    api._setPin(document.getElementById("frame").contentDocument.getElementById("para"), true);
+  });
+  await page.waitForFunction(() => document.querySelector("#insp-panel .insp-name")?.textContent === "p",
+    null, { timeout: 3000 }).catch(() => {});
+  assert.equal(await page.locator("#insp-panel .insp-name").textContent(), "p", "панель показує новий елемент");
+  await page.mouse.up();
+});
+
+test("R1b. lostpointercapture завершує скраб одним записом", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#card");
+  const box = await page.locator('#insp-panel .insp-f[data-prop="gap"] .insp-fl').boundingBox();
+  const cx = box.x + box.width / 2; const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 30, cy, { steps: 10 });
+  await page.evaluate(() => {
+    const lab = document.querySelector('#insp-panel .insp-f[data-prop="gap"] .insp-fl');
+    lab.dispatchEvent(new Event("lostpointercapture", { bubbles: true }));
+  });
+  await waitPkg(page, dir, (p) => editOf(p, "gap")?.to === "22px", "запис на lostpointercapture");
+  await page.mouse.up();
+});
+
+test("R2. W/H — розмір РОЗКЛАДКИ: дробова ширина без хибної delta, transform не псує число", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#fr");
+  const w = '#insp-panel .insp-f[data-prop="width"] .insp-fi';
+  assert.equal(await page.locator(w).getAttribute("data-delta"), null, "99.6 без відступів — delta немає");
+  await page.fill(w, "101");
+  await page.press(w, "Enter");
+  await waitPkg(page, dir, (p) => editOf(p, "width"), "правка width");
+  assert.equal(editOf(pkg(dir), "width").to, "101px", "пишеться введене, а не 100.6px");
+  await pin(page, "#sc");
+  assert.equal(await fieldValue(page, "width"), "220", "W = розмір розкладки (200 + 2×10), не масштабований rect");
+  const label = await page.evaluate(() => document.getElementById("frame").contentDocument
+    .querySelector("[data-canvas-inspector]").shadowRoot.querySelector(".o-size").textContent);
+  assert.equal(label.split("×")[0].trim(), "220", "ярлик оверлея показує те саме число");
+  await page.fill(w, "240");
+  await page.press(w, "Enter");
+  await waitPkg(page, dir, (p) => editOf(p, "width")?.to === "220px", "240 − 20 = 220px");
+});
+
+test("R3. менше за відступи: ширина клампиться ПІСЛЯ віднімання delta (0px, не -40px)", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#cb");
+  const w = '#insp-panel .insp-f[data-prop="width"] .insp-fi';
+  await page.fill(w, "10");
+  await page.press(w, "Enter");
+  await waitPkg(page, dir, (p) => editOf(p, "width"), "правка width");
+  assert.equal(editOf(pkg(dir), "width").to, "0px");
+});
+
+test("R4. багатовластивісний запис атомарний: збій третьої властивості відкочує перші дві", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#nb");
+  await page.evaluate(() => {
+    const api = document.getElementById("frame").contentWindow.CanvasInspector;
+    const orig = api.applyTune.bind(api);
+    api.applyTune = (p, v) => (p === "border-color" ? false : orig(p, v));
+  });
+  await page.click('#insp-panel [data-act="inspadd"][data-val="stroke"]');
+  await page.waitForTimeout(400);
+  const left = await page.frameLocator("#frame").locator("#nb").evaluate((e) => e.getAttribute("style"));
+  assert.ok(!/border/.test(left || ""), `на макеті лишився інлайн: ${left}`);
+  const p = pkg(dir);
+  const props = p ? (p.elements || []).flatMap((e) => e.edits).map((e) => e.prop) : [];
+  assert.deepEqual(props.filter((x) => x.startsWith("border")), [], "у пакеті нічого від дії не лишилось");
+});
+
+test("R5. Alt у полі вводу всередині макета не вмикає лінії", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#a");
+  await page.frameLocator("#frame").locator("#inp").focus();
+  await page.keyboard.down("Alt");
+  const alt = await page.evaluate(() => document.getElementById("frame").contentWindow.CanvasInspector.alt);
+  await page.keyboard.up("Alt");
+  assert.equal(alt, false);
+});
+
+test("R6. Shift+← → не навігують (ні в рамці, ні з фокусом в оболонці)", async (t) => {
+  const { page } = await boot(t);
+  await pin(page, "#a");
+  await page.keyboard.press("Shift+ArrowRight");
+  assert.equal(await pinnedId(page), "a", "рамка: Shift+→ — не сусід");
+  await page.locator("#insp-panel .insp-top").click();
+  await page.keyboard.press("Shift+ArrowRight");
+  assert.equal(await pinnedId(page), "a", "оболонка: Shift+→ — не сусід");
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await pinnedId(page), "b", "без Shift — сусід");
+});
+
+test("G1. «+» біля обведення без border → три довгі властивості в пакеті й рамка 1px solid", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#nb");
+  await page.click('#insp-panel [data-act="inspadd"][data-val="stroke"]');
+  const p = await waitPkg(page, dir, (x) => editOf(x, "border-style") && editOf(x, "border-width") && editOf(x, "border-color"), "три правки");
+  assert.equal(editOf(p, "border-style").to, "solid");
+  assert.equal(editOf(p, "border-width").to, "1px");
+  assert.match(editOf(p, "border-color").to, /^#[0-9a-f]{6}$/i);
+  const cs = await page.frameLocator("#frame").locator("#nb").evaluate((e) => { const c = getComputedStyle(e); return [c.borderTopWidth, c.borderTopStyle]; });
+  assert.deepEqual(cs, ["1px", "solid"]);
+});
+
+test("G2. матриця вирівнювання пише justify-content/align-items; напрям column перемапує матрицю", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#card");
+  await page.click('#insp-panel [data-act="inspalign"][data-val="2,1"]');
+  let p = await waitPkg(page, dir, (x) => editOf(x, "justify-content") && editOf(x, "align-items"), "дві правки");
+  assert.equal(editOf(p, "justify-content").to, "flex-end");
+  assert.equal(editOf(p, "align-items").to, "center");
+  await page.click('#insp-panel [data-act="inspdir"][data-val="column"]');
+  p = await waitPkg(page, dir, (x) => editOf(x, "flex-direction")?.to === "column", "flex-direction");
+  assert.equal(await page.locator('#insp-panel [data-act="inspalign"][data-val="1,2"]').getAttribute("aria-pressed"), "true",
+    "у column головна вісь — вертикаль: вибір (2,1) перейшов у (1,2)");
+  await page.click('#insp-panel [data-act="inspalign"][data-val="2,0"]');
+  p = await waitPkg(page, dir, (x) => editOf(x, "justify-content")?.to === "flex-start", "column: justify = верх");
+  assert.equal(editOf(p, "align-items").to, "flex-end", "column: align = право");
+});
+
+test("G3. колір у «Заливка»: hex + Enter пише background-color", async (t) => {
+  const { dir, page } = await boot(t);
+  await pin(page, "#card");
+  const f = '#insp-panel .insp-f[data-prop="background-color"] .insp-fi';
+  await page.fill(f, "#112233");
+  await page.press(f, "Enter");
+  const p = await waitPkg(page, dir, (x) => editOf(x, "background-color"), "background-color");
+  assert.equal(editOf(p, "background-color").to.toLowerCase(), "#112233");
+  assert.equal(await page.frameLocator("#frame").locator("#card").evaluate((e) => getComputedStyle(e).backgroundColor), "rgb(17, 34, 51)");
 });
 
 /* ── Мутації (кожна знята: прибери запобіжник — перевірка червоніє) ─────────────────────────────────────────────────

@@ -344,6 +344,15 @@ const STYLE = `
 `;
 
 /**
+ * Розмір РОЗКЛАДКИ елемента (без transform): `offsetWidth/Height` там, де вони є, інакше — прямокутник. Одне джерело
+ * і для панелі (`facts.w/h`), і для ярлика «W × H» оверлея, щоб числа не розходились; transform: scale() не псує їх.
+ */
+function layoutSize(el, r = el.getBoundingClientRect()) {
+  const has = typeof el.offsetWidth === 'number' && typeof el.offsetHeight === 'number';
+  return has ? { w: el.offsetWidth, h: el.offsetHeight } : { w: r.width, h: r.height };
+}
+
+/**
  * Те, чого немає в `describeAll`, але потрібно панелі властивостей (етап Г): розмір рамки, геометрія до батька,
  * чи є власний текст, `border-style` (для «+» біля обведення) і кольори ДС (для «+» біля заливки й обведення).
  * Усе — примітиви й плоскі обʼєкти: жодного вузла DOM (та сама межа, що в `report()`).
@@ -362,7 +371,8 @@ function panelFacts(el) {
   for (const n of Array.from(el.childNodes || [])) {
     if (n.nodeType === 3 && n.nodeValue.trim()) { own = true; break; }
   }
-  return { w: Math.round(r.width), h: Math.round(r.height), parent, ownText: own,
+  const lay = layoutSize(el, r);
+  return { w: lay.w, h: lay.h, parent, ownText: own,
     extra: [describe(el, 'border-style')], dsColors: pickDsColors(ds().tokens) };
 }
 
@@ -1084,19 +1094,22 @@ const Inspector = {
   },
 
   _onKey(e) {
+    if (e.metaKey || e.ctrlKey) return;
+    // Набір тексту (у т.ч. в полі comment-layer усередині його shadow DOM) не має ні вмикати інспектор, ні ловитись —
+    // і Alt теж: з Option у полі вводу лінії не мусять блимати.
+    if (isEditable(deepTarget(e)) || isEditable(activeDeep())) return;
     if (e.key === 'Alt') {
       if (this.on) { this.setAlt(true); e.preventDefault(); }
       return;
     }
-    if (e.metaKey || e.ctrlKey) return;
-    // Набір тексту (у т.ч. в полі comment-layer усередині його shadow DOM) не має ні вмикати інспектор, ні ловитись.
-    if (isEditable(deepTarget(e)) || isEditable(activeDeep())) return;
     // Регексп, а не чотири порівняння: кирилична розкладка мусить працювати, а кирилиця в СТРОКОВОМУ літералі —
     // майбутнє спрацювання охоронця i18n (він не заглядає в регекспи).
     if (!e.altKey && /^[iIшШ]$/.test(e.key)) {
       this.toggle(); e.stopPropagation(); e.preventDefault(); return;
     }
     if (!this.on) return;
+    // Shift+←/→ — виділення тексту, а не навігація: драбина лише для клавіш без Shift.
+    if (e.shiftKey) return;
     const nav = e.key === 'Escape' || e.key === 'Enter' || e.key === 'ArrowLeft'
       || e.key === 'ArrowRight' || e.key === 'ArrowUp';
     if (!nav) return;
@@ -1309,7 +1322,8 @@ const Inspector = {
       this._place(this._selb, pr);
       if (alt) hide(this._size);
       else {
-        this._size.textContent = `${Math.round(pr.width)} × ${Math.round(pr.height)}`;
+        const ls = layoutSize(pin, pr);
+        this._size.textContent = `${Math.round(ls.w)} × ${Math.round(ls.h)}`;
         Object.assign(this._size.style, { left: px(pr.left + pr.width / 2), top: px(pr.bottom) });
         this._size.classList.remove('hidden');
       }

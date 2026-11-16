@@ -118,7 +118,9 @@ export function buildModel(rep, opts = {}) {
     f.value = String(Math.round(rendered));
     if (n !== null) {
       const d = Math.round((rendered - n) * 10) / 10;
-      if (d !== 0) f.delta = d;
+      /* Розмір розкладки з offsetWidth цілий, а CSS-значення дробове (99.6px): різниця менша за піксель — це
+         округлення, а не рамка з відступами; хибна delta 0.4 писала б 100.6px замість введеного 101. */
+      if (Math.abs(d) >= 0.5) f.delta = d;
     }
     return f;
   };
