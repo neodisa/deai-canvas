@@ -633,7 +633,7 @@ test("19б: «Огляд» — кнопок режимів нема (один р
 /* ───────── Видалення коментаря питає в картці (етап В, 0.28.0) ───────── */
 test("26: кошик у картці — питання на місці; Esc / клік повз / «Скасувати» нічого не видаляють, «Видалити» видаляє; нативного вікна нема", async (t) => {
   const meta = { iteration: "1", version: "1", seq: 7, viewport: { w: 1280, h: 900 } };
-  const { page, dir } = await boot(t, DELETE_PORT_BASE, (d) => {
+  const { page, dir, frame } = await boot(t, DELETE_PORT_BASE, (d) => {
     writeFileSync(path.join(d, ".dc-local-comments.json"), JSON.stringify([
       seedPin({ id: "d1", text: "Видалити мене", meta }),
       seedPin({ id: "d2", text: "Лишитись мусить", meta: { ...meta, seq: 8 } }),
@@ -653,10 +653,19 @@ test("26: кошик у картці — питання на місці; Esc / �
     assert.equal(await page.locator("#cmt-panel .cfm p").count(), 1, "у питанні є щось, крім самого питання");
   };
   const both = () => assert.deepEqual(stored(), ["d1", "d2"], "коментар видалено без підтвердження");
-  // (a) Esc: питання зникає, панель лишається
+  const trashFocused = () => page.evaluate(() => { const a = document.activeElement; return a?.dataset?.act === "cmtdel" && a.dataset.val === "d1"; });
+  // (0) перемальовка панелі посеред питання (знімок коментатора від перемикача пінів) не губить фокус із «Скасувати»
   await ask();
+  const n0 = await msgCount(page, "change");
+  await frame.evaluate(() => { window.CommentLayer.togglePins(); window.CommentLayer.togglePins(); });
+  await until(async () => (await msgCount(page, "change")) >= n0 + 2);
+  await settle(page);
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cfm-no")), true, "перемальовка панелі зняла фокус із «Скасувати»");
+  assert.equal(await page.locator("#cmt-panel .cfm").count(), 1, "перемальовка зняла питання");
+  // (a) Esc: питання зникає, панель лишається, фокус — на кошику тієї картки
   await page.keyboard.press("Escape");
   await page.waitForSelector("#cmt-panel .cfm", { state: "detached" });
+  assert.equal(await trashFocused(), true, "після Esc фокус не на кошику картки");
   assert.equal(await panelOpen(page), true, "Esc закрив панель разом із питанням");
   await pause(400);
   both();
@@ -670,6 +679,13 @@ test("26: кошик у картці — питання на місці; Esc / �
   await ask();
   await page.click("#cmt-panel .cfm-no");
   await page.waitForSelector("#cmt-panel .cfm", { state: "detached" });
+  assert.equal(await trashFocused(), true, "після «Скасувати» фокус не на кошику картки");
+  await pause(400);
+  both();
+  // (c2) клік у макет (рамка) — питання знімається, нічого не видалено
+  await ask();
+  await frame.click("#p");
+  await page.waitForSelector("#cmt-panel .cfm", { state: "detached", timeout: 5000 });
   await pause(400);
   both();
   assert.equal(await page.locator('#cmt-panel .cmt-card[data-cid="d1"]').count(), 1, "картка зникла після «Скасувати»");

@@ -286,8 +286,11 @@ test("кошик у картці (етап В): cmtdel питає, cmtdelyes в�
   assert.equal(/removeComment/.test(act("cmtdel")), false, "кошик сам нічого не видаляє");
   assert.match(act("cmtdelyes"), /if \(cmtDelAsk !== id\) return;/);
   assert.match(act("cmtdelyes"), /removeComment\(id, \{ confirmed: true \}\)/);
-  assert.match(act("cmtdelno"), /cmtDelAsk = null; paintComments\(\);/);
-  assert.match(src, /if \(cmtFree && cmtOpen && cmtDelAsk && ev\.key === 'Escape'\) \{ cmtDelAsk = null; paintComments\(\); return; \}/);
+  assert.match(act("cmtdelno"), /cmtdelno: \(\) => closeDelAsk\(true\),/);
+  assert.match(src, /function closeDelAsk\(refocus\) \{\s*const id = cmtDelAsk;\s*cmtDelAsk = null;\s*paintComments\(\);\s*if \(refocus && id\) cmtEl\.querySelector\(`\[data-act="cmtdel"\]\[data-val="\$\{CSS\.escape\(id\)\}"\]`\)\?\.focus\(\);/, "після «Скасувати»/Esc фокус — на кошику тієї картки");
+  assert.match(src, /window\.addEventListener\('blur', \(\) => setTimeout\(\(\) => \{\s*if \(cmtDelAsk && document\.activeElement\?\.tagName === 'IFRAME'\) \{ cmtDelAsk = null; paintComments\(\); \}/, "клік у макет знімає питання");
+  assert.match(src, /act\.closest\('\.cmt-acts--cfm'\)/, "перемальовка панелі повертає фокус на кнопку питання");
+  assert.match(src, /if \(cmtFree && cmtOpen && cmtDelAsk && ev\.key === 'Escape'\) \{ ev\.preventDefault\(\); closeDelAsk\(true\); return; \}/);
   assert.match(src, /if \(cmtDelAsk && !ev\.target\.closest\?\.\('\.cmt-acts--cfm'\)\) \{ cmtDelAsk = null; paintComments\(\); \}/);
   assert.match(src, /editingId: cmtEditing, delAsk: cmtDelAsk,/);
 });

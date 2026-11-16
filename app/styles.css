@@ -283,6 +283,8 @@ body.home-open .isl-tools::before{display:none}
    Контейнер не ловить кліків (`pointer-events:none`) — лише сама картка. */
 .cv-ask-pop{position:fixed;inset:0;z-index:250;pointer-events:none}
 .cv-ask--pop{position:absolute;pointer-events:auto;max-width:calc(100vw - 16px)}
+/* Високий поповер не виходить за вікно: прокрутка — у формі, а не в рамці картки (хвостик `.cv-ask-tip` стоїть ПОЗА рамкою — `overflow` на ній його б обрізав). 52px = падінги й рамка картки + запас. */
+.cv-ask--pop>form{max-height:calc(100vh - 52px);overflow:auto}
 .cv-ask--pop:has(form.fb){width:360px}
 .cv-ask--pop:has(form.up){width:340px}
 .cv-ask-tip{position:absolute;width:12px;height:12px;margin-left:-6px;background:var(--s2);border:1px solid var(--line2);transform:rotate(45deg)}

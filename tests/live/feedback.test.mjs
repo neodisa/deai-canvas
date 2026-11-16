@@ -310,6 +310,27 @@ test("діалог відгуку: екрани, валідація, черга 
     await closeForm(page);
   });
 
+  await t.test("високий поповер у низькому вікні (1280×420): картка у вікні, «Надіслати» досяжна прокруткою, хвостик не обрізано", async () => {
+    await page.setViewportSize({ width: 1280, height: 420 });
+    try {
+      await s.open();
+      await page.click('#hud [data-act="feedback"]');
+      await waitForm(page);
+      const box = await page.locator(".cv-ask--pop").boundingBox();
+      assert.ok(box.y >= 0 && box.y + box.height <= 420 + 1, `картка виходить за вікно: y=${box.y} h=${box.height}`);
+      const submit = page.locator(`${FORM} button[data-a="ok"]`);
+      await submit.scrollIntoViewIfNeeded();
+      const sb = await submit.boundingBox();
+      assert.ok(sb.y >= 0 && sb.y + sb.height <= 420, `«Надіслати» поза вікном: y=${sb.y}`);
+      assert.equal(await submit.isVisible(), true);
+      const ov = await page.evaluate(() => getComputedStyle(document.querySelector(".cv-ask--pop")).overflow);
+      assert.notEqual(ov, "auto", "прокрутка на рамці картки обрізала б хвостик");
+      await closeForm(page);
+    } finally {
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
+  });
+
   assert.deepEqual(fake.rejected(), [], "приймач відхилив запити сервера (заголовки/ключ/Prefer/x-upsert)");
   assert.deepEqual(s.errors.filter((e) => !/boom/.test(e)), [], "помилки сторінки");
   assert.deepEqual([...s.hosts].filter((h) => !LOCAL.has(h)), [], "сторінка ходила не лише на 127.0.0.1");
