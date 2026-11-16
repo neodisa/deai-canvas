@@ -1,4 +1,4 @@
-# Deai Canvas
+# <img src="app/pwa/icon-192.png" alt="" width="40" height="40" align="top"> Deai Canvas
 
 **A local workspace for reviewing the HTML mockups an AI agent writes.** The agent (Claude Code or any
 other) makes the pages. Deai Canvas keeps every iteration, shows all screens at once, lets you point at an
