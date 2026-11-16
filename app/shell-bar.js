@@ -191,8 +191,9 @@ function crumbIter(model, openDd, iterDelAsk = false) {
   })).join("");
   /* «Видалити ітерацію» (етап В): дропдаун лишається відкритим і стає питанням — підтвердження там, де дія.
      Стан питання — у стані смуги (`iterDelAsk`), закриття дропдауна його скидає. */
+  const curId = (it.items || []).find((x) => x.on)?.id ?? "";
   const ask = `<div class="dd dd--confirm">${confirmHTML({ title: t("cfmDelIter", it.label),
-    yes: t("menuDeleteYes"), no: t("cfmNo"), yesAttrs: 'data-act="delit" data-val="confirmed"', noAttrs: 'data-act="delitno"' })}</div>`;
+    yes: t("menuDeleteYes"), no: t("cfmNo"), yesAttrs: `data-act="delit" data-val="confirmed:${esc(curId)}"`, noAttrs: 'data-act="delitno"' })}</div>`;
   const dd = iterDelAsk ? ask : `<div class="dd">
     ${list}${list ? '<div class="dd-sep"></div>' : ""}
     ${ddItem({ act: "newit", icon: "plus", title: t("newIteration"), sub: t("newIterationSub") })}

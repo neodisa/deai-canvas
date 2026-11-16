@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { confirmHTML } from "../app/inline-confirm.js";
+import { confirmHTML, confirmedId } from "../app/inline-confirm.js";
 
 const app = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
 
@@ -36,6 +36,17 @@ test("deleteNodes: confirmed пропускає лише питання yesno", 
 
 test("дропдаун ітерації: delitask питає на місці, delit(val) пропускає питання лише з 'confirmed'", () => {
   assert.match(app, /if \(act === 'delitask'\) \{ iterDelAsk = true; paintBar\(\);/);
-  assert.match(app, /val === 'confirmed' \|\| await askYesNo\(t\('menuDeleteIterationConfirm'/);
+  assert.match(app, /const pre = confirmedId\(val\);\s*if \(pre !== null && pre !== it\.id\) return;\s*const go = pre !== null \|\| await askYesNo\(t\('menuDeleteIterationConfirm'/);
   assert.match(app, /if \(openDd !== 'iter'\) iterDelAsk = false;/);
+});
+
+test("confirmedId: лише `confirmed:<id>`; голе `confirmed`, порожнє й чуже — null (питання не пропускається)", () => {
+  assert.equal(confirmedId("confirmed:it3"), "it3");
+  assert.equal(confirmedId("confirmed:"), "");
+  for (const v of ["confirmed", "", undefined, null, 5, "it3", "xconfirmed:it3"]) assert.equal(confirmedId(v), null, String(v));
+});
+
+test("delit: id з питання не збігається з поточною ітерацією — вихід до будь-якого запиту (нічого не видаляється)", () => {
+  const body = app.slice(app.indexOf("  delit: async (val) => {"), app.indexOf("  // ── дропдаун синку з git"));
+  assert.ok(body.indexOf("if (pre !== null && pre !== it.id) return;") < body.indexOf("/api/iteration-delete"));
 });

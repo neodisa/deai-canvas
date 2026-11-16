@@ -13,7 +13,7 @@ import { flatten as flattenTree, pathOf, topIds, visibleIds, visibleRows, statsO
 import { canMove } from './page-order.js';
 import { readFlow, shotKey, shotVersion, stateQuery } from './flow-model.js';
 import { flowLayout } from './flow-layout.js';
-import { confirmHTML } from './inline-confirm.js';
+import { confirmHTML, confirmedId } from './inline-confirm.js';
 import { ask, askChoice, askForm, askYesNo, formValues, tell, tellError } from './ask.js';
 import { composeDeleteNote, deleteDialogModel, resolveDrop, shouldCommitDrop, shouldRefreshPanel, vanishedFolders, zoneOfHit, groupTargetIds, pageMenuItems, runSequential, treeBusyGate, treeTarget as pickTreeTarget } from './tree-actions.js';
 import {
@@ -1758,6 +1758,18 @@ function cmtDown() {
 document.addEventListener('click', (ev) => {
   if (cmtDelAsk && !ev.target.closest?.('.cmt-acts--cfm')) { cmtDelAsk = null; paintComments(); }
 }, true);
+/* Клік у макет — це клік в iframe: до `document` він не долітає, зате вікно оболонки втрачає фокус. Фокус пішов у рамку —
+   питання знімається, нічого не видаляючи (та сама ідея, що в поповері `ask.js`). */
+window.addEventListener('blur', () => setTimeout(() => {
+  if (cmtDelAsk && document.activeElement?.tagName === 'IFRAME') { cmtDelAsk = null; paintComments(); }
+}, 0));
+/** Зняти питання «Видалити назавжди?»; `refocus` — повернути фокус на кошик тієї картки (Esc, «Скасувати»), а не лишати на `body`. */
+function closeDelAsk(refocus) {
+  const id = cmtDelAsk;
+  cmtDelAsk = null;
+  paintComments();
+  if (refocus && id) cmtEl.querySelector(`[data-act="cmtdel"][data-val="${CSS.escape(id)}"]`)?.focus();
+}
 function paintComments() {
   const html = cmtOpen && !homeOpen ? commentsPanelHTML({ snapshot: cmtSnap, query: cmtQuery, selectedId: cmtSel,
     editingId: cmtEditing, delAsk: cmtDelAsk, expanded: cmtExpanded, filter: cmtFilter, dual: !noTeamComments(), teamDown: cmtTeamDown,
@@ -1765,8 +1777,11 @@ function paintComments() {
   cmtTool = cmtOpen && !homeOpen ? readTool(cmtLayer()) : null;
   /* Фокус і каретку поля пошуку / редагування — назад після перезапису (той самий прийом, що в `paintInsp`). */
   const act = document.activeElement;
+  const cfmSel = act && cmtEl.contains(act) && act.closest('.cmt-acts--cfm')
+    ? `.cmt-acts--cfm .${act.classList.contains('cfm-yes') ? 'cfm-yes' : 'cfm-no'}` : null;   // фокус на кнопці питання «Видалити назавжди?»
   const keep = act && cmtEl.contains(act) && (act.id === 'cmt-q' || act.classList.contains('cmt-edit'))
-    ? { sel: act.id === 'cmt-q' ? '#cmt-q' : '.cmt-edit', range: [act.selectionStart, act.selectionEnd] } : null;
+    ? { sel: act.id === 'cmt-q' ? '#cmt-q' : '.cmt-edit', range: [act.selectionStart, act.selectionEnd] }
+    : (cfmSel ? { sel: cfmSel, range: [0, 0] } : null);
   const top = cmtEl.querySelector('.cmt-body')?.scrollTop || 0;
   cmtEl.hidden = !html;
   const wasWith = document.body.classList.contains('with-cmt');
@@ -2162,7 +2177,7 @@ const BAR_ACTIONS = {
      коментатор не показує браузерний `confirm()`. */
   cmtdel: (id) => { cmtDelAsk = id; paintComments(); cmtEl.querySelector('.cmt-acts--cfm .cfm-no')?.focus(); },
   cmtdelyes: (id) => { if (cmtDelAsk !== id) return; cmtDelAsk = null; cmtLayer()?.removeComment(id, { confirmed: true }); paintComments(); },
-  cmtdelno: () => { cmtDelAsk = null; paintComments(); },
+  cmtdelno: () => closeDelAsk(true),
   cmtedit: (id) => { cmtEditing = id; cmtDraft = null; paintComments(); cmtEl.querySelector('.cmt-edit')?.focus(); },
   cmteditsave: (id) => {
     const ta = cmtEl.querySelector('.cmt-edit');
@@ -2396,7 +2411,10 @@ const BAR_ACTIONS = {
     const it = curIter();
     if (!it) return;
     const label = it.label_text || it.id;
-    const go = val === 'confirmed' || await askYesNo(t('menuDeleteIterationConfirm', label), { yes: t('menuDeleteYes'), danger: true });
+    /* `confirmed:<id>` — питання в дропдауні назвало саме цю ітерацію: коли «поточною» стала інша, не видаляємо нічого. */
+    const pre = confirmedId(val);
+    if (pre !== null && pre !== it.id) return;
+    const go = pre !== null || await askYesNo(t('menuDeleteIterationConfirm', label), { yes: t('menuDeleteYes'), danger: true });
     if (!go) return;
     try {
       await post('/api/iteration-delete', { id: it.id });
@@ -8071,7 +8089,7 @@ document.addEventListener('keydown', (ev) => {
     ev.preventDefault(); BAR_ACTIONS.cmtpins(); return;
   }
   /* Esc при питанні «Видалити назавжди?» (етап В) знімає лише питання — панель лишається. */
-  if (cmtFree && cmtOpen && cmtDelAsk && ev.key === 'Escape') { cmtDelAsk = null; paintComments(); return; }
+  if (cmtFree && cmtOpen && cmtDelAsk && ev.key === 'Escape') { ev.preventDefault(); closeDelAsk(true); return; }
   if (cmtFree && cmtOpen && ev.key === 'Escape') { setCommentsOpen(false); return; }
 
   /* ⌥M (режим) і ⌘\ (панель шарів) — акорди із ЗАТВЕРДЖЕНОГО прототипу

@@ -859,10 +859,12 @@ test("дропдаун ітерації: пункт видалення — delit
 });
 
 test("дропдаун ітерації: iterDelAsk — лише питання, «Ні» перед «Видалити», без переліку ітерацій", () => {
-  const h = html({ openDd: "iter", iterDelAsk: true });
+  const iterList = [{ id: "it2", label: "Іт.2", note: "", pub: false, onGl: false }, { id: "it3", label: "Іт.3", note: "", pub: false, onGl: false }];
+  const h = html({ openDd: "iter", iterDelAsk: true, iterList, iterId: "it3" });
+  assert.match(h, /data-val="confirmed:it3"/, "«Видалити» привʼязане до id ітерації з питання");
   assert.match(h, /class="dd dd--confirm"/);
   assert.match(h, /class="cfm"/);
-  assert.match(h, /class="cfm-yes" data-act="delit" data-val="confirmed"/);
+  assert.match(h, /class="cfm-yes" data-act="delit" data-val="confirmed:it3"/);
   assert.match(h, /class="cfm-no" data-act="delitno"/);
   assert.ok(h.includes(t("cfmDelIter", "Іт.3")), "питання називає ітерацію");
   assert.doesNotMatch(h, /data-act="iter"/);
