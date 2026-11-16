@@ -3,6 +3,13 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.28.1] — 16.11.2026
+
+### Змінено
+- Кнопки в усіх діалогах в одному порядку: «Скасувати» ліворуч, головна чи небезпечна дія — крайня праворуч (як «Ні» /
+  «Видалити» в підтвердженні на місці). Раніше «Скасувати» стояла праворуч. Фокус для небезпечних дій — як і був, на
+  «Скасувати».
+
 ## [0.28.0] — 16.11.2026
 
 Shell redesign, stage В: dialogs. Every question, message and form of the canvas now looks like the dark shell, delete

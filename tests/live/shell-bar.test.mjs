@@ -470,6 +470,8 @@ test("«Видалити ітерацію»: питання в дропдаун�
   const card = await page.evaluate(() => getComputedStyle(document.querySelector(".cv-ask")).backgroundColor);
   assert.notEqual(card, "rgb(255, 255, 255)", "картка біла");
   assert.equal(await page.evaluate(() => document.activeElement?.dataset?.a), "cancel", "фокус не на «Скасувати»");
+  // Порядок кнопок (0.28.1, власник): «Скасувати» ліворуч, «Видалити» — праворуч, як «Ні» / «Видалити» в дропдауні.
+  assert.deepEqual(await page.$$eval(".cv-ask-row button", (bs) => bs.map((b) => b.dataset.a)), ["cancel", "ok"]);
   await page.keyboard.press("Escape");
   await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
   assert.equal(alive(), true, "Esc у картці видалив ітерацію");

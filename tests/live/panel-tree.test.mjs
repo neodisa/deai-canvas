@@ -629,6 +629,8 @@ test("S2: тека з вмістом — темна картка з перелі
     assert.notEqual(v, "rgb(255, 255, 255)", `${k}: тло біле`);
   }
   assert.equal(looks.focus, "cancel", "фокус не на «Скасувати»");
+  // Порядок кнопок (0.28.1, власник): «Скасувати» ліворуч, небезпечна — крайня праворуч, як у питанні в меню.
+  assert.deepEqual(await page.$$eval(".cv-ask-row button", (bs) => bs.map((b) => b.dataset.a)), ["cancel", "unwrap", "all"]);
   await page.keyboard.press("Escape");
   await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
   await quiet(page);
