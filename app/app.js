@@ -1822,11 +1822,19 @@ function cmtNewsTree() {
   cmtNewsPagesKey = k;
   if (curTask) renderPanel();
 }
+/** Вибір вкладки фільтра панелі: лише значення з FILTERS; памʼятається в `dc-cmt-filter`; перемальовує панель. */
+function setCmtFilter(f) {
+  if (!FILTERS.includes(f)) return;
+  cmtFilter = f;
+  try { localStorage.setItem('dc-cmt-filter', f); } catch (e) {}
+  paintComments();
+}
 function newsToast(came) {
   const last = came[came.length - 1];
   notice('cmt-news', came.length === 1 ? t('cmtNewToast', last.author || '—') : t('cmtNewToastN', came.length), [{
     act: 'cmtshownew', label: t('cmtShowNew'),
-    run: () => { dropNotice('cmt-news'); setCommentsOpen(true); cmtSel = last.id; paintComments(); cmtLayer()?.focus(last.id); },
+    /* Новини — завжди командні: на «Для Claude» їх (недорученими) не видно, тож «Показати» веде на «Команду». */
+    run: () => { dropNotice('cmt-news'); if (cmtFilter === 'local') setCmtFilter('project'); setCommentsOpen(true); cmtSel = last.id; paintComments(); cmtLayer()?.focus(last.id); },
   }]);
 }
 function setCommentsOpen(on) {
@@ -2148,7 +2156,7 @@ const BAR_ACTIONS = {
   cmtcarry: (id) => { cmtLayer()?.carry(id); },
   cmtshot: (id) => { cmtLayer()?.openShot(id); },
   cmtsec: (k) => { if (k in cmtExpanded) { cmtExpanded[k] = !cmtExpanded[k]; paintComments(); } },
-  cmtfilter: (f) => { if (!FILTERS.includes(f)) return; cmtFilter = f; try { localStorage.setItem('dc-cmt-filter', f); } catch (e) {} paintComments(); },
+  cmtfilter: (f) => setCmtFilter(f),
   cmtassign: (id) => { cmtLayer()?.setMeta?.(id, { assignee: 'claude' }); },
   cmtunassign: (id) => { cmtLayer()?.setMeta?.(id, { assignee: null }); },
   cmtpins: () => { cmtLayer()?.togglePins(); },

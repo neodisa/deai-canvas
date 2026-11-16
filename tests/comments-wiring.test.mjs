@@ -29,11 +29,32 @@ const act = (key) => {
 };
 
 test("cmtfilter: лише значення з FILTERS, вибір памʼятається в dc-cmt-filter", () => {
-  const a = act("cmtfilter");
+  assert.match(act("cmtfilter"), /cmtfilter: \(f\) => setCmtFilter\(f\),/, "дія ділить шлях із тостом новин");
+  const a = fn("setCmtFilter");
   assert.match(a, /if \(!FILTERS\.includes\(f\)\) return;/, "довільне значення не мусить потрапити ні в стан, ні в localStorage");
   assert.match(a, /localStorage\.setItem\('dc-cmt-filter', f\)/);
   assert.ok(a.indexOf("FILTERS.includes") < a.indexOf("cmtFilter = f"));
   assert.match(src, /localStorage\.getItem\('dc-cmt-filter'\); return FILTERS\.includes\(v\) \? v : 'local'/, "немає чи сміття — вкладка «Для Claude» (рішення власника 16.11.2026)");
+});
+
+test("тост новин: «Показати» з вкладки «Для Claude» веде на «Команду» через спільний шлях; з «Команда»/«Усі» вкладку не чіпає", () => {
+  const body = fn("newsToast");
+  assert.match(body, /if \(cmtFilter === 'local'\) setCmtFilter\('project'\);/);
+  assert.ok(body.indexOf("setCmtFilter('project')") < body.indexOf("setCommentsOpen(true)"), "вкладку міняємо до відкриття панелі");
+  /* поведінка: виконуємо `run` із підставленими залежностями */
+  const run = (filter) => {
+    const calls = [];
+    const notice = (id, text, actions) => { calls.push(["notice"]); notice.run = actions[0].run; };
+    const mk = new Function("notice", "t", "dropNotice", "setCommentsOpen", "paintComments", "cmtLayer", "setCmtFilter", "state",
+      `let cmtFilter = state.f; let cmtSel = null; function newsToast(came) ${body}\nnewsToast([{ id: "x", author: "a" }]); return () => { state.f = cmtFilter; };`);
+    const state = { f: filter };
+    mk(notice, (k) => k, () => {}, () => calls.push(["open"]), () => {}, () => null, (f) => calls.push(["filter", f]), state);
+    notice.run();
+    return calls.filter((c) => c[0] !== "notice");
+  };
+  assert.deepEqual(run("local"), [["filter", "project"], ["open"]]);
+  assert.deepEqual(run("all"), [["open"]]);
+  assert.deepEqual(run("project"), [["open"]]);
 });
 
 test("«Огляд»: аудиторія «Claude» має підказку під чипом, як і «Команді»", () => {

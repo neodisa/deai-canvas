@@ -325,9 +325,9 @@ test("5: пін колеги → «нових» на острівці, плаш�
   assert.match(await row.evaluate((el) => el.closest("[data-val], li, .row")?.textContent ?? ""), /Пошук/, "число в дереві не на сторінці піна");
 
   await page.click('.cv-notice[data-notice="cmt-news"] [data-act="cmtshownew"]');
-  /* 0.27.1: «Показати» відкриває панель на вкладці «Для Claude», де недорученого командного піна нема, — вкладка «Команда». */
-  await page.click('#cmt-panel [data-act="cmtfilter"][data-val="project"]');
+  /* 0.27.1: «Показати» з вкладки «Для Claude» сам веде на «Команду» — картку видно без ручного перемикання. */
   await page.waitForSelector("#cmt-panel:not([hidden]) .cmt-sec--new .cmt-card");
+  assert.equal(await page.getAttribute('#cmt-panel [data-act="cmtfilter"][data-val="project"]', "aria-pressed"), "true", "«Показати» не перемкнув на «Команду»");
   assert.equal(await page.locator("#cmt-panel .cmt-sec--new .cmt-card").count(), 1);
   assert.equal(await newCount(page), null, "бейдж острівця лишився «новим» при відкритій панелі");
   assert.equal(await page.locator('.cv-notice[data-notice="cmt-news"]').count(), 0, "плашка лишилась");
