@@ -3068,11 +3068,11 @@ def inject_module_comment_layer(html, assets_base, client_urls, config, version=
 #   · аудиторій дві лише коли командне живе (`team`), інакше одна — і чипів у формі нема (коментатор малює їх від двох).
 # Банер `__clDown` — ПЕРШИМ тегом, як у `MODULE_COMMENT_SNIPPET` (порядок несучий, див. коментар над `_COMMENT_DOWN_BANNER`).
 DUAL_AUDIENCES_JS = """(function () {
-        var uk = { local: 'Claude', team: 'Команді', localNote: 'Бачите лише ви і Claude. Claude візьме в роботу.', note: 'Видно колегам у превʼю. Claude не візьме, поки не доручите.' };
-        var en = { local: 'Claude', team: 'Team', localNote: 'Only you and Claude see this. Claude will pick it up.', note: 'Colleagues see this in the preview. Claude will not pick it up until you assign it.' };
+        var uk = { local: 'Claude', team: 'Команді', note: 'Командні коментарі видно колегам у превʼю' };
+        var en = { local: 'Claude', team: 'Team', note: 'Team comments are visible to colleagues in the preview' };
         var L = uk;
         try { if (localStorage.getItem('dc-lang') === 'en') L = en; } catch (e) {}
-        return [{ id: 'local', label: L.local, icon: 'bot', color: '#7C6CF0', private: true, note: L.localNote },
+        return [{ id: 'local', label: L.local, icon: 'bot', color: '#7C6CF0', private: true },
                 { id: 'project', label: L.team, icon: 'team', note: L.note }];
       })()"""
 

@@ -86,7 +86,6 @@ function foldHTML(key, title, items, st, kind) {
 }
 
 const FILTER_KEY = { local: "cmtFLocal", project: "cmtFTeam", all: "cmtFAll" };
-const HINT_KEY = { local: "cmtFHintLocal", project: "cmtFHintTeam", all: "cmtFHintAll" };
 
 /** st: {snapshot, query, selectedId, editingId, expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down} */
 export function commentsPanelHTML(st) {
@@ -107,8 +106,7 @@ export function commentsPanelHTML(st) {
       + FILTERS.map((f) => `<button type="button" data-act="cmtfilter" data-val="${f}" aria-pressed="${filter === f}">`
         + `<span>${esc(t(FILTER_KEY[f]))}</span><span class="cmt-fn">${n[f]}</span>`
         + (f === "project" && n.fresh ? `<span class="cmt-fnew" title="${esc(t("cmtNewTitle"))}">+${n.fresh}</span>` : "")
-        + "</button>").join("") + "</div>"
-      + `<p class="cmt-fhint">${esc(t(HINT_KEY[filter]))}</p>`;
+        + "</button>").join("") + "</div>";
   }
   const down = st.teamDown ? `<p class="cmt-teamdown" role="alert">${esc(t("cmtTeamDown", st.teamDown))}</p>` : "";
   let body;

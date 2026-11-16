@@ -183,6 +183,8 @@ test("1: форма має два чипи (Claude типово), «Команд
   await frame.click("h1");
   await frame.waitForFunction(`!!${SHADOW}.querySelector('.compose textarea')`);
   assert.deepEqual(await chips(frame), [["local", "true"], ["project", "false"]], "типово — Claude, чипів рівно два");
+  // Під «Claude» підпису нема: власник 16.11.2026 — підписи, про які не просили, загромождають форму.
+  assert.equal(await frame.evaluate(`${SHADOW}.querySelector('.compose .caud-note')?.textContent ?? ""`), "", "під «Claude» зʼявився підпис");
   await frame.evaluate(`${SHADOW}.querySelector('.compose .caud-b[data-pick="project"]').click()`);
   assert.deepEqual(await chips(frame), [["local", "false"], ["project", "true"]]);
   assert.ok((await frame.evaluate(`${SHADOW}.querySelector('.compose .caud-note').textContent`)).length > 0, "нема рядка-примітки «команда бачить це в превʼю»");

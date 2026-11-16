@@ -77,7 +77,8 @@ test("фільтр — окремим рядком під пошуком, пор
   assert.match(html, /data-val="project" aria-pressed="true"><span>Команда<\/span><span class="cmt-fn">2<\/span><span class="cmt-fnew"[^>]*>\+1<\/span><\/button>/);
   assert.match(html, /data-val="all" aria-pressed="false"><span>Усі<\/span><span class="cmt-fn">3<\/span><\/button>/);
   assert.ok(html.indexOf('id="cmt-q"') < html.indexOf('class="cmt-filter"'), "фільтр — під пошуком, не в шапці");
-  assert.match(html, /<p class="cmt-fhint">Спільні коментарі\. Їх бачать колеги в превʼю\. Claude бере лише доручені\.<\/p>/);
+  // Рядка-пояснення під фільтром нема: власник 16.11.2026 — підписи, про які не просили, загромождають панель.
+  assert.equal(html.includes("cmt-fhint"), false);
   assert.match(html, /aria-label="Кому"/);
   assert.equal(html.includes("cmt-total"), false, "з фільтром числа у вкладках, не в шапці");
   assert.equal(commentsPanelHTML(base({ dual: true, filter: "local" })).includes("cmt-fnew"), false, "без нових мітки нема");
@@ -86,7 +87,6 @@ test("фільтр — окремим рядком під пошуком, пор
 test("невідоме значення фільтра — вкладка «Для Claude»", () => {
   const html = commentsPanelHTML(base({ dual: true, filter: "сміття" }));
   assert.match(html, /data-val="local" aria-pressed="true"/);
-  assert.match(html, /<p class="cmt-fhint">Те, що Claude візьме в роботу/);
 });
 
 test("шапка: іконка, назва, кнопки icob; icon-btn більше нема; без dual — число в шапці", () => {

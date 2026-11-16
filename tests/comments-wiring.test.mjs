@@ -58,7 +58,7 @@ test("тост новин: «Показати» з вкладки «Для Claud
 });
 
 test("«Огляд»: аудиторія «Claude» має підказку під чипом, як і «Команді»", () => {
-  assert.match(src, /\{ id: 'local', label: t\('audChipLocal'\), icon: 'bot', color: LOCAL_PIN_COLOR, private: true, note: t\('audChipLocalNote'\) \}/);
+  assert.match(src, /\{ id: 'local', label: t\('audChipLocal'\), icon: 'bot', color: LOCAL_PIN_COLOR, private: true \}/);
   assert.match(src, /\{ id: 'project', label: t\('audChipTeam'\), icon: 'team', note: t\('audChipTeamNote'\) \}/);
 });
 

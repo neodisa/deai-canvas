@@ -1862,7 +1862,6 @@ body:not(.home-open) .cn-drawer{display:none}
 .cmt-filter button:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
 .cmt-fn{font-size:11px;font-variant-numeric:tabular-nums}
 .cmt-fnew{min-width:15px;padding:0 4px;border-radius:999px;background:var(--open);color:var(--on-sel);font-size:10px;font-weight:600;line-height:15px;text-align:center;box-sizing:border-box}
-.cmt-fhint{margin:6px 12px 0;font-size:11px;line-height:1.4;color:var(--dim)}
 .cmt-n--local{background:var(--local-pin);color:#fff}
 .cmt-ib{display:inline-grid;place-items:center;width:var(--h-xs);height:var(--h-xs);flex:none;border:0;border-radius:var(--r-sm);background:none;color:var(--mid);cursor:pointer}
 .cmt-ib:hover{background:var(--s4);color:var(--hi)}

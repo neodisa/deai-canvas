@@ -5317,7 +5317,7 @@ const ovc = overviewComments({
   },
   /* Аудиторії піна на «Огляді» (поправки 11, 12, 20): без командного каналу — одна (чипів нема). */
   audiences: () => (noTeamComments() ? [] : [
-    { id: 'local', label: t('audChipLocal'), icon: 'bot', color: LOCAL_PIN_COLOR, private: true, note: t('audChipLocalNote') },
+    { id: 'local', label: t('audChipLocal'), icon: 'bot', color: LOCAL_PIN_COLOR, private: true },
     { id: 'project', label: t('audChipTeam'), icon: 'team', note: t('audChipTeamNote') },
   ]),
   onArmed: (on) => { commentArmed = !!on; canvasEl.classList.toggle('cv-commenting', commentArmed); },
