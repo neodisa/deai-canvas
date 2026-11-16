@@ -130,19 +130,19 @@ test("форма у вікні питання: кружки перебивают
   assert.match(rule(".cv-ask .cv-color .ico"), /display:none/);
   assert.match(rule(".cv-ask .cv-color[aria-checked=true] .ico"), /display:block/);
   assert.match(rule(".cv-ask .cv-color[aria-checked=true]"), /box-shadow/);
-  /* Світлі токени `--space-*` на білій картці без рамки зливаються з фоном: рамка 1px видима на КОЖНОМУ кружку. */
-  assert.match(body, /border:1px solid var\(--g450\)/, "кружок без видимої рамки: нетекстовий контраст < 3:1");
+  /* Токени `--space-*` на картці без рамки зливаються з фоном: рамка 1px видима на КОЖНОМУ кружку (етап В: темна картка → `--line2`). */
+  assert.match(body, /border:1px solid var\(--line2\)/, "кружок без видимої рамки: нетекстовий контраст < 3:1");
   assert.match(rule(".cv-ask--form label,.cv-ask--form p,.cv-ask--form .cv-lbl") ?? "", /white-space:normal/,
     "підписи форми не успадковують `pre-wrap` повідомлень");
 });
 
-test("поле з помилкою (`aria-invalid=true`) має червону рамку токеном --bad-ink, і вона сильніша за звичайну рамку поля", () => {
+test("поле з помилкою (`aria-invalid=true`) має червону рамку токеном --bad (темна картка, етап В), і вона сильніша за звичайну рамку поля", () => {
   const body = rule('.cv-field input[aria-invalid="true"]');
   assert.ok(body, "правила для [aria-invalid=true] немає: `ctl.focus(імʼя)` ставить атрибут, а видимої різниці нема");
-  assert.match(body, /border-color:var\(--bad-ink\)/);
-  assert.match(css, /--bad-ink\s*:\s*#[0-9a-fA-F]{3,8}/, "токена --bad-ink нема в :root");
-  /* Специфічність: `.cv-ask input` (0,1,1) задає рамку звичайному полю; правило помилки (0,2,1) мусить її перебивати. */
-  assert.match(rule(".cv-ask input"), /border:1px solid var\(--border\)/);
+  assert.match(body, /border-color:var\(--bad\)/);
+  assert.match(css, /--bad\s*:\s*#[0-9a-fA-F]{3,8}/, "токена --bad нема в :root");
+  /* Специфічність: `.cv-ask input:where(…)` (0,1,1) задає рамку звичайному полю; правило помилки (0,2,1) мусить її перебивати. */
+  assert.match(rule(".cv-ask input:where(:not([type=checkbox]):not([type=radio]))"), /border:1px solid var\(--line2\)/);
   /* Один червоний для діалогів: літерал `#c2362e` не живе поза :root (токен, а не копія в кожному правилі). */
   const outside = css.replace(/:root\s*\{[^{}]*\}/, "");
   assert.doesNotMatch(outside, /#c2362e/i, "літерал червоного діалогів повернувся поза :root — розійдеться з токеном");
@@ -181,7 +181,7 @@ test("плашка з додатковими рядками: `.cv-notice-body` �
 test("ревʼю Task 7: рядок-статус довгого створення (.cv-form-note) і друга лінія помилки форми (pre-line) мають правила, лише токени", () => {
   const note = rule(".cv-form-note");
   assert.ok(note, ".cv-form-note без правила: `showCreateWait` (app.js) додає цей клас — без стилю він виглядав би голим абзацом");
-  assert.match(note, /color:var\(--g700\)/, "колір — токеном палітри");
+  assert.match(note, /color:var\(--mid\)/, "колір — токеном палітри");
   assert.doesNotMatch(note, /#[0-9a-fA-F]{3,8}\b/, "літерал кольору замість токена");
   const err = rule(".cv-ask--form .cv-form-err");
   assert.ok(err, "правила для другого рядка помилки нема");

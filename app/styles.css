@@ -231,33 +231,51 @@ body.home-open .isl-tools::before{display:none}
    `app/ask.js`): наші питання, на відміну від `prompt()`, сторінку не спиняють.
    `overflow:auto` — бо в повідомлення їде перелік незнятих кадрів, а він буває
    довшим за екран. */
-.cv-ask-scrim{position:fixed;inset:0;z-index:250;background:rgba(21,29,25,.34);
+.cv-ask-scrim{position:fixed;inset:0;z-index:250;background:rgba(13,21,17,.55);
   display:flex;justify-content:center;align-items:flex-start;
   padding:18vh 16px 24px;overflow:auto}
 .cv-ask{display:flex;flex-direction:column;gap:10px;width:520px;max-width:100%;
-  background:var(--card);border:1px solid var(--border);border-radius:8px;
-  padding:16px 18px;box-shadow:0 12px 40px rgba(0,0,0,.22)}
+  background:var(--s2);border:1px solid var(--line2);border-radius:var(--r-lg);color:var(--hi);
+  padding:16px 18px;box-shadow:0 18px 50px rgba(0,0,0,.45)}
+/* Заголовок і пояснення (етап В, `splitTitle` в `app/ask.js`): перший рядок питання — `h2`, решта — абзац. */
+.cv-ask-title{margin:0;display:flex;align-items:flex-start;gap:8px;font-size:14px;font-weight:650;line-height:1.35;color:var(--hi);text-wrap:balance}
+.cv-ask-text{margin:0;font-size:13px;line-height:1.5;color:var(--mid)}
+.cv-ask--error .ico{flex:none;margin-top:1px;color:var(--bad)}
 /* `pre-wrap` — бо в повідомленнях справжні `\n` (три рядки про GitLab, перелік
    кадрів); без нього вони злипаються в одне полотно тексту. */
-.cv-ask label,.cv-ask p{margin:0;font-size:13px;color:var(--g700);line-height:1.45;
+.cv-ask label,.cv-ask p{margin:0;font-size:13px;color:var(--mid);line-height:1.45;
   white-space:pre-wrap;max-height:52vh;overflow:auto}
-.cv-ask input{font:inherit;font-size:14px;padding:8px 10px;min-width:0;
-  border:1px solid var(--border);border-radius:6px}
+.cv-ask input:where(:not([type=checkbox]):not([type=radio])){font:inherit;font-size:14px;height:var(--h-ctl);padding:0 10px;min-width:0;
+  background:var(--s1);color:var(--hi);border:1px solid var(--line2);border-radius:var(--r-sm)}
+.cv-ask input:where(:not([type=checkbox]):not([type=radio])):focus{border-color:var(--sel)}
+.cv-ask input[type=checkbox],.cv-ask input[type=radio]{accent-color:var(--sel)}
 .cv-ask-row{display:flex;justify-content:flex-end;gap:8px}
-.cv-ask button{font:inherit;font-size:13px;padding:6px 14px;border-radius:6px;
-  border:1px solid var(--border);background:var(--g50);cursor:pointer}
-.cv-ask button[data-a="ok"]{background:var(--accent);border-color:var(--accent);color:#fff}
+.cv-ask button{font:inherit;font-size:13px;height:var(--h-ctl);padding:0 14px;border-radius:var(--r-sm);
+  border:1px solid var(--line2);background:var(--s3);color:var(--hi);cursor:pointer}
+.cv-ask button:hover{background:var(--s4)}
+.cv-ask button[data-a="ok"]{background:var(--sel);border-color:var(--sel);color:var(--on-sel)}
+.cv-ask button[data-a="ok"]:hover{background:var(--sel-hover)}
 /* Руйнівна дія має ВИГЛЯДАТИ руйнівною: та сама кнопка, що й «Гаразд», на
    видаленні теки читалась як звичайне підтвердження. */
-.cv-ask button[data-a="ok"].cv-ask-danger{background:var(--bad-ink);border-color:var(--bad-ink)}
+.cv-ask button[data-a="ok"].cv-ask-danger{background:var(--bad);border-color:var(--bad);color:var(--on-sel)}
 /* Варіанти `askChoice` не мають data-a="ok", тож небезпечний варіант фарбуємо
    за класом окремо. */
-.cv-ask button.cv-ask-danger{background:var(--bad-ink);border-color:var(--bad-ink);color:#fff}
+.cv-ask button.cv-ask-danger{background:var(--bad);border-color:var(--bad);color:var(--on-sel)}
 /* Перелік того, що зникне при видаленні теки (до 30 рядків + «…і ще N»). */
-.cv-ask-list{margin:0 0 10px;padding-left:18px;max-height:160px;overflow:auto;color:var(--dim);font-size:12px}
-.cv-ask button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cv-ask-list{margin:0 0 10px;padding:8px 10px 8px 28px;max-height:160px;overflow:auto;color:var(--mid);font-size:12px;
+  background:var(--s1);border:1px solid var(--line);border-radius:var(--r-sm)}
+.cv-ask button:focus-visible,.cv-ask-list:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+/* Поповер (етап В, `askForm` з `anchor`): без підкладки, картка з хвостиком до кнопки-якоря; макет під ним живий.
+   Контейнер не ловить кліків (`pointer-events:none`) — лише сама картка. */
+.cv-ask-pop{position:fixed;inset:0;z-index:250;pointer-events:none}
+.cv-ask--pop{position:absolute;pointer-events:auto;max-width:calc(100vw - 16px)}
+.cv-ask--pop:has(form.fb){width:360px}
+.cv-ask--pop:has(form.up){width:340px}
+.cv-ask-tip{position:absolute;width:12px;height:12px;margin-left:-6px;background:var(--s2);border:1px solid var(--line2);transform:rotate(45deg)}
+.cv-ask--pop[data-place="above"] .cv-ask-tip{bottom:-7px;border-top:0;border-left:0}
+.cv-ask--pop[data-place="below"] .cv-ask-tip{top:-7px;border-bottom:0;border-right:0}
 /* ── форми у вікні питання (`askForm`): діалог простору й «Нова задача» ────────
-   Оболонка — та сама світла картка `.cv-ask`, що й у решти питань; нижче лише те,
+   Оболонка — та сама темна картка `.cv-ask`, що й у решти питань; нижче лише те,
    чого в них нема: заголовок, підписані поля, кружки кольору, слот помилки.
    `.cv-ask label,.cv-ask p` вище ставить `pre-wrap` і `max-height:52vh` — для
    повідомлень з переносами; у формі підписи й підказки звичайний текст, тож
@@ -265,75 +283,75 @@ body.home-open .isl-tools::before{display:none}
 .cv-ask--form{width:460px;gap:0}
 .cv-ask--form label,.cv-ask--form p,.cv-ask--form .cv-lbl{white-space:normal;max-height:none;overflow:visible}
 .cv-form{display:flex;flex-direction:column;gap:14px;margin:0}
-.cv-form-h{margin:0;font-size:16px;font-weight:600;color:var(--g900)}
+.cv-form-h{margin:0;font-size:14px;font-weight:650;color:var(--hi)}
 .cv-field{display:flex;flex-direction:column;gap:6px;min-width:0}
-.cv-field label,.cv-lbl{font-size:12px;font-weight:500;color:var(--g700)}
-.cv-field input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.cv-field label,.cv-lbl{font-size:12px;font-weight:500;color:var(--mid)}
+.cv-field input:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
 /* Поле лише для читання — назва ЗНАЙДЕНОГО простору: сервер її не перезапише, тож
    воно не має виглядати редагованим. */
-.cv-field input[readonly]{background:var(--g50);color:var(--g700)}
+.cv-field input[readonly]{background:var(--s1);color:var(--mid)}
 /* Рядок-статус довгого створення задачі (`showCreateWait`, app.js): тихий, під полями, над слотом помилки. */
-.cv-form-note{margin:0;font-size:12px;line-height:1.4;color:var(--g700)}
-.cv-form-err{padding:8px 10px;border-radius:6px;font-size:13px;line-height:1.4;color:#a32a23;
-  background:color-mix(in srgb,var(--bad-ink) 8%,#fff);border:1px solid color-mix(in srgb,var(--bad-ink) 35%,#fff)}
+.cv-form-note{margin:0;font-size:12px;line-height:1.4;color:var(--mid)}
+.cv-form-err{padding:8px 10px;border-radius:var(--r-sm);font-size:13px;line-height:1.4;color:var(--bad);
+  background:color-mix(in srgb,var(--bad) 10%,transparent);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent)}
 /* Помилка форми може мати другий рядок (`\n`: причина сервера під текстом про адресу): `.cv-ask--form p` скидає `white-space`
    у `normal`, тож без цього перенос зникав би. */
 .cv-ask--form .cv-form-err{white-space:pre-line}
 /* Поле, про яке помилка (`ctl.focus(імʼя)` ставить `aria-invalid`): рамка видна й тому, хто не
    читає текст помилки, а не лише скрінрідеру. `:focus-visible` лишає своє кільце — рамка під ним червона. */
-.cv-field input[aria-invalid="true"]{border-color:var(--bad-ink)}
-/* Діалог довіри своєму модулю (3c, `trust-view.js`): та сама біла картка `askForm`, що в діалогу простору, ширша — під
+.cv-field input[aria-invalid="true"]{border-color:var(--bad)}
+/* Діалог довіри своєму модулю (3c, `trust-view.js`): та сама темна картка `askForm`, що в діалогу простору, ширша — під
    список файлів. «Забрати довіру» — ліворуч у рядку кнопок, небезпечна (`--bad-ink` на `--g50` ≥ 4.5:1).
    Правила для `<p>` стоять під `.tr` (форма діалогу): `.cv-ask p` вище має специфічність (0,1,1) і забрав би в простого
    `.tr-meta` розмір, колір і відступ. */
 .cv-ask--form:has(.tr){width:560px}
-.tr .tr-meta,.tr .tr-path{margin:-8px 0 0;font-size:12px;line-height:1.4;color:var(--g600);overflow-wrap:anywhere}
-.tr .tr-reopened{padding:8px 10px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);font-size:13px;color:var(--g900)}
-.tr-warn{display:flex;gap:8px;padding:10px 12px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
-  font-size:13px;line-height:1.45;color:var(--g900)}
-.tr-warn .ico{flex:none;margin-top:2px;color:var(--bad-ink)}
-.cv-ask--form .tr-warn p{margin:0 0 6px;color:var(--g900)}
+.tr .tr-meta,.tr .tr-path{margin:-8px 0 0;font-size:12px;line-height:1.4;color:var(--dim);overflow-wrap:anywhere}
+.tr .tr-reopened{padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--s1);font-size:13px;color:var(--hi)}
+.tr-warn{display:flex;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--s1);
+  font-size:13px;line-height:1.45;color:var(--hi)}
+.tr-warn .ico{flex:none;margin-top:2px;color:var(--bad)}
+.cv-ask--form .tr-warn p{margin:0 0 6px;color:var(--hi)}
 .cv-ask--form .tr-warn p:last-child{margin:0}
-.tr .tr-h3{font-weight:600;color:var(--g700)}
-.tr .tr-none{color:var(--g600)}
-.tr-asks{margin:-8px 0 0;padding-left:18px;font-size:13px;color:var(--g900)}
-.tr-mark{margin-left:6px;padding:0 6px;border:1px solid var(--g450);border-radius:999px;font-size:11px;color:var(--g700);white-space:nowrap}
-.tr-files{max-height:180px;overflow:auto;margin:-8px 0 0;padding:6px 8px;list-style:none;border:1px solid var(--g450);
+.tr .tr-h3{font-weight:600;color:var(--mid)}
+.tr .tr-none{color:var(--dim)}
+.tr-asks{margin:-8px 0 0;padding-left:18px;font-size:13px;color:var(--hi)}
+.tr-mark{margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:var(--mid);white-space:nowrap}
+.tr-files{max-height:180px;overflow:auto;margin:-8px 0 0;padding:6px 8px;list-style:none;border:1px solid var(--line);
   border-radius:6px;font-size:12px}
-.tr-files:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.tr-files li{display:flex;align-items:center;gap:8px;padding:2px 0;color:var(--g900)}
+.tr-files:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.tr-files li{display:flex;align-items:center;gap:8px;padding:2px 0;color:var(--hi)}
 .tr-files code{flex:1;min-width:0;overflow-wrap:anywhere}
-.tr-size{flex:none;color:var(--g600)}
-.tr .tr-removed{font-size:12px;color:var(--g600);overflow-wrap:anywhere}
-.tr .tr-refused{display:flex;gap:8px;color:var(--g900)}
-.tr-refused .ico{flex:none;margin-top:2px;color:var(--bad-ink)}
+.tr-size{flex:none;color:var(--dim)}
+.tr .tr-removed{font-size:12px;color:var(--dim);overflow-wrap:anywhere}
+.tr .tr-refused{display:flex;gap:8px;color:var(--hi)}
+.tr-refused .ico{flex:none;margin-top:2px;color:var(--bad)}
 /* Деталь відмови: `.cn-why-detail` бере --dim (2,25:1 на білому діалозі), тут потрібен темний текст. */
-.tr-refused .cn-why-detail{color:var(--g600)}
+.tr-refused .cn-why-detail{color:var(--dim)}
 /* Довге слово без пробілів (назва модуля в заголовку, мітка налаштування, текст помилки) не розпирає діалог. */
 .tr .cv-form-h,.tr-asks,.tr .cv-form-err{overflow-wrap:anywhere}
-.tr .tr-wait{color:var(--g700)}
-.cv-ask button.tr-untrust{margin-right:auto;border-color:var(--bad-ink);background:var(--g50);color:var(--bad-ink)}
-/* Діалог оновлення інструмента (0.23.0, `update-view.js`): та сама біла картка `askForm`, що в діалогу довіри, і ті самі правила під
+.tr .tr-wait{color:var(--mid)}
+.cv-ask button.tr-untrust{margin-right:auto;border-color:var(--bad);background:var(--s1);color:var(--bad)}
+/* Діалог оновлення інструмента (0.23.0, `update-view.js`): та сама темна картка `askForm`, що в діалогу довіри, і ті самі правила під
    `.up` (специфічність: `.cv-ask p` вище забрав би в простого `.up-ver` розмір і колір). Опис змін — ПРОКРУТНИЙ блок із фокусом
    (як `.tr-files`): без `tabindex` клавіатурою його не дочитати. Команда для копіювання — моноширинна, з кнопкою поруч. */
 .cv-ask--form:has(.up){width:560px}
-.up .up-ver{margin:-8px 0 0;font-size:12px;line-height:1.4;color:var(--g600)}
-.up .up-why{display:flex;gap:8px;padding:10px 12px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
-  font-size:13px;line-height:1.45;color:var(--g900);overflow-wrap:anywhere}
-.up .up-why .ico{flex:none;margin-top:2px;color:var(--bad-ink)}
+.up .up-ver{margin:-8px 0 0;font-size:12px;line-height:1.4;color:var(--dim)}
+.up .up-why{display:flex;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--s1);
+  font-size:13px;line-height:1.45;color:var(--hi);overflow-wrap:anywhere}
+.up .up-why .ico{flex:none;margin-top:2px;color:var(--bad)}
 .up .up-cmd{display:flex;align-items:center;gap:8px;margin-top:-6px}
-.up .up-cmd code{flex:1;min-width:0;padding:6px 8px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
-  color:var(--g900);overflow-wrap:anywhere}
-.up .up-h3{margin:0;font-weight:600;color:var(--g700)}
-.up .up-note{margin:0;font-size:13px;color:var(--g600)}
-.up .up-notes{max-height:240px;overflow:auto;padding:6px 10px;border:1px solid var(--g450);border-radius:6px;font-size:13px;line-height:1.45;
-  color:var(--g900);overflow-wrap:anywhere}
-.up .up-notes:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.up .up-sec-h{margin:6px 0 4px;font-size:13px;font-weight:600;color:var(--g900)}
+.up .up-cmd code{flex:1;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--s1);
+  color:var(--hi);overflow-wrap:anywhere}
+.up .up-h3{margin:0;font-weight:600;color:var(--mid)}
+.up .up-note{margin:0;font-size:13px;color:var(--dim)}
+.up .up-notes{max-height:240px;overflow:auto;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;line-height:1.45;
+  color:var(--hi);overflow-wrap:anywhere}
+.up .up-notes:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.up .up-sec-h{margin:6px 0 4px;font-size:13px;font-weight:600;color:var(--hi)}
 .up .up-notes p{margin:4px 0}
 .up .up-list{margin:4px 0;padding-left:18px}
-.up .up-notes code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:var(--g50);padding:0 3px;border-radius:3px;overflow-wrap:anywhere}
-.up .up-st{margin:0;font-size:13px;color:var(--g700)}
+.up .up-notes code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:var(--s1);padding:0 3px;border-radius:3px;overflow-wrap:anywhere}
+.up .up-st{margin:0;font-size:13px;color:var(--mid)}
 .up[aria-busy="true"] .up-notes{opacity:.6}
 /* Пігулка оновлення в смузі: звичайний контрол смуги з рамкою; підпис ховається з рештою на 1180 (`.lbl-upd`, див. контейнерні запити). */
 .upd-pill{flex:none;margin-right:2px}
@@ -342,10 +360,10 @@ body.home-open .isl-tools::before{display:none}
    сам стан не оголошує. Рамка 1px `--g450` — на КОЖНОМУ кружку: світлі кольори токенів
    `--space-*` на білій картці без неї зливаються з фоном (нетекстовий контраст ≥3:1). */
 .cv-colors{display:flex;gap:8px;flex-wrap:wrap}
-.cv-ask .cv-color{width:28px;height:28px;padding:0;border:1px solid var(--g450);border-radius:var(--r);
+.cv-ask .cv-color{width:28px;height:28px;padding:0;border:1px solid var(--line2);border-radius:var(--r);
   display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
-.cv-ask .cv-color .ico{display:none;color:var(--g900)}
-.cv-ask .cv-color[aria-checked=true]{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--g800)}
+.cv-ask .cv-color .ico{display:none;color:var(--hi)}
+.cv-ask .cv-color[aria-checked=true]{box-shadow:0 0 0 2px var(--s2),0 0 0 4px var(--hi)}
 .cv-ask .cv-color[aria-checked=true] .ico{display:block}
 .cv-colors[aria-disabled=true] .cv-color{cursor:default;opacity:.55}
 /* ⌘K палітра команд і довідка клавіш (Task 6 Плану B, `app/shell-palette.js`).
@@ -1832,24 +1850,24 @@ body:not(.home-open) .cn-drawer{display:none}
 .wz-agent{margin-top:0}
 /* `.th-in` дає `padding:22px 28px 60px`; тут те саме правило пізніше й тієї ж специфічності — вузьке вікно його перебиває. */
 @media (max-width:719px){.wz{padding:16px 16px 48px}.wz-two{grid-template-columns:1fr}}
-/* Відгук (0.23.0, `feedback-view.js`): кнопка — в острівці (`island.js`); діалог — та сама біла картка `askForm`. Поле тексту й
+/* Відгук (0.23.0, `feedback-view.js`): кнопка — в острівці (`island.js`); діалог — та сама темна картка `askForm`. Поле тексту й
    «Що буде надіслано» (прокрутний `<pre>` із фокусом, як `.up-notes`) — лише наявні токени. */
 .cv-ask--form:has(.fb){width:560px}
 .fb .fb-kinds{display:flex;gap:16px}
-.fb textarea{font:inherit;font-size:14px;padding:8px 10px;min-width:0;resize:vertical;border:1px solid var(--border);border-radius:6px;
-  background:#fff;color:var(--g900)}
+.fb textarea{font:inherit;font-size:14px;padding:8px 10px;min-width:0;resize:vertical;border:1px solid var(--line2);border-radius:6px;
+  background:var(--s1);color:var(--hi)}
 .fb input[type=checkbox],.fb input[type=radio]{padding:0}
-.fb textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.fb textarea[aria-invalid="true"]{border-color:var(--bad-ink)}
+.fb textarea:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.fb textarea[aria-invalid="true"]{border-color:var(--bad)}
 .fb .fb-opts{gap:8px}
-.fb .fb-why{font-size:12px;line-height:1.4;color:var(--g600)}
+.fb .fb-why{font-size:12px;line-height:1.4;color:var(--dim)}
 .fb .fb-why[hidden],.fb .fb-thumb[hidden]{display:none}
-.fb .fb-thumb{display:block;max-width:100%;max-height:120px;object-fit:contain;align-self:flex-start;border:1px solid var(--g450);border-radius:6px;background:var(--g50)}
-.fb .fb-preview summary{cursor:pointer;font-weight:600;color:var(--g700)}
-.fb .fb-hint{margin:6px 0 0;font-size:12px;line-height:1.4;color:var(--g600)}
-.fb .fb-pre{margin:6px 0 0;max-height:220px;overflow:auto;padding:8px 10px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
-  font-size:12px;line-height:1.45;color:var(--g900);white-space:pre-wrap;overflow-wrap:anywhere}
-.fb .fb-pre:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.fb .fb-thumb{display:block;max-width:100%;max-height:120px;object-fit:contain;align-self:flex-start;border:1px solid var(--line);border-radius:6px;background:var(--s1)}
+.fb .fb-preview summary{cursor:pointer;font-weight:600;color:var(--mid)}
+.fb .fb-hint{margin:6px 0 0;font-size:12px;line-height:1.4;color:var(--dim)}
+.fb .fb-pre{margin:6px 0 0;max-height:220px;overflow:auto;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--s1);
+  font-size:12px;line-height:1.45;color:var(--hi);white-space:pre-wrap;overflow-wrap:anywhere}
+.fb .fb-pre:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
 
 /* Панель «Коментарі» (0.26.0): та сама права панель, що й інспектор (`.insp`); вони взаємно виключні. */
 .cmt-top .cmt-total{font-size:11px;color:var(--dim);margin-right:auto}

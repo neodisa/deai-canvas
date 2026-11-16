@@ -6,10 +6,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { classesIn, css, hasRule } from "./_css-classes.mjs";
 
 const view = readFileSync(new URL("../app/comments-view.js", import.meta.url), "utf8");
-// Коментарі CSS не рахуються: `.cmt-x` у тексті коментаря — не правило (ревʼю 0.27.1).
-const css = readFileSync(new URL("../app/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const app = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
 
 /** Класи-маркери без власного стилю — лише з причиною. */
@@ -27,34 +26,15 @@ const DYNAMIC = new Map([
   ["cmt-aud--", ["local", "project"]],
 ]);
 
-function classesInView(src) {
-  const out = new Set();
-  for (const m of src.matchAll(/class="([^"]*)"/g)) {
-    // `${…}`-вставки всередині атрибута: беремо лише літеральні шматки, а гілки тернарних виразів — з лапок нижче
-    const literal = m[1].replace(/\$\{[^}]*\}/g, " ");
-    // хвіст на «-»/«--» — префікс динамічного класу (`cmt-aud--${…}`): повне імʼя відоме лише під час виконання
-    for (const c of literal.split(/\s+/)) if (/^[a-z][\w-]*[a-z0-9]$/.test(c)) out.add(c);
-    for (const d of m[1].matchAll(/([a-z][\w-]*-)\$\{/g)) {
-      const tails = DYNAMIC.get(d[1]);
-      if (!tails) throw new Error(`динамічний клас «${d[1]}\${…}» без переліку хвостів у DYNAMIC`);
-      for (const tail of tails) out.add(d[1] + tail);
-    }
-  }
-  // класи з тернарних гілок: " cmt-card--sel", "cmt-ib" : "cmt-act" тощо
-  // `id="cmt-q"` — це id, а не клас: пропускаємо
-  for (const m of src.matchAll(/(?<!\bid=)["'` ](cmt-[\w-]+|icob|insp-[\w-]+|panel-title)["'`]/g)) out.add(m[1]);
-  return out;
-}
-
-const hasRule = (cls) => new RegExp(`\\.${cls.replace(/[-]/g, "\\-")}(?![\\w-])`).test(css);
+const OPTS = { dynamic: DYNAMIC, quoted: "cmt-[\\w-]+|icob|insp-[\\w-]+|panel-title" };
 
 test("кожен клас розмітки панелі коментарів має правило в styles.css", () => {
-  const missing = [...classesInView(view)].filter((c) => !NO_STYLE.has(c) && !hasRule(c)).sort();
+  const missing = [...classesIn(view, OPTS)].filter((c) => !NO_STYLE.has(c) && !hasRule(c)).sort();
   assert.deepEqual(missing, [], `класи без стилю: ${missing.join(", ")}`);
 });
 
 test("перелік винятків не гниє: кожен виняток справді вживається і справді без стилю", () => {
-  const used = classesInView(view);
+  const used = classesIn(view, OPTS);
   for (const [c, why] of NO_STYLE) {
     assert.ok(why && why.length > 10, `${c}: причина обовʼязкова`);
     assert.ok(used.has(c), `${c}: у розмітці вже нема — приберіть виняток`);

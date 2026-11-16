@@ -213,7 +213,7 @@ test("кожен клас tr-* розмітки має правило в styles.
 test("css: діалог ширший за типову форму, а правила для <p> стоять під `.tr` — `.cv-ask p` (0,1,1) інакше перебив би їхні розмір і колір", () => {
   const css = read("styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
   assert.match(css, /\.cv-ask--form:has\(\.tr\)\s*\{[^{}]*width:\s*560px/, "діалог довіри — 560px (під список файлів)");
-  assert.match(css, /\.cv-ask button\.tr-untrust\s*\{[^{}]*margin-right:\s*auto[^{}]*var\(--bad-ink\)/, "«Забрати довіру» — ліворуч у рядку кнопок, небезпечна");
+  assert.match(css, /\.cv-ask button\.tr-untrust\s*\{[^{}]*margin-right:\s*auto[^{}]*var\(--bad\)/, "«Забрати довіру» — ліворуч у рядку кнопок, небезпечна");
   const src = read("trust-view.js").replace(/\/\*[\s\S]*?\*\//g, "");
   const paragraphs = [...src.matchAll(/<p class="(tr-[\w-]+)"/g)].map((m) => m[1]);
   assert.ok(paragraphs.length >= 8, `абзаців знайдено лише ${paragraphs.length}: ${paragraphs}`);
@@ -225,14 +225,14 @@ test("css: діалог ширший за типову форму, а прави
   }
 });
 
-test("css (ревʼю Task 7): причина відмови темна (--g600, не --dim 2,25:1), довгі слова без пробілів переносяться, абзац попередження — --g900", () => {
+test("css (ревʼю Task 7): причина відмови читається на темній картці (--dim, етап В), довгі слова без пробілів переносяться, абзац попередження — --hi", () => {
   const css = read("styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
-  assert.match(css, /\.tr-refused \.cn-why-detail\s*\{[^{}]*color:\s*var\(--g600\)/, "деталь відмови: `.cn-why-detail` бере --dim, на білому діалозі нечитабельно");
+  assert.match(css, /\.tr-refused \.cn-why-detail\s*\{[^{}]*color:\s*var\(--dim\)/, "деталь відмови явно в --dim: на темній картці (етап В) токен читається, правило не мусить зникнути");
   const wrap = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => /overflow-wrap:\s*anywhere/.test(m[2])).map((m) => m[1].split(",").map((x) => x.trim()));
   for (const sel of [".tr .cv-form-h", ".tr-asks", ".tr .cv-form-err"]) {
     assert.ok(wrap.some((list) => list.includes(sel)), `«${sel}»: довге слово без пробілів розпирає діалог — потрібен overflow-wrap:anywhere`);
   }
-  assert.match(css, /\.cv-ask--form \.tr-warn p\s*\{[^{}]*color:\s*var\(--g900\)/, "без кольору абзац бере --g700 від `.cv-ask p`");
+  assert.match(css, /\.cv-ask--form \.tr-warn p\s*\{[^{}]*color:\s*var\(--hi\)/, "без кольору абзац бере --mid від `.cv-ask p`");
 });
 
 test("словник: кожен ключ, який кличе trust-view.js, є в обох мовах", () => {

@@ -586,7 +586,9 @@ test("publishErr: `vercel-auth` — повний `error` із тіла (api() р
 
 test("publishErr: текст сервера не потрапляє в розмітку — `tell` кладе його `textContent` (проводка, `ask.js`)", () => {
   const ask = readFileSync(new URL("../app/ask.js", import.meta.url), "utf8");
-  assert.match(ask, /head\.textContent = text;/);
+  // етап В: заголовок — текстовий вузол, пояснення — textContent; жодного innerHTML із чужим текстом
+  assert.match(ask, /head\.appendChild\(document\.createTextNode\(title\)\);/);
+  assert.match(ask, /p\.textContent = body;/);
   assert.match(ask, /export const tell = \(message\) => overlay\(message, 'tell'\);/);
 });
 
