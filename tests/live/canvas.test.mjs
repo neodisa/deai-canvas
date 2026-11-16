@@ -1604,7 +1604,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
       /* Спершу даємо ОБОМ шляхам відпрацювати, тоді перевіряємо діалог, і лише
          потім чекаємо поле. З `alert()` у коді оверлея не буде ніколи, і єдиним
          слідом лишився б таймаут — факт без причини. */
-      const said = page.locator(".cv-ask p");
+      const said = page.locator(".cv-ask-title");   // етап В: питання/повідомлення — заголовок `h2.cv-ask-title`
       await said.waitFor({ timeout: 10000 }).catch(() => {});
       assert.deepEqual(dialogs, [], "збій запису пішов у діалог браузера, а не в канвас");
       await said.waitFor({ timeout: 3000 });
@@ -3167,24 +3167,25 @@ test("AG. видалення питає в канвасі, і дефолт — �
      (перевірено мутаційно — саме так воно й виглядало). */
   await page.waitForTimeout(300);
   assert.deepEqual(dialogs, [], "видалення все ще питає діалогом браузера");
-  await page.locator(".cv-ask").waitFor({ timeout: 3000 });
-  assert.match(await page.locator(".cv-ask p").textContent(), /Видалити сторінку/);
+  /* Етап В: для сторінки без дітей питання — прямо в меню (`#cv-ctx .cfm`), а не окремою карткою. */
+  await page.locator("#cv-ctx .cfm").waitFor({ timeout: 3000 });
+  assert.match(await page.locator("#cv-ctx .cfm-t").textContent(), /Видалити сторінку/);
 
   /* 2. Дефолт руйнівної дії — НЕ руйнувати, і це не лише про значення відмови:
         фокус стоїть на «Скасувати», тож Enter і пробіл, натиснуті не дивлячись
         (а над відкритим питанням це найзвичніший рефлекс), скасовують. */
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.a), "cancel",
-    "фокус не на «Скасувати» — Enter наосліп видалив би сторінку");
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cfm-no")), true,
+    "фокус не на «Ні» — Enter наосліп видалив би сторінку");
   await page.keyboard.press("Enter");
   await page.waitForTimeout(600);
-  assert.equal(await page.locator(".cv-ask").count(), 0, "оверлей не закрився");
+  assert.equal(await page.locator("#cv-ctx").count(), 0, "питання в меню не закрилось");
   assert.deepEqual(pages(), ["holovna", "poshuk"], "сторінку видалено без явного «так»");
 
   /* 3. І явне «так» таки видаляє. Без цього рядка перевірка вище лишалась би
         зеленою і над кнопкою, яка не робить нічого, — тобто стерегла б рівно ту
         поломку, від якої ця задача й починалась. */
   await menuDelete();
-  await press(page, page.locator(".cv-ask [data-a='ok']"));
+  await press(page, page.locator("#cv-ctx .cfm-yes"));
   await page.locator('.row[data-page="poshuk"]').waitFor({ state: "detached", timeout: 5000 });
   assert.deepEqual(pages(), ["holovna"], "підтверджене видалення не дійшло до диска");
   assert.deepEqual(dialogs, [], "видалення все ще питає діалогом браузера");

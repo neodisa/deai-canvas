@@ -367,7 +367,8 @@ test("c: vercel-auth, module-error («видаліть вручну») і vercel
     fake.reply = { status: c.status, body: { ok: false, code: c.code, error: c.error } };
     await page.click('#bar [data-act="publish"]');
     await page.waitForSelector(".cv-ask", { timeout: 10000 });
-    const body = await page.locator(".cv-ask p").first().textContent();
+    /* Етап В: перший рядок тексту — заголовок, решта (деталі сервера) — абзац; склеюємо назад, як було одним текстом. */
+    const body = [await page.locator(".cv-ask-title").textContent(), ...(await page.locator(".cv-ask-text").allTextContents())].join("\n\n");
     assert.match(body, c.human, `${c.code}: людський текст — ${body}`);
     if (c.detail) {
       /* Другий абзац — текст сервера дослівно: саме він каже, що виправити (права токена, видалити проєкт вручну). */
