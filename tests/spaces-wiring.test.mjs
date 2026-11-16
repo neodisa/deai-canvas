@@ -49,7 +49,7 @@ test("`space`: не перемикає на той самий простір, п
   const body = src.slice(i, src.indexOf("\n  spacenew:", i));
   assert.match(body, /val === spaceNow\(\)\?\.id\) return;/);
   assert.match(body, /post\('\/api\/space-switch', \{ id: val \}\)/);
-  assert.match(body, /catch \(e\) \{ tell\(t\('errFailed', e\.message\)\); return; \}/);
+  assert.match(body, /catch \(e\) \{ tellError\(t\('errTSpaceSwitch'\), e\.message\); return; \}/);
   assert.match(body, /await afterSpaceChange\(\);/);
 });
 

@@ -117,6 +117,20 @@ const UK = {
   // переписує з нуля План B, тому їх ключі сюди не йдуть — див. стелю
   // охоронця літералів.
   errFailed: (msg) => `Не вдалося: ${msg}`,
+  // Заголовки помилок дій (етап В, `tellError`): що саме не вдалося; причина від сервера — під ним.
+  errTDupIter: 'Не вдалося дублювати ітерацію',
+  errTOpenTask: 'Не вдалося відкрити задачу',
+  errTSpaceSwitch: 'Не вдалося перемкнути простір',
+  errTRenameIter: 'Не вдалося перейменувати ітерацію',
+  errTDeleteIter: 'Не вдалося видалити ітерацію',
+  errTVcsPush: 'Не вдалося надіслати зміни',
+  errTVcsPull: 'Не вдалося підтягнути зміни',
+  errTPublish: 'Не вдалося змінити публікацію',
+  errTTeamsMute: 'Не вдалося змінити сповіщення Teams',
+  errTPreviewPw: 'Не вдалося змінити пароль превʼю',
+  errTRenamePage: 'Не вдалося перейменувати сторінку',
+  errTMovePage: 'Не вдалося перемістити сторінку',
+  errTPagePublish: 'Не вдалося змінити публікацію сторінки',
   errFlowLoadFailed: (msg) => `граф не завантажився: ${msg}`,
   // Панель шарів (`shell-panel.js`, `bodyContent()`): той самий префікс, що
   // ніс старий `.pp-err` до переписування панелі (Task 4 Плану B) — його
@@ -169,9 +183,9 @@ const UK = {
   menuRename: 'Перейменувати…',
   menuDuplicateIteration: 'Дублювати (нова копія)',
   menuDeleteIteration: 'Видалити ітерацію',
-  menuRenameIterationPrompt: (n) => `Підпис ітерації Іт.${n} `
-    + '(коротко, напр. «Категорія»; порожнє — вернути «Іт.N»):',
-  menuDuplicateIterationPrompt: (label) => `Нова ітерація — копія ${label}. Примітка (необовʼязково):`,
+  menuRenameIterationPrompt: (n) => `Підпис ітерації Іт.${n}\n`
+    + '(коротко, напр. «Категорія»; порожнє — вернути «Іт.N»)',
+  menuDuplicateIterationPrompt: (label) => `Нова ітерація — копія ${label}\nПримітка (необовʼязково)`,
   menuDeleteIterationConfirm: (label) => `Видалити ${label}?\nПапка ітерації буде видалена `
     + '(git-історія збережеться).',
   menuDeleteYes: 'Видалити',
@@ -182,7 +196,7 @@ const UK = {
   menuMoveDown: 'Опустити',
   menuDeletePage: 'Видалити сторінку',
   menuRenamePagePrompt: 'Нова назва сторінки:',
-  menuDeletePageConfirm: 'Видалити сторінку? Тека буде видалена (git-історія збережеться).',
+  menuDeletePageConfirm: 'Видалити сторінку?\nТека буде видалена (git-історія збережеться).',
 
   // Автозʼємка: підпис кнопки (`shootBtnLabel`) і тости прогону (`shootWithProgress`)
   shootStopLabel: (done, of) => `Стоп ${done}${of}`,
@@ -263,7 +277,7 @@ const UK = {
   teamsOnSub: (ch) => `увімкнено для всього проєкту ${ch} · для всіх`,
   teamsMutedSub: 'вимкнено для всіх колегою — коментарі в Teams не йдуть',
   teamsMutedByMe: 'вимкнено для всіх (тобою) — коментарі в Teams не йдуть',
-  teamsStillMuted: (pid) => `Сповіщення лишаються вимкненими: тиша стоїть на ширшому каналі ${pid}. `
+  teamsStillMuted: (pid) => `Сповіщення лишаються вимкненими\nТиша стоїть на ширшому каналі ${pid}. `
     + 'Увімкнути її можна з задачі цього каналу.',
   pubPwUngated: (n) => `${n} стор. превью зовсім без пароля (зібрано до фікса) — оновіть публікацію`,
   whyTeamsLoading: 'перевіряю стан у базі…',
@@ -280,11 +294,11 @@ const UK = {
   pubPwCustom: 'свій для задачі · лише на цій машині',
   pubPwStale: 'новий пароль ще не в превью — натисніть «Оновити»',
   pwUnreadable: 'секрети простору не читаються — пароль превʼю невідомий, посилання не скопійовано',
-  askPreviewPw: 'Пароль превью цієї задачі. Порожньо — повернути спільний типовий.\n'
-    + 'Це оверлей у браузері: він обмежує радіус зливу, а не захищає.',
+  askPreviewPw: 'Пароль превʼю цієї задачі\n'
+    + 'Порожньо — повернути спільний типовий. Це оверлей у браузері: він обмежує радіус зливу, а не захищає.',
   pwSavedNotPublished: 'Пароль збережено. Він потрапить у превью з першою публікацією.',
-  pwSavedRepublish: 'Пароль збережено, але опубліковане превью ще відкривається СТАРИМ — '
-    + 'на кожній сторінці. Оновити публікацію зараз?',
+  pwSavedRepublish: 'Оновити публікацію зараз?\nПароль збережено, але опубліковане превью ще відкривається СТАРИМ — '
+    + 'на кожній сторінці.',
   pwSavedSame: 'Пароль той самий, що вже в превью.',
   pwMachineNote: 'Пароль живе в tasks.json цієї машини: колега, що перепублікує задачу '
     + 'зі своєї, поставить свій.',
@@ -344,7 +358,7 @@ const UK = {
   folderMissing: 'теки немає на цій машині',
   folderMissingOpen: (key) => `Задачу ${key} не відкрити: теки немає на цій машині.`,
   publishBusy: 'Публікую…',
-  publishDeployFailed: (n, dir, err) => `Зібрано ${n} ітерацій у:\n${dir}\n\nДеплой не вдався: ${err}`,
+  publishDeployFailed: (n, dir, err) => `Деплой не вдався\n${err}\n\nЗібрано ${n} ітерацій у:\n${dir}`,
   publishNotTaskLink: (owner, url) => `Це ТВОЄ превʼю (${url}), а не посилання задачі: задача веде на превʼю власника — ${owner}. Менеджеру давай його посилання.`,
   publishCommentsUnavailable: (code) => `Коментарі не додано до превʼю: модуль коментарів недоступний (${code}). Саме превʼю опубліковано.`,
   toastCopied: 'Посилання скопійовано',
@@ -406,8 +420,8 @@ const UK = {
   // просто ніколи не заводили для цієї задачі. Інструмент не має свого майстра
   // налаштування, тому чесний текст називає РЕАЛЬНЕ місце правки (`serve.py`,
   // `gitlab_cfg()`), а не вигадує кнопку, якої нема.
-  glSetupMsg: 'GitLab налаштовується в tasks.json для цієї задачі — '
-    + 'полями gitlab.repo і gitlab.path (плюс gitlab.branch, типово main).',
+  glSetupMsg: 'GitLab налаштовується в tasks.json для цієї задачі\n'
+    + 'Полями gitlab.repo і gitlab.path (плюс gitlab.branch, типово main).',
 
   // Task 4 Плану B — панель шарів (`app/shell-panel.js`). Значення взяті
   // дослівно з прототипу (`docs/proto/shell.html`, обʼєкти `L.uk`/`L.en`),
@@ -579,7 +593,7 @@ const UK = {
   inspTunerResetAll: 'Скинути все',
   // Питання називає ЧИСЛО і прямо каже, чого воно НЕ чіпає: записка —
   // окрема робота, і втратити її разом із правками було б несподіванкою.
-  inspTunerResetAllAsk: (n) => `Скинути всі накручені зміни на цій сторінці (${n})? `
+  inspTunerResetAllAsk: (n) => `Скинути всі накручені зміни на цій сторінці (${n})?\n`
     + 'Записка Клоду лишиться.',
   inspTunerNote: 'Записка для Клода',
   inspTunerNotePh: 'що саме не так і чого хочеться…',
@@ -597,7 +611,7 @@ const UK = {
   // Відмова запису 409 (`saveTune`): пакет на диску змінив хтось інший — найчастіше
   // Клод, що вже застосував і очистив його. Кажемо ДВІ речі: що показано диск і що
   // останній поворот ручки не ліг, — інакше дизайнер шукав би правку, якої немає.
-  tuneTakenElsewhere: 'Пакет тюнера змінено поза цією вкладкою (найімовірніше, Клод його вже '
+  tuneTakenElsewhere: 'Пакет тюнера змінено поза цією вкладкою\n(найімовірніше, Клод його вже '
     + 'застосував). Показую те, що на диску; останню правку не збережено — поверни її ще раз.',
   // «Скасувати» — це саме «скинути все» (та сама дія, що й посилання вище):
   // скасувати тут можна лише накручене, бо більше нічого й не сталось.
@@ -751,16 +765,16 @@ const UK = {
   treeErrBadWhere: 'Сюди кинути не можна.',
   treeErrBadIds: 'Некоректний перелік шарів.',
   treeErrCorrupt: 'pages.json зіпсований (дерево має неправильну форму) — полагодьте файл.',
-  delTreeTitle: (name, n) => `Видалити «${name}»? Разом із цим шаром буде видалено вкладені (${n}):`,
+  delTreeTitle: (name, n) => `Видалити «${name}»?\nРазом із цим шаром буде видалено вкладені (${n}):`,
   countTitle: (p, s, f) => `Сторінок: ${p}, станів: ${s}, тек: ${f}`,
   delMore: (n) => `…і ще ${n}`,
-  delUnwrap: 'Прибрати, вміст підняти вище',
+  delUnwrap: 'Прибрати лише теку',
   delAll: 'Видалити все',
   whyNotFolder: 'Обрано не теку',
   whyTopLevel: 'Уже на верхньому рівні',
   whySelectOne: 'Виберіть один шар',
   whyEmptyFolder: 'Тека порожня',
-  delManyTitle: (n, total) => `Видалити вибране (${n})? Разом із вкладеними зникне ${total}:`,
+  delManyTitle: (n, total) => `Видалити вибране (${n})?\nРазом із вкладеними зникне ${total}:`,
   delPartialWhy: (k, n, why) => `Видалено ${k} з ${n}. Причина: ${why}`,
   delPartial: (k, n) => `Видалено ${k} з ${n}; решту лишено виділеною.`,
   treeTimeout: 'Сервер не відповів за 15 с — перевірте, чи дію застосовано, і повторіть.',
@@ -1409,6 +1423,20 @@ const EN = {
   flowEdgeSelf: (from, to) => `edge "${from} → ${to}": arrow to itself — discarded`,
 
   errFailed: (msg) => `Failed: ${msg}`,
+  // Action error titles (stage В, `tellError`): what exactly failed; the server reason goes under it.
+  errTDupIter: 'Could not duplicate the iteration',
+  errTOpenTask: 'Could not open the task',
+  errTSpaceSwitch: 'Could not switch the space',
+  errTRenameIter: 'Could not rename the iteration',
+  errTDeleteIter: 'Could not delete the iteration',
+  errTVcsPush: 'Could not push the changes',
+  errTVcsPull: 'Could not pull the changes',
+  errTPublish: 'Could not change publishing',
+  errTTeamsMute: 'Could not change Teams notifications',
+  errTPreviewPw: 'Could not change the preview password',
+  errTRenamePage: 'Could not rename the page',
+  errTMovePage: 'Could not move the page',
+  errTPagePublish: 'Could not change the page publishing',
   errFlowLoadFailed: (msg) => `flow failed to load: ${msg}`,
   errPagesLoadFailed: (msg) => `pages failed to load: ${msg}`,
   toastFreshnessCheckFailed: 'freshness check for frames failed',
@@ -1445,7 +1473,7 @@ const EN = {
   menuDeleteIteration: 'Delete iteration',
   menuRenameIterationPrompt: (n) => `Label for It.${n} `
     + '(short, e.g. "Category"; empty — revert to "It.N"):',
-  menuDuplicateIterationPrompt: (label) => `New iteration — a copy of ${label}. Note (optional):`,
+  menuDuplicateIterationPrompt: (label) => `New iteration — a copy of ${label}\nNote (optional)`,
   menuDeleteIterationConfirm: (label) => `Delete ${label}?\nThe iteration folder will be deleted `
     + '(git history is preserved).',
   menuDeleteYes: 'Delete',
@@ -1454,7 +1482,7 @@ const EN = {
   menuMoveDown: 'Move down',
   menuDeletePage: 'Delete page',
   menuRenamePagePrompt: 'New page name:',
-  menuDeletePageConfirm: 'Delete page? The folder will be deleted (git history is preserved).',
+  menuDeletePageConfirm: 'Delete page?\nThe folder will be deleted (git history is preserved).',
 
   shootStopLabel: (done, of) => `Stop ${done}${of}`,
   shootCapturingLabel: 'Capturing…',
@@ -1522,7 +1550,7 @@ const EN = {
   teamsOnSub: (ch) => `on for the whole project ${ch} · for everyone`,
   teamsMutedSub: 'off for everyone, by a colleague — comments do not reach Teams',
   teamsMutedByMe: 'off for everyone (by you) — comments do not reach Teams',
-  teamsStillMuted: (pid) => `Notifications stay off: the silence is set on the wider channel ${pid}. `
+  teamsStillMuted: (pid) => `Notifications stay off\nThe silence is set on the wider channel ${pid}. `
     + 'Turn it on from that channel’s task.',
   pubPwUngated: (n) => `${n} preview page(s) have no password at all (built before the fix) — update the publish`,
   whyTeamsLoading: 'checking the database…',
@@ -1539,11 +1567,11 @@ const EN = {
   pubPwCustom: 'task-specific · this machine only',
   pubPwStale: 'the new password is not in the preview yet — press “Update”',
   pwUnreadable: 'the space secrets cannot be read — the preview password is unknown, the link was not copied',
-  askPreviewPw: 'Preview password for this task. Leave empty to restore the shared default.\n'
-    + 'It is a browser overlay: it limits the blast radius, it does not protect.',
+  askPreviewPw: 'Preview password for this task\n'
+    + 'Leave empty to restore the shared default. It is a browser overlay: it limits the blast radius, it does not protect.',
   pwSavedNotPublished: 'Password saved. It reaches the preview with the first publish.',
-  pwSavedRepublish: 'Password saved, but the published preview still opens with the OLD one — '
-    + 'on every page. Update the publish now?',
+  pwSavedRepublish: 'Update the publish now?\nPassword saved, but the published preview still opens with the OLD one — '
+    + 'on every page.',
   pwSavedSame: 'The password is the same one the preview already has.',
   pwMachineNote: 'The password lives in this machine’s tasks.json: a colleague who republishes '
     + 'the task from theirs will set their own.',
@@ -1580,7 +1608,7 @@ const EN = {
   folderMissing: 'folder is not on this machine',
   folderMissingOpen: (key) => `Cannot open ${key}: its folder is not on this machine.`,
   publishBusy: 'Publishing…',
-  publishDeployFailed: (n, dir, err) => `Collected ${n} iterations into:\n${dir}\n\nDeploy failed: ${err}`,
+  publishDeployFailed: (n, dir, err) => `Deploy failed\n${err}\n\nCollected ${n} iterations into:\n${dir}`,
   publishNotTaskLink: (owner, url) => `This is YOUR preview (${url}), not the task link: the task points to its owner's preview — ${owner}. Give the manager that link.`,
   publishCommentsUnavailable: (code) => `Comments were not added to the preview: the comments module is unavailable (${code}). The preview itself was published.`,
   toastCopied: 'Link copied',
@@ -1625,8 +1653,8 @@ const EN = {
   figmaErrFailed: (d) => `Could not copy the mockup to Figma: ${d}`,
   toastWidthNotNumber: 'Width is a number of pixels',
   toastWidthClamped: (w, min, max) => `Width out of range — used ${w}px (allowed ${min}–${max})`,
-  glSetupMsg: 'GitLab is configured in tasks.json for this task — '
-    + 'via the gitlab.repo and gitlab.path fields (plus gitlab.branch, default main).',
+  glSetupMsg: 'GitLab is configured in tasks.json for this task\n'
+    + 'Via the gitlab.repo and gitlab.path fields (plus gitlab.branch, default main).',
 
   // Task 4 of Plan B — see the UK block for why these exist and for the
   // three keys the prototype doesn't have (shotsUnknown/shotsTakeBare/
@@ -1733,7 +1761,7 @@ const EN = {
   inspTunerOther: (n) => `${n} more on other pages — they are in the package too`,
   inspTunerDrop: 'Reset this change',
   inspTunerResetAll: 'Reset all',
-  inspTunerResetAllAsk: (n) => `Reset every tuned change on this page (${n})? `
+  inspTunerResetAllAsk: (n) => `Reset every tuned change on this page (${n})?\n`
     + 'The note for Claude stays.',
   inspTunerNote: 'Note for Claude',
   inspTunerNotePh: 'what feels wrong and what you want…',
@@ -1743,7 +1771,7 @@ const EN = {
   inspTunerSendHint: 'Mark the package ready — Claude will see that you are done. '
     + 'Your changes are saved as you go regardless.',
   inspTunerReadyMark: 'ready — waiting for Claude',
-  tuneTakenElsewhere: 'The tuner package was changed outside this tab (most likely Claude has '
+  tuneTakenElsewhere: 'The tuner package was changed outside this tab\n(most likely Claude has '
     + 'already applied it). Showing what is on disk; your last edit was not saved — redo it.',
   inspTunerCancel: 'Cancel',
   // See the UK block: the change stays in the package (it describes what the
@@ -1861,16 +1889,16 @@ const EN = {
   treeErrBadWhere: 'Cannot drop here.',
   treeErrBadIds: 'Invalid list of layers.',
   treeErrCorrupt: 'pages.json is damaged (the tree has a wrong shape) — fix the file.',
-  delTreeTitle: (name, n) => `Delete “${name}”? Nested layers will be deleted with it (${n}):`,
+  delTreeTitle: (name, n) => `Delete “${name}”?\nNested layers will be deleted with it (${n}):`,
   countTitle: (p, s, f) => `Pages: ${p}, states: ${s}, folders: ${f}`,
   delMore: (n) => `…and ${n} more`,
-  delUnwrap: 'Remove, keep contents one level up',
+  delUnwrap: 'Remove the folder only',
   delAll: 'Delete everything',
   whyNotFolder: 'Not a folder',
   whyTopLevel: 'Already at the top level',
   whySelectOne: 'Select a single layer',
   whyEmptyFolder: 'The folder is empty',
-  delManyTitle: (n, total) => `Delete the selection (${n})? With nested layers ${total} will go:`,
+  delManyTitle: (n, total) => `Delete the selection (${n})?\nWith nested layers ${total} will go:`,
   delPartialWhy: (k, n, why) => `Deleted ${k} of ${n}. Reason: ${why}`,
   delPartial: (k, n) => `Deleted ${k} of ${n}; the rest stays selected.`,
   treeTimeout: 'The server did not answer within 15 s — check whether the action applied, then retry.',

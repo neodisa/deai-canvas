@@ -13,7 +13,7 @@ import { flatten as flattenTree, pathOf, topIds, visibleIds, visibleRows, statsO
 import { canMove } from './page-order.js';
 import { readFlow, shotKey, shotVersion, stateQuery } from './flow-model.js';
 import { flowLayout } from './flow-layout.js';
-import { ask, askChoice, askForm, askYesNo, tell } from './ask.js';
+import { ask, askChoice, askForm, askYesNo, tell, tellError } from './ask.js';
 import { composeDeleteNote, deleteDialogModel, resolveDrop, shouldCommitDrop, shouldRefreshPanel, vanishedFolders, zoneOfHit, groupTargetIds, pageMenuItems, runSequential, treeBusyGate, treeTarget as pickTreeTarget } from './tree-actions.js';
 import {
   CANVAS_PRESETS, CANVAS_W, MAX_W, MIN_W, PRESETS, activePreset, frameKey, parseWidth,
@@ -1292,7 +1292,7 @@ async function dupIteration() {
     const r = await post('/api/iteration', { from, note });
     picked = r.iteration.id;
     await refreshGitlab(); render();
-  } catch (e) { tell(t('errFailed', e.message)); }
+  } catch (e) { tellError(t('errTDupIter'), e.message); }
 }
 
 /**
@@ -2012,7 +2012,7 @@ async function switchTask(val) {
     currentTaskId = val; taskSwitchGen += 1;
     if (homeReady()) homeData = { ...homeData, current: val };
     return true;
-  } catch (e) { tell(t('errFailed', e.message)); return false; }
+  } catch (e) { tellError(t('errTOpenTask'), e.message); return false; }
 }
 
 const BAR_ACTIONS = {
@@ -2078,7 +2078,7 @@ const BAR_ACTIONS = {
   space: async (val) => {
     if (!val || val === spaceNow()?.id) return;
     try { await post('/api/space-switch', { id: val }); }
-    catch (e) { tell(t('errFailed', e.message)); return; }
+    catch (e) { tellError(t('errTSpaceSwitch'), e.message); return; }
     await afterSpaceChange();
   },
   spacenew: () => openWizard(),
@@ -2367,7 +2367,7 @@ const BAR_ACTIONS = {
     const next = await ask(t('menuRenameIterationPrompt', itNum(it.id)), cur);
     if (next === null) return;
     try { await post('/api/iteration-rename', { id: it.id, label: next }); render(); }
-    catch (e) { tell(t('errFailed', e.message)); }
+    catch (e) { tellError(t('errTRenameIter'), e.message); }
   },
 
   delit: async () => {
@@ -2380,7 +2380,7 @@ const BAR_ACTIONS = {
       await post('/api/iteration-delete', { id: it.id });
       if (picked === it.id) picked = null;
       render();
-    } catch (e) { tell(t('errFailed', e.message)); }
+    } catch (e) { tellError(t('errTDeleteIter'), e.message); }
   },
 
   // ── дропдаун синку з git: адреси `vcs-*` (старі, з префіксом gitlab, лишились псевдонімами для хука) ──────
@@ -2411,7 +2411,7 @@ const BAR_ACTIONS = {
       else if (r.changed === false) toast(t('glNothingToSendToast', lbl));
       else if (r.pushed) toast(t('glPushedToast', r.sha || '—', lbl));
     /* `requestErrText`: 400 від `send_error` (немає ролі чи цілі, погана ітерація) приходить HTML-ом, причина — в рядку статусу. */
-    } catch (e) { tell(t('errFailed', requestErrText(e))); }
+    } catch (e) { tellError(t('errTVcsPush'), requestErrText(e)); }
     await refreshGitlab(); render();
   },
 
@@ -2434,7 +2434,7 @@ const BAR_ACTIONS = {
          її не бачить: без цієї гілки pull, що не вдався, мовчав би — а мовчазна кнопка виглядає зламаною. */
       else if (r.ok === false) tell(glFailText(r, lbl, t('glSyncFailedMsg', r.error || '—', lbl)));
       await refreshGitlab(); render();
-    } catch (e) { tell(t('errFailed', requestErrText(e))); }
+    } catch (e) { tellError(t('errTVcsPull'), requestErrText(e)); }
   },
 
   /* Синк із git у ЛІГА налаштовується правкою `tasks.json` (`gitlab_cfg()` у `serve.py`), а не на «Підключенні»: відкриття
@@ -2458,7 +2458,7 @@ const BAR_ACTIONS = {
     const it = curIter();
     if (!it) return;
     try { await post('/api/publish-toggle', { id: it.id }); render(); }
-    catch (e) { tell(t('errFailed', e.message)); }
+    catch (e) { tellError(t('errTPublish'), e.message); }
   },
 
   openpreview: () => {
@@ -2485,7 +2485,7 @@ const BAR_ACTIONS = {
       else tell(t('teamsStillMuted', teamsMute.via || teamsMute.channel));
       paintBar();
     } catch (e) {
-      tell(t('errFailed', e.message));
+      tellError(t('errTTeamsMute'), e.message);
       teamsMute = null;
       paintBar();
       loadTeamsMute();
@@ -2502,7 +2502,7 @@ const BAR_ACTIONS = {
     if (next === null) { render(); return; }
     let r;
     try { r = await post('/api/preview-password', { password: next }); }
-    catch (e) { tell(t('errFailed', e.message)); render(); return; }
+    catch (e) { tellError(t('errTPreviewPw'), e.message); render(); return; }
     await render();
     const state = curTask?.publish_url ? r.preview_gate?.state : 'none';
     if (state === 'stale') {
@@ -5056,7 +5056,7 @@ async function renamePage(pageId) {
   const name = await ask(t('menuRenamePagePrompt'), cur);
   if (name === null) return;
   try { await post('/api/page-rename', { it, page: pageId, name }); await loadPages(); render(); }
-  catch (e) { tell(t('errFailed', e.message)); }
+  catch (e) { tellError(t('errTRenamePage'), e.message); }
 }
 /**
  * Переставити сторінку серед сусідів: `{delta: ±1}` із меню або `{index}` із
@@ -5066,7 +5066,7 @@ async function renamePage(pageId) {
 async function movePage(pageId, how) {
   const it = picked;                  // фіксуємо ДО await — див. «＋ стор.» у render()
   try { await post('/api/page-move', { it, page: pageId, ...how }); await loadPages(); render(); }
-  catch (e) { tell(t('errFailed', e.message)); }
+  catch (e) { tellError(t('errTMovePage'), e.message); }
 }
 /** Вузол, на якому діє меню/палітра: єдиний вибраний, інакше відкрита сторінка. */
 function treeTarget() {
@@ -5182,7 +5182,7 @@ async function treePostNow(path, body, it, quiet = false) {
 }
 async function togglePagePublish(pageId) {
   try { await post('/api/page-publish-toggle', { it: picked, page: pageId }); await loadPages(); render(); }
-  catch (e) { tell(t('errFailed', e.message)); }
+  catch (e) { tellError(t('errTPagePublish'), e.message); }
 }
 /* Видалення — ОДНА дорога для одного й багатьох вузлів (`deleteDialogModel`):
    питання зі списком того, що зникне (до 30 назв + «…і ще N»); «прибрати лише

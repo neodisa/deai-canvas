@@ -578,6 +578,8 @@ function mkEnv(over = {}) {
     post: async (path, body) => { log.post.push([path, body]); return env.reply; },
     reply: {},
     tell: (m) => log.tell.push(m),
+    // етап В: помилка дії = заголовок + причина; у журнал `tell` — той самий текст, що склав би `tellError`
+    tellError: (title, reason) => log.tell.push(`${title}\n${reason}`),
     toast: (m) => log.toast.push(m),
     askYesNo: async (msg, o) => { log.ask.push([msg, o]); return env.yes !== false; },
     yes: true,
@@ -689,13 +691,13 @@ test("glpush: запит упав — людський текст (HTML від s
     const env = mkEnv();
     env.post = async () => { throw htmlErr; };
     await actFn(act, env)();
-    assert.deepEqual(env.log.tell, [t("errFailed", "no gitlab configured for this task")], act);
+    assert.deepEqual(env.log.tell, [`${t(act === "glpush" ? "errTVcsPush" : "errTVcsPull")}\nno gitlab configured for this task`], act);
     assert.ok(!env.log.tell[0].includes("<"), `${act}: у тексті розмітки нема`);
   }
   const net = mkEnv();
   net.post = async () => { throw new TypeError("Failed to fetch"); };
   await actFn("glpush", net)();
-  assert.deepEqual(net.log.tell, [t("errFailed", "Failed to fetch")]);
+  assert.deepEqual(net.log.tell, [`${t("errTVcsPush")}\nFailed to fetch`]);
   assert.deepEqual((await run("glpush", {}, { glCache: null })).post, [], "без кешу — нічого");
 });
 
@@ -763,13 +765,13 @@ test("glpull: питання й тости несуть підпис; unchanged 
   assert.deepEqual(log.toast, ["На GitLab те саме, що в it2 — нової ітерації не заводив"]);
 });
 
-test("glpull: «Ні» у питанні — запиту нема; запит упав — errFailed (catch лишився для транспорту)", async () => {
+test("glpull: «Ні» у питанні — запиту нема; запит упав — заголовок errTVcsPull + причина (catch лишився для транспорту)", async () => {
   const log = await run("glpull", {}, { yes: false });
   assert.deepEqual(log.post, []);
   const env = mkEnv();
   env.post = async () => { throw new Error("net down"); };
   await actFn("glpull", env)();
-  assert.deepEqual(env.log.tell, [t("errFailed", "net down")]);
+  assert.deepEqual(env.log.tell, [`${t("errTVcsPull")}\nnet down`]);
 });
 
 test("glhistory: відкриває лише http(s) із відповіді; інше — як без web (нічого)", () => {
