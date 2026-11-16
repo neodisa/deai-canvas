@@ -248,6 +248,24 @@ const state = (page) => page.evaluate(() => {
  * («ховер мовчить») не відрізняє «сигнал придушено правильно» від «курсор
  * нікуди не поїхав і малювання не було».
  */
+/**
+ * Токени ДС простору вантажаться асинхронно (`loadSpaceTokens` → `_dsArrived` → `_tuned` → `_paint` і сигнал батькові).
+ * Під навантаженням повного прогону відповідь інколи приходила вже ПІСЛЯ `arm` — лічильники бачили зайвий `_paint` і
+ * зайвий сигнал, і B/C/D падали раз на кілька прогонів (16.11.2026). Тому перед `arm` чекаємо, поки запит токенів
+ * відповів (або його немає зовсім — макет без простору), і ще два кадри на `res.json()` та перемальовку.
+ */
+async function dsSettled(page) {
+  await page.waitForFunction(() => {
+    const w = document.getElementById("frame")?.contentWindow;
+    const s = w?.document.querySelector('script[src*="inspector.js"]');
+    if (!s) return false;
+    if (!/[?&]sp=/.test(s.src)) return true;
+    return w.performance.getEntriesByType("resource")
+      .some((e) => e.name.includes("/api/ds-tokens") && e.responseEnd > 0);
+  }, null, { timeout: 10000 });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+}
+
 async function arm(page) {
   await page.evaluate(() => {
     const api = document.getElementById("frame").contentWindow.CanvasInspector;
@@ -294,6 +312,7 @@ async function centerOf(page, sel) {
 async function pinByClick(page, sel) {
   const [x, y] = await centerOf(page, sel);
   await page.mouse.move(x, y);
+  await dsSettled(page);
   await arm(page);
   await page.mouse.down();
   await page.mouse.up();
@@ -452,6 +471,7 @@ test("C. рух курсора БЕЗ піна не смикає батька ж
   t.after(() => browser.close());
   const page = await openInspector(browser, url);
 
+  await dsSettled(page);
   await arm(page);
   const seen = [];
   for (const sel of ["#ttl", "#target", "#a", "#b", "#target", "#ttl"]) {
@@ -486,6 +506,7 @@ test("D. курсор покинув запінений елемент — зв�
   await pinByClick(page, "#target");
   assert.equal((await state(page)).pinned, "target");
 
+  await dsSettled(page);
   await arm(page);                              // скидаємо після піна
   const [x, y] = await centerOf(page, "#a");
   await page.mouse.move(x, y);
@@ -608,6 +629,12 @@ test("F. падіння в ланцюжку не ховає стан назав�
   /* Свої винятки чекані; чужий тут означав би, що перевірка міряє не те. */
   const errs = [];
   page.on("pageerror", (e) => errs.push(String(e.message || e)));
+  /* Тиша перед підрахунком (16.11.2026): після падіння батька `_emit` повторює сигнал на НАЙБЛИЖЧОМУ ж малюванні, а
+     малювання могло прийти саме собою — від токенів ДС, що доїхали пізно, чи від синтетичного руху миші, яким Chromium
+     оновлює ховер над рамкою. Під навантаженням повного прогону воно встигало раніше за `hits()` — «2 !== 1». Тому
+     чекаємо токени й відводимо курсор з рамки на смугу оболонки. */
+  await dsSettled(page);
+  await page.mouse.move(5, 5);
 
   /* Вимикаємо ДО того, як вішати лічильник: сама ця зміна стану нас не
      цікавить, а рахувати треба рівно одну доставку. */

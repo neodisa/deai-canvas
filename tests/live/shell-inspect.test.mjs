@@ -212,9 +212,14 @@ test("D. «Огляд» ховає панель, навіть коли овер�
      перевіряти те, чого не обіцяє й сама смуга. Натомість перевіряємо, що
      цикл НЕ зламаний: бар мусить і після повернення вміти відкрити
      інспектор і панель заново. */
+  /* Чекаємо саме НОВИЙ обʼєкт інспектора: у повному прогоні голе «`CanvasInspector` є» інколи ловило ще СТАРИЙ (до
+     перезавантаження рамки) — кнопка вмикала його, рамка перезавантажувалась, і `on === true` нижче не наставало ніколи. */
+  await page.evaluate(() => { window.__oldInsp = document.getElementById("frame").contentWindow.CanvasInspector; });
   await page.click('#bar [data-act="mode"][data-val="layout"]');
-  await page.waitForFunction(() => !!(document.getElementById("frame")?.contentWindow?.CanvasInspector),
-    null, { timeout: 5000 });
+  await page.waitForFunction(() => {
+    const api = document.getElementById("frame")?.contentWindow?.CanvasInspector;
+    return !!api && api !== window.__oldInsp;
+  }, null, { timeout: 5000 });
   assert.equal(await page.locator("#insp-panel").isVisible(), false,
     "після повернення в «Макет» інспектор мусить бути вимкнений (макет перезавантажився) — панелі не місце");
 
