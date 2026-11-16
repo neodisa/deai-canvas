@@ -31,6 +31,7 @@ import { TIERS } from "./bar-model.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
+import { confirmHTML } from "./inline-confirm.js";
 import { spaceColorToken, spaceRows } from "./spaces-model.js";
 
 /** Клас, яким контейнерний запит ховає лише ПІДПИС контролу (іконка лишається).
@@ -161,7 +162,7 @@ export function mark(text, q) {
    смаком): сегмент у смузі коштував ~180px там, де на 1440 бракує одного
    пікселя; меню «⋯» робило контрол недосяжним на будь-якій ширині понад
    1060px, бо CSS ховає «⋯» — знайдено живим тестом, не оком. */
-function crumbIter(model, openDd) {
+function crumbIter(model, openDd, iterDelAsk = false) {
   const it = model.zone1.find((x) => x.id === "iter");
   if (!it) return "";
   const open = openDd === "iter";
@@ -188,13 +189,17 @@ function crumbIter(model, openDd) {
     marks: `${x.pub ? `<span class="dot dot--ok" title="${esc(t("markPreview"))}"></span>` : ""}`
       + `${x.onGl ? ico("cloud", 13, "ico") : ""}`,
   })).join("");
-  const dd = `<div class="dd">
+  /* «Видалити ітерацію» (етап В): дропдаун лишається відкритим і стає питанням — підтвердження там, де дія.
+     Стан питання — у стані смуги (`iterDelAsk`), закриття дропдауна його скидає. */
+  const ask = `<div class="dd dd--confirm">${confirmHTML({ title: t("cfmDelIter", it.label),
+    yes: t("menuDeleteYes"), no: t("cfmNo"), yesAttrs: 'data-act="delit" data-val="confirmed"', noAttrs: 'data-act="delitno"' })}</div>`;
+  const dd = iterDelAsk ? ask : `<div class="dd">
     ${list}${list ? '<div class="dd-sep"></div>' : ""}
     ${ddItem({ act: "newit", icon: "plus", title: t("newIteration"), sub: t("newIterationSub") })}
     ${ddItem({ act: "renit", icon: "pencil", title: t("renameIteration") })}
     ${ddItem({ act: "dupit", icon: "copy", title: t("dupIteration") })}
     <div class="dd-sep"></div>
-    ${ddItem({ act: "delit", icon: "trash", title: t("delIteration"), danger: true })}</div>`;
+    ${ddItem({ act: "delitask", icon: "trash", title: t("delIteration"), danger: true })}</div>`;
   /* Підпис автора — ще один `txt--soft`, тобто тиснеться разом із приміткою і
      НЕ тисне тег `Іт.N` (межу стереже живий тест «довга примітка тисне на
      примітку, а не на тег ітерації»). Чужа ітерація має видимий клас, а не
@@ -435,7 +440,7 @@ export function barHTML(model, state) {
   const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
   const zone1 = home
     ? `${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
-    : `<div class="crumbs">${crumbIter(model, openDd)}${crumbTitle(model)}</div>`;
+    : `<div class="crumbs">${crumbIter(model, openDd, !!state?.iterDelAsk)}${crumbTitle(model)}</div>`;
   /* Зони 2 і 3 екрана «Задачі» порожні в МОДЕЛІ — не малюємо їхніх контролів,
      але самі вузли лишаються (грид смуги на них тримається). */
   const zone2 = home ? "" : zone2HTML(model, state, openDd);

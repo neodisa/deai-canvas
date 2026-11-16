@@ -234,6 +234,7 @@ body.home-open .isl-tools::before{display:none}
 .cfm .cfm-yes:hover{background:var(--bad);filter:brightness(1.08)}
 .cfm .cfm-no:focus-visible,.cfm .cfm-yes:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
 .cv-ctx--confirm{width:260px;padding:4px}
+.dd--confirm{width:260px;padding:4px}
 /* Оверлей питань канваса (`app/ask.js`) — заміна `prompt`/`confirm`/`alert`.
    Підкладка на весь екран і шар ВИЩЕ за все, крізь що ці питання ставлять:
    полотно, смуга (`z-index:100`), панель сторінок (`90`) і контекстні меню

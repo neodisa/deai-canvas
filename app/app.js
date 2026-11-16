@@ -190,6 +190,7 @@ let shootProgress = null;
 /* ===== Смуга (Task 3 Плану B): стан, якого нема більш ніде ===== */
 /** Який дропдаун смуги розкритий: `'iter'|'gl'|'pub'|'more'|'space'|null`. */
 let openDd = null;
+let iterDelAsk = false;   // дропдаун ітерації показує питання «Видалити Іт.N?» (етап В)
 /* Відкритий екран «Задачі» (вхід — логотип у смузі). Прапорець ділять смуга
    (`barState().homeOpen` міняє її склад) і сам екран (`enterHome`/`leaveHome`
    нижче ставлять ще й клас `home-open` на `body`). */
@@ -1010,7 +1011,7 @@ function barState() {
     figmaBusy,
     tasksErr,
     tasksErrKey,
-    openDd,
+    openDd, iterDelAsk,
     homeOpen,
     /* Сторінка оверлею (`tasks`/`conn`/`wiz`) — для крихти смуги й пункту ⌘K; поза оверлеєм — `null`. */
     homePage: homeOpen ? homePage : null,
@@ -1162,6 +1163,7 @@ function rememberTab(task, taskList) {
  */
 function paintBar() {
   barSeeded = true;
+  if (openDd !== 'iter') iterDelAsk = false;   // питання про видалення живе лише в відкритому дропдауні ітерації
   /* Фокус дропдауна просторів: `innerHTML` знищує вузол, а з ним і фокус.
      Запамʼятовуємо ІНДЕКС рядка (ідентичність вузла після перемальовки інша) і те,
      що фокус стояв на фішці. */
@@ -2371,11 +2373,14 @@ const BAR_ACTIONS = {
     catch (e) { tellError(t('errTRenameIter'), e.message); }
   },
 
-  delit: async () => {
+  /* `val === 'confirmed'` — питання вже поставлено в дропдауні ітерації (`data-val` у розмітці смуги, етап В); з палітри
+     ⌘K дія йде без значення — темна картка, як було. «Ні» в дропдауні — порожня дія: дропдаун уже закрито делегуванням. */
+  delitno: () => {},
+  delit: async (val) => {
     const it = curIter();
     if (!it) return;
     const label = it.label_text || it.id;
-    const go = await askYesNo(t('menuDeleteIterationConfirm', label), { yes: t('menuDeleteYes'), danger: true });
+    const go = val === 'confirmed' || await askYesNo(t('menuDeleteIterationConfirm', label), { yes: t('menuDeleteYes'), danger: true });
     if (!go) return;
     try {
       await post('/api/iteration-delete', { id: it.id });
@@ -2950,6 +2955,8 @@ bar.addEventListener('click', (ev) => {
     return;
   }
   const act = el.dataset.act;
+  /* «Видалити ітерацію» в дропдауні (етап В): дропдаун лишається відкритим і стає питанням. */
+  if (act === 'delitask') { iterDelAsk = true; paintBar(); bar.querySelector('.dd--confirm .cfm-no')?.focus(); return; }
   const hadOpenDd = !!openDd;
   /* Рядок дропдауна просторів — фокус після закриття вернемо на фішку (див. нижче). */
   const fromSpaces = openDd === 'space' && !!el.closest('.dd--spaces');

@@ -33,3 +33,9 @@ test("deleteNodes: confirmed пропускає лише питання yesno", 
   assert.match(body, /async function deleteNodes\(ids, \{ confirmed = false \} = \{\}\)/);
   assert.match(body, /if \(!confirmed && !\(await askYesNo\(t\('menuDeletePageConfirm'\)/);
 });
+
+test("дропдаун ітерації: delitask питає на місці, delit(val) пропускає питання лише з 'confirmed'", () => {
+  assert.match(app, /if \(act === 'delitask'\) \{ iterDelAsk = true; paintBar\(\);/);
+  assert.match(app, /val === 'confirmed' \|\| await askYesNo\(t\('menuDeleteIterationConfirm'/);
+  assert.match(app, /if \(openDd !== 'iter'\) iterDelAsk = false;/);
+});

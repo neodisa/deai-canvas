@@ -850,3 +850,25 @@ test("розмітка смуги збалансована за тегами", (
     }
   }
 });
+
+/* Етап В (0.28.0): «Видалити ітерацію» питає в самому дропдауні. */
+test("дропдаун ітерації: пункт видалення — delitask (питання), а не одразу delit", () => {
+  const h = html({ openDd: "iter" });
+  assert.match(h, /data-act="delitask"/);
+  assert.doesNotMatch(h, /data-act="delit"/);
+});
+
+test("дропдаун ітерації: iterDelAsk — лише питання, «Ні» перед «Видалити», без переліку ітерацій", () => {
+  const h = html({ openDd: "iter", iterDelAsk: true });
+  assert.match(h, /class="dd dd--confirm"/);
+  assert.match(h, /class="cfm"/);
+  assert.match(h, /class="cfm-yes" data-act="delit" data-val="confirmed"/);
+  assert.match(h, /class="cfm-no" data-act="delitno"/);
+  assert.ok(h.includes(t("cfmDelIter", "Іт.3")), "питання називає ітерацію");
+  assert.doesNotMatch(h, /data-act="iter"/);
+  assert.ok(h.indexOf('class="cfm-no"') < h.indexOf('class="cfm-yes"'));
+});
+
+test("питання лише при відкритому дропдауні ітерації", () => {
+  assert.doesNotMatch(html({ openDd: null, iterDelAsk: true }), /class="cfm"/);
+});
