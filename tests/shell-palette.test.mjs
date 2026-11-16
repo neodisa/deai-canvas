@@ -1052,7 +1052,7 @@ test("відгук: дія має групу gSet, іконку зі спрай�
   assert.equal(a.group, "gSet");
   assert.ok(ico(a.icon));
   for (const lang of ["uk", "en"]) assert.ok(DICT[lang][a.labelKey] !== undefined, `${lang}.${a.labelKey}`);
-  assert.match(src, /\n  feedback: \(\) => /);
+  assert.match(src, /\n  feedback: \(val, el\) => /);   // етап В: другий аргумент — кнопка-якір поповера
   const list = (lang, q) => { setLang(lang); return filterActions(paletteActions(S({ update: null, lang })), q).map((x) => x.id); };
   assert.ok(list("uk", "баг").includes("feedback"));
   assert.ok(list("uk", "ідея").includes("feedback"));

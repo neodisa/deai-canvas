@@ -348,6 +348,7 @@ function overlay(text, kind, { value = '', readOnly = false, danger = false, yes
       tip.className = 'cv-ask-tip';
       boxEl.appendChild(tip);
       place = () => {
+        if (!anchorEl.isConnected) return;   // якір перемалювала смуга — лишаємо де стояли, а не стрибаємо в кут
         const r = popPlace(anchorEl.getBoundingClientRect(), boxEl.offsetWidth, boxEl.offsetHeight, innerWidth, innerHeight, form.place);
         boxEl.style.left = `${r.left}px`;
         boxEl.style.top = `${r.top}px`;

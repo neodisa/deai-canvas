@@ -167,7 +167,7 @@ test("діалог без перегляду: у pre — фраза, що пер
 /* ── проводка app.js (текст-виборка) ─────────────────────────────────────── */
 
 test("app.js: дії feedback в BAR_ACTIONS, діалог на askForm, помилки кільця й відповідей — через textContent/ctl.error", () => {
-  assert.match(appJs, /^\s*feedback: \(\) => openFeedback\(\),/m);
+  assert.match(appJs, /^\s*feedback: \(val, el\) => openFeedback\(/m);   // етап В: з острівця — з якорем, з ⌘K — без
   assert.match(appJs, /askForm\(\(\) => feedbackDialogHTML\(/);
   assert.match(appJs, /jsonPost\('\/api\/feedback-preview', sess\.previewBody\(\)\)/);
   assert.match(appJs, /jsonPost\('\/api\/feedback', sess\.sendBody\(/);

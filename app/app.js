@@ -14,7 +14,7 @@ import { canMove } from './page-order.js';
 import { readFlow, shotKey, shotVersion, stateQuery } from './flow-model.js';
 import { flowLayout } from './flow-layout.js';
 import { confirmHTML } from './inline-confirm.js';
-import { ask, askChoice, askForm, askYesNo, tell, tellError } from './ask.js';
+import { ask, askChoice, askForm, askYesNo, formValues, tell, tellError } from './ask.js';
 import { composeDeleteNote, deleteDialogModel, resolveDrop, shouldCommitDrop, shouldRefreshPanel, vanishedFolders, zoneOfHit, groupTargetIds, pageMenuItems, runSequential, treeBusyGate, treeTarget as pickTreeTarget } from './tree-actions.js';
 import {
   CANVAS_PRESETS, CANVAS_W, MAX_W, MIN_W, PRESETS, activePreset, frameKey, parseWidth,
@@ -2350,9 +2350,11 @@ const BAR_ACTIONS = {
 
   /* Оновлення інструмента (0.23.0): пігулка в смузі (`update`) і пункт ⌘K «Що нового» (`updatenotes`) відкривають той самий діалог;
      «Перевірити оновлення» (`updatecheck`) питає remote зараз. Логіка — `openUpdateDialog`/`checkUpdateNow` нижче. */
-  update: () => openUpdateDialog(),
+  /* З пігулки в рядку вкладок — поповер під нею (етап В); з ⌘K чи «Налаштувань» якоря нема — модальна картка. */
+  update: (val, el) => openUpdateDialog(el?.classList?.contains('upd-pill') ? el : null),
   /* «Відгук» (смуга) і «Баг / ідея» (⌘K): той самий діалог, на будь-якому екрані й без задачі (`openFeedback`). */
-  feedback: () => openFeedback(),
+  /* З кнопки острівця — поповер над нею (етап В); з ⌘K якоря нема — модальна картка. */
+  feedback: (val, el) => openFeedback(el?.closest?.('#hud') ? el : null),
   updatenotes: () => openUpdateDialog(),
   updatecheck: () => checkUpdateNow(),
 
@@ -2672,7 +2674,7 @@ function updateErrText(code, latest) {
  * «Скасувати» не діють, тож опит не лишається без діалогу.
  */
 let updateDialogOpen = false;
-async function openUpdateDialog() {
+async function openUpdateDialog(anchor = null) {
   if (updateDialogOpen) return;
   updateDialogOpen = true;
   try {
@@ -2698,6 +2700,7 @@ async function openUpdateDialog() {
       sections: null, restartFailed: info.restart_failed === true,
     }), {
       /* Пігулку перемальовує смуга, а після оновлення вона може зникнути: фокус — на пігулку, а коли її нема, на двері в палітру. */
+      anchor, place: 'below',
       focusBack: () => document.querySelector('#tabs .upd-pill') ?? document.querySelector('#tabs [data-act="home"]'),
       onMount(form) {
         formEl = form;
@@ -2777,7 +2780,14 @@ async function fetchFeedbackPreview(sess) {
 }
 
 let feedbackDialogOpen = false;
-async function openFeedback() {
+/* Чернетка відгуку (етап В): живе в памʼяті вкладки до успішної відправки — поповер закривається кліком повз,
+   і набране не мусить пропадати. */
+let fbDraft = null;
+const fbDraftOf = (form) => {
+  const v = formValues(form.elements);
+  return { kind: v.kind, text: v.text, contact: v.contact, includeDiag: v.diag, includeShot: v.shot };
+};
+async function openFeedback(anchor = null) {
   if (feedbackDialogOpen) return;
   feedbackDialogOpen = true;
   try {
@@ -2816,12 +2826,18 @@ async function openFeedback() {
       paintPreview();
     };
     await askForm(() => feedbackDialogHTML({
+      ...(fbDraft || {}),
       shot: shotState(preview), shotUrl: sess.shotUrl(), previewFailed: !preview,
       previewText: preview ? previewText(sentView(preview, { includeDiag: true, includeShot: false })) : t('fbPreviewFail'),
     }), {
+      anchor, place: 'above',
       focusBack: () => document.querySelector('#hud [data-act="feedback"]') ?? document.querySelector('#tabs [data-act="home"]'),
       onMount(form) {
         formEl = form;
+        /* Чернетка (етап В): кожна правка запамʼятовується, закриття повз її не губить; відправка — очищає. */
+        const keep = () => { fbDraft = fbDraftOf(form); };
+        form.addEventListener('input', keep);
+        form.addEventListener('change', keep);
         /* Перегляд не вдався: діагностика за замовчуванням ВИМКНЕНА (галочку знімає розмітка). Людина може ввімкнути — тоді `change` питає знову. */
         for (const id of ['#fb-diag', '#fb-shot']) form.querySelector(id)?.addEventListener('change', repaint);
         form.querySelector('#fb-shot')?.addEventListener('change', syncShot);
@@ -2854,6 +2870,7 @@ async function openFeedback() {
         if (r.status !== 200 || b.ok !== true) return t('fbErrGeneric', String(b.error || r.status));
         const o = outcome(b);
         toast(t(o.key, ...o.args) + (o.suffixKey ? ` ${t(o.suffixKey)}` : ''));
+        fbDraft = null;
         return undefined;
       },
     });
