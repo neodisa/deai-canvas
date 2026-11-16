@@ -66,11 +66,12 @@ async function boot(t) {
   return { ...server, fake, page, hosts, errors, open };
 }
 
-const FORM = ".cv-ask-scrim form[data-form=feedback]";
+/* Етап В: з острівця форма — поповер `.cv-ask-pop`, з ⌘K — модальна `.cv-ask-scrim`; тут важить сама форма. */
+const FORM = "form[data-form=feedback]";
 const waitForm = (page) => page.waitForSelector(FORM, { timeout: 15000 });
 const closeForm = async (page) => {
   await page.click(`${FORM} button[data-a="cancel"]`);
-  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
+  await page.waitForSelector(".cv-ask-scrim, .cv-ask-pop", { state: "detached" });
 };
 /** Тост ПОКАЗАНО і говорить те саме (застарілий текст схованого тоста не рахується). */
 const waitToast = (page, re) => page.waitForFunction((src) => {
@@ -256,6 +257,56 @@ test("діалог відгуку: екрани, валідація, черга 
     await waitForm(page);
     const shown = await previewJson(page);
     assert.match(shown.diag.errors.client[0].msg, /^(Uncaught )?(Error: )?boom$/);
+    await closeForm(page);
+  });
+
+  await t.test("поповер «Баг / ідея» (етап В): над кнопкою острівця, без підкладки; чернетка переживає закриття повз; другий клік по кнопці закриває; відправка чистить; ⌘K — модалка", async () => {
+    fake.setMode("up");
+    await s.open();
+    const btn = page.locator('#hud [data-act="feedback"]');
+    await btn.click();
+    await waitForm(page);
+    assert.equal(await page.locator(".cv-ask-pop .cv-ask--pop " + FORM).count(), 1, "форма не в поповері");
+    assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "поповер не мусить мати підкладки");
+    const box = await page.locator(".cv-ask--pop").boundingBox();
+    const bb = await btn.boundingBox();
+    assert.ok(box.y + box.height < bb.y, `картка не над кнопкою: низ ${box.y + box.height} ≥ верх кнопки ${bb.y}`);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "fb-text", "фокус не в полі тексту");
+    const bg = await page.evaluate(() => getComputedStyle(document.querySelector(".cv-ask--pop")).backgroundColor);
+    assert.notEqual(bg, "rgb(255, 255, 255)", "картка біла");
+    await page.fill("#fb-text", "Чернетка, що не мусить зникнути");
+    await page.fill("#fb-contact", "me@example.test");
+    // клік у макет (рамку) — повз поповер
+    await page.mouse.click(Math.round(box.x + box.width / 2), 400);
+    await page.waitForSelector(".cv-ask-pop", { state: "detached" });
+    await btn.click();
+    await waitForm(page);
+    assert.equal(await page.inputValue("#fb-text"), "Чернетка, що не мусить зникнути", "чернетка тексту загублена");
+    assert.equal(await page.inputValue("#fb-contact"), "me@example.test", "чернетка контакту загублена");
+    // повторний клік по кнопці закриває і не відкриває знову
+    await btn.click();
+    await page.waitForSelector(".cv-ask-pop", { state: "detached" });
+    await page.waitForTimeout(500);
+    assert.equal(await page.locator(".cv-ask-pop").count(), 0, "клік по якорю відкрив форму знову");
+    // відправка чистить чернетку
+    await btn.click();
+    await waitForm(page);
+    await previewJson(page);
+    await page.click(`${FORM} button[data-a="ok"]`);
+    await waitToast(page, /Дякуємо! Відгук/);
+    await page.waitForSelector(".cv-ask-pop", { state: "detached" });
+    await btn.click();
+    await waitForm(page);
+    assert.equal(await page.inputValue("#fb-text"), "", "після відправки чернетка лишилась");
+    await closeForm(page);
+    // ⌘K → модальна картка з підкладкою
+    await page.keyboard.press("Control+k");
+    await page.locator("#palq").waitFor({ state: "visible" });
+    await page.fill("#palq", "Баг / ідея");
+    await page.waitForFunction(() => document.querySelectorAll(".pal-it").length === 1, null, { timeout: 5000 });
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".cv-ask-scrim " + FORM, { timeout: 15000 });
+    assert.equal(await page.locator(".cv-ask-pop").count(), 0);
     await closeForm(page);
   });
 

@@ -355,7 +355,7 @@ test("blankStage: чистить сцену, полотно й панель — 
 
 test("openPalette: під відкритим діалогом (.cv-ask-scrim) не відкривається — ПЕРШИМ рядком, до зміни стану палітри", () => {
   const body = fn("openPalette");
-  const guard = "if (document.querySelector('.cv-ask-scrim')) return;";
+  const guard = "if (askUp()) return;";   // етап В: `askUp()` = модальна картка АБО поповер
   assert.ok(body.includes(guard), "⌘K відкрив би палітру поверх форми, що чекає відповіді сервера");
   assert.ok(body.indexOf(guard) < body.indexOf("paletteOverlay = 'pal'"), "перевірка ДО будь-якої зміни стану");
   assert.ok(body.indexOf(guard) < body.indexOf("openDd = null"), "і до закриття дропдауна");

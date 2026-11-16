@@ -98,7 +98,8 @@ test("пігулка й діалог оновлення: без файла — �
     await s.open();
     await waitPill(page);
     await pill(page).click();
-    const form = page.locator(".cv-ask-scrim form.up");
+    /* Етап В: з пігулки — поповер `.cv-ask-pop`. */
+    const form = page.locator(".cv-ask-pop form.up");
     await form.waitFor({ timeout: 15000 });
     const cur = (await (await fetch(`${url}/api/update`)).json()).current;
     assert.match(await form.locator(".up-ver").textContent(), new RegExp(`${cur.replace(/\./g, "\\.")}.*99\\.0\\.0`));
@@ -114,9 +115,41 @@ test("пігулка й діалог оновлення: без файла — �
     await page.waitForFunction(() => !document.querySelector('[data-up-notes] [role="status"]'), null, { timeout: 15000 });
     assert.ok((await form.locator("[data-up-notes]").textContent()).trim().length > 0);
     await form.locator('button[data-a="cancel"]').click();
-    await page.locator(".cv-ask-scrim").waitFor({ state: "detached" });
+    await page.locator(".cv-ask-pop").waitFor({ state: "detached" });
     /* Жоден `apply` не ішов: стан не змінився. */
     assert.equal((await (await fetch(`${url}/api/update`)).json()).current, cur);
+  });
+
+  await t.test("поповер оновлення (етап В): під пігулкою, без підкладки, темна картка; Esc закриває і вертає фокус на пігулку; ⌘K «Що нового» — модалка", async () => {
+    await s.open();
+    await waitPill(page);
+    await pill(page).click();
+    const form = page.locator(".cv-ask-pop form.up");
+    await form.waitFor({ timeout: 15000 });
+    assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "поповер не мусить мати підкладки");
+    const box = await page.locator(".cv-ask--pop").boundingBox();
+    const pb = await pill(page).boundingBox();
+    assert.ok(box.y > pb.y + pb.height, `картка не під пігулкою: верх ${box.y} ≤ низ пігулки ${pb.y + pb.height}`);
+    const looks = await page.evaluate(() => ({
+      card: getComputedStyle(document.querySelector(".cv-ask--pop")).backgroundColor,
+      btn: getComputedStyle(document.querySelector('.cv-ask--pop button[data-a="cancel"]')).backgroundColor,
+    }));
+    assert.notEqual(looks.card, "rgb(255, 255, 255)", "картка біла");
+    assert.notEqual(looks.btn, "rgb(255, 255, 255)", "кнопка біла");
+    assert.notEqual(looks.btn, "rgba(0, 0, 0, 0)", "кнопка без тла");
+    await page.keyboard.press("Escape");
+    await page.locator(".cv-ask-pop").waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("upd-pill")), true, "фокус не повернувся на пігулку");
+    // ⌘K «Що нового» — без якоря: модальна картка
+    await page.keyboard.press("Control+k");
+    await page.locator("#palq").waitFor({ state: "visible" });
+    await page.fill("#palq", "Що нового");
+    await page.waitForFunction(() => document.querySelectorAll(".pal-it").length >= 1, null, { timeout: 5000 });
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".cv-ask-scrim form.up", { timeout: 15000 });
+    assert.equal(await page.locator(".cv-ask-pop").count(), 0);
+    await page.keyboard.press("Escape");
+    await page.locator(".cv-ask-scrim").waitFor({ state: "detached" });
   });
 
   await t.test("state offline у файлі — пігулки нема", async () => {

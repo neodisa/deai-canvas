@@ -49,7 +49,7 @@ test("barState і paletteState несуть homePage", () => {
 });
 
 test("клавіші сторінки «Задачі» на «Підключенні» й майстрі не діють", () => {
-  assert.match(src, /if \(!homeOpen \|\| ev\.isComposing \|\| paletteOverlay \|\| document\.querySelector\('\.cv-ask-scrim'\)\) return;\n  if \(homePage !== 'tasks'\) return;/);
+  assert.match(src, /if \(!homeOpen \|\| ev\.isComposing \|\| paletteOverlay \|\| askUp\(\)\) return;\n  if \(homePage !== 'tasks'\) return;/);
 });
 
 test("перечитування при поверненні у вікно: на «Підключенні» — loadConn", () => {
@@ -194,7 +194,7 @@ test("панель: перевірка в панелі — module-check прос
 });
 
 test("панель: Esc — запит закриття (з питанням при незбереженому), не під діалогом і не під палітрою", () => {
-  assert.match(src, /document\.addEventListener\('keydown', \(ev\) => \{\n  if \(ev\.key === 'Escape' && !ev\.isComposing && !ev\.defaultPrevented && cnDrawer && !paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) \{\n    ev\.preventDefault\(\);\n    requestCloseCnDrawer\(\);\n  \}\n\}\);/);
+  assert.match(src, /document\.addEventListener\('keydown', \(ev\) => \{\n  if \(ev\.key === 'Escape' && !ev\.isComposing && !ev\.defaultPrevented && cnDrawer && !paletteOverlay && !askUp\(\)\) \{\n    ev\.preventDefault\(\);\n    requestCloseCnDrawer\(\);\n  \}\n\}\);/);
   const b = fnc("requestCloseCnDrawer");
   assert.match(b, /if \(!cnDrawer \|\| cnDrawer\.busy\) return;/, "під час запиту панель не закривається");
   assert.match(b, /const dirty = isDirty\(formPatch\(mine\.fields, mine\.init, readCnForm\(cnDrawerNode\(\)\)\)\);/);
@@ -275,7 +275,7 @@ test("cnSubmit: запис іде у mine.spaceId; після питання п�
 
 test("фокус: після «Перевірити» й «Вимкнути» кнопка картки відновлюється, коли фокус пропав (busy-перемальовка вимикає натиснуту кнопку)", () => {
   const h = fnc("refocusCard");
-  assert.match(h, /if \(\(a && a !== document\.body && a\.isConnected\) \|\| paletteOverlay \|\| document\.querySelector\('\.cv-ask-scrim'\)\) return;/,
+  assert.match(h, /if \(\(a && a !== document\.body && a\.isConnected\) \|\| paletteOverlay \|\| askUp\(\)\) return;/,
     "не краде фокус у того, хто вже деінде, і з-під палітри чи діалогу");
   assert.match(h, /\[data-cn="\$\{act\}"\]\[data-id="\$\{sel\}"\]:not\(\[disabled\]\)/, "спершу та сама дія");
   assert.match(h, /\[data-cn\]\[data-id="\$\{sel\}"\]:not\(\[disabled\]\)/, "запасна — будь-яка кнопка тієї ж картки");
@@ -395,7 +395,7 @@ test("wireHome: клік по [data-cn] (картка, помилка сторі
 
 test("перший фокус після списку не краде фокус у палітри чи діалогу (Task 7: місце фокуса — focusConnLanding, роль — connFocusRole)", () => {
   assert.match(fnc("loadConn"),
-    /if \(connFocusPending\) \{\s*connFocusPending = false;\s*const role = connFocusRole;\s*connFocusRole = '';\s*if \(!paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) focusConnLanding\(role\);\s*\}/);
+    /if \(connFocusPending\) \{\s*connFocusPending = false;\s*const role = connFocusRole;\s*connFocusRole = '';\s*if \(!paletteOverlay && !askUp\(\)\) focusConnLanding\(role\);\s*\}/);
   /* Те, що раніше стояло в loadConn рядком, тепер — у focusConnLanding: без ролі й без картки ролі поведінка та сама (перша кнопка першої
      картки або «Спробувати ще», без прокрутки). */
   assert.match(fnc("focusConnLanding"), /home\?\.querySelector\('\.cn-card \[data-cn\], \[data-cn="retry"\]'\)/);

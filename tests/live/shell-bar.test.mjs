@@ -98,7 +98,7 @@ import test from "node:test";
 import { chromium } from "playwright";
 
 import { runShoot } from "../../bin/shoot.mjs";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { startServer, taskFixture } from "./fixture.mjs";
@@ -226,9 +226,9 @@ test("кожен контрол смуги щось робить на клік",
        зняв би з неї цю обіцянку зовсім. */
     /* Четвертий спосіб (0.23.0): діалог `askForm` (`.cv-ask-scrim`) — «Відгук» малює його ПОЗА `#bar`, після відповіді попереднього
        перегляду (`POST /api/feedback-preview`), тож для нього чекаємо зʼявлення явно, а не рівно 150 мс. */
-    if (key === "feedback") await page.waitForSelector(".cv-ask-scrim", { timeout: 5000 }).catch(() => {});
+    if (key === "feedback") await page.waitForSelector(".cv-ask-scrim, .cv-ask-pop", { timeout: 5000 }).catch(() => {});
     const dd = await page.$$eval(".dd", (e) => e.length);
-    const overlay = await page.$$eval(".pal,.keysheet,.cv-ask-scrim", (e) => e.length);
+    const overlay = await page.$$eval(".pal,.keysheet,.cv-ask-scrim,.cv-ask-pop", (e) => e.length);
     assert.ok(before !== after || dd > 0 || overlay > 0,
       `контрол «${name}» не зробив нічого`);
     await page.keyboard.press("Escape");
@@ -401,4 +401,85 @@ test("чужа ітерація в смузі підписана автором 
   }, null, { timeout: 5000 });
   assert.equal(await crumb.evaluate((e) => e.classList.contains("crumb--foreign")), false,
     "своя ітерація помічена як чужа");
+});
+
+/* ── «Видалити ітерацію» питає в самому дропдауні (етап В, 0.28.0) ───────────────────────────────────────────────────
+   Три «ні» (Esc, клік повз, «Ні») мусять лишити папку ітерації на диску й запис у iterations.json; лише явне «Видалити»
+   прибирає. З палітри ⌘K — темна модальна картка (там дропдауна нема). */
+test("«Видалити ітерацію»: питання в дропдауні; Esc / клік повз / «Ні» нічого не видаляють, «Видалити» видаляє; з ⌘K — картка", async (t) => {
+  const { dir } = taskFixture({ html: PAGE });
+  const it2 = path.join(dir, "iterations", "it2");
+  mkdirSync(it2, { recursive: true });
+  writeFileSync(path.join(it2, "index.html"), PAGE("друга"));
+  writeFileSync(path.join(dir, "iterations.json"), JSON.stringify({
+    iterations: [
+      { id: "it1", date: "24.08.2026 12:00", note: "перша", published: false },
+      { id: "it2", date: "25.08.2026 12:00", note: "друга", published: false },
+    ],
+  }));
+  const ids = () => JSON.parse(readFileSync(path.join(dir, "iterations.json"), "utf8")).iterations.map((i) => i.id);
+  const alive = () => existsSync(path.join(it2, "index.html")) && ids().includes("it2");
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 70 });
+  t.after(() => child.kill());
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: VIEW });
+  let dialogs = 0;
+  page.on("dialog", (d) => { dialogs += 1; d.dismiss(); });
+  await page.goto(`${url}/app/`);
+  await page.locator("#bar button.crumb--iter").first().waitFor();
+  assert.match(await page.locator("#bar button.crumb--iter").innerText(), /Іт\.2/, "відкрита не остання ітерація");
+
+  const ask = async () => {
+    await page.click('#bar [data-dd="iter"]');
+    await page.click('#bar [data-act="delitask"]');
+    await page.waitForSelector("#bar .dd--confirm .cfm", { timeout: 5000 });
+    assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "питання вийшло модальним");
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cfm-no")), true, "фокус не на «Ні»");
+    assert.match(await page.textContent("#bar .cfm-t"), /Видалити Іт\.2\?/);
+    assert.equal(await page.locator("#bar .cfm p").count(), 1, "у питанні є щось, крім самого питання");
+  };
+  // (a) Esc
+  await ask();
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#bar .dd", { state: "detached" });
+  assert.equal(alive(), true, "Esc видалив ітерацію");
+  // (b) клік повз смугу
+  await ask();
+  await page.locator(".panel").first().click({ position: { x: 3, y: 3 } });
+  await page.waitForSelector("#bar .dd", { state: "detached" });
+  assert.equal(alive(), true, "клік повз видалив ітерацію");
+  // повторне відкриття дропдауна знову показує перелік, а не старе питання
+  await page.click('#bar [data-dd="iter"]');
+  await page.waitForSelector('#bar [data-act="iter"]');
+  assert.equal(await page.locator("#bar .cfm").count(), 0, "питання пережило закриття дропдауна");
+  await page.keyboard.press("Escape");
+  // (c) «Ні»
+  await ask();
+  await page.click("#bar .cfm-no");
+  await page.waitForSelector("#bar .dd", { state: "detached" });
+  assert.equal(alive(), true, "«Ні» видалило ітерацію");
+  // ⌘K → картка (модальна, темна), Esc — нічого не видалено
+  await page.keyboard.press("Control+k");
+  await page.locator("#palq").waitFor({ state: "visible" });
+  await page.fill("#palq", "Видалити ітерацію");
+  await page.waitForFunction(() => document.querySelectorAll(".pal-it").length >= 1, null, { timeout: 5000 });
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(".cv-ask-scrim .cv-ask", { timeout: 5000 });
+  assert.equal(await page.locator("#bar .cfm").count(), 0);
+  const card = await page.evaluate(() => getComputedStyle(document.querySelector(".cv-ask")).backgroundColor);
+  assert.notEqual(card, "rgb(255, 255, 255)", "картка біла");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.a), "cancel", "фокус не на «Скасувати»");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
+  assert.equal(alive(), true, "Esc у картці видалив ітерацію");
+  // (d) «Видалити» в дропдауні — видалено без другого вікна
+  await ask();
+  await page.click("#bar .cfm-yes");
+  const end = Date.now() + 8000;
+  while (Date.now() < end && ids().includes("it2")) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(ids().includes("it2"), false, "«Видалити» не дійшло до iterations.json");
+  assert.equal(existsSync(it2), false, "папка ітерації лишилась на диску");
+  assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "після видалення висить друге питання");
+  assert.equal(dialogs, 0, "з'явилось нативне вікно браузера");
 });

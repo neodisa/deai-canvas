@@ -25,10 +25,12 @@
  *   P колесо посеред перетягування: кидок за точкою відпускання
  *   Q Esc посеред жесту скасовує жест, а не закриває меню
  *   R клік без руху (<4px) лишається вибором
+ *   S «Видалити» для сторінки без дітей питає В МЕНЮ (етап В): Esc / клік повз / «Ні» — нічого не видалено, «Видалити» — видалено;
+ *     тека з вмістом — темна картка з переліком, не вбудоване питання
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cpSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { chromium } from "playwright";
@@ -563,4 +565,72 @@ test("R: клік без руху (<4px) лишається вибором ря�
   await quiet(page);
   assert.deepEqual(posts, [], "клік без руху послав запит дерева");
   assert.equal(JSON.stringify(disk(it1)), before);
+});
+
+test("S: «Видалити» для сторінки без дітей питає в самому меню; видаляє лише явне «Видалити»", async (t) => {
+  const { page, it1 } = await boot(t, nested, 2000);
+  const alive = () => existsSync(path.join(it1, "osoba", "index.html")) && idsOf(disk(it1)).includes("osoba");
+  const openAsk = async () => {
+    await row(page, "osoba").click({ button: "right" });
+    await page.click('#cv-ctx [data-a="delete"]');
+    await page.waitForSelector("#cv-ctx .cfm", { timeout: 5000 });
+    assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "питання вийшло модальним, а не в меню");
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cfm-no")), true, "фокус не на «Ні»");
+    assert.match(await page.textContent("#cv-ctx .cfm-t"), /Видалити сторінку «Особа»\?/);
+    assert.equal(await page.locator("#cv-ctx .cfm p").count(), 1, "у питанні є щось, крім самого питання");
+  };
+  const gone = (why) => assert.equal(alive(), true, `видалено: ${why}`);
+  // (a) Esc
+  await openAsk();
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#cv-ctx", { state: "detached" });
+  await quiet(page);
+  gone("Esc");
+  // (b) клік повз
+  await openAsk();
+  await page.locator(".panel").first().click({ position: { x: 2, y: 2 } });
+  await page.waitForSelector("#cv-ctx", { state: "detached" });
+  await quiet(page);
+  gone("клік повз");
+  // (c) «Ні»
+  await openAsk();
+  await page.click("#cv-ctx .cfm-no");
+  await page.waitForSelector("#cv-ctx", { state: "detached" });
+  await quiet(page);
+  gone("«Ні»");
+  assert.deepEqual(await rowIds(page), ["kartka", "s-err", "s-empty", "osoba"], "дерево змінилось без підтвердження");
+  // (d) «Видалити»: без другого вікна
+  await openAsk();
+  await page.click("#cv-ctx .cfm-yes");
+  const left = await until(() => idsOf(disk(it1)), (ids) => !ids.includes("osoba"));
+  assert.equal(left.includes("osoba"), false, "«Видалити» не дійшло до диска");
+  assert.equal(existsSync(path.join(it1, "osoba")), false, "тека сторінки лишилась на диску");
+  await idle(page);
+  assert.equal(await page.locator(".cv-ask").count(), 0, "після видалення висить друге питання чи повідомлення");
+  assert.deepEqual(await until(() => rowIds(page), (r) => !r.includes("osoba")), ["kartka", "s-err", "s-empty"], "панель показує не те, що на диску");
+});
+
+test("S2: тека з вмістом — темна картка з переліком, а не питання в меню; тло не біле", async (t) => {
+  const tree = () => withTree([
+    { id: "fold", name: "Тека", kind: "folder", children: [{ id: "kartka", name: "Картка", kind: "page" }] },
+    { id: "osoba", name: "Особа", kind: "page" }]);
+  const { page, it1 } = await boot(t, tree, 2100, { expand: "fold" });
+  await row(page, "fold").click({ button: "right" });
+  await page.click('#cv-ctx [data-a="delete"]');
+  await page.waitForSelector(".cv-ask-scrim .cv-ask-list li");
+  assert.equal(await page.locator("#cv-ctx .cfm").count(), 0, "для теки з вмістом питання вбудоване в меню");
+  const looks = await page.evaluate(() => ({
+    card: getComputedStyle(document.querySelector(".cv-ask")).backgroundColor,
+    del: getComputedStyle(document.querySelector('.cv-ask [data-a="all"]')).backgroundColor,
+    cancel: getComputedStyle(document.querySelector('.cv-ask [data-a="cancel"]')).backgroundColor,
+    focus: document.activeElement?.dataset?.a,
+  }));
+  for (const [k, v] of Object.entries({ card: looks.card, del: looks.del, cancel: looks.cancel })) {
+    assert.notEqual(v, "rgb(255, 255, 255)", `${k}: тло біле`);
+  }
+  assert.equal(looks.focus, "cancel", "фокус не на «Скасувати»");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
+  await quiet(page);
+  assert.deepEqual(idsOf(disk(it1)), ["fold", "kartka", "osoba"], "Esc у картці видалив");
 });

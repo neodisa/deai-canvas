@@ -1869,7 +1869,7 @@ test("focusConnLanding: роль vcs → кнопка картки її моду
 
 test("loadConn: перший фокус бере роль із connFocusRole і не краде фокус у палітри чи діалогу", () => {
   const b = fn("loadConn").replace(/\/\*[\s\S]*?\*\//g, "");
-  assert.match(b, /if \(connFocusPending\) \{\s*connFocusPending = false;\s*const role = connFocusRole;\s*connFocusRole = '';\s*if \(!paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) focusConnLanding\(role\);\s*\}/);
+  assert.match(b, /if \(connFocusPending\) \{\s*connFocusPending = false;\s*const role = connFocusRole;\s*connFocusRole = '';\s*if \(!paletteOverlay && !askUp\(\)\) focusConnLanding\(role\);\s*\}/);
   assert.match(src, /\nlet connFocusRole = '';/, "стан оголошено поруч із connFocusPending (TDZ)");
 });
 

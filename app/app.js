@@ -1901,7 +1901,10 @@ function dropFrameCmt({ sel = false } = {}) {
   paintComments();
 }
 /** Відкритий модальний шар оболонки (палітра/довідка, будь-який діалог `askForm`): клавіші C/H тоді не наші. */
-const shellModalOpen = () => !!paletteOverlay || !!document.querySelector('.cv-ask-scrim, [aria-modal="true"]');
+/* Питання чи форма канваса відкриті: модальна картка (`.cv-ask-scrim`) АБО поповер біля кнопки (`.cv-ask-pop`, етап В).
+   Поповер не затемнює макет, але клавіатура йому належить так само: нічого глобального під ним не реагує. */
+const askUp = () => !!document.querySelector('.cv-ask-scrim, .cv-ask-pop');
+const shellModalOpen = () => !!paletteOverlay || askUp() || !!document.querySelector('[aria-modal="true"]');
 /** Подія коментатора: `src` — 'frame' чи 'canvas'; чужий вид — ігнор (поправка 11). */
 function onCommentsEvent(src, m) {
   if ((src === 'canvas') !== (mode === 'canvas')) return;
@@ -3567,7 +3570,7 @@ async function loadConn({ spaces = true } = {}) {
     const role = connFocusRole;
     connFocusRole = '';
     /* Не з-під палітри чи діалогу: їм фокус належить. */
-    if (!paletteOverlay && !document.querySelector('.cv-ask-scrim')) focusConnLanding(role);
+    if (!paletteOverlay && !askUp()) focusConnLanding(role);
   }
 }
 
@@ -3650,7 +3653,7 @@ async function connDisable(e) {
  */
 function refocusCard(id, act) {
   const a = document.activeElement;
-  if ((a && a !== document.body && a.isConnected) || paletteOverlay || document.querySelector('.cv-ask-scrim')) return;
+  if ((a && a !== document.body && a.isConnected) || paletteOverlay || askUp()) return;
   const home = homeNode();
   const sel = CSS.escape(id);
   (home?.querySelector(`[data-cn="${act}"][data-id="${sel}"]:not([disabled])`)
@@ -4180,7 +4183,7 @@ function wireCnDrawer(el) {
    інше (відкритий дропдаун смуги: його слухач стоїть раніше й гасить подію через `preventDefault`). Не під час
    IME-композиції (`isComposing`): там Esc скасовує набране, а не закриває панель чи питає «Відкинути?». */
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && !ev.isComposing && !ev.defaultPrevented && cnDrawer && !paletteOverlay && !document.querySelector('.cv-ask-scrim')) {
+  if (ev.key === 'Escape' && !ev.isComposing && !ev.defaultPrevented && cnDrawer && !paletteOverlay && !askUp()) {
     ev.preventDefault();
     requestCloseCnDrawer();
   }
@@ -4192,7 +4195,7 @@ document.addEventListener('keydown', (ev) => {
  *  відкривають, ↑ з першого ряду — назад у пошук. Палітра, діалог питання й
  *  IME-композиція клавіш екрана не віддають. */
 document.addEventListener('keydown', (ev) => {
-  if (!homeOpen || ev.isComposing || paletteOverlay || document.querySelector('.cv-ask-scrim')) return;
+  if (!homeOpen || ev.isComposing || paletteOverlay || askUp()) return;
   if (homePage !== 'tasks') return;   // «Підключення» й майстер: клавіші списку задач не діють; Esc панелі — свій обробник
   const el = homeNode();
   if (!el) return;
@@ -5763,7 +5766,7 @@ async function refreshPanelFromDisk() {
   if (homeOpen) return;
   const it = picked;
   const quiet = () => ({ busy: treeGate.busy, dragging: dragActive(),
-    askOpen: !!document.querySelector('.cv-ask-scrim') });
+    askOpen: askUp() });
   if (panelRefreshing || !shouldRefreshPanel({ it, current: picked, ...quiet() })) return;
   panelRefreshing = true;
   try {
@@ -7973,7 +7976,7 @@ function openPalette() {
   /* Під відкритим діалогом (`.cv-ask-scrim`: форма простору, «Нова задача», питання) палітра не
      відкривається: підкладка ловить кліки, але не клавіатуру, і ⌘K поверх зайнятої форми
      дозволив би виконати дію палітри (перемкнути простір) просто під запитом, що вже летить. */
-  if (document.querySelector('.cv-ask-scrim')) return;
+  if (askUp()) return;
   document.getElementById('cv-ctx')?.remove(); // контекстне меню сторінки не сміє висіти під палітрою
   paletteOverlay = 'pal'; palQuery = ''; palCursor = 0;
   if (openDd) { openDd = null; paintBar(); }    // дропдаун смуги закритий ДО відкриття — драбинці нема з чим змагатись
@@ -8019,7 +8022,7 @@ document.addEventListener('keydown', (ev) => {
   /* ⌘G / Ctrl+G — «загорнути в теку». Не в полі вводу й не під відкритим
      діалогом чи палітрою: там це «знайти далі»/звичайний набір. */
   if (meta && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'g'
-      && !homeOpen && !paletteOverlay && !document.querySelector('.cv-ask-scrim')
+      && !homeOpen && !paletteOverlay && !askUp()
       && !ev.target.closest?.('input,textarea,[contenteditable]')) {
     /* Спершу рахуємо ціль: нема що групувати — гарячу клавішу браузера
        («знайти далі») не відбираємо. Автоповтор не запускає другу теку. */

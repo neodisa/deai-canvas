@@ -22,6 +22,7 @@ import { seedPins, shootAll, t45Task } from "./_t45-fixture.mjs";
 const PORT_BASE = 26100;
 const SEEDED_PORT_BASE = 26200;
 const TWO_IT_PORT_BASE = 26300;
+const DELETE_PORT_BASE = 26400;
 const PAGE = () => `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:40px">
 <main><h1 id="t">Заголовок</h1><p id="p">Абзац для коментаря</p></main></body></html>`;
 
@@ -423,14 +424,15 @@ test("24: M-5 — під відкритим діалогом оболонки (�
   const { page, frame } = A;
   assert.equal(await panelOpen(page), true);
   await page.click('#hud [data-act="feedback"]');
-  await page.waitForSelector(".cv-ask-scrim");
-  await page.locator(".cv-ask-scrim button").first().focus();
+  /* Етап В: з острівця «Відгук» — поповер `.cv-ask-pop`, не підкладка; для клавіатури він так само «діалог». */
+  await page.waitForSelector(".cv-ask-pop");
+  await page.locator(".cv-ask-pop button").first().focus();
   await page.keyboard.press("c");
   await keyC(frame);
   await pause(400);
   assert.equal(await panelOpen(page), true, "C під діалогом закрила панель");
   await page.keyboard.press("Escape");
-  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
+  await page.waitForSelector(".cv-ask-pop", { state: "detached" });
   assert.equal(await panelOpen(page), true, "Esc діалогу закрив ще й панель");
 });
 
@@ -626,4 +628,56 @@ test("19б: «Огляд» — кнопок режимів нема (один р
   await until(async () => (await n()) === 4);
   await page.click('#hud [data-act="comments"]');
   await until(async () => (await n()) === 0);
+});
+
+/* ───────── Видалення коментаря питає в картці (етап В, 0.28.0) ───────── */
+test("26: кошик у картці — питання на місці; Esc / клік повз / «Скасувати» нічого не видаляють, «Видалити» видаляє; нативного вікна нема", async (t) => {
+  const meta = { iteration: "1", version: "1", seq: 7, viewport: { w: 1280, h: 900 } };
+  const { page, dir } = await boot(t, DELETE_PORT_BASE, (d) => {
+    writeFileSync(path.join(d, ".dc-local-comments.json"), JSON.stringify([
+      seedPin({ id: "d1", text: "Видалити мене", meta }),
+      seedPin({ id: "d2", text: "Лишитись мусить", meta: { ...meta, seq: 8 } }),
+    ]));
+  });
+  let dialogs = 0;
+  page.on("dialog", (d) => { dialogs += 1; d.dismiss(); });
+  const file = path.join(dir, ".dc-local-comments.json");
+  const stored = () => { try { return JSON.parse(readFileSync(file, "utf8")).map((c) => c.id).sort(); } catch (e) { return null; } };
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector('#cmt-panel .cmt-card[data-cid="d1"]');
+  const ask = async () => {
+    await page.click('#cmt-panel .cmt-card[data-cid="d1"] [data-act="cmtdel"]');
+    await page.waitForSelector('#cmt-panel .cmt-card[data-cid="d1"] .cmt-acts--cfm .cfm');
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cfm-no")), true, "фокус не на «Скасувати»");
+    assert.equal(await page.locator("#cmt-panel .cfm").count(), 1, "питання не лише в одній картці");
+    assert.equal(await page.locator("#cmt-panel .cfm p").count(), 1, "у питанні є щось, крім самого питання");
+  };
+  const both = () => assert.deepEqual(stored(), ["d1", "d2"], "коментар видалено без підтвердження");
+  // (a) Esc: питання зникає, панель лишається
+  await ask();
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#cmt-panel .cfm", { state: "detached" });
+  assert.equal(await panelOpen(page), true, "Esc закрив панель разом із питанням");
+  await pause(400);
+  both();
+  // (b) клік деінде в панелі
+  await ask();
+  await page.click('#cmt-panel .cmt-card[data-cid="d2"] .cmt-text');
+  await page.waitForSelector("#cmt-panel .cfm", { state: "detached" });
+  await pause(400);
+  both();
+  // (c) «Скасувати»
+  await ask();
+  await page.click("#cmt-panel .cfm-no");
+  await page.waitForSelector("#cmt-panel .cfm", { state: "detached" });
+  await pause(400);
+  both();
+  assert.equal(await page.locator('#cmt-panel .cmt-card[data-cid="d1"]').count(), 1, "картка зникла після «Скасувати»");
+  // (d) «Видалити»
+  await ask();
+  await page.click("#cmt-panel .cfm-yes");
+  await until(() => stored() !== null && !stored().includes("d1"));
+  assert.deepEqual(stored(), ["d2"], "«Видалити» не дійшло до сховища, або зникло зайве");
+  await page.waitForSelector('#cmt-panel .cmt-card[data-cid="d1"]', { state: "detached" });
+  assert.equal(dialogs, 0, "з'явилось нативне вікно браузера");
 });

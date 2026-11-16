@@ -81,7 +81,7 @@ test("оновлення панелі з диска: focus і visibilitychange, 
   assert.ok(body.indexOf("shouldRefreshPanel(") < body.indexOf("await api("));
   assert.match(body, /rev: r\?\.rev \?\? '', seenRev: panelRev/);
   assert.match(body, /busy: treeGate\.busy, dragging: dragActive\(\)/);
-  assert.match(body, /\.cv-ask-scrim/);
+  assert.match(body, /askOpen: askUp\(\)/, "відкрите питання чи поповер (`askUp()`, етап В) відкладає оновлення панелі");
   assert.match(body, /if \(mode === 'canvas' \|\| pickedPage !== before\) render\(\); else renderPanel\(\);/, "«Огляд» або зникла відкрита сторінка → повний render");
   assert.match(src, /addEventListener\('focus', \(\) => \{ syncTuneFromDisk\(\); refreshPanelFromDisk\(\); \}\)/);
   assert.match(src, /visibilityState === 'visible'\) \{ syncTuneFromDisk\(\); refreshPanelFromDisk\(\); \}/);

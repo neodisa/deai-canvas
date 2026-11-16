@@ -112,7 +112,7 @@ test("apply → рестарт → перезавантаження у вики�
 
     // 4. діалог: версії й «Що нового» з CHANGELOG ВІДДАЛЕНОГО тега
     await page.click("#tabs .upd-pill");
-    const form = page.locator(".cv-ask-scrim form.up");
+    const form = page.locator(".cv-ask-pop form.up");
     await form.waitFor({ timeout: 15000 });
     assert.match(await form.locator(".up-ver").textContent(), new RegExp(`${current.replace(/\./g, "\\.")}.*${TARGET.replace(/\./g, "\\.")}`));
     await page.waitForFunction((note) => (document.querySelector("[data-up-notes]")?.textContent ?? "").includes(note), NOTE, { timeout: 30000 });
