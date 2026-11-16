@@ -69,6 +69,10 @@
   --z-dd:200; --z-overlay:300; --z-toast:400;
   --dur:170ms; --ease:cubic-bezier(.2,.8,.2,1);
 }
+/* Публічне превʼю (`PAGES_PREVIEW_PAGE`) рядка вкладок не має — смуга й усе під нею піднімаються на його висоту
+   (з 0.25.0 до 0.28.2 зверху лишалась порожня смуга 36 px). `--h-top` перевизначаємо теж: на `:root` він уже
+   порахований з 36 px, і спадкоємці отримують готове число, а не формулу. */
+body:not(:has(> #tabs)){--h-tabs:0px;--h-top:var(--h-bar)}
 *{box-sizing:border-box}
 body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);background:var(--bg)}
 /* ===== верхня панель — темна, зоновано (Напрямок A) ===== */

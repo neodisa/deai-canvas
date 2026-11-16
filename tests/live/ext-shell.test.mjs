@@ -216,6 +216,16 @@ describe("зовнішня оболонка на зібраному publish/", (
     assert.equal(await page.locator("#pages-panel .row").count(), 2);
     // Назва задачі у вкладці — ЛИШЕ після входу.
     assert.equal(await page.title(), "Фікстура");
+    // Рядка вкладок у превʼю нема — смуга стоїть під самим верхом, рамка й дерево — одразу під смугою.
+    // До 0.28.2 зверху лишалась порожня смуга заввишки з рядок вкладок інструмента (36 px).
+    const geo = await page.evaluate(() => {
+      const r = (sel) => document.querySelector(sel).getBoundingClientRect();
+      return { bar: r("#bar .bar").top, barBottom: r("#bar .bar").bottom,
+               stage: r("#stage").top, tree: r("#pages-panel").top };
+    });
+    assert.equal(geo.bar, 0, `смуга не під самим верхом: ${JSON.stringify(geo)}`);
+    assert.equal(geo.stage, geo.barBottom, `рамка не під смугою: ${JSON.stringify(geo)}`);
+    assert.equal(geo.tree, geo.barBottom, `дерево не під смугою: ${JSON.stringify(geo)}`);
     // Рамка відкрила першу сторінку й справді завантажилась.
     await page.waitForFunction(() => {
       const f = document.getElementById("frame");
