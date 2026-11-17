@@ -720,12 +720,18 @@ def _cmd_pull(_a):
     reg, junk = split_fixtures(read_registry(d))
     tasks = cfg.setdefault('tasks', {})
 
+    # Етап Д: видалене на ЦІЙ машині (запис кошика чи надгробок «назавжди») реєстр не воскрешає — видалення локальне,
+    # колеги задачу бачать і далі. Сміттєве значення `trash` — це порожній кошик.
+    trash = cfg.get('trash') if isinstance(cfg.get('trash'), dict) else {}
+
     added, updated = [], []
     # Що САМЕ ця синхронізація визначає — по полях. Записуємо потім точково, на
     # свіжо перечитаний конфіг: див. `_save_registry_state`.
     writes = {}
     for tid, e in reg.items():
         local = tasks.get(tid)
+        if local is None and tid in trash:
+            continue
         if local is None:
             if cross_check:
                 try:

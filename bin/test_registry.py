@@ -523,6 +523,57 @@ class TestPullSkipsFixtures(_RegistrySandbox):
         self.assertIn('у кеші фікстура: nova', err)
 
 
+class TestPullSkipsTrash(_RegistrySandbox):
+    """Етап Д: задача, видалена на цій машині (запис кошика чи надгробок), не воскресає з реєстру."""
+
+    def _pull(self, registry):
+        from unittest import mock
+        with mock.patch.object(rg, 'read_registry', lambda d: dict(registry)), \
+             mock.patch.object(rg, '_work_root', lambda cfg, profile: self.tmp):
+            return self._quiet(rg.cmd_pull, None)
+
+    def _cfg(self):
+        import json
+        with open(self.file, encoding='utf-8') as f:
+            return json.load(f)
+
+    def _write(self, cfg):
+        import json
+        with open(self.file, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f)
+
+    def test_trashed_and_purged_ids_stay_gone(self):
+        cfg = self._cfg()
+        cfg['tasks'].pop('courts')
+        entry = dict(COURTS)
+        cfg['trash'] = {'courts': {'entry': entry, 'dir': None, 'trashDir': None, 'at': '2026-11-17T10:00:00Z'},
+                        'dead': {'purged': '2026-11-17T11:00:00Z'}}
+        self._write(cfg)
+        self._pull({'courts': dict(COURTS, id='courts'), 'dead': dict(COURTS, id='dead', title='Dead')})
+        after = self._cfg()
+        self.assertNotIn('courts', after['tasks'])
+        self.assertNotIn('dead', after['tasks'])
+        self.assertEqual(after['trash']['courts']['entry'], entry, 'запис кошика мусить пережити pull цілим')
+        self.assertEqual(after['trash']['dead'], {'purged': '2026-11-17T11:00:00Z'}, 'надгробок теж')
+
+    def test_garbage_trash_is_treated_as_empty(self):
+        for garbage in ('x', ['courts'], 5, None):
+            cfg = self._cfg()
+            cfg['tasks'].pop('courts', None)
+            cfg['trash'] = garbage
+            self._write(cfg)
+            self._pull({'courts': dict(COURTS, id='courts')})
+            self.assertIn('courts', self._cfg()['tasks'], f'сміттєвий trash {garbage!r} не мусить ховати задачу')
+
+    def test_missing_trash_key_still_pulls(self):
+        cfg = self._cfg()
+        cfg['tasks'].pop('courts', None)
+        cfg.pop('trash', None)
+        self._write(cfg)
+        self._pull({'courts': dict(COURTS, id='courts')})
+        self.assertIn('courts', self._cfg()['tasks'])
+
+
 class TestTrack(_RegistrySandbox):
     """4d-1: `track` — переносиме поле. 4d-4a: межа `track`/`profile` — одна функція `_track_of_entry`; запис машини на 0.14.0 має
     лише `profile`, і `pull` дописує йому `track`; тека задачі — з ЯВНИХ напрямків простору ЛІГИ (було: `design_work_roots`
