@@ -17,7 +17,7 @@
 **Tech Stack:** Python 3 stdlib (`serve.py`, `unittest`), vanilla ES modules, `node --test`, Playwright (живі).
 
 **Спека:** `docs/superpowers/specs/2026-11-17-tasks-crud-design.md`. Прототип:
-https://claude.ai/artifact/Aun4bx9AQJFz5W6yacVjYw. Рівень строгості — **повний**:
+погоджено власником 17.11.2026. Рівень строгості — **повний**:
 - після КОЖНОЇ задачі — ревʼю відповідності спеці, потім ревʼю якості;
 - кожен новий охоронець доводиться мутацією, яка його валить.
 
