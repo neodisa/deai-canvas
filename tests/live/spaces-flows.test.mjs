@@ -618,14 +618,14 @@ test("T7 фокус після діалогу: фішка («Скасувати�
   await waitText(page, "#bar .space-name", "P2");
   await chipFocused("збереження в діалозі правки");
 
-  /* (ii) екран «Задачі»: «Нова задача» → «Скасувати» — фокус на кнопці, якою діалог відкрили. */
+  /* (ii) екран «Задачі»: картка «+» → «Скасувати» — фокус на картці, якою форму відкрили. */
   await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
-  await page.click('#tasks-home .th-head [data-th="newtask"]');
-  await page.waitForSelector('form[data-form="task"]');
-  await page.click('form[data-form="task"] [data-a="cancel"]');
+  await page.click('#th-grid [data-th="newtask"]');
+  await page.waitForSelector('#th-new-slot form[data-form="task"]');
+  await page.click('#th-new-slot form[data-form="task"] [data-a="cancel"]');
   await page.waitForFunction(() => !document.querySelector('form[data-form="task"]'));
-  assert.equal((await active(page))?.th, "newtask", `після «Скасувати» у формі задачі фокус не на кнопці «Нова задача»: ${JSON.stringify(await active(page))}`);
+  assert.equal((await active(page))?.th, "newtask", `після «Скасувати» у формі задачі фокус не на картці «+»: ${JSON.stringify(await active(page))}`);
 
   /* (iii) фокус НЕ крадеться: діалог (що лишився, — «Назва й колір…») закривається, фокус лишається там, куди людина його віддала.
      З 0.25.0 фішка простору живе лише на екрані «Задачі», а діалог відкривається тільки нею, тож рамки макета під діалогом нема
@@ -752,7 +752,7 @@ test("T10 агент завів першу задачу в порожньому 
   const tr = trackTuner(page);
   await page.goto(`${server.url}/app/`);
   await page.waitForSelector("#tasks-home .th-empty--space");
-  assert.equal(await page.locator("#tasks-home .th-card").count(), 0, "свідок: у порожньому просторі вже є картки");
+  assert.equal(await page.locator("#tasks-home .th-card[data-id]").count(), 0, "свідок: у порожньому просторі вже є картки задач (картка «+» — не задача)");
 
   const made = await postJson(server.url, "/api/task-new", { id: "t1", title: "T1", space: "p" });
   assert.equal(made.status, 200, `агент не зміг завести задачу: ${await made.text()}`);

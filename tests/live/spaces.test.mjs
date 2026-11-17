@@ -148,8 +148,8 @@ test("1: перемикання на «P» без інтеграцій — см�
   /* Екран «Задачі» (перемикання йшло з нього, тож він лишається): заголовок із простором, лише x — задачі іншого простору тут
      нема (це й замінює колишній перемикач задач на смузі), без «Команди». */
   await waitText(page, "#tasks-home h1.th-h", "Задачі · P");
-  await page.waitForSelector("#tasks-home .th-card");
-  assert.deepEqual(await page.$$eval("#tasks-home .th-card", (els) => els.map((e) => e.dataset.id)), ["x"],
+  await page.waitForSelector("#tasks-home .th-card[data-id]");
+  assert.deepEqual(await page.$$eval("#tasks-home .th-card[data-id]", (els) => els.map((e) => e.dataset.id)), ["x"],
     "на екрані задач чужі задачі іншого простору");
   assert.equal(await page.locator('#tasks-home .th-tab[data-v="team"]').count(), 0, "вкладка «Команда» без інтеграцій");
   assert.equal(await page.locator('#tasks-home .th-tab[data-v="mine"]').count(), 1);
@@ -186,10 +186,11 @@ test("2: у «P» — «Нова задача» → «Landing» → id landing �
   await waitText(page, "#bar .space-name", "P");
   await openHome(page);
   await waitText(page, "#tasks-home h1.th-h", "Задачі · P");
-  assert.equal(await page.locator('#tasks-home .th-head [data-th="newtask"]').count(), 1, "кнопка «Нова задача» у голові екрана");
+  assert.equal(await page.locator('#tasks-home .th-head [data-th="newtask"]').count(), 0, "кнопка «Нова задача» лишилась у голові екрана");
+  assert.equal(await page.evaluate(() => document.querySelector("#th-grid > :first-child")?.dataset.th), "newtask", "картка «+» — не перша в сітці");
 
-  await page.click('#tasks-home .th-head [data-th="newtask"]');
-  await page.waitForSelector('form[data-form="task"]');
+  await page.click('#th-grid [data-th="newtask"]');
+  await page.waitForSelector('#th-new-slot form[data-form="task"]');
   await page.fill("#tf-title", "Landing");
   assert.equal(await page.inputValue("#tf-id"), "landing", "id не виведено з назви");
   await page.click('form[data-form="task"] [data-a="ok"]');
@@ -225,7 +226,8 @@ test("3: «Новий простір…» → «Client», тека типова 
   await waitText(page, "#tasks-home h1.th-h", "Задачі · Client");
   assert.equal(await homeOpen(page), true, "порожній простір — екран «Задачі»");
   await page.waitForSelector("#tasks-home .th-empty--space");
-  assert.equal(await page.locator('#tasks-home [data-th="newtask"]').count(), 2, "«Нова задача» в голові й у порожньому стані");
+  assert.equal(await page.locator('#th-grid [data-th="newtask"]').count(), 1, "порожній простір: картка «+» у сітці");
+  assert.equal(await page.locator('#tasks-home .th-head [data-th="newtask"]').count(), 0, "кнопки «Нова задача» в голові нема");
   assert.equal(await page.locator('#tasks-home .th-tab[data-v="team"]').count(), 0, "новий простір без інтеграцій");
   await waitText(page, "#bar .space-name", "Client");
   assert.equal(await page.locator('form[data-form="space"]').count(), 0, "форма простору лишилась (крок 2 її не має)");

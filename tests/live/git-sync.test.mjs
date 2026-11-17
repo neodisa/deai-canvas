@@ -411,8 +411,8 @@ test("5: автосинк — autosync-off за замовчуванням (orig
 async function openTaskForm(page) {
   await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
-  await page.click('#tasks-home .th-head [data-th="newtask"]');
-  await page.waitForSelector('form[data-form="task"]');
+  await page.click('#th-grid [data-th="newtask"]');
+  await page.waitForSelector('#th-new-slot form[data-form="task"]');
 }
 
 test("6: нова задача — з «Репозиторієм»: рядок «Перший клон…», макет колеги в Іт.1 + форк; з порожнім полем — звичайний запит без ознак клону", async (t) => {
