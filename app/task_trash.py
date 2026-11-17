@@ -18,7 +18,7 @@ TRASH_DIRNAME = '.deai-trash'
 
 class TrashError(Exception):
     """Відмова з кодом відповіді маршруту: `not-in-trash`, `task-exists`, `task-dir-exists`, `task-restore-failed`,
-    `task-purge-failed`."""
+    `task-purge-failed`, `bad-id`, `task-in-trash`."""
 
     def __init__(self, code, message=''):
         super().__init__(message or code)
@@ -35,6 +35,9 @@ def _iso(now):
 
 def trash_dir_for(task_dir, tid, now):
     """Вільний шлях у кошику поруч із текою задачі: `<батьківська>/.deai-trash/<id>-<РРРРММДД-ГГХХСС>[-N]`."""
+    if not (isinstance(tid, str) and tid and tid not in ('.', '..') and os.path.basename(tid) == tid
+            and '/' not in tid and os.sep not in tid):
+        raise TrashError('bad-id', 'the task id is not a safe folder name')
     parent = os.path.dirname(os.path.normpath(task_dir))
     base = os.path.join(parent, TRASH_DIRNAME, f"{tid}-{now.strftime('%Y%m%d-%H%M%S')}")
     cand, n = base, 2
@@ -74,6 +77,8 @@ def delete(cfg, tid, now, order=()):
     """Задача `tid` → кошик. Тека (якщо є) переїжджає; запис задачі стає `entry` запису кошика; `current`, що вказував на неї,
     переходить на першу іншу з `order` (порядок «нещодавно відкриті» маршруту), а без інших — прибирається.
     Повертає `(запис, undo)`; `undo()` вертає теку на місце (для збою запису `tasks.json`). `OSError` переносу — маршруту."""
+    if in_trash(cfg, tid):
+        raise TrashError('task-in-trash', 'a trash record with this id already exists')
     entry = cfg['tasks'][tid]
     d = entry.get('dir')
     src = d if isinstance(d, str) and d and os.path.isdir(d) else None
@@ -87,7 +92,7 @@ def delete(cfg, tid, now, order=()):
         cfg['trash'] = {}
     cfg['trash'][tid] = rec
     if cfg.get('current') == tid:
-        rest = [k for k in (list(order) or list(cfg['tasks'])) if k != tid and k in cfg['tasks']]
+        rest = [k for k in [*order, *cfg['tasks']] if k != tid and k in cfg['tasks']]
         if rest:
             cfg['current'] = rest[0]
         else:

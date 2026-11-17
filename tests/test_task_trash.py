@@ -5,6 +5,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'app'))
 import task_trash as tt  # noqa: E402
@@ -43,6 +44,14 @@ class TrashDirFor(TrashCase):
         self.assertTrue(tt.trash_dir_for(d, 'a', NOW).endswith('a-20261117-101500-3'))
 
 
+    def test_hostile_ids_are_rejected(self):
+        d = self.mk('a')
+        for bad in ('/x', 'a/../z', '..', '.', '', None):
+            with self.assertRaises(tt.TrashError, msg=repr(bad)) as cm:
+                tt.trash_dir_for(d, bad, NOW)
+            self.assertEqual(cm.exception.code, 'bad-id')
+
+
 class Delete(TrashCase):
     def test_moves_folder_and_entry_in_one_cfg(self):
         d = self.mk('a')
@@ -60,6 +69,44 @@ class Delete(TrashCase):
         cfg['current'] = 'b'
         tt.delete(cfg, 'b', NOW, order=['b', 'c', 'a'])
         self.assertEqual(cfg['current'], 'c')
+
+    def test_current_falls_back_when_order_is_incomplete(self):
+        cfg = self.cfg(a={'dir': self.mk('a')}, b={'dir': self.mk('b')})
+        tt.delete(cfg, 'a', NOW, order=['a'])
+        self.assertEqual(cfg['current'], 'b')
+
+    def test_current_falls_back_to_first_remaining_with_empty_order(self):
+        cfg = self.cfg(a={'dir': self.mk('a')}, b={'dir': self.mk('b')}, c={'dir': self.mk('c')})
+        tt.delete(cfg, 'a', NOW)
+        self.assertEqual(cfg['current'], 'b')
+
+    def test_refuses_when_live_trash_record_exists(self):
+        d = self.mk('a')
+        cfg = self.cfg(a={'dir': d})
+        cfg['trash'] = {'a': {'entry': {'dir': '/old'}, 'dir': '/old', 'trashDir': None, 'at': 'x'}}
+        with self.assertRaises(tt.TrashError) as cm:
+            tt.delete(cfg, 'a', NOW)
+        self.assertEqual(cm.exception.code, 'task-in-trash')
+        self.assertTrue(os.path.isfile(os.path.join(d, 'index.html')))
+        self.assertIn('a', cfg['tasks'])
+        self.assertEqual(cfg['trash']['a']['dir'], '/old')
+
+    def test_tombstone_is_overwritten(self):
+        cfg = self.cfg(a={'dir': self.mk('a')})
+        cfg['trash'] = {'a': {'purged': 'x'}}
+        tt.delete(cfg, 'a', NOW)
+        self.assertIn('entry', cfg['trash']['a'])
+
+    def test_failed_rename_leaves_cfg_and_folder(self):
+        d = self.mk('a')
+        cfg = self.cfg(a={'dir': d}, b={'dir': self.mk('b')})
+        with mock.patch('task_trash.os.rename', side_effect=OSError('boom')):
+            with self.assertRaises(OSError):
+                tt.delete(cfg, 'a', NOW, order=['a', 'b'])
+        self.assertIn('a', cfg['tasks'])
+        self.assertNotIn('trash', cfg)
+        self.assertEqual(cfg['current'], 'a')
+        self.assertTrue(os.path.isfile(os.path.join(d, 'index.html')))
 
     def test_last_task_drops_current(self):
         cfg = self.cfg(a={'dir': self.mk('a')})
@@ -133,6 +180,16 @@ class Restore(TrashCase):
                 tt.restore(cfg, tid)
             self.assertEqual(cm.exception.code, 'not-in-trash')
 
+    def test_refuses_without_original_folder_and_moves_nothing(self):
+        cfg, _d, rec = self.trashed()
+        cfg['trash']['a']['dir'] = None
+        with self.assertRaises(tt.TrashError) as cm:
+            tt.restore(cfg, 'a')
+        self.assertEqual(cm.exception.code, 'task-restore-failed')
+        self.assertTrue(os.path.isdir(rec['trashDir']))
+        self.assertIn('a', cfg['trash'])
+        self.assertNotIn('a', cfg['tasks'])
+
     def test_undo_puts_folder_back_into_trash(self):
         cfg, d, rec = self.trashed()
         _entry, undo = tt.restore(cfg, 'a')
@@ -150,6 +207,12 @@ class Purge(TrashCase):
         self.assertFalse(os.path.exists(rec['trashDir']))
         self.assertEqual(cfg['trash']['a'], {'purged': '2026-11-17T11:00:00Z'})
         self.assertFalse(tt.in_trash(cfg, 'a'))
+
+    def test_missing_trash_folder_still_leaves_tombstone(self):
+        cfg = {'tasks': {}, 'trash': {'x': {'entry': {}, 'dir': None,
+                                            'trashDir': os.path.join(self.root, '.deai-trash', 'x-1'), 'at': 'x'}}}
+        tt.purge(cfg, 'x', LATER)
+        self.assertEqual(cfg['trash']['x'], {'purged': '2026-11-17T11:00:00Z'})
 
     def test_refuses_a_path_outside_the_trash(self):
         victim = self.mk('victim')
