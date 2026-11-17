@@ -121,14 +121,14 @@ const overview = async (url, qs = "") => (await fetch(`${url}/api/tasks-overview
  */
 async function openHome(page, { all = false } = {}) {
   await page.click('#tabs [data-act="home"]');
-  await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
+  await page.waitForSelector("#tasks-home .th-card[data-id]", { timeout: 15000 });
   if (!all) return;
   await page.click('#tasks-home [data-th="status"][data-v="all"]');
-  await page.waitForFunction(() => document.querySelectorAll("#tasks-home .th-card").length === 4, null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelectorAll("#tasks-home .th-card[data-id]").length === 4, null, { timeout: 15000 });
 }
 
 /** Бейджі статусу на картках «Моїх»: `{id задачі: текст}`; картки без бейджа в мапу не потрапляють. */
-const badges = (page) => page.$$eval("#tasks-home .th-card", (els) => Object.fromEntries(els
+const badges = (page) => page.$$eval("#tasks-home .th-card[data-id]", (els) => Object.fromEntries(els
   .map((e) => [e.dataset.id, e.querySelector(".th-bdg[class*='th-bdg--']:not(.th-bdg--com)")?.textContent?.trim() ?? null])
   .filter(([, v]) => v)));
 const trackerBanner = (page) => page.locator("#tasks-home .th-banner", { hasText: "Трекер недоступний" });
@@ -149,7 +149,7 @@ test("1: звичайний простір без трекера — `tracker: n
   assert.equal(ov.tracker, null, "без постачальника ролі відповідь мусить мати `tracker: null`");
   assert.ok(ov.mine.every((x) => x.jiraStatus == null), `статус зʼявився без трекера: ${JSON.stringify(ov.mine)}`);
   await openHome(page);
-  assert.equal(await page.locator("#tasks-home .th-card").count(), 4);
+  assert.equal(await page.locator("#tasks-home .th-card[data-id]").count(), 4);
   assert.deepEqual(await badges(page), {}, "бейджі статусу без трекера");
   assert.equal(await page.locator("#tasks-home .th-banner").count(), 0, "банер без трекера");
   assert.deepEqual(page.errors, []);
