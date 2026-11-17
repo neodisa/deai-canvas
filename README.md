@@ -35,6 +35,7 @@ element and tell the agent what to change, and publishes a protected preview for
   off-system values, distances while Alt is held, and a change request for the agent.
 - **Agent status**: a state in the island and a dot on every task tab.
 - **Tasks screen**: search, sort, tags, issue-tracker statuses and a team dashboard if you connect them.
+- **Create, rename, delete**: a «+» card in the grid, rename from the card, the tab, F2 or ⌘K, and a per-space trash with restore.
 - **Publish** to a folder or to your own Vercel account, with an optional password gate.
 - **Git sync**: send an iteration to any git repository and pull a colleague's changes back as a new iteration.
 - **Spaces, wizard and Settings**: several projects on one machine; modules are connected and checked from the UI.
@@ -64,7 +65,7 @@ The screenshots show a made-up budgeting app on demo data. `node ops/readme-shot
 
 ## Status
 
-Version 0.29.0 (16.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
+Version 0.30.0 (17.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
 cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Feature reference
