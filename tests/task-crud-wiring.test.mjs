@@ -67,3 +67,11 @@ test("toast: вузол для читачів екрана — role=status, aria
   assert.equal(made[0].attrs.role, "status");
   assert.equal(made[0].attrs["aria-live"], "polite");
 });
+
+test("focusKey: картка «+» (th-card без data-id) ключується за data-th, а не за `data-id=undefined`", () => {
+  const el = (cls, dataset, id = "") => ({ id, classList: { contains: (c) => cls.includes(c) }, dataset });
+  const env = { document: { body: {} }, CSS: { escape: (x) => String(x) } };
+  const { focusKey } = load(env, ["focusKey"]);
+  assert.equal(focusKey(el(["th-card"], { th: "newtask" })), '[data-th="newtask"]');
+  assert.equal(focusKey(el(["th-card"], { th: "open", id: "x" })), '.th-card[data-id="x"]');
+});

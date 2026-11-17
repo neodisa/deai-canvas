@@ -8,7 +8,7 @@
  */
 import "./_spaces-kit.mjs";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
@@ -425,7 +425,8 @@ test("перейменування: збій запиту (500) — тост, с
 
 /* ═══════════════════════ Task 8: видалення з питанням у картці, тост «Повернути» ═══════════════════════ */
 
-const CARD = (id) => `#tasks-home .th-card[data-id="${id}"]`;
+/** Жива картка задачі (картка кошика теж `.th-card`, її сюди не беремо). */
+const CARD = (id) => `#tasks-home .th-card:not(.th-card--trash)[data-id="${id}"]`;
 const trashDirOf = (file, id) => path.join(path.dirname(readTasks(file)[id]?.dir ?? ""), ".deai-trash");
 const tabIds = (page) => page.$$eval("#tabs .tab-main[data-val]", (els) => els.map((e) => e.dataset.val));
 
@@ -554,9 +555,12 @@ test("видалення ОБОХ задач: екран лишається, «�
     await page.waitForFunction((k) => !document.querySelector(`#tasks-home .th-card[data-id="${k}"]`), id);
   }
   await page.waitForFunction(() => document.querySelectorAll("#tabs .tab-main[data-val]").length === 0);
+  /* Фокус ставиться в кінці `deleteTask` (після скидання стану й перемальовок): чекаємо його кінця (тост), а не початку. */
+  await page.waitForSelector("#cv-toast.show");
+  await page.waitForLoadState("networkidle");
   assert.equal(await homeHidden(page), false, "екран закрився");
   assert.equal(await cur(url), null, "сервер назвав поточну");
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.th), "newtask", "після останнього видалення фокус не на «+»");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.th), "newtask", `після останнього видалення фокус не на «+»: ${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 120))}`);
   assert.equal(await page.evaluate(() => document.getElementById("cv-toast").getAttribute("role")), "status", "тост без role=status");
   await page.click('#tabs [data-act="home"]');
   await page.waitForTimeout(300);
@@ -631,10 +635,14 @@ test("кошик: чип «Кошик · N» зʼявляється після �
   assert.equal(await page.locator('#tasks-home [data-th="tag"], #tasks-home [data-th="designer"]').count(), 0, "мітки в кошику");
   assert.equal(await page.locator('#tasks-home .th-card:not(.th-card--trash)').count(), 0, "живі картки поруч із кошиком");
   /* Enter на картці кошика нічого не відкриває; Delete — нічого не питає. */
+  const switches = [];
+  page.on("request", (r) => { if (/\/api\/task-(switch|delete)/.test(r.url())) switches.push(r.url()); });
   await page.focus(TRASH_CARD("y"));
   await page.keyboard.press("Enter");
   await page.keyboard.press("Delete");
-  await page.waitForTimeout(200);
+  /* Два кадри перемальовки: усе, що клавіші мали б запустити синхронно, уже сталось. */
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  assert.deepEqual(switches, [], "Enter/Delete на картці кошика надіслали запит");
   assert.equal(await homeHidden(page), false, "Enter відкрив картку кошика");
   assert.equal(await page.locator(".th-card--ask").count(), 0, "Delete спитав про видалення з кошика");
   /* Повторний клік по чипу виходить із кошика. */
@@ -730,4 +738,91 @@ test("кошик: клік по статусному чипу виходить �
   await page.waitForSelector(CARD("x"));
   assert.equal(await inTrashView(page), false, "лишилась у кошику");
   assert.equal(await page.getAttribute(trashChip, "aria-pressed"), "false");
+});
+
+/** Записати у `tasks.json` простору зміну (імітація «іншого вікна» чи агента). */
+const editTasksFile = (file, fn) => { const cfg = JSON.parse(readFileSync(file, "utf8")); fn(cfg); writeFileSync(file, JSON.stringify(cfg, null, 2)); };
+/** Витіснити «Кошик» зі сторінки як повернення у вікно: `focus` перечитує екран (не частіше за вікно `shouldRefreshHome`). */
+const refetchOnFocus = (page, gone) => page.waitForFunction((sel) => {
+  window.dispatchEvent(new Event("focus"));
+  return !document.querySelector(sel);
+}, gone);
+
+test("кошик спорожнили деінде: вигляд вимкнено, наступне видалення показує «Мої», а не кошик", async (t) => {
+  const { page, file } = await studio(t, 2900);
+  await trashIt(page, "y");
+  await page.waitForSelector(trashChip);
+  await page.click(trashChip);
+  await page.waitForSelector(TRASH_CARD("y"));
+  editTasksFile(file, (c) => { c.trash = {}; });
+  await refetchOnFocus(page, trashChip);
+  await trashIt(page, "x");
+  await page.waitForSelector(trashChip);
+  assert.equal(await inTrashView(page), false, "вигляд кошика ожив після чужого спорожнення");
+  assert.equal(await page.getAttribute(trashChip, "aria-pressed"), "false");
+  assert.equal(await page.locator('#tasks-home [data-th="newtask"]').count(), 1, "«Мої» не показано (нема «+»)");
+});
+
+test("кошик: подвійний клік по «Повернути» — один запит, без помилки; подвійне підтвердження «назавжди» — теж один", async (t) => {
+  const { page } = await studio(t, 3000);
+  const posts = { restore: 0, purge: 0 };
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/task-restore")) posts.restore += 1;
+    if (r.url().endsWith("/api/task-purge")) posts.purge += 1;
+  });
+  await trashIt(page, "x");
+  await trashIt(page, "y");
+  await page.waitForSelector(trashChip);
+  await page.click(trashChip);
+  await page.waitForSelector(TRASH_CARD("x"));
+  await page.evaluate(() => { const b = document.querySelector('.th-card--trash[data-id="x"] [data-th="restore"]'); b.click(); b.click(); });
+  await page.waitForSelector(CARD("x"), { state: "attached" }).catch(() => {});
+  await page.waitForFunction(() => !document.querySelector('.th-card--trash[data-id="x"]'));
+  assert.equal(posts.restore, 1, "повернення пішло двічі");
+  assert.equal(await page.evaluate(() => /Не вдалося|уже є/.test(document.getElementById("cv-toast")?.textContent || "")), false, "тост-помилка на вдалому поверненні");
+  await page.click(`${TRASH_CARD("y")} [data-th="menu"]`);
+  await page.click('#th-menu [data-th="purge"]');
+  await page.evaluate(() => { const b = document.querySelector('.th-card--trash[data-id="y"] .cfm-yes'); b.click(); b.click(); });
+  await page.waitForFunction(() => !document.querySelector(".th-card--trash"));
+  assert.equal(posts.purge, 1, "знищення пішло двічі");
+});
+
+test("кошик → «Повернути»: тека вже існує — тост, картка лишається в кошику", async (t) => {
+  const { page, file } = await studio(t, 3100);
+  const dir = readTasks(file).y.dir;
+  await trashIt(page, "y");
+  await page.waitForSelector(trashChip);
+  mkdirSync(dir, { recursive: true });
+  await page.click(trashChip);
+  await page.click(`${TRASH_CARD("y")} [data-th="restore"]`);
+  await page.waitForFunction(() => /Тека задачі вже існує/.test(document.getElementById("cv-toast")?.textContent || ""));
+  assert.equal(await page.locator(TRASH_CARD("y")).count(), 1, "картка зникла з кошика");
+  assert.ok(JSON.parse(readFileSync(file, "utf8")).trash?.y, "запис кошика зник");
+});
+
+test("кошик → «Повернути»: id уже зайнятий живою задачею — тост, картка лишається в кошику", async (t) => {
+  const { page, file } = await studio(t, 3200);
+  const xdir = readTasks(file).x.dir;
+  await trashIt(page, "y");
+  await page.waitForSelector(trashChip);
+  editTasksFile(file, (c) => { c.tasks.y = { dir: xdir, title: "Y2" }; });
+  await page.click(trashChip);
+  await page.click(`${TRASH_CARD("y")} [data-th="restore"]`);
+  await page.waitForFunction(() => /Задача з таким ідентифікатором уже є/.test(document.getElementById("cv-toast")?.textContent || ""));
+  assert.equal(await page.locator(TRASH_CARD("y")).count(), 1, "картка зникла з кошика");
+  assert.ok(JSON.parse(readFileSync(file, "utf8")).trash?.y, "запис кошика зник");
+});
+
+test("кошик → «Видалити назавжди»: збій сервера (500) — тост із причиною, питання знято, картка лишається", async (t) => {
+  const { page } = await studio(t, 3300);
+  await trashIt(page, "y");
+  await page.waitForSelector(trashChip);
+  await page.route("**/api/task-purge", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }));
+  await page.click(trashChip);
+  await page.click(`${TRASH_CARD("y")} [data-th="menu"]`);
+  await page.click('#th-menu [data-th="purge"]');
+  await page.click(`${TRASH_CARD("y")} .cfm-yes`);
+  await page.waitForFunction(() => /Не вдалося/.test(document.getElementById("cv-toast")?.textContent || ""));
+  await page.waitForFunction(() => !document.querySelector(".th-card--ask"));
+  assert.equal(await page.locator(TRASH_CARD("y")).count(), 1, "картка зникла після збою");
 });

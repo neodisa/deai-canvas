@@ -3245,7 +3245,8 @@ let homeRepainting = false;
 function focusKey(a) {
   if (!a || a === document.body) return null;
   if (a.id) return `#${CSS.escape(a.id)}`;
-  if (a.classList.contains('th-card')) return `.th-card[data-id="${CSS.escape(a.dataset.id)}"]`;
+  /* Картка «+» теж `.th-card`, але без `data-id`: ключ `[data-id="undefined"]` нічого не знаходив і фокус із неї гинув на кожній перемальовці. */
+  if (a.classList.contains('th-card') && a.dataset.id != null) return `.th-card[data-id="${CSS.escape(a.dataset.id)}"]`;
   /* Кнопки карток «Підключення»: дія + модуль (`retry` id не має). */
   if (a.dataset.cn) {
     return `[data-cn="${a.dataset.cn}"]${a.dataset.id != null ? `[data-id="${CSS.escape(a.dataset.id)}"]` : ''}`;
@@ -3541,16 +3542,25 @@ function focusAfterTrash(order, id) {
 }
 const trashOrder = () => homeCards().filter((c) => c.dataset.trash === '1').map((c) => c.dataset.id);
 
+/** id, повернення яких у дорозі (як `deletingIds`). */
+const restoringIds = new Set();
+/** id, знищення яких у дорозі. */
+const purgingIds = new Set();
+
 /** Повернути задачу з кошика (тост «Повернути» чи картка кошика): вкладка — на те саме місце, екран перечитується.
  *  `fromTrash` — виклик із вигляду кошика: фокус іде на сусідню картку кошика, а не на повернуту. */
 async function restoreTask(id, { spaceId, tabRec = null, at = -1, title = id, fromTrash = false } = {}) {
+  if (restoringIds.has(id)) return;      // подвійний клік: другий запит дістав би `task-exists` і тост-помилку на вдалому поверненні
   const order = fromTrash ? trashOrder() : [];
+  restoringIds.add(id);
   try { await postForm('/api/task-restore', { id, space: spaceId }); }
   catch (e) {
+    restoringIds.delete(id);
     const key = e.code === 'task-dir-exists' ? 'taskRestoreDirExists' : e.code === 'task-exists' ? 'taskRestoreIdTaken' : null;
     toast(key ? t(key) : t('errFailed', requestErrText(e)));
     return;
   }
+  restoringIds.delete(id);
   markHomeMutated();
   if (tabRec && !tabs.some((x) => x.id === id)) {
     const k = Math.min(Math.max(0, at), tabs.length);
@@ -3563,27 +3573,37 @@ async function restoreTask(id, { spaceId, tabRec = null, at = -1, title = id, fr
     if (!homeData.trash.length) homeEdit = { ...homeEdit, trash: false };
     if (fromTrash) { paintHomeLower(); focusAfterTrash(order, id); }
   } else homeData = null;
+  const stale = !homeData;
   await loadHome();
+  /* Список скинуто (інший простір чи закритий екран) — сітку перемальовано з нуля, фокус сам нікуди не потрапив. */
+  if (stale && fromTrash && homeOpen) focusAfterTrash(order, id);
   if (homeOpen && !fromTrash) homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
   if (!tabRec) toast(t('taskRestored', title));
 }
 
 /** Видалити задачу з кошика назавжди (питання в картці вже підтверджено): тека йде з диска, лишається надгробок. */
 async function purgeFromTrash(id) {
+  if (purgingIds.has(id)) return;
   const spaceId = homeData?.space?.id;
   const row = (homeData?.trash || []).find((y) => y.id === id);
   const order = trashOrder();
   homeEdit = { ...homeEdit, ask: null };
+  purgingIds.add(id);
   try { await postForm('/api/task-purge', { id, space: spaceId }); }
-  catch (e) { paintHomeLower(); toast(t('errFailed', requestErrText(e))); return; }
+  catch (e) { purgingIds.delete(id); paintHomeLower(); toast(t('errFailed', requestErrText(e))); return; }
+  purgingIds.delete(id);
   markHomeMutated();
   if (homeOpen && homeReady() && homeData?.space?.id === spaceId) {
     homeData = { ...homeData, trash: (homeData.trash || []).filter((y) => y.id !== id) };
     if (!homeData.trash.length) homeEdit = { ...homeEdit, trash: false };
     paintHomeLower();
     focusAfterTrash(order, id);
-  } else homeData = null;
-  toast(t('taskPurged', row?.title ?? id));
+    toast(t('taskPurged', row?.title ?? id));
+  } else {
+    homeData = null;
+    toast(t('taskPurged', row?.title ?? id));
+    if (homeOpen) { await loadHome(); if (homeOpen) focusAfterTrash(order, id); }
+  }
 }
 
 /**
@@ -3624,6 +3644,8 @@ async function loadHome(refresh = false, { spaces = true } = {}) {
     if (gen === taskSwitchGen) currentTaskId = r.current ?? currentTaskId;
     else r.current = currentTaskId;
     homeData = r;
+    /* Кошик спорожнили деінде (інше вікно, агент): вигляд кошика без кошика — пастка, наступне видалення вмить перекинуло б сітку в нього. */
+    if (homeEdit.trash && !(r.trash || []).length) homeEdit = { ...homeEdit, trash: false };
   } catch (e) {
     if (seq !== homeSeq || !homeOpen) return;
     const why = (e && e.message) || String(e);
