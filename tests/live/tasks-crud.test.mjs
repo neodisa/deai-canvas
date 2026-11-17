@@ -826,3 +826,135 @@ test("кошик → «Видалити назавжди»: збій серве�
   await page.waitForFunction(() => !document.querySelector(".th-card--ask"));
   assert.equal(await page.locator(TRASH_CARD("y")).count(), 1, "картка зникла після збою");
 });
+
+/* ── Етап Д, Task 10: перейменування з вкладки, F2 у макеті, ⌘K ─────────────────────────────────────────────────── */
+const POP = '.cv-ask-pop [data-form="taskname"]';
+const tabOf = (id) => `#tabs .tab-main[data-val="${id}"]`;
+const titleOf = (file, id) => readTasks(file)[id]?.title;
+const tabTip = (page, id) => page.getAttribute(tabOf(id), "title");
+
+/** `studioTabs`, але вже ПОЗА екраном «Задачі»: відкрита `current`, вкладка `inactive` поруч. */
+async function studioCanvas(t, offset) {
+  const s = await studioTabs(t, offset);
+  await s.page.click(tabOf(s.current));
+  await s.page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await s.page.waitForLoadState("networkidle");
+  return s;
+}
+
+test("перейменування з вкладки: двічі по НЕактивній — задача перемкнулась, поповер під вкладкою; Enter → tasks.json і підказка", async (t) => {
+  const { page, file, url, inactive } = await studioCanvas(t, 3400);
+  await page.dblclick(tabOf(inactive));
+  await page.waitForSelector(POP);
+  /* Поповер зʼявляється одразу, а `task-switch` ще летить: чекаємо, поки сервер перемкнеться. */
+  await page.waitForFunction(async (id) => (await (await fetch("/api/tasks")).json()).current === id, inactive);
+  await page.waitForSelector(`${tabOf(inactive)}[aria-current="page"]`);
+  await page.waitForLoadState("networkidle");              // перемальовка після `task-switch` дочитана: запізніла не затре нову назву
+  assert.equal(await cur(url), inactive, "задача не перемкнулась");
+  assert.equal(await page.inputValue("#tn-title"), inactive.toUpperCase(), "у полі не поточна назва");
+  const pop = await page.locator(".cv-ask--pop").boundingBox();
+  const tab = await page.locator(tabOf(inactive)).boundingBox();
+  assert.ok(pop.y >= tab.y + tab.height - 2, "поповер не під вкладкою");
+  await page.fill("#tn-title", "Нова назва");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
+  assert.equal(titleOf(file, inactive), "Нова назва");
+  assert.match(await tabTip(page, inactive), /Нова назва/);
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.val), inactive, "фокус не на вкладці");
+});
+
+test("перейменування з вкладки: ціль dblclick — не сама вкладка (спільний предок після перемальовки рядка) — вкладку береться з точки кліку", async (t) => {
+  const { page, inactive } = await studioCanvas(t, 3500);
+  const b = await page.locator(tabOf(inactive)).boundingBox();
+  /* Натиск на старому вузлі, відпуск на перемальованому: ціль — `.tabs-list`, а не `.tab-main`; координати — над вкладкою. */
+  await page.evaluate(({ x, y }) => {
+    document.querySelector("#tabs .tabs-list").dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+  }, { x: b.x + b.width / 2, y: b.y + b.height / 2 });
+  await page.waitForSelector(POP);
+  assert.equal(await page.inputValue("#tn-title"), inactive.toUpperCase());
+});
+
+test("перейменування з вкладки: двічі по активній → поповер; Esc — без запиту, фокус на вкладці; без змін і порожня назва — без запиту", async (t) => {
+  const { page, current } = await studioCanvas(t, 3600);
+  const posts = [];
+  page.on("request", (r) => { if (r.method() === "POST" && /task-rename/.test(r.url())) posts.push(r.url()); });
+  await page.dblclick(tabOf(current));
+  await page.waitForSelector(POP);
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.val), current, "фокус не на вкладці");
+  await page.dblclick(tabOf(current));
+  await page.waitForSelector(POP);
+  await page.keyboard.press("Enter");                    // назва не змінилась
+  await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
+  await page.dblclick(tabOf(current));
+  await page.waitForSelector(POP);
+  await page.fill("#tn-title", "   ");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(`${POP} [data-form-error]:not(:empty)`);
+  assert.match(await page.textContent(`${POP} [data-form-error]`), /Вкажи назву/);
+  assert.deepEqual(posts, [], "пішов запит");
+});
+
+test("перейменування з вкладки: збій сервера — текст помилки в поповері, назва не змінилась", async (t) => {
+  const { page, file, current } = await studioCanvas(t, 3700);
+  await page.route("**/api/task-rename", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "task-rename-failed" }) }));
+  await page.dblclick(tabOf(current));
+  await page.waitForSelector(POP);
+  await page.fill("#tn-title", "Інша");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(`${POP} [data-form-error]:not(:empty)`);
+  assert.equal(titleOf(file, current), current.toUpperCase());
+});
+
+test("перейменування: F2 у макеті → поповер під активною вкладкою; не діє в полі вводу, з модифікатором і на екрані «Задачі»", async (t) => {
+  const { page, file, current } = await studioCanvas(t, 3800);
+  await page.keyboard.press("Shift+F2");
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator(POP).count(), 0, "Shift+F2 відкрив поповер");
+  await page.keyboard.press("F2");
+  await page.waitForSelector(POP);
+  const pop = await page.locator(".cv-ask--pop").boundingBox();
+  const tab = await page.locator(tabOf(current)).boundingBox();
+  assert.ok(pop.y >= tab.y + tab.height - 2, "поповер не під активною вкладкою");
+  await page.fill("#tn-title", "");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(`${POP} [data-form-error]:not(:empty)`);
+  await page.fill("#tn-title", "Через F2");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
+  assert.equal(titleOf(file, current), "Через F2");
+  /* Екран «Задачі»: F2 без картки у фокусі нічого не відкриває. */
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector("#th-grid");
+  await page.locator("#th-grid").evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press("F2");
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator(POP).count(), 0, "F2 на екрані «Задачі» відкрив поповер вкладки");
+});
+
+test("перейменування: F2, коли фокус у макеті (iframe), теж відкриває поповер", async (t) => {
+  const { page, current } = await studioCanvas(t, 3900);
+  await page.frameLocator("#frame, iframe").first().locator("h1").first().click();
+  await page.keyboard.press("F2");
+  await page.waitForSelector(POP);
+  assert.ok(current);
+});
+
+test("перейменування: ⌘K «Перейменувати задачу» → той самий поповер; на екрані «Задачі» пункту нема", async (t) => {
+  const { page, current } = await studioCanvas(t, 4000);
+  await page.keyboard.press("Control+k");
+  await page.fill("#palq", "Перейменувати задачу");
+  await page.waitForSelector('.pal-it:has-text("Перейменувати задачу")');
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(POP);
+  assert.equal(await page.inputValue("#tn-title"), current.toUpperCase());
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector("#th-grid");
+  await page.keyboard.press("Control+k");
+  await page.fill("#palq", "Перейменувати задачу");
+  await page.waitForTimeout(150);
+  assert.equal(await page.locator('.pal-it:has-text("Перейменувати задачу")').count(), 0);
+});

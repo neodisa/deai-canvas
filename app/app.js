@@ -41,7 +41,7 @@ import {
   spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
 } from './spaces-model.js';
 import {
-  parseTags, spaceDialogHTML, tagsFormHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
+  parseTags, spaceDialogHTML, tagsFormHTML, taskFormHTML, taskNameFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
 } from './space-dialogs.js';
 import { createWizard } from './wizard.js';
 import { panelHTML } from './shell-panel.js';
@@ -2052,6 +2052,7 @@ const frameTyping = (ev) => typingIn(ev, frame.contentDocument);
 function frameCmtKey(ev) {
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey || ev.repeat || ev.isComposing) return;
   if (frameTyping(ev) || shellModalOpen()) return;
+  if (ev.key === 'F2' && !homeOpen) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.rentask(); return; }
   const k = (ev.key || '').toLowerCase();
   if (k === 'c' || ev.code === 'KeyC') { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.comments(); }
   else if ((k === 'h' || ev.code === 'KeyH') && cmtOpen) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.cmtpins(); }
@@ -2126,6 +2127,8 @@ async function switchTask(val) {
 }
 
 const BAR_ACTIONS = {
+  /* ⌘K «Перейменувати задачу» (Task 10): поповер під вкладкою поточної задачі. */
+  rentask: () => renameTaskFromTab(currentTaskId),
   /* Логотип → екран «Задачі» (`enterHome` нижче: смуга, клас на `body`, запит
      `/api/tasks-overview`). Логотип з «Підключення» теж веде на «Задачі» — тому сторінка названа явно: без
      неї `enterHome` лишив би відкриту. Відкрита панель «Підключення» з незбереженими змінами спершу питає
@@ -3454,6 +3457,38 @@ function applyTaskTitle(id, title) {
      новий — запис назви в неї отруїв би чужий обʼєкт. Смугу малюємо лише тоді, коли обʼєкт справді про цю задачу. */
   if (curTask?.id === id) { curTask = { ...curTask, title }; paintBar(); }
 }
+
+/** Етап Д: «Перейменувати задачу» — поповер `askForm` під вкладкою задачі `id`; нема вкладки (чи вона схована) — модальна картка. */
+async function renameTaskFromTab(id) {
+  if (!id) return;
+  const tab = tabs.find((x) => x.id === id);
+  const title = tab?.title ?? (curTask?.id === id ? curTask.title : '') ?? '';
+  const anchor = () => tabsEl.querySelector(`.tab-main[data-val="${CSS.escape(id)}"]`);
+  await askForm(() => taskNameFormHTML({ title }), {
+    anchor: anchor(), place: 'below',
+    focusBack: anchor,
+    onSubmit: async (vals, ctl) => {
+      const next = String(vals.title ?? '').trim();
+      if (!next) { ctl.focus('title'); return t('titleRequired'); }
+      if (next === title) return undefined;
+      try { const r = await postForm('/api/task-rename', { id, title: next }); applyTaskTitle(id, r.title); }
+      catch (e) { return t('errFailed', requestErrText(e)); }
+      if (homeOpen) paintHomeLower();
+      return undefined;
+    },
+  });
+}
+
+/* Двічі по вкладці — перейменувати. ⛔ Перший клік по НЕактивній вкладці перемикає задачу, і `paintTabs` переписує рядок:
+   ціль `dblclick` або відʼєднана, або (натиск на старому вузлі, відпуск на новому) — спільний предок без `.tab-main`.
+   Тому вкладку беремо з точки кліку, коли сама ціль її не дає. */
+tabsEl.addEventListener('dblclick', (ev) => {
+  const el = (ev.target.isConnected ? ev.target.closest?.('.tab-main') : null)
+    || document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.tab-main');
+  if (!el) return;
+  ev.preventDefault();
+  renameTaskFromTab(el.dataset.val);
+});
 
 /** Стан Claude «працює» для задачі (id чи Jira-ключ) з останнього опиту вкладок (`claudeAll`); нема даних — ні. */
 const claudeWorkingOn = (row) => {
@@ -8503,6 +8538,7 @@ function paletteState() {
     spaceId: st.space?.id ?? null,
     space: st.space ? { id: st.space.id, capabilities: st.space.capabilities, compat: st.space.compat } : null,
     update: st.update,
+    taskId: st.taskId,
   };
 }
 
@@ -8677,6 +8713,8 @@ document.addEventListener('keydown', (ev) => {
   /* Коментарі (0.26.0): `C` — панель (і режим коментування), `H` — сховати піни, поки панель відкрита, `Esc` — закрити.
      Після `typing` вище: у полі пошуку панелі `c` друкується. */
   const cmtFree = !ev.repeat && !ev.isComposing && !ev.defaultPrevented && !shellModalOpen();
+  /* F2 — перейменувати поточну задачу (Task 10). Без модифікаторів; поле вводу, палітра, діалог і екран «Задачі» відсіяні вище. */
+  if (cmtFree && ev.key === 'F2' && !meta && !ev.altKey && !ev.shiftKey && currentTaskId) { ev.preventDefault(); BAR_ACTIONS.rentask(); return; }
   if (cmtFree && !meta && !ev.altKey && !ev.shiftKey && (ev.key.toLowerCase() === 'c' || ev.code === 'KeyC')) {
     ev.preventDefault(); BAR_ACTIONS.comments(); return;
   }
