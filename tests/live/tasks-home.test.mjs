@@ -458,15 +458,16 @@ test("мітки 2: старий стан 0.10.0 (`profiles: ['united']`) міг
   assert.deepEqual([...saved.tags].sort(), ["liga360", "united"]);
 });
 
-test("мітки 3: кнопка «Мітки» відкриває діалог (задача НЕ відкривається), збереження → картка й чипи, tasks.json; помилка — під полем, файл без змін", async (t) => {
+test("мітки 3: «⋯» → «Мітки…» відкриває діалог (задача НЕ відкривається), збереження → картка й чипи, tasks.json; помилка — під полем, файл без змін", async (t) => {
   const { page, url, tasksFile } = await boot(t, PORT_BASE + 2000);
   await page.click('#tabs [data-act="home"]');
   await page.waitForSelector('#tasks-home .th-card[data-id="t2"]');
   assert.equal(await cur(url), "fixture");
 
-  await page.click('#tasks-home [data-th="tags"][data-id="t2"]');
+  await page.click('#tasks-home .th-more[data-id="t2"]');
+  await page.click('#th-menu [data-th="tags"]');
   await page.waitForSelector('form[data-form="tags"]');
-  assert.equal(await homeShown(page), true, "екран зник: клік по «Мітки» відкрив задачу");
+  assert.equal(await homeShown(page), true, "екран зник: «Мітки…» відкрили задачу");
   assert.equal(await cur(url), "fixture", "клік по «Мітки» переключив задачу");
   assert.equal(await page.inputValue("#tg-tags"), "liga360", "діалог не заповнений похідною міткою");
 
@@ -484,7 +485,7 @@ test("мітки 3: кнопка «Мітки» відкриває діалог 
   assert.deepEqual(readTasks(tasksFile).t2.tags, ["alpha", "beta"], "tasks.json без міток");
   assert.equal(await cur(url), "fixture", "збереження міток переключило задачу");
   // збереження перемальовує картку (кнопка-відкривач зникає з DOM): фокус мусить дістатися нової кнопки тієї ж картки (`focusBack`)
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id + "/" + document.activeElement?.dataset?.th), "t2/tags", "після збереження фокус загублено");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id + "/" + document.activeElement?.className), "t2/th-more", "після збереження фокус загублено");
   const cardTags = await page.textContent('#tasks-home .th-card[data-id="t2"]');
   assert.match(cardTags, /alpha/, "картка не показує нову мітку");
   assert.match(cardTags, /beta/);
@@ -519,21 +520,23 @@ test("мітки 4: «Нова задача» з полем «Мітки» у з
   assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="beta"]').count(), 1, "чипа beta нема");
 });
 
-test("мітки 5: клавіатура — Enter на кнопці «Мітки» відкриває діалог (задача НЕ відкривається), Esc закриває й вертає фокус на ту саму кнопку", async (t) => {
+test("мітки 5: клавіатура — Shift+F10 → ↓ → Enter на «Мітки…» відкриває діалог (задача НЕ відкривається), Esc закриває й вертає фокус на «⋯» картки", async (t) => {
   const { page, url } = await boot(t, PORT_BASE + 2200);
   await page.click('#tabs [data-act="home"]');
   await page.waitForSelector('#tasks-home .th-card[data-id="t4"]');
-  const btn = '#tasks-home [data-th="tags"][data-id="t4"]';
-  await page.focus(btn);
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id + "/" + document.activeElement?.dataset?.th), "t4/tags");
+  await page.focus('#tasks-home .th-card[data-id="t4"]');
+  await page.keyboard.press("Shift+F10");
+  await page.waitForSelector("#th-menu");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.th), "tags", "↓ не стала на «Мітки…»");
   await page.keyboard.press("Enter");
   await page.waitForSelector('form[data-form="tags"]');
-  assert.equal(await homeShown(page), true, "Enter на «Мітки» відкрив задачу");
-  assert.equal(await cur(url), "fixture", "Enter на «Мітки» переключив задачу");
+  assert.equal(await homeShown(page), true, "Enter на «Мітки…» відкрив задачу");
+  assert.equal(await cur(url), "fixture", "Enter на «Мітки…» переключив задачу");
   await page.keyboard.press("Escape");
   await page.waitForSelector('form[data-form="tags"]', { state: "detached" });
   assert.equal(await homeShown(page), true, "Esc закрив ще й екран");
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id + "/" + document.activeElement?.dataset?.th), "t4/tags", "фокус не повернувся на кнопку «Мітки»");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id + "/" + document.activeElement?.className), "t4/th-more", "фокус не повернувся на «⋯» картки");
 });
 
 test("мова: перемикання з ⌘K на екрані «Задачі» перемальовує сам екран", async (t) => {

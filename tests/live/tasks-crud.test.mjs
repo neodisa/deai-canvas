@@ -182,3 +182,177 @@ test("нова задача: форма вже не жива, коли відп�
   assert.ok(readTasks(file).fon, "задачу не створено");
   assert.equal(await page.locator('form[data-form="task"]').count(), 0, "форма лишилась у схованому DOM");
 });
+
+/* ═══════════════════════ Task 7: меню картки, «Мітки…» з меню, перейменування на місці ═══════════════════════ */
+
+const itemOf = (page) => page.evaluate(() => document.activeElement?.dataset?.th ?? document.activeElement?.tagName);
+const MORE = (id) => `#tasks-home .th-more[data-id="${id}"]`;
+
+test("меню: «⋯» відкриває з фокусом на першому пункті; ↓/↑ по колу; Esc закриває й вертає фокус на «⋯»; клік повз — закриває", async (t) => {
+  const { page } = await studio(t, 500);
+  await page.click(MORE("x"));
+  await page.waitForSelector("#th-menu");
+  assert.equal(await page.getAttribute(MORE("x"), "aria-expanded"), "true");
+  assert.equal(await homeHidden(page), false, "клік по «⋯» відкрив задачу");
+  assert.equal(await itemOf(page), "rename", "фокус не на першому пункті");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await itemOf(page), "tags");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await itemOf(page), "delete");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await itemOf(page), "rename", "↓ з останнього не пішла по колу");
+  await page.keyboard.press("ArrowUp");
+  assert.equal(await itemOf(page), "delete", "↑ з першого не пішла по колу");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#th-menu").count(), 0, "Esc не закрив меню");
+  assert.equal(await homeHidden(page), false, "Esc закрив ще й екран");
+  assert.equal(await page.getAttribute(MORE("x"), "aria-expanded"), "false");
+  assert.equal(await page.evaluate(() => document.activeElement?.className), "th-more", "фокус не на «⋯»");
+  /* Повторний клік по «⋯» — тогл. */
+  await page.click(MORE("x"));
+  await page.waitForSelector("#th-menu");
+  await page.click(MORE("x"));
+  assert.equal(await page.locator("#th-menu").count(), 0, "другий клік по «⋯» не закрив меню");
+  /* Клік повз закриває й нічого більше не робить: картка під курсором не відкривається. */
+  await page.click(MORE("x"));
+  await page.waitForSelector("#th-menu");
+  await page.click('#tasks-home .th-card[data-id="y"] .th-ttl');
+  assert.equal(await page.locator("#th-menu").count(), 0, "клік повз не закрив меню");
+  assert.equal(await page.getAttribute(MORE("x"), "aria-expanded"), "false");
+  assert.equal(await homeHidden(page), false, "клік повз меню відкрив картку");
+});
+
+test("меню: перемальовка сітки прибирає меню, а aria-expanded не застрягає", async (t) => {
+  const { page } = await studio(t, 550);
+  await page.click(MORE("x"));
+  await page.waitForSelector("#th-menu");
+  await page.fill("#th-q", "x");
+  await page.waitForFunction(() => !document.getElementById("th-menu"));
+  assert.equal(await page.getAttribute(MORE("x"), "aria-expanded"), "false", "aria-expanded застряг після перемальовки");
+});
+
+test("меню: правий клік по картці — меню в точці кліку; Shift+F10 на картці — меню під «⋯»", async (t) => {
+  const { page } = await studio(t, 600);
+  const card = await page.locator('#tasks-home .th-card[data-id="y"]').boundingBox();
+  const px = card.x + 40, py = card.y + 60;
+  await page.mouse.click(px, py, { button: "right" });
+  await page.waitForSelector("#th-menu");
+  const box = await page.locator("#th-menu").boundingBox();
+  assert.ok(Math.abs(box.x - px) < 4 && Math.abs(box.y - py) < 4, `меню не в точці кліку: ${box.x},${box.y} проти ${px},${py}`);
+  assert.equal(await homeHidden(page), false, "правий клік відкрив задачу");
+  await page.keyboard.press("Escape");
+  /* Правий клік по картці «+» меню не дає. */
+  const plus = await page.locator('#tasks-home [data-th="newtask"]').boundingBox();
+  await page.mouse.click(plus.x + 20, plus.y + 20, { button: "right" });
+  assert.equal(await page.locator("#th-menu").count(), 0, "меню на картці «+»");
+
+  await page.focus('#tasks-home .th-card[data-id="x"]');
+  await page.keyboard.press("Shift+F10");
+  await page.waitForSelector("#th-menu");
+  const m = await page.locator("#th-menu").boundingBox();
+  const b = await page.locator(MORE("x")).boundingBox();
+  assert.ok(m.y >= b.y + b.height - 1, "меню не під «⋯»");
+  assert.ok(Math.abs(m.x + m.width - (b.x + b.width)) < 6, "меню не вирівняне за правим краєм «⋯»");
+  assert.equal(await page.getAttribute("#th-menu", "data-for"), "x");
+});
+
+test("меню → «Мітки…» відкриває діалог міток (задача НЕ відкривається); Esc — фокус на «⋯» картки", async (t) => {
+  const { page, url } = await studio(t, 700);
+  const before = await cur(url);
+  await page.click(MORE("y"));
+  await page.waitForSelector("#th-menu");
+  await page.click('#th-menu [data-th="tags"]');
+  await page.waitForSelector('form[data-form="tags"]');
+  assert.equal(await page.locator("#th-menu").count(), 0, "меню лишилось під діалогом");
+  assert.equal(await homeHidden(page), false, "«Мітки…» відкрили задачу");
+  assert.equal(await cur(url), before, "«Мітки…» переключили задачу");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector('form[data-form="tags"]', { state: "detached" });
+  assert.equal(await homeHidden(page), false, "Esc закрив ще й екран");
+  assert.equal(await page.evaluate(() => document.activeElement?.className + "/" + document.activeElement?.dataset?.id), "th-more/y", "фокус не на «⋯» картки");
+});
+
+test("перейменування на картці: F2 → поле з виділеною назвою; Enter → tasks.json title, id і тека ті самі, підказка вкладки нова", async (t) => {
+  const { page, file } = await studio(t, 800);
+  /* Вкладка x зʼявляється, коли задачу відкрито: відкриваємо й вертаємось на екран. */
+  await page.click('#tasks-home .th-card[data-id="x"]');
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector('#tasks-home .th-card[data-id="x"]');
+  const dirBefore = readTasks(file).x.dir;
+  await page.focus('#tasks-home .th-card[data-id="x"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  assert.equal(await active(page), "INPUT#th-ren.", "фокус не в полі назви");
+  assert.equal(await page.evaluate(() => { const i = document.getElementById("th-ren"); return i.value.slice(i.selectionStart, i.selectionEnd); }), "X", "назву не виділено");
+  assert.equal(await page.locator('#tasks-home .th-card[data-id="x"][data-th="open"]').count(), 0, "картка в перейменуванні лишилась відкривачем");
+  await page.keyboard.type("Нова назва");
+  await page.keyboard.press("Enter");
+  /* Чекаємо на РЕЗУЛЬТАТ (нова назва на картці й фокус на ній), а не на зникнення поля: його могла зняти й стороння перемальовка. */
+  await page.waitForFunction(() => /Нова назва/.test(document.querySelector('#tasks-home .th-card[data-id="x"] .th-ttl')?.textContent || "")
+    && document.activeElement?.dataset?.id === "x");
+  const row = readTasks(file).x;
+  assert.equal(row.title, "Нова назва", "tasks.json без нової назви");
+  assert.equal(row.dir, dirBefore, "тека змінилась");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id + "/" + document.activeElement?.dataset?.th), "x/open", "фокус не повернувся на картку");
+  assert.match(await page.getAttribute('#tabs .tab-main[data-val="x"]', "title"), /Нова назва/, "підказка вкладки стара");
+});
+
+test("перейменування на картці: Esc — без запиту; порожнє — без запиту; втрата фокуса — зберігає", async (t) => {
+  const { page, file } = await studio(t, 900);
+  const posts = [];
+  page.on("request", (r) => { if (r.method() === "POST" && /task-rename/.test(r.url())) posts.push(r.url()); });
+  await page.focus('#tasks-home .th-card[data-id="y"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  await page.keyboard.type("Нічого");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.getElementById("th-ren"));
+  assert.equal(await homeHidden(page), false, "Esc закрив ще й екран");
+  assert.equal(readTasks(file).y.title, "Y", "Esc записав назву");
+  await page.focus('#tasks-home .th-card[data-id="y"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  await page.fill("#th-ren", "   ");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.getElementById("th-ren"));
+  assert.deepEqual(posts, [], "порожня назва дала запит");
+  assert.equal(readTasks(file).y.title, "Y");
+  /* Втрата фокуса зберігає. */
+  await page.focus('#tasks-home .th-card[data-id="y"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  await page.fill("#th-ren", "Зі втратою");
+  await page.focus("#th-q");
+  await page.waitForFunction(() => !document.getElementById("th-ren"));
+  await page.waitForFunction(() => /Зі втратою/.test(document.querySelector('#tasks-home .th-card[data-id="y"] .th-ttl')?.textContent || ""));
+  assert.equal(readTasks(file).y.title, "Зі втратою");
+  assert.equal(posts.length, 1);
+});
+
+test("перейменування на картці: клік по іншій картці комітить і НЕ відкриває її; через меню «Перейменувати» теж", async (t) => {
+  const { page, file } = await studio(t, 1000);
+  await page.click(MORE("x"));
+  await page.waitForSelector("#th-menu");
+  await page.click('#th-menu [data-th="rename"]');
+  await page.waitForSelector("#th-ren");
+  assert.equal(await page.locator("#th-menu").count(), 0, "меню лишилось під час перейменування");
+  await page.fill("#th-ren", "Через меню");
+  await page.click('#tasks-home .th-card[data-id="y"] .th-ttl');
+  await page.waitForFunction(() => !document.getElementById("th-ren"));
+  await page.waitForFunction(() => /Через меню/.test(document.querySelector('#tasks-home .th-card[data-id="x"] .th-ttl')?.textContent || ""));
+  assert.equal(readTasks(file).x.title, "Через меню", "клік повз не зберіг назву");
+  assert.equal(await homeHidden(page), false, "клік по іншій картці під час перейменування відкрив її");
+});
+
+test("перейменування на картці: «клік» без pointerdown (синтетичний) по іншій картці теж комітить і не відкриває її", async (t) => {
+  const { page, file } = await studio(t, 1100);
+  await page.focus('#tasks-home .th-card[data-id="x"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  await page.fill("#th-ren", "Синтетика");
+  await page.evaluate(() => document.querySelector('#tasks-home .th-card[data-id="y"]').click());
+  await page.waitForFunction(() => /Синтетика/.test(document.querySelector('#tasks-home .th-card[data-id="x"] .th-ttl')?.textContent || ""));
+  assert.equal(readTasks(file).x.title, "Синтетика");
+  assert.equal(await homeHidden(page), false, "синтетичний клік по іншій картці відкрив її");
+});

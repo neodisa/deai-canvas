@@ -1833,6 +1833,7 @@ test("кнопка «Підключення» на «Задачах», що ще
   const env = mkConn(null, {
     homeOpen: true, homePage: "tasks", homeData: { loading: true, space: PLAIN },
     wiz: { click: () => { throw new Error("майстер не мав би бути"); } },
+    homeEdit: { ren: null }, document: { getElementById: () => null },
   });
   load(env, { funcs: ["enterConnections", "loadSpaces", "wireHome"] }).wireHome({ addEventListener: (type, fn) => { handlers[type] = fn; } });
   const btn = { dataset: { th: "conn" } };

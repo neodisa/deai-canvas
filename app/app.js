@@ -32,6 +32,7 @@ import { ISLAND_SHELL, applyBadge, badgeFor, islandParts } from './claude-status
 import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.js';
 import { barHTML } from './shell-bar.js';
 import { cleanTitle, readHomeUi, relTime, taskKey } from './tasks-model.js';
+import { taskMenuHTML } from './task-menu.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, hasNotify, hasTeamComments, healTarget,
@@ -1742,7 +1743,7 @@ function closeNewTaskCard() {
 }
 
 /**
- * «Мітки» на картці «Моїх» (`data-th="tags"`, 4b-3): діалог з одним полем, заповненим поточними мітками задачі →
+ * «Мітки…» з меню картки «Моїх» (`data-th="tags"`, 4b-3): діалог з одним полем, заповненим поточними мітками задачі →
  * `POST /api/task-tags {id, tags}` (сервер сам знаходить простір, де лежить задача) → мітки в рядку екрана оновлюються на місці.
  * Мітки беремо з рядка `homeData.mine` (це те, що людина бачить на картці, включно з похідною міткою ЛІГИ): збереження
  * замінює їх власними. Помилка `bad-tags` — текст під полем, діалог лишається; будь-яка інша (задачу вилучено — 404, id у двох
@@ -1754,7 +1755,8 @@ async function editTaskTags(id) {
   const row = (homeData?.mine || []).find((y) => y.id === id);
   if (!row) return;
   await askForm(() => tagsFormHTML({ value: (row.tags || []).join(', ') }), {
-    focusBack: () => homeNode()?.querySelector(`[data-th="tags"][data-id="${CSS.escape(id)}"]`),
+    /* Кнопки «Мітки» на картці вже нема: «Мітки…» відкривається з меню, тож фокус вертається на «⋯» картки. */
+    focusBack: () => homeNode()?.querySelector(`.th-more[data-id="${CSS.escape(id)}"]`),
     onSubmit: async (vals, ctl) => {
       let saved;
       try { saved = await postForm('/api/task-tags', { id, tags: parseTags(vals.tags) }); }
@@ -3212,6 +3214,7 @@ const homeReady = () => Array.isArray(homeData && homeData.mine);
 const homeNode = () => document.getElementById('tasks-home');
 const homeCards = () => [...(homeNode()?.querySelectorAll('.th-card:not(#th-new-slot)') || [])];
 
+let homeRepainting = false;
 /** Селектор елемента, який був у фокусі, — щоб повернути фокус на ТОЙ САМИЙ
  *  після перемальовки (вузол новий, фокус на ньому пропав би). */
 function focusKey(a) {
@@ -3237,7 +3240,9 @@ function keepFocus(root, redo) {
   const key = root.contains(a) && a !== root ? focusKey(a) : null;
   const nth = key ? [...root.querySelectorAll(key)].indexOf(a) : -1;
   const caret = key === '#th-q' ? [a.selectionStart, a.selectionEnd] : null;
-  redo();
+  /* Зняття сфокусованого поля назви при `innerHTML` теж дає `focusout` — це перемальовка, а не втрата фокуса людиною. */
+  homeRepainting = true;
+  try { redo(); } finally { homeRepainting = false; }
   if (!key) return;
   const all = root.querySelectorAll(key);
   const n = all[nth] ?? all[0];
@@ -3273,6 +3278,8 @@ function paintHome() {
   /* Майстер (етап 3b) — раніше за привітання: на першому запуску просторів ще нема, а майстер уже відкритий. */
   if (homePage === 'wiz') { wiz.paint(); return; }
   const top = el.scrollTop;
+  const menuFor = dropTaskMenu();
+  const ren = holdRen();
   /* Просторів на машині нема зовсім — замість списку привітання (дорога звідси одна:
      створити перший простір). Рішає `spacesResp`, а не `homeData`: порожній `mine` без
      простору — це «нема де», а не «нічого не знайдено». */
@@ -3283,16 +3290,113 @@ function paintHome() {
     mountNewForm(held);
   });
   el.scrollTop = top;
+  restoreRen(ren);
+  refocusMore(menuFor);
 }
 /** Лише чіпи й сітка — поле пошуку лишається тим самим вузлом. */
 function paintHomeLower() {
   const lower = document.getElementById('th-lower');
   if (!lower) return;
+  const menuFor = dropTaskMenu();
+  const ren = holdRen();
   keepFocus(lower, () => {
     const held = heldInNewForm();
     lower.innerHTML = homeGridHTML(homeView(), homeData);
     mountNewForm(held);
   });
+  restoreRen(ren);
+  refocusMore(menuFor);
+}
+
+/** Меню картки (етап Д). `at` — `{x, y}` (правий клік) або `null` (під «⋯»). Вузол — у `#tasks-home`: його кліки ловить
+ *  `wireHome` (`data-th`). Перемальовка екрана меню прибирає (`dropTaskMenu`): воно не в розмітці стану, а `aria-expanded`
+ *  нова кнопка й так малює `false`. */
+function openTaskMenu(id, { trash = false, at = null } = {}) {
+  closeTaskMenu(false);
+  const home = homeNode();
+  const x = ((trash ? homeData?.trash : homeData?.mine) || []).find((y) => y.id === id);
+  if (!home || !x) return;
+  const tpl = document.createElement('template');
+  tpl.innerHTML = taskMenuHTML(x, { trash }).trim();
+  const m = tpl.content.firstChild;
+  m.style.position = 'fixed';
+  home.appendChild(m);
+  const btn = home.querySelector(`.th-more[data-id="${CSS.escape(id)}"]`);
+  const r = btn?.getBoundingClientRect();
+  positionCtxMenu(m, at ?? { x: r ? r.right - m.offsetWidth : 0, y: r ? r.bottom + 4 : 0 });
+  btn?.setAttribute('aria-expanded', 'true');
+  m.dataset.for = id;
+  m.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
+}
+
+function closeTaskMenu(refocus = true) {
+  const m = document.getElementById('th-menu');
+  if (!m) return;
+  const id = m.dataset.for;
+  m.remove();
+  const btn = homeNode()?.querySelector(`.th-more[data-id="${CSS.escape(id)}"]`);
+  btn?.setAttribute('aria-expanded', 'false');
+  if (refocus) btn?.focus({ preventScroll: true });
+}
+
+/** Перед перемальовкою: меню геть. Повертає id картки, якщо фокус сидів у меню (його треба повернути на «⋯»). */
+function dropTaskMenu() {
+  const m = document.getElementById('th-menu');
+  if (!m) return null;
+  const had = m.contains(document.activeElement);
+  const id = m.dataset.for;
+  m.remove();
+  return had ? id : null;
+}
+/** Поле назви (`#th-ren`) — частина розмітки: перемальовка (дані дочитались, чип) повернула б у нього стару назву. Запамʼятовуємо
+ *  набране з виділенням до перемальовки й вертаємо після. */
+function holdRen() {
+  const i = document.getElementById('th-ren');
+  return i ? { v: i.value, a: i.selectionStart, b: i.selectionEnd } : null;
+}
+function restoreRen(h) {
+  const i = h && document.getElementById('th-ren');
+  if (!i) return;
+  i.value = h.v;
+  try { i.setSelectionRange(h.a, h.b); } catch (e) {}
+}
+const refocusMore = (id) => { if (id) homeNode()?.querySelector(`.th-more[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }); };
+
+/* Перейменування назви задачі на картці (етап Д). */
+function startRenameCard(id) {
+  if (!(homeData?.mine || []).some((y) => y.id === id)) return;
+  homeEdit = { ...homeEdit, ren: id, ask: null };
+  paintHomeLower();
+  const inp = document.getElementById('th-ren');
+  inp?.focus({ preventScroll: true }); inp?.select();
+}
+
+let renSaving = false;
+/** Зберегти (`save`) чи відкинути назву з поля. `ren` скидається першим рядком: другий виклик (Enter + втрата фокуса, клік повз)
+ *  нічого не зробить, тож подвійного запису нема. */
+async function commitRenameCard(save) {
+  const id = homeEdit.ren;
+  if (!id || renSaving) return;
+  const inp = document.getElementById('th-ren');
+  const row = (homeData?.mine || []).find((y) => y.id === id);
+  const next = (inp?.value ?? '').trim();
+  homeEdit = { ...homeEdit, ren: null };
+  const focusCard = () => homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  if (!save || !row || !next || next === cleanTitle(row)) { paintHomeLower(); focusCard(); return; }
+  renSaving = true;
+  try {
+    const r = await postForm('/api/task-rename', { id, title: next });
+    applyTaskTitle(id, r.title);
+  } catch (e) { toast(t('errFailed', requestErrText(e))); }
+  finally { renSaving = false; }
+  paintHomeLower(); focusCard();
+}
+
+/** Нова назва — всюди, де її показують: рядок екрана, запис вкладки (підказка), поточна задача. */
+function applyTaskTitle(id, title) {
+  if (homeReady()) homeData = { ...homeData, mine: homeData.mine.map((y) => (y.id === id ? { ...y, title } : y)) };
+  if (tabs.some((x) => x.id === id)) { tabs = tabs.map((x) => (x.id === id ? { ...x, title } : x)); saveTabs(); paintTabs(); }
+  if (curTask && currentTaskId === id) { curTask = { ...curTask, title }; paintBar(); }
 }
 
 /**
@@ -3490,10 +3594,26 @@ function ensureHome() {
 }
 
 function wireHome(el) {
+  /* Клік повз поле назви під час перейменування: комітимо вже на `pointerdown` і ковтаємо наступний клік. Фокус-аут (мітка
+     з `setTimeout`) спрацював би між `mousedown` і `click` — і клік по іншій картці відкрив би її. */
+  let renEatClick = false;
+  el.addEventListener('pointerdown', (ev) => {
+    if (homeEdit.ren && !ev.target.closest('#th-ren')) { renEatClick = true; commitRenameCard(true); }
+  }, true);
+  el.addEventListener('pointerup', () => { setTimeout(() => { renEatClick = false; }, 0); }, true);
   el.addEventListener('click', (ev) => {
+    /* ⛔ Перейменування — ПЕРШИМ, до `closest('[data-th]')`: клік повз поле комітить назву й більше нічого не робить. */
+    if (renEatClick) { renEatClick = false; return; }
+    if (homeEdit.ren && !ev.target.closest('#th-ren')) { commitRenameCard(true); return; }
+    /* Клік повз відкрите меню (і повз «⋯») закриває його без наслідків. */
+    if (document.getElementById('th-menu') && !ev.target.closest('#th-menu') && !ev.target.closest('.th-more')) { closeTaskMenu(false); return; }
     /* Посилання «Превʼю ↗» — своя навігація в новій вкладці: без цього рядка клік
        по ньому долітав би до картки й ще й відкривав би задачу. */
-    if (ev.target.closest('a')) return;
+    if (ev.target.closest('a')) {
+      /* Пункт меню «Відкрити превʼю» — теж посилання: меню знімаємо ПІСЛЯ кліку, інакше відчеплений вузол не відкриє вкладку. */
+      if (ev.target.closest('#th-menu')) setTimeout(() => closeTaskMenu(false));
+      return;
+    }
     /* Сторінка майстра (3b) — усі її кліки в контролері; обробники «Задач» і «Підключення» її не бачать. */
     if (homePage === 'wiz') { wiz.click(ev); return; }
     /* Кнопки карток і помилки сторінки «Підключення» (`data-cn` + `data-id`). */
@@ -3502,8 +3622,17 @@ function wireHome(el) {
     const b = ev.target.closest('[data-th]');
     if (!b) return;
     const v = b.dataset.v;
+    /* Пункт меню: спершу меню геть, потім дія. «⋯» — тогл (меню тієї ж картки закривається). */
+    if (ev.target.closest('#th-menu')) closeTaskMenu(false);
     switch (b.dataset.th) {
       case 'open': homeOpenTask(b.dataset.id); break;
+      case 'menu': {
+        const m = document.getElementById('th-menu');
+        if (m && m.dataset.for === b.dataset.id) closeTaskMenu();
+        else openTaskMenu(b.dataset.id, { trash: b.dataset.trash === '1' });
+        break;
+      }
+      case 'rename': startRenameCard(b.dataset.id); break;
       case 'tab':
         /* Порівнюємо з вкладкою, що справді малюється (`effectiveTab`): у просторі без
            «Команди» збережена `team` читається як `mine`, і клік по єдиній вкладці
@@ -3513,7 +3642,7 @@ function wireHome(el) {
         paintHome();
         break;
       case 'newtask': openNewTaskCard(); break;
-      /* ⛔ «Мітки» — кнопка ВСЕРЕДИНІ картки `data-th="open"`: `closest('[data-th]')` вище бере найближчий — саме її, тож задача не відкривається. */
+      /* «Мітки…» — пункт меню картки; фокус після діалогу вертається на «⋯» (`editTaskTags.focusBack`). */
       case 'tags': editTaskTags(b.dataset.id); break;
       case 'conn': enterConnections(); break;
       case 'spacenew': openWizard(); break;
@@ -3532,6 +3661,18 @@ function wireHome(el) {
         break;
       case 'retry': retryHome(); break;
     }
+  });
+  /* Втрата фокуса полем назви (Tab, клік поза вікном) зберігає назву; клік повз збережено вище, на `pointerdown`. */
+  el.addEventListener('focusout', (ev) => {
+    if (ev.target.id === 'th-ren' && homeEdit.ren && !homeRepainting) setTimeout(() => commitRenameCard(true));
+  });
+  /* Правий клік по картці — меню в точці кліку (не по картці «+» і не по питанню «Видалити?»; поле назви лишає рідне меню). */
+  el.addEventListener('contextmenu', (ev) => {
+    if (homePage !== 'tasks' || ev.target.closest('input, textarea, #th-menu')) return;
+    const card = ev.target.closest('.th-card[data-id]');
+    if (!card || card.classList.contains('th-card--ask') || card.classList.contains('th-card--new') || !card.querySelector('.th-more')) return;
+    ev.preventDefault();
+    openTaskMenu(card.dataset.id, { trash: card.dataset.trash === '1', at: { x: ev.clientX, y: ev.clientY } });
   });
   el.addEventListener('input', (ev) => {
     if (homePage === 'wiz') { wiz.input(ev); return; }
@@ -4299,6 +4440,28 @@ document.addEventListener('keydown', (ev) => {
   const a = document.activeElement;
   const q = el.querySelector('#th-q');
   if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  /* Меню картки: ↑/↓/Home/End ходять по пунктах по колу, Esc закриває (фокус на «⋯»), Tab закриває й іде далі. Інших дій екрана
+     (Esc, `/`, стрілки сітки) під відкритим меню нема. */
+  const menu = document.getElementById('th-menu');
+  if (menu) {
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    const at = items.indexOf(a);
+    if (ev.key === 'Escape') { ev.preventDefault(); closeTaskMenu(); }
+    else if (ev.key === 'Tab') closeTaskMenu();
+    else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key) && items.length) {
+      ev.preventDefault();
+      const n = ev.key === 'Home' ? 0 : ev.key === 'End' ? items.length - 1
+        : (at + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items[n].focus({ preventScroll: true });
+    }
+    return;
+  }
+  /* Поле назви на картці: Enter зберігає, Esc відкидає — до гілки `typing`. */
+  if (a && a.id === 'th-ren' && homeEdit.ren) {
+    if (ev.key === 'Enter') { ev.preventDefault(); commitRenameCard(true); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); commitRenameCard(false); }
+    return;
+  }
   /* Esc у формі «Нова задача» вертає картку «+»; під час клону (`aria-busy`) не діє — запит однаково долетить. До гілки `typing`. */
   if (ev.key === 'Escape' && homeEdit.newForm && newFormEl && a && newFormEl.contains(a)) {
     ev.preventDefault();
@@ -4323,6 +4486,12 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (!a || !a.classList || !a.classList.contains('th-card')) return;
+  /* Меню під «⋯»: Shift+F10 і клавіша «Меню» (є «⋯» — є й меню; на картці «+» й під питанням його нема). */
+  if ((ev.key === 'F10' && ev.shiftKey) || ev.key === 'ContextMenu') {
+    if (a.querySelector('.th-more')) { ev.preventDefault(); openTaskMenu(a.dataset.id, { trash: a.dataset.trash === '1' }); }
+    return;
+  }
+  if (ev.key === 'F2' && a.dataset.th === 'open') { ev.preventDefault(); startRenameCard(a.dataset.id); return; }
   const cards = homeCards();
   const i = cards.indexOf(a);
   if (ev.key === 'Enter' || ev.key === ' ') {

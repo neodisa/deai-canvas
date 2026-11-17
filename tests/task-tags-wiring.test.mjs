@@ -68,6 +68,8 @@ function wireEnv(over = {}) {
     log,
     homePage: "tasks", wiz: { click: () => { throw new Error("майстер не мав би бути"); } },
     homeUi: { tab: "mine", status: "active", tags: new Set(), designers: new Set() }, homeData: { mine: [], team: null },
+    homeEdit: { ren: null }, document: { getElementById: () => null }, closeTaskMenu: () => {}, openTaskMenu: () => {},
+    startRenameCard: () => {}, commitRenameCard: () => {},
     effectiveTab, saveHomeUi: () => {}, paintHome: () => { log.paint += 1; }, paintHomeLower: () => {},
     homeOpenTask: (id) => log.open.push(id), editTaskTags: (id) => log.tags.push(id),
     connAction: () => { throw new Error("не картка «Підключення»"); },
@@ -81,7 +83,7 @@ function wire(env) {
   return handlers;
 }
 
-test("клік по кнопці «Мітки» на картці відкриває діалог міток, а НЕ задачу; клік по самій картці відкриває задачу", () => {
+test("клік по пункту «Мітки…» меню картки відкриває діалог міток, а НЕ задачу; клік по самій картці відкриває задачу", () => {
   const env = wireEnv();
   const { click } = wire(env);
   const grid = node("div", {});
@@ -222,10 +224,10 @@ test("діалог міток: екран перечитали, поки зап�
   assert.deepEqual(odd.env.homeData.mine[0].tags, ["alpha", "Beta"]);
 });
 
-test("діалог міток: фокус після закриття — на кнопку «Мітки» ТІЄЇ Ж картки (вона перемальована)", async () => {
+test("діалог міток: фокус після закриття — на «⋯» ТІЄЇ Ж картки (вона перемальована)", async () => {
   const { env } = await open("t1");
   env.opts.focusBack();
-  assert.equal(env.log.focusBack, '[data-th="tags"][data-id="t1"]');
+  assert.equal(env.log.focusBack, '.th-more[data-id="t1"]');
 });
 
 /* ── поле «Мітки» в «Новій задачі»: код відмови → текст і поле ─────────────────────────────────────────────── */
