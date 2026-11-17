@@ -34,6 +34,7 @@ function titleEnv(over = {}) {
   return {
     log, markHomeMutated: () => {}, homeReady: () => false, homeData: null, tabs: [], saveTabs: () => {},
     paintTabs: () => { log.tabs += 1; }, paintBar: () => { log.bar += 1; },
+    renamedAt: new Map(), pruneRenamed: () => {}, performance: { now: () => 1000 },
     curTask: null, currentTaskId: null, ...over,
   };
 }
@@ -52,6 +53,7 @@ test("applyTaskTitle: `curTask` саме про цю задачу — назва
   load(env, ["applyTaskTitle"]).applyTaskTitle("x", "Ікс");
   assert.equal(env.curTask.title, "Ікс");
   assert.equal(env.log.bar, 1);
+  assert.deepEqual(env.renamedAt.get("x"), { title: "Ікс", at: 1000 }, "перейменування не записано для render()");
 });
 
 test("toast: вузол для читачів екрана — role=status, aria-live=polite", () => {

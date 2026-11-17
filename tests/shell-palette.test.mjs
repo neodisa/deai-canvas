@@ -1063,12 +1063,12 @@ test("відгук: дія має групу gSet, іконку зі спрай�
 
 /* Етап Д, Task 10: «Перейменувати задачу» (F2) є лише коли відкрита задача; на екрані «Задачі» її нема. */
 test("rentask: є з відкритою задачею (act, kbd F2), нема без задачі й на екрані «Задачі»", () => {
-  const a = paletteActions(S({ taskId: "LIGA-1" })).find((x) => x.id === "rentask");
+  const a = paletteActions(S({ hasTask: true })).find((x) => x.id === "rentask");
   assert.ok(a, "пункту нема при відкритій задачі");
   assert.equal(a.act, "rentask");
   assert.equal(a.kbd, "F2");
   assert.equal(a.labelKey, "taskRenamePal");
-  assert.equal(paletteActions(S({ taskId: "" })).some((x) => x.id === "rentask"), false, "є без задачі");
-  assert.equal(paletteActions(S()).some((x) => x.id === "rentask"), false, "є без ключа taskId");
-  assert.equal(paletteActions(S({ taskId: "LIGA-1", homeOpen: true })).some((x) => x.id === "rentask"), false, "є на екрані «Задачі»");
+  assert.equal(paletteActions(S({ hasTask: false })).some((x) => x.id === "rentask"), false, "є без задачі");
+  assert.equal(paletteActions(S()).some((x) => x.id === "rentask"), false, "є без ключа hasTask");
+  assert.equal(paletteActions(S({ hasTask: true, homeOpen: true })).some((x) => x.id === "rentask"), false, "є на екрані «Задачі»");
 });

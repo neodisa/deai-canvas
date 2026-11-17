@@ -244,8 +244,8 @@ export function paletteActions(state) {
      (`BAR_ACTIONS.home`): друга реалізація «відкрити список задач» розійшлась
      би з першою. Раніше це був `navOnly` і розкривало дропдаун (крихти в смузі вже нема). */
   out.push({ id: "go-tasks", group: "gGo", labelKey: "tasks", icon: "task", act: "home" });
-  /* «Перейменувати задачу» (Task 10): лише коли відкрита задача (`s.taskId`; еталони без ключа її не мають). */
-  if (s.taskId) out.push({ id: "rentask", group: "gGo", labelKey: "taskRenamePal", icon: "pencil", kbd: "F2", act: "rentask" });
+  /* «Перейменувати задачу» (Task 10): лише коли відкрита задача (`s.hasTask`; еталони без ключа її не мають). */
+  if (s.hasTask) out.push({ id: "rentask", group: "gGo", labelKey: "taskRenamePal", icon: "pencil", kbd: "F2", act: "rentask" });
   if (hasIteration) {
     // Без ітерації перехід до ітерацій був би кнопкою, що відкриває
     // нічого (`crumbIter` у `shell-bar.js` повертає '' — крихти немає). Той самий інваріант, що ховає й саму крихту.

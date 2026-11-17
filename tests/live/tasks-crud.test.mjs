@@ -865,6 +865,9 @@ test("перейменування з вкладки: двічі по НЕакт
 
 test("перейменування з вкладки: ціль dblclick — не сама вкладка (спільний предок після перемальовки рядка) — вкладку береться з точки кліку", async (t) => {
   const { page, inactive } = await studioCanvas(t, 3500);
+  /* Перший клік пари справді влучає по цій вкладці (його запамʼятовує обробник), другий — синтетичний нижче. */
+  await page.click(tabOf(inactive));
+  await page.waitForSelector(`${tabOf(inactive)}[aria-current="page"]`);
   const b = await page.locator(tabOf(inactive)).boundingBox();
   /* Натиск на старому вузлі, відпуск на перемальованому: ціль — `.tabs-list`, а не `.tab-main`; координати — над вкладкою. */
   await page.evaluate(({ x, y }) => {
@@ -933,12 +936,93 @@ test("перейменування: F2 у макеті → поповер під
   assert.equal(await page.locator(POP).count(), 0, "F2 на екрані «Задачі» відкрив поповер вкладки");
 });
 
-test("перейменування: F2, коли фокус у макеті (iframe), теж відкриває поповер", async (t) => {
+test("перейменування: F2, коли фокус у макеті (iframe), відкриває ОДИН поповер; у полі вводу макета — ні", async (t) => {
   const { page, current } = await studioCanvas(t, 3900);
-  await page.frameLocator("#frame, iframe").first().locator("h1").first().click();
+  const fl = page.frameLocator("#frame, iframe").first();
+  await fl.locator("h1").first().click();
+  /* Справжній фокус усередині рамки: клік по заголовку фокус не бере, тож ставимо його на тимчасову кнопку макета. */
+  await fl.locator("body").evaluate((b) => {
+    const k = b.ownerDocument.createElement("button"); k.id = "fx"; k.textContent = "fx"; b.append(k); k.focus();
+  });
+  assert.equal(await page.evaluate(() => document.getElementById("frame").contentDocument.activeElement?.id), "fx", "фокус не в рамці");
   await page.keyboard.press("F2");
   await page.waitForSelector(POP);
-  assert.ok(current);
+  assert.equal(await page.inputValue("#tn-title"), current.toUpperCase(), "поповер про не поточну задачу");
+  /* Повторний F2 при відкритому поповері не складає другий. */
+  await page.keyboard.press("F2");
+  await page.waitForTimeout(250);
+  assert.equal(await page.locator(POP).count(), 1, "F2 склав другий поповер");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
+  /* Фокус у <input> макета — F2 не діє. */
+  await fl.locator("body").evaluate((b) => {
+    const k = b.ownerDocument.createElement("input"); k.id = "fi"; b.append(k); k.focus();
+  });
+  assert.equal(await page.evaluate(() => document.getElementById("frame").contentDocument.activeElement?.id), "fi", "фокус не в полі макета");
+  await page.keyboard.press("F2");
+  await page.waitForTimeout(250);
+  assert.equal(await page.locator(POP).count(), 0, "F2 у полі макета відкрив поповер");
+});
+
+test("перейменування з вкладки: подвійний клік по хрестику закриває вкладку, але не відкриває перейменування сусідньої", async (t) => {
+  const { page } = await studioCanvas(t, 4100);
+  /* Третя вкладка: нова задача відкривається й стає вкладкою. */
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector('#th-grid [data-th="newtask"]');
+  await page.click('#th-grid [data-th="newtask"]');
+  await page.waitForSelector('#th-new-slot form[data-form="task"]');
+  await page.keyboard.type("Третя");
+  await page.fill("#tf-id", "tri");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await page.waitForFunction(() => document.querySelectorAll("#tabs .tab-main").length === 3);
+  await page.waitForLoadState("networkidle");
+  /* Перший клік пари — справжній, по хрестику другої вкладки: вона закривається, рядок зсувається. Другий клік пари в живому
+     браузері може впасти на `.tab-main` сусіда (геометрія залежить від ширини вкладок) — відтворюємо його подіями: клік
+     з `detail: 2` і `dblclick` по правому сусідові. */
+  const first = await page.locator("#tabs .tab-main").nth(1).getAttribute("data-val");
+  assert.equal(await page.locator("#tabs .tab-main").nth(2).getAttribute("data-val"), "tri", "порядок вкладок не той");
+  await page.click(`#tabs .tab-x[data-val="${first}"]`);
+  await page.waitForSelector(`#tabs .tab-main[data-val="${first}"]`, { state: "detached" });
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    const el = document.querySelector('#tabs .tab-main[data-val="tri"]');
+    const r = el.getBoundingClientRect();
+    const o = { bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
+    el.dispatchEvent(new MouseEvent("click", { ...o, detail: 2 }));
+    el.dispatchEvent(new MouseEvent("dblclick", { ...o, detail: 2 }));
+  });
+  await page.waitForTimeout(600);
+  assert.equal(await page.locator(POP).count(), 0, "поповер перейменування відкрився");
+  assert.equal(await page.locator(tabOf(first)).count(), 0, "вкладку не закрито");
+});
+
+test("перейменування: запізніла відповідь /api/task, що вийшла ДО перейменування, не повертає стару назву в смугу", async (t) => {
+  const { page, file, inactive } = await studioCanvas(t, 4200);
+  let release; const gate = new Promise((r) => { release = r; });
+  let held = false;
+  await page.route("**/api/task", async (route) => {
+    if (held) return route.continue();
+    held = true;
+    const stale = await route.fetch();       // відповідь зі СТАРОЮ назвою — знімається одразу
+    await gate;
+    await route.fulfill({ response: stale });
+  });
+  await page.click(tabOf(inactive));          // перемикання → render() висне на /api/task
+  await page.waitForFunction(() => true);
+  await page.waitForTimeout(300);
+  assert.ok(held, "запит не зупинено");
+  await page.dblclick(tabOf(inactive));
+  await page.waitForSelector(POP);
+  await page.fill("#tn-title", "Свіжа назва");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
+  assert.equal(titleOf(file, inactive), "Свіжа назва");
+  release();
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(300);
+  assert.match(await tabTip(page, inactive), /Свіжа назва/, "підказка вкладки повернулась до старої");
+  assert.match(await page.textContent("#bar"), /Свіжа назва/, "смуга повернулась до старої назви");
 });
 
 test("перейменування: ⌘K «Перейменувати задачу» → той самий поповер; на екрані «Задачі» пункту нема", async (t) => {

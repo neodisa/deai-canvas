@@ -62,6 +62,7 @@ import {
 } from './update-model.js';
 import { TABS_KEY, closeTab, pruneTabs, readTabs, tabsModel, upsertTab, writeTabs } from './tabs-model.js';
 import { tabsHTML } from './tabs-view.js';
+import { applyRecentTitles, pruneRenamed } from './recent-titles.js';
 import { islandToolsHTML } from './island.js';
 import { commentsPanelHTML } from './comments-view.js';
 import { FILTERS, openCount } from './comments-model.js';
@@ -245,6 +246,8 @@ let curTaskList = null;
    «уже поточна» на задачі, яку щойно покинули. Тому: пишемо тут на кожну
    відповідь `/api/tasks`, на відповідь екрана й на кожне успішне переключення. */
 let currentTaskId = null;
+/** id → {title, at}: свіжі перейменування для `render()` (див. `recent-titles.js`). */
+const renamedAt = new Map();
 /* Лічильник успішних переключень: відповідь екрана, що вилетіла ДО переключення,
    не сміє перезаписати `currentTaskId` старим значенням. */
 let taskSwitchGen = 0;
@@ -1226,9 +1229,12 @@ function paintBar() {
  *  (`leaveHome`). Без оверлея `afterModulesChange` рамку перезавантажує, бо виходу вже не буде. */
 async function render({ keepFrame = false } = {}) {
   let task, taskList;
+  const startedAt = performance.now();
   try {
     task = await api('/api/task');
     taskList = await api('/api/tasks');
+    /* Перейменування, що влучило між початком запитів і відповіддю, — сервер у відповіді міг віддати стару назву. */
+    ({ task, list: taskList } = applyRecentTitles(task, taskList, renamedAt, startedAt));
     /* Простір відповіді інший, ніж у задачі, яку ми показували: його змінив агент чи сусідня
        вкладка (клацання тут проходить через `afterSpaceChange`/`switchTask`, які скидають
        самі, і тоді `curTask` вже `null`). Усе, що належало тому простору, — пакет тюнера з
@@ -3451,6 +3457,8 @@ async function commitRenameCard(save) {
 /** Нова назва — всюди, де її показують: рядок екрана, запис вкладки (підказка), поточна задача. */
 function applyTaskTitle(id, title) {
   markHomeMutated();
+  pruneRenamed(renamedAt, performance.now());
+  renamedAt.set(id, { title, at: performance.now() });
   if (homeReady()) homeData = { ...homeData, mine: homeData.mine.map((y) => (y.id === id ? { ...y, title } : y)) };
   if (tabs.some((x) => x.id === id)) { tabs = tabs.map((x) => (x.id === id ? { ...x, title } : x)); saveTabs(); paintTabs(); }
   /* Лише справжня `curTask`: після видалення поточної вона ще вказує на видалену задачу (до `render()`), а `currentTaskId` уже
@@ -3482,10 +3490,16 @@ async function renameTaskFromTab(id) {
 /* Двічі по вкладці — перейменувати. ⛔ Перший клік по НЕактивній вкладці перемикає задачу, і `paintTabs` переписує рядок:
    ціль `dblclick` або відʼєднана, або (натиск на старому вузлі, відпуск на новому) — спільний предок без `.tab-main`.
    Тому вкладку беремо з точки кліку, коли сама ціль її не дає. */
+/* Перший клік пари: подвійний клік по хрестику закриває вкладку, рядок зсувається, другий клік падає на СУСІДНЮ
+   `.tab-main` — `dblclick` усе одно спрацює. Тому перейменовуємо лише ту вкладку, по якій влучив ПЕРШИЙ клік. */
+let lastTabClickId = null;
+tabsEl.addEventListener('click', (ev) => {
+  if (ev.detail === 1) lastTabClickId = ev.target.closest?.('.tab-main')?.dataset.val ?? null;
+}, true);
 tabsEl.addEventListener('dblclick', (ev) => {
   const el = (ev.target.isConnected ? ev.target.closest?.('.tab-main') : null)
     || document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.tab-main');
-  if (!el) return;
+  if (!el || el.dataset.val !== lastTabClickId) return;
   ev.preventDefault();
   renameTaskFromTab(el.dataset.val);
 });
@@ -8538,7 +8552,7 @@ function paletteState() {
     spaceId: st.space?.id ?? null,
     space: st.space ? { id: st.space.id, capabilities: st.space.capabilities, compat: st.space.compat } : null,
     update: st.update,
-    taskId: st.taskId,
+    hasTask: !!st.taskId,
   };
 }
 
