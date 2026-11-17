@@ -1265,7 +1265,7 @@ function mkTaskEnv(over = {}) {
     reply: { id: "t-1", space: "plain" },
     resetSpaceState: async () => { log.reset.push("space"); },
     resetPerTaskState: async () => { log.reset.push("task"); },
-    homeData: { old: 1 }, currentTaskId: "A", taskSwitchGen: 0,
+    homeData: { old: 1 }, currentTaskId: "A", taskSwitchGen: 0, newFormEl: null,
     refreshGitlab: async (id) => { log.refresh.push(id); },
     leaveHome: async () => { log.leave += 1; },
     toast: (m) => log.toast.push(m),
@@ -1302,8 +1302,9 @@ const taskDialog = async (over) => {
   const ctx = { sp, withRepo, taken: Promise.resolve(["taken-1"]), trashIds: [] };
   return {
     env, ctl, form, timers, withRepo,
-    hint: (f2) => f.mountRepoHint(f2, sp, withRepo),
-    submit: (vals, extra = {}) => f.createTask({ title: "Лендинг", id: "lend", ...vals }, ctl, { ...ctx, ...extra }),
+    /* Підказка пише лише в ЖИВУ форму (`newFormEl === form`), а не в «підключену»: на «Команді» форма відчеплена законно. */
+    hint: (f2, { live = true } = {}) => { env.newFormEl = live ? f2 : null; return f.mountRepoHint(f2, sp, withRepo); },
+    submit: (vals, extra = {}, isLive) => f.createTask({ title: "Лендинг", id: "lend", ...vals }, ctl, { ...ctx, ...extra }, isLive),
   };
 };
 const tick = () => new Promise((r) => setImmediate(r));
@@ -1317,7 +1318,7 @@ test("форма: поле «Репозиторій» — лише у звича
   const b = fn("openNewTaskCard");
   assert.match(b, /const withRepo = hasVcs\(sp\) && !isLegacyVcs\(sp\);/);
   assert.match(b, /taskFormHTML\(\{ inline: true, tags: true, \.\.\.\(withRepo \? \{ repo: \{\} \} : \{\}\) \}\)/, "розмітка форми: інлайн, «Мітки» — завжди, «Репозиторій» — за withRepo");
-  assert.match(b, /wireTaskForm\(form, \{ taken: taken\.then\(\(ids\) => \[\.\.\.ids, \.\.\.trashIds\]\) \}\);/, "проводка id/назви лишилась; автопідстановка обходить кошик");
+  assert.match(b, /wireTaskForm\(form, \{ taken: taken\.then\(\(ids\) => \[\.\.\.ids, \.\.\.trashIds0\]\) \}\);/, "проводка id/назви лишилась; автопідстановка обходить кошик");
 });
 
 test("підказка: типовий repo з GET /api/modules?space=… (лише вмикнений модуль з роллю vcs) стає placeholder після монтування", async () => {
@@ -1361,12 +1362,39 @@ test("підказка не питається там, де поля нема (�
   }
 });
 
-test("підказка, що приїхала, коли форму вже закрито (відчеплена), нічого не пише", async () => {
+test("підказка, що приїхала, коли форму вже закрито (не жива), нічого не пише", async () => {
+  const { hint } = await taskDialog();
+  const attrs = {};
+  hint({ isConnected: true, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) }, { live: false });
+  await tick();
+  assert.deepEqual(attrs, {});
+});
+
+test("підказка: форма відчеплена від DOM (екран «Команда»), але жива — підказка пишеться", async () => {
   const { hint } = await taskDialog();
   const attrs = {};
   hint({ isConnected: false, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
   await tick();
-  assert.deepEqual(attrs, {});
+  assert.equal(attrs.placeholder, "git@gh.example:o/r.git");
+});
+
+test("createTask: форма вже не жива після створення — без переходу й скидань, лише тост і застарілий homeData", async () => {
+  const { env, submit } = await taskDialog();
+  assert.equal(await submit({}, {}, () => false), undefined);
+  assert.equal(env.log.leave, 0, "leaveHome не викликано");
+  assert.deepEqual(env.log.reset, [], "поточні задача й простір не скинуто");
+  assert.deepEqual(env.log.refresh, []);
+  assert.equal(env.currentTaskId, "A", "поточна задача не змінилась");
+  assert.equal(env.homeData, null, "список задач застарів");
+  assert.deepEqual(env.log.toast, ["Задачу «Лендинг» створено"]);
+});
+
+test("createTask: форма жива — перехід до створеної задачі, як і раніше", async () => {
+  const { env, submit } = await taskDialog();
+  await submit({}, {}, () => true);
+  assert.equal(env.log.leave, 1);
+  assert.equal(env.currentTaskId, "t-1");
+  assert.deepEqual(env.log.toast, []);
 });
 
 test("запит: зі значенням поля — vcs: {repo} (обрізане) через taskPost (клон — довга стеля); з порожнім чи пробілами — ключа vcs у тілі НЕМАЄ, а запит іде звичайним postForm", async () => {

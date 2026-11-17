@@ -1620,7 +1620,7 @@ function applySpaceMeta(id, { name, color }) {
  * Перехід до створеної задачі — ВСЕРЕДИНІ відправки: картку могли закрити, не дочекавшись кінця (Esc до клону не діє, але
  * екран може піти геть), а задачу вже створено, і екран лишився б без переходу.
  */
-async function createTask(vals, ctl, { sp, withRepo, taken, trashIds }) {
+async function createTask(vals, ctl, { sp, withRepo, taken, trashIds }, isLive = () => true) {
   const key = taskFormError(vals, await taken, trashIds);
   if (key) { ctl.focus(taskErrField(key)); return t(key); }
   /* `vcs` — лише зі значенням: порожнє поле (чи самі пробіли) ключа в тілі не лишає, і задача бере типовий `repo` модуля. */
@@ -1651,6 +1651,13 @@ async function createTask(vals, ctl, { sp, withRepo, taken, trashIds }) {
     return taskErrShowsReason(e.code, 'vcs' in body) ? t('errFailed', why) : t(key2);
   }
   stopWait?.(false);
+  /* Клон міг тривати хвилини, а людина — піти: відкрила іншу задачу, змінила простір, зайшла в «Команду». Форма вже не жива —
+     задачу створено, але НЕ перехоплюємо навігацію: ні скидання поточної задачі чи простору, ні `leaveHome`; лише тост. */
+  if (!isLive()) {
+    homeData = null;
+    toast(t('taskCreatedBg', body.title));
+    return undefined;
+  }
   /* Нова задача — поточна: усе пер-задачне попереднього чуже. Простір відповіді
      порівнюємо з відомим, як у `switchTask`. `homeData` — застарілий (задачі в
      ньому ще нема), тож не показуємо його при наступному вході. */
@@ -1674,7 +1681,8 @@ function mountRepoHint(form, sp, withRepo) {
     return m?.settings?.find((x) => x.key === 'repo')?.value || '';
   }).catch(() => '').then((hint) => {
     const field = form.querySelector('#tf-repo');
-    if (hint && field && form.isConnected) field.setAttribute('placeholder', hint);
+    /* Жива, а не «підключена»: на «Команді» чи в кошику форма законно відчеплена від DOM, але ще потрібна. */
+    if (hint && field && newFormEl === form) field.setAttribute('placeholder', hint);
   });
 }
 
@@ -1688,13 +1696,15 @@ async function openNewTaskCard() {
   const withRepo = hasVcs(sp) && !isLegacyVcs(sp);
   const taken = formApi('/api/tasks?all=1').then((r) => (r.tasks || []).map((x) => x.id)).catch(() => []);
   /* Ідентифікатори з кошика: їх займає запис кошика (повернення вимагає вільного id) — автопідстановка їх обходить. */
-  const trashIds = (homeData?.trash || []).map((x) => x.id);
+  const trashIds0 = (homeData?.trash || []).map((x) => x.id);
   const tpl = document.createElement('template');
   tpl.innerHTML = taskFormHTML({ inline: true, tags: true, ...(withRepo ? { repo: {} } : {}) }).trim();
   const form = tpl.content.firstChild;
   newFormEl = form;
-  newFormCtx = { sp, withRepo, taken, trashIds };
-  wireTaskForm(form, { taken: taken.then((ids) => [...ids, ...trashIds]) });
+  newFormCtx = { sp, withRepo, taken };
+  wireTaskForm(form, { taken: taken.then((ids) => [...ids, ...trashIds0]) });
+  /* Форма жива, поки вона — поточна форма відкритого екрана «Задачі». */
+  const isLive = () => newFormEl === form && homeOpen && homePage === 'tasks';
   const ctl = makeFormCtl(form);
   let busy = false;
   form.addEventListener('input', () => ctl.error(''));
@@ -1703,9 +1713,17 @@ async function openNewTaskCard() {
     if (busy) return;
     busy = true; ctl.busy(true); ctl.error('');
     try {
-      const msg = await createTask(formValues(form.elements), ctl, newFormCtx ?? { sp, withRepo, taken, trashIds });
+      /* Кошик — на момент відправки, не відкриття: за цей час задачу могли видалити чи повернути. */
+      const trashIds = (homeData?.trash || []).map((x) => x.id);
+      const msg = await createTask(formValues(form.elements), ctl, { ...(newFormCtx ?? { sp, withRepo, taken }), trashIds }, isLive);
       if (msg) ctl.error(msg);
-      else if (newFormEl === form) { resetHomeEdit(); form.remove(); }   // задачу створено, екран пішов: форма не лишається в схованому DOM
+      else {
+        // задачу створено: форма не лишається в схованому DOM
+        if (newFormEl === form) resetHomeEdit();
+        form.remove();
+      }
+    } catch (e) {
+      ctl.error(t('errFailed', requestErrText(e)));
     } finally { busy = false; ctl.busy(false); }
   });
   form.addEventListener('click', (ev) => { if (ev.target.closest('[data-a="cancel"]') && !busy) closeNewTaskCard(); });
@@ -1717,7 +1735,8 @@ async function openNewTaskCard() {
 
 /** Закрити форму: картка «+» вертається, фокус — на неї. */
 function closeNewTaskCard() {
-  resetHomeEdit();
+  homeEdit = { ...homeEdit, newForm: false };
+  newFormEl = null; newFormCtx = null;
   paintHomeLower();
   homeNode()?.querySelector('[data-th="newtask"]')?.focus({ preventScroll: true });
 }
@@ -3191,7 +3210,7 @@ const resetHomeEdit = () => { homeEdit = { newForm: false, ren: null, ask: null,
 const homeView = () => ({ ...homeUi, now: Date.now(), edit: homeEdit });
 const homeReady = () => Array.isArray(homeData && homeData.mine);
 const homeNode = () => document.getElementById('tasks-home');
-const homeCards = () => [...(homeNode()?.querySelectorAll('.th-card') || [])];
+const homeCards = () => [...(homeNode()?.querySelectorAll('.th-card:not(#th-new-slot)') || [])];
 
 /** Селектор елемента, який був у фокусі, — щоб повернути фокус на ТОЙ САМИЙ
  *  після перемальовки (вузол новий, фокус на ньому пропав би). */

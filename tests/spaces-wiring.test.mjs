@@ -653,3 +653,20 @@ test("розмітка дропдауна: застереження Vercel ма�
   assert.match(bar, /\(c\.notes \|\| \[\]\)\.map\(\(n\) => `<div class="dd-note dd-note--\$\{n\.id\}">\$\{esc\(t\(n\.key\)\)\}<\/div>`\)/);
   assert.match(bar, /\$\{c\.legacy \? `<div class="dd-note">\$\{t\("pubGateTruth"\)\}<\/div>` : ""\}\$\{notes\}<\/div>`/);
 });
+
+test("етап Д, виправлення ревʼю: гейт живості, слот поза стрілками, resetSpaceState скидає homeEdit, пізні дані — за newFormEl", () => {
+  const open = fn("openNewTaskCard");
+  assert.match(open, /const isLive = \(\) => newFormEl === form && homeOpen && homePage === 'tasks';/, "форма жива лише на відкритому екрані «Задачі»");
+  assert.match(open, /\{ \.\.\.\(newFormCtx \?\? \{ sp, withRepo, taken \}\), trashIds \}, isLive\)/, "гейт іде в createTask; кошик читається при відправці");
+  assert.match(open, /catch \(e\) \{\s*ctl\.error\(t\('errFailed', requestErrText\(e\)\)\);/, "несподіваний збій — у слот помилки");
+  assert.match(open, /form\.remove\(\);/);
+  const task = fn("createTask");
+  const gate = task.indexOf("if (!isLive())");
+  assert.ok(gate > 0, "гейт є");
+  assert.ok(gate < task.indexOf("await leaveHome()") && gate < task.indexOf("currentTaskId = made.id"), "гейт — ДО навігації й зміни поточної задачі");
+  assert.match(fn("resetSpaceState"), /resetHomeEdit\(\);/, "зміна простору скидає стан екрана задач");
+  assert.match(fn("closeNewTaskCard"), /homeEdit = \{ \.\.\.homeEdit, newForm: false \};/, "закриття не стирає решту homeEdit");
+  assert.match(src, /const homeCards = \(\) => \[\.\.\.\(homeNode\(\)\?\.querySelectorAll\('\.th-card:not\(#th-new-slot\)'\)/, "слот без tabindex не зупиняє стрілки");
+  assert.match(fn("mountRepoHint"), /newFormEl === form/);
+  assert.doesNotMatch(fn("mountRepoHint"), /isConnected/);
+});
