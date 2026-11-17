@@ -18,7 +18,8 @@ task goes to the space's trash instead of disappearing.
 - Кошик простору: чип «Кошик · N» на екрані задач. Звідти задачу можна повернути або видалити назавжди.
 - Сервер: `POST /api/task-rename`, `/api/task-delete`, `/api/task-restore`, `/api/task-purge`.
 - `GET /api/tasks-overview` повертає масив `trash`; `GET /api/task-thumb?…&trash=1` віддає кадр задачі з кошика.
-- Видалена задача лежить у теці `.deai-trash` поряд із текою задач; на її місці лишається надгробок (tombstone).
+- Видалена задача переїжджає в теку `.deai-trash` поруч зі своєю текою. Після «Видалити назавжди» в `tasks.json` лишається
+  надгробок (tombstone), щоб `registry pull` не повернув задачу.
 
 ### Змінено
 - «Мітки» переїхали з кнопки на картці в меню картки.
