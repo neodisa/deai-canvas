@@ -502,8 +502,8 @@ test("мітки 4: «Нова задача» з полем «Мітки» у з
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.goto(`${server.url}/app/`);
   await page.waitForSelector("#tasks-home .th-empty--space");
-  await page.click('#tasks-home .th-head [data-th="newtask"]');
-  await page.waitForSelector('form[data-form="task"]');
+  await page.click('#th-grid [data-th="newtask"]');
+  await page.waitForSelector('#th-grid #th-new-slot form[data-form="task"]');
   assert.equal(await page.locator("#tf-tags").count(), 1, "поля «Мітки» нема у формі");
   await page.fill("#tf-title", "Задача з мітками");
   await page.fill("#tf-id", "tg1");

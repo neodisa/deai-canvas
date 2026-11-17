@@ -34,6 +34,43 @@ import { t } from "./i18n.js";
 let open = null;
 
 /**
+ * Керування формою (етап Д: спільне для діалогу й інлайн-форми «Нова задача»): слот помилки, поле з `aria-invalid`, стан
+ * «зайнято». Працює над будь-яким вузлом `<form>`, що несе `[data-form-error]` і `button[data-a="ok"]`.
+ */
+export function makeFormCtl(formEl) {
+  const errEl = () => formEl.querySelector('[data-form-error]');
+  return {
+    form: formEl,
+    /* Текст помилки у слот `[data-form-error]` (`role="alert"` — читач озвучить
+       сам). Порожній — ховає. */
+    error(msg) {
+      const el = errEl();
+      if (!el) return;
+      el.textContent = msg || '';
+      el.hidden = !msg;
+      /* Зняти відмову — зняти й `aria-invalid` з полів: стара помилка поля, яке людина
+         вже правила, зчитувачу не потрібна. */
+      if (!msg) for (const f of formEl.querySelectorAll('[aria-invalid]')) f.removeAttribute('aria-invalid');
+    },
+    /* Поле за імʼям — помилка про НЬОГО: `aria-invalid` (текст помилки поле вже
+       знає з `aria-describedby` на `[data-form-error]`) і фокус. Виклик ПЕРЕД поверненням
+       тексту: `error(текст)` потім `aria-invalid` не знімає. */
+    focus(name) {
+      const f = formEl.elements.namedItem(name);
+      if (!f) return;
+      f.setAttribute?.('aria-invalid', 'true');
+      f.focus?.();
+    },
+    /* На час запиту «Створити» вимкнена, а форма позначена зайнятою: другий клік
+       не створить другий простір. */
+    busy(on) {
+      for (const b of formEl.querySelectorAll('button[data-a="ok"]')) b.disabled = on;
+      if (on) formEl.setAttribute('aria-busy', 'true'); else formEl.removeAttribute('aria-busy');
+    },
+  };
+}
+
+/**
  * Значення полів форми — ЧИСТА функція над переліком `{name, type, value, checked,
  * disabled}` (рівно те, що дає `form.elements`, тож у вузлі її можна прогнати без DOM).
  * Правила — ті самі, що в HTML-відправки: безіменні, вимкнені й кнопки пропускаються;
@@ -289,36 +326,7 @@ function overlay(text, kind, { value = '', readOnly = false, danger = false, yes
     if (isForm) {
       boxEl.innerHTML = form.build();
       formEl = boxEl.querySelector('form');
-      const errEl = () => formEl.querySelector('[data-form-error]');
-      ctl = {
-        form: formEl,
-        /* Текст помилки у слот `[data-form-error]` (`role="alert"` — читач озвучить
-           сам). Порожній — ховає. */
-        error(msg) {
-          const el = errEl();
-          if (!el) return;
-          el.textContent = msg || '';
-          el.hidden = !msg;
-          /* Зняти відмову — зняти й `aria-invalid` з полів: стара помилка поля, яке людина
-             вже правила, зчитувачу не потрібна. */
-          if (!msg) for (const f of formEl.querySelectorAll('[aria-invalid]')) f.removeAttribute('aria-invalid');
-        },
-        /* Поле за імʼям — помилка про НЬОГО: `aria-invalid` (текст помилки поле вже
-           знає з `aria-describedby` на `[data-form-error]`) і фокус. Виклик ПЕРЕД поверненням
-           тексту: `error(текст)` потім `aria-invalid` не знімає. */
-        focus(name) {
-          const f = formEl.elements.namedItem(name);
-          if (!f) return;
-          f.setAttribute?.('aria-invalid', 'true');
-          f.focus?.();
-        },
-        /* На час запиту «Створити» вимкнена, а форма позначена зайнятою: другий клік
-           не створить другий простір. */
-        busy(on) {
-          for (const b of formEl.querySelectorAll('button[data-a="ok"]')) b.disabled = on;
-          if (on) formEl.setAttribute('aria-busy', 'true'); else formEl.removeAttribute('aria-busy');
-        },
-      };
+      ctl = makeFormCtl(formEl);
       formEl.addEventListener('submit', async (ev) => {
         ev.preventDefault();
         if (busy || open !== api) return;

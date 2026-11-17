@@ -14,7 +14,7 @@ import { canMove } from './page-order.js';
 import { readFlow, shotKey, shotVersion, stateQuery } from './flow-model.js';
 import { flowLayout } from './flow-layout.js';
 import { confirmHTML, confirmedId } from './inline-confirm.js';
-import { ask, askChoice, askForm, askYesNo, formValues, tell, tellError } from './ask.js';
+import { ask, askChoice, askForm, askYesNo, formValues, makeFormCtl, tell, tellError } from './ask.js';
 import { composeDeleteNote, deleteDialogModel, resolveDrop, shouldCommitDrop, shouldRefreshPanel, vanishedFolders, zoneOfHit, groupTargetIds, pageMenuItems, runSequential, treeBusyGate, treeTarget as pickTreeTarget } from './tree-actions.js';
 import {
   CANVAS_PRESETS, CANVAS_W, MAX_W, MIN_W, PRESETS, activePreset, frameKey, parseWidth,
@@ -1383,6 +1383,7 @@ async function resetSpaceState({ reload = true } = {}) {
   dropGlState();
   tasksErr = false; tasksErrKey = null;
   homeUi.q = ''; homeUi.tags.clear(); homeUi.designers.clear(); saveHomeUi();
+  resetHomeEdit();
   if (reload) await loadSpaces();
 }
 
@@ -1613,78 +1614,112 @@ function applySpaceMeta(id, { name, color }) {
  * `space` називаємо ЯВНО (поточний): без нього сервер пішов би в простір з інтеграціями
  * (потік dev-pipeline ЛІГА) і завів би «особисту» задачу в реєстр компанії.
  * Перелік зайнятих id — з усіх просторів (`?all=1`): id унікальний на машині. Він може
- * приїхати вже після відкриття діалогу — форма перерахує id, а відправка його дочекається.
- * Перехід до створеної задачі — ВСЕРЕДИНІ `onSubmit`: діалог може закритися, не дійшовши до кінця (його перебило інше
- * питання), а задачу вже створено, і екран лишився б без переходу.
+ * приїхати вже після відкриття форми — вона перерахує id, а відправка його дочекається.
+ * Етап Д: форма стоїть у клітинці сітки (`openNewTaskCard`), а не діалогом; тіло відправки — тут, щоб його читали обидві
+ * частини однаково. `ctx` — `{sp, withRepo, taken, trashIds}`; повертає текст помилки чи `undefined`.
+ * Перехід до створеної задачі — ВСЕРЕДИНІ відправки: картку могли закрити, не дочекавшись кінця (Esc до клону не діє, але
+ * екран може піти геть), а задачу вже створено, і екран лишився б без переходу.
  */
-async function newTaskDialog() {
-  const sp = spaceNow();
-  if (!sp) return;
-  const taken = formApi('/api/tasks?all=1').then((r) => (r.tasks || []).map((x) => x.id)).catch(() => []);
-  /* Необовʼязкове поле «Репозиторій» (4a): лише у звичайному просторі з роллю `vcs`. У ЛІГА ціль синку живе в `tasks.json`
-     (профіль задачі), тож форма там побайтно та, що була. Підказка — типовий `repo` з налаштувань увімкненого модуля ролі
-     (`GET /api/modules`); вона приїздить ПІСЛЯ відкриття (форма не чекає мережі), збій запиту — без підказки. */
-  const withRepo = hasVcs(sp) && !isLegacyVcs(sp);
-  const repoHint = withRepo
-    ? api(`/api/modules?space=${encodeURIComponent(sp.id)}`).then((r) => {
-      const m = (r?.modules || []).find((e) => e.enabled === true && (e.roles || []).includes('vcs'));
-      return m?.settings?.find((x) => x.key === 'repo')?.value || '';
-    }).catch(() => '')
-    : Promise.resolve('');
-  await askForm(() => taskFormHTML(withRepo ? { repo: {}, tags: true } : { tags: true }), {
-    onMount: (form) => {
-      wireTaskForm(form, { taken });
-      repoHint.then((hint) => {
-        const field = form.querySelector('#tf-repo');
-        if (hint && field && form.isConnected) field.setAttribute('placeholder', hint);
-      });
-    },
-    focusBack: () => homeNode()?.querySelector('[data-th="newtask"]'),
-    onSubmit: async (vals, ctl) => {
-      const key = taskFormError(vals, await taken);
-      if (key) { ctl.focus(taskErrField(key)); return t(key); }
-      /* `vcs` — лише зі значенням: порожнє поле (чи самі пробіли) ключа в тілі не лишає, і задача бере типовий `repo` модуля. */
-      const repo = withRepo ? String(vals.repo ?? '').trim() : '';
-      /* `tags` — лише коли поле непорожнє (клієнт ріже по комах, решту правил перевіряє сервер: `bad-tags`). */
-      const tags = parseTags(vals.tags);
-      const body = { id: vals.id, title: vals.title.trim(), space: sp.id, ...(repo ? { vcs: { repo } } : {}), ...(tags.length ? { tags } : {}) };
-      /* Сервер клонує, лише коли в тілі є `vcs` (форма шле його тільки зі значенням поля; без `from`) або коли простір з
-         інтеграціями має роль `vcs` — профільний `gitlab` (`_task_new_write`: `if gitlab or (vcs and adopt_src is None)`), і то
-         ТАКОЖ у ЛІГА з явним `git-sync` та порожнім полем; без ролі клону нема (`taskCreateClones`, spaces-model.js). Лише такий
-         запит триває хвилини — довга стеля (`taskPost`) і рядок про клон мають сенс тільки йому. Порожнє поле у звичайному
-         просторі, простір без синку — миттєвий запит (`postForm`, 20 с) без жодних ознак. Довгому Esc і «Скасувати» не діють
-         (запит однаково долетить і задача зʼявиться), тож форма мусить сказати, що вона жива. */
-      const clones = taskCreateClones(sp, body);
-      let made;
-      const stopWait = clones ? showCreateWait(ctl.form) : null;
-      try { made = await (clones ? taskPost(body) : postForm('/api/task-new', body)); }
-      catch (e) {
-        stopWait?.(true);
-        const key2 = taskErrKey(e.code);
-        const field = taskErrField(key2);
-        if (field) ctl.focus(field);
-        const why = requestErrText(e);
-        /* Адресу, гілку й теку відхиляє `validate` модуля: загальний текст про адресу + причина сервера другим рядком (дані — як
-           текст у слоті помилки, не розмітка). Решта відмов без свого ключа (коди каркаса й постачальника, коли тіло несло `vcs`;
-           завжди — `check-timeout`/`module-error`/`vcs-error`): «Не вдалося: <причина>» без підсвітки. */
-        if (key2 === 'taskErrVcsTarget') return why ? `${t(key2)}\n${t('taskErrWhy', why)}` : t(key2);
-        return taskErrShowsReason(e.code, 'vcs' in body) ? t('errFailed', why) : t(key2);
-      }
-      stopWait?.(false);
-      /* Нова задача — поточна: усе пер-задачне попереднього чуже. Простір відповіді
-         порівнюємо з відомим, як у `switchTask`. `homeData` — застарілий (задачі в
-         ньому ще нема), тож не показуємо його при наступному вході. */
-      try {
-        if (spaceChanged(sp.id, made.space)) await resetSpaceState();
-        else await resetPerTaskState();
-        homeData = null;
-        currentTaskId = made.id; taskSwitchGen += 1;
-        await refreshGitlab(made.id);
-        await leaveHome();
-      } catch (e) { toast(t('errFailed', e.message)); }
-      return undefined;
-    },
+async function createTask(vals, ctl, { sp, withRepo, taken, trashIds }) {
+  const key = taskFormError(vals, await taken, trashIds);
+  if (key) { ctl.focus(taskErrField(key)); return t(key); }
+  /* `vcs` — лише зі значенням: порожнє поле (чи самі пробіли) ключа в тілі не лишає, і задача бере типовий `repo` модуля. */
+  const repo = withRepo ? String(vals.repo ?? '').trim() : '';
+  /* `tags` — лише коли поле непорожнє (клієнт ріже по комах, решту правил перевіряє сервер: `bad-tags`). */
+  const tags = parseTags(vals.tags);
+  const body = { id: vals.id, title: vals.title.trim(), space: sp.id, ...(repo ? { vcs: { repo } } : {}), ...(tags.length ? { tags } : {}) };
+  /* Сервер клонує, лише коли в тілі є `vcs` (форма шле його тільки зі значенням поля; без `from`) або коли простір з
+     інтеграціями має роль `vcs` — профільний `gitlab` (`_task_new_write`: `if gitlab or (vcs and adopt_src is None)`), і то
+     ТАКОЖ у ЛІГА з явним `git-sync` та порожнім полем; без ролі клону нема (`taskCreateClones`, spaces-model.js). Лише такий
+     запит триває хвилини — довга стеля (`taskPost`) і рядок про клон мають сенс тільки йому. Порожнє поле у звичайному
+     просторі, простір без синку — миттєвий запит (`postForm`, 20 с) без жодних ознак. Довгому Esc і «Скасувати» не діють
+     (запит однаково долетить і задача зʼявиться), тож форма мусить сказати, що вона жива. */
+  const clones = taskCreateClones(sp, body);
+  let made;
+  const stopWait = clones ? showCreateWait(ctl.form) : null;
+  try { made = await (clones ? taskPost(body) : postForm('/api/task-new', body)); }
+  catch (e) {
+    stopWait?.(true);
+    const key2 = taskErrKey(e.code);
+    const field = taskErrField(key2);
+    if (field) ctl.focus(field);
+    const why = requestErrText(e);
+    /* Адресу, гілку й теку відхиляє `validate` модуля: загальний текст про адресу + причина сервера другим рядком (дані — як
+       текст у слоті помилки, не розмітка). Решта відмов без свого ключа (коди каркаса й постачальника, коли тіло несло `vcs`;
+       завжди — `check-timeout`/`module-error`/`vcs-error`): «Не вдалося: <причина>» без підсвітки. */
+    if (key2 === 'taskErrVcsTarget') return why ? `${t(key2)}\n${t('taskErrWhy', why)}` : t(key2);
+    return taskErrShowsReason(e.code, 'vcs' in body) ? t('errFailed', why) : t(key2);
+  }
+  stopWait?.(false);
+  /* Нова задача — поточна: усе пер-задачне попереднього чуже. Простір відповіді
+     порівнюємо з відомим, як у `switchTask`. `homeData` — застарілий (задачі в
+     ньому ще нема), тож не показуємо його при наступному вході. */
+  try {
+    if (spaceChanged(sp.id, made.space)) await resetSpaceState();
+    else await resetPerTaskState();
+    homeData = null;
+    currentTaskId = made.id; taskSwitchGen += 1;
+    await refreshGitlab(made.id);
+    await leaveHome();
+  } catch (e) { toast(t('errFailed', e.message)); }
+  return undefined;
+}
+
+/** Підказка репозиторію: типовий `repo` з налаштувань увімкненого модуля ролі `vcs` (`GET /api/modules`); приїздить ПІСЛЯ
+ *  відкриття (форма не чекає мережі), збій запиту — без підказки. Лише там, де є поле «Репозиторій». */
+function mountRepoHint(form, sp, withRepo) {
+  if (!withRepo) return;
+  api(`/api/modules?space=${encodeURIComponent(sp.id)}`).then((r) => {
+    const m = (r?.modules || []).find((e) => e.enabled === true && (e.roles || []).includes('vcs'));
+    return m?.settings?.find((x) => x.key === 'repo')?.value || '';
+  }).catch(() => '').then((hint) => {
+    const field = form.querySelector('#tf-repo');
+    if (hint && field && form.isConnected) field.setAttribute('placeholder', hint);
   });
+}
+
+/** Етап Д: картка «+» стає формою на місці. Жива `<form>` (`newFormEl`) тримається ПОЗА сіткою й вставляється в слот після
+ *  кожної перемальовки (`mountNewForm`): сітка перемальовується через `innerHTML`, і набране інакше зникло б. */
+async function openNewTaskCard() {
+  const sp = spaceNow();
+  if (!sp || homeEdit.newForm) return;
+  /* Необовʼязкове поле «Репозиторій» (4a): лише у звичайному просторі з роллю `vcs`. У ЛІГА ціль синку живе в `tasks.json`
+     (профіль задачі), тож форма там без поля. */
+  const withRepo = hasVcs(sp) && !isLegacyVcs(sp);
+  const taken = formApi('/api/tasks?all=1').then((r) => (r.tasks || []).map((x) => x.id)).catch(() => []);
+  /* Ідентифікатори з кошика: їх займає запис кошика (повернення вимагає вільного id) — автопідстановка їх обходить. */
+  const trashIds = (homeData?.trash || []).map((x) => x.id);
+  const tpl = document.createElement('template');
+  tpl.innerHTML = taskFormHTML({ inline: true, tags: true, ...(withRepo ? { repo: {} } : {}) }).trim();
+  const form = tpl.content.firstChild;
+  newFormEl = form;
+  newFormCtx = { sp, withRepo, taken, trashIds };
+  wireTaskForm(form, { taken: taken.then((ids) => [...ids, ...trashIds]) });
+  const ctl = makeFormCtl(form);
+  let busy = false;
+  form.addEventListener('input', () => ctl.error(''));
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (busy) return;
+    busy = true; ctl.busy(true); ctl.error('');
+    try {
+      const msg = await createTask(formValues(form.elements), ctl, newFormCtx ?? { sp, withRepo, taken, trashIds });
+      if (msg) ctl.error(msg);
+      else if (newFormEl === form) { resetHomeEdit(); form.remove(); }   // задачу створено, екран пішов: форма не лишається в схованому DOM
+    } finally { busy = false; ctl.busy(false); }
+  });
+  form.addEventListener('click', (ev) => { if (ev.target.closest('[data-a="cancel"]') && !busy) closeNewTaskCard(); });
+  homeEdit = { ...homeEdit, newForm: true, ask: null, ren: null };
+  paintHomeLower();
+  form.querySelector('#tf-title')?.focus({ preventScroll: false });
+  mountRepoHint(form, sp, withRepo);
+}
+
+/** Закрити форму: картка «+» вертається, фокус — на неї. */
+function closeNewTaskCard() {
+  resetHomeEdit();
+  paintHomeLower();
+  homeNode()?.querySelector('[data-th="newtask"]')?.focus({ preventScroll: true });
 }
 
 /**
@@ -3145,7 +3180,15 @@ let homePaintPending = false;
 /* Задача відкривається (запит у дорозі): другий Enter/клік не запускає друге. */
 let homeOpening = false;
 
-const homeView = () => ({ ...homeUi, now: Date.now() });
+/* Етап Д: тимчасовий стан екрана «Задачі» — НЕ зберігається (`homeUi` пишеться в localStorage, це — ні). Скидається на вході
+   на екран і на зміні простору. `newForm`: відкрита форма «Нова задача» (жива `<form>` — `newFormEl`); `ren`: id задачі, назву
+   якої правлять на картці; `ask`: питання в картці `{id, kind, claude}`; `trash`: вигляд кошика. */
+let homeEdit = { newForm: false, ren: null, ask: null, trash: false };
+let newFormEl = null;
+let newFormCtx = null;
+const resetHomeEdit = () => { homeEdit = { newForm: false, ren: null, ask: null, trash: false }; newFormEl = null; newFormCtx = null; };
+
+const homeView = () => ({ ...homeUi, now: Date.now(), edit: homeEdit });
 const homeReady = () => Array.isArray(homeData && homeData.mine);
 const homeNode = () => document.getElementById('tasks-home');
 const homeCards = () => [...(homeNode()?.querySelectorAll('.th-card') || [])];
@@ -3191,6 +3234,17 @@ function keepFocus(root, redo) {
   if (caret) { try { n.setSelectionRange(caret[0], caret[1]); } catch (e) {} }
 }
 
+/** Жива форма «Нова задача» — у свій слот після перемальовки сітки: поля й набране переживають `innerHTML` сітки.
+ *  `held` — елемент форми, що мав фокус ДО перемальовки: вузол вилучено з DOM разом із фокусом, тож вертаємо його сюди. */
+function mountNewForm(held = null) {
+  const slot = document.getElementById('th-new-slot');
+  if (!slot || !newFormEl) return;
+  if (newFormEl.parentNode !== slot) slot.appendChild(newFormEl);
+  if (held && newFormEl.contains(held)) held.focus({ preventScroll: true });
+}
+/** Елемент форми «Нова задача», що зараз у фокусі (до перемальовки), або `null`. */
+const heldInNewForm = () => (newFormEl && newFormEl.contains(document.activeElement) ? document.activeElement : null);
+
 /** Повна перемальовка (відкриття, вкладка, нові дані). */
 function paintHome() {
   const el = homeNode();
@@ -3204,8 +3258,10 @@ function paintHome() {
      створити перший простір). Рішає `spacesResp`, а не `homeData`: порожній `mine` без
      простору — це «нема де», а не «нічого не знайдено». */
   keepFocus(el, () => {
+    const held = heldInNewForm();
     el.innerHTML = needsWelcome(spacesResp) ? welcomeHTML()
       : homePage === 'conn' ? connPageHTML(connView()) : homeHTML(homeView(), homeData);
+    mountNewForm(held);
   });
   el.scrollTop = top;
 }
@@ -3213,7 +3269,11 @@ function paintHome() {
 function paintHomeLower() {
   const lower = document.getElementById('th-lower');
   if (!lower) return;
-  keepFocus(lower, () => { lower.innerHTML = homeGridHTML(homeView(), homeData); });
+  keepFocus(lower, () => {
+    const held = heldInNewForm();
+    lower.innerHTML = homeGridHTML(homeView(), homeData);
+    mountNewForm(held);
+  });
 }
 
 /**
@@ -3300,7 +3360,7 @@ function enterHome({ spaces = true, page } = {}) {
   homeOpen = true;
   openDd = null;
   document.body.classList.add('home-open');
-  if (!was) homeUi.q = '';
+  if (!was) { homeUi.q = ''; resetHomeEdit(); }
   const el = ensureHome();
   el.hidden = false;
   paintBar();
@@ -3433,7 +3493,7 @@ function wireHome(el) {
         homeUi.tab = v; saveHomeUi();
         paintHome();
         break;
-      case 'newtask': newTaskDialog(); break;
+      case 'newtask': openNewTaskCard(); break;
       /* ⛔ «Мітки» — кнопка ВСЕРЕДИНІ картки `data-th="open"`: `closest('[data-th]')` вище бере найближчий — саме її, тож задача не відкривається. */
       case 'tags': editTaskTags(b.dataset.id); break;
       case 'conn': enterConnections(); break;
@@ -4220,6 +4280,12 @@ document.addEventListener('keydown', (ev) => {
   const a = document.activeElement;
   const q = el.querySelector('#th-q');
   if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  /* Esc у формі «Нова задача» вертає картку «+»; під час клону (`aria-busy`) не діє — запит однаково долетить. До гілки `typing`. */
+  if (ev.key === 'Escape' && homeEdit.newForm && newFormEl && a && newFormEl.contains(a)) {
+    ev.preventDefault();
+    if (!newFormEl.hasAttribute('aria-busy')) closeNewTaskCard();
+    return;
+  }
   const typing = !!a && (['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) || a.isContentEditable);
   if (ev.key === '/' && !typing) { q?.focus(); ev.preventDefault(); return; }
   if (a && a === q) {
@@ -4230,8 +4296,9 @@ document.addEventListener('keydown', (ev) => {
       homeCards()[0]?.focus();
       ev.preventDefault();
     } else if (ev.key === 'Enter') {
-      const first = homeCards()[0];
-      if (first && first.dataset.th === 'open') homeOpenTask(first.dataset.id);
+      /* Перша ЗАДАЧА, а не перша картка: першою в сітці стоїть «+». */
+      const first = homeCards().find((c) => c.dataset.th === 'open');
+      if (first) homeOpenTask(first.dataset.id);
       ev.preventDefault();
     }
     return;
@@ -4242,6 +4309,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter' || ev.key === ' ') {
     ev.preventDefault();
     if (a.dataset.th === 'open') homeOpenTask(a.dataset.id);
+    else if (a.dataset.th === 'newtask') openNewTaskCard();
     return;
   }
   const grid = el.querySelector('#th-grid');

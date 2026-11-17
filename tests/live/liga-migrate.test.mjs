@@ -341,13 +341,17 @@ test("3b: форма «Нова задача» мігрованої ЛІГИ —
   const page = await newPage(t, url);
   await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
-  /* ⚠️ У ЛІГА (інтеграції ввімкнені) голова екрана без кнопки «Нова задача» (`noIntegrations` у `tasks-home.js`), тож форму відкриваємо тим
-     самим делегованим обробником, що й кнопка: вузол `data-th="newtask"` доданий у `#tasks-home` і натиснутий — `newTaskDialog()` справжній. */
+  /* ⚠️ У ЛІГА (інтеграції ввімкнені) картки «+» нема (`noDashboard` у `tasks-home.js`), тож форму відкриваємо тим самим делегованим
+     обробником, що й картка: вузол `data-th="newtask"` і порожній слот `#th-new-slot` (туди `mountNewForm` кладе живу форму) додані
+     в `#tasks-home` — `openNewTaskCard()` справжній. */
   await page.evaluate(() => {
+    const home = document.getElementById("tasks-home");
+    const slot = document.createElement("div");
+    slot.id = "th-new-slot";
     const b = document.createElement("button");
     b.dataset.th = "newtask";
     b.id = "t-newtask";
-    document.getElementById("tasks-home").append(b);
+    home.append(slot, b);
   });
   await page.click("#t-newtask");
   await page.waitForSelector('form[data-form="task"]', { timeout: 15000 });

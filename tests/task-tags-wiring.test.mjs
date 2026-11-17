@@ -258,9 +258,9 @@ test("збережений стан: старий запис 0.10.0 (profiles) �
 
 /* ── «Нова задача»: тіло запиту і проводка ────────────────────────────────────────────────────────────────── */
 
-test("newTaskDialog: поле «Мітки» є в обох формах (з «Репозиторієм» і без), а tags у тілі — лише непорожні", () => {
-  const body = fn("newTaskDialog");
-  assert.match(body, /taskFormHTML\(withRepo \? \{ repo: \{\}, tags: true \} : \{ tags: true \}\)/);
+test("«Нова задача»: поле «Мітки» є в обох формах (з «Репозиторієм» і без), а tags у тілі — лише непорожні", () => {
+  assert.match(fn("openNewTaskCard"), /taskFormHTML\(\{ inline: true, tags: true, \.\.\.\(withRepo \? \{ repo: \{\} \} : \{\}\) \}\)/);
+  const body = fn("createTask");
   assert.match(body, /const tags = parseTags\(vals\.tags\);/);
   assert.match(body, /\.\.\.\(tags\.length \? \{ tags \} : \{\}\)/);
 });

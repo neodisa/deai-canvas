@@ -1043,7 +1043,7 @@ test("resetSpaceState: кеш і ключ скинуто, відкладений
     glCache: REAL_A, glKey: "plain|A|it1", glBusyTimer: 5, glSeq: 3,
     curTaskList: null, homeData: null, currentTaskId: "A", taskSwitchGen: 0, homeSeq: 0, teamsMute: {},
     tasksErr: true, tasksErrKey: "k", homeUi: { q: "x", tags: { clear() {} }, designers: { clear() {} } },
-    saveHomeUi: () => {}, taskQ: "q", taskCursor: 4, resetPerTaskState: async () => {}, loadSpaces: async () => {},
+    saveHomeUi: () => {}, resetHomeEdit: () => {}, taskQ: "q", taskCursor: 4, resetPerTaskState: async () => {}, loadSpaces: async () => {},
   });
   const q = deferredApi(env);
   const f = load(env, { funcs: ["glKeyNow", "cancelGlRetry", "dropGlState", "scheduleGlRetry", "refreshGitlab", "resetSpaceState"] });
@@ -1133,7 +1133,7 @@ test("потік wizOpenTask (refresh до leaveHome): ключ — нова з�
 });
 
 test("створення задачі: refreshGitlab питає про made.id (всі три потоки передають цільову задачу)", () => {
-  assert.match(fn("newTaskDialog"), /currentTaskId = made\.id; taskSwitchGen \+= 1;\s*await refreshGitlab\(made\.id\);\s*await leaveHome\(\);/);
+  assert.match(fn("createTask"), /currentTaskId = made\.id; taskSwitchGen \+= 1;\s*await refreshGitlab\(made\.id\);\s*await leaveHome\(\);/);
   assert.match(fn("wizOpenTask"), /currentTaskId = made\.id; taskSwitchGen \+= 1;\s*await refreshGitlab\(made\.id\);\s*await leaveHome\(\);/);
   assert.match(fn("switchTask"), /await refreshGitlab\(val\);\s*currentTaskId = val;/);
 });
@@ -1239,14 +1239,14 @@ test("Task 7: «Підключення» не лишає мертвих vcs-кл
   for (const k of Object.keys(DICT.uk).filter((x) => /^cnErrVcs/.test(x))) assert.ok(reach.has(k), `${k} ніхто не показує`);
 });
 
-/* ── поле «Репозиторій» і запит створення: виконання newTaskDialog із заглушками ─────────────────────────── */
+/* ── поле «Репозиторій» і запит створення: виконання createTask/mountRepoHint із заглушками ─────────────────────────── */
 
-const TASK_HELPERS = ["newTaskDialog", "showCreateWait"];
+const TASK_HELPERS = ["createTask", "showCreateWait", "mountRepoHint"];
 const GIT_ENTRY = { id: "git-sync", enabled: true, roles: ["vcs"], settings: [{ key: "repo", value: "git@gh.example:o/r.git" }, { key: "branch", value: "main" }] };
 const PUB_ENTRY = { id: "static-publish", enabled: true, roles: ["publish"], settings: [{ key: "repo", value: "ЧУЖЕ" }] };
 const NOVCS = { id: "plain", capabilities: { vcs: null } };
 
-/** Середовище `newTaskDialog`: усе, чого він торкається, — заглушки з журналом; `askForm` лише запамʼятовує параметри діалогу. */
+/** Середовище `createTask`/`mountRepoHint`: усе, чого вони торкаються, — заглушки з журналом. */
 function mkTaskEnv(over = {}) {
   const log = { api: [], form: [], post: [], taskPost: [], focus: [], toast: [], leave: 0, refresh: [], reset: [], wire: [] };
   const env = {
@@ -1286,6 +1286,8 @@ function fakeForm() {
   };
   return form;
 }
+/** Відправка форми «Нова задача» (етап Д: картка в сітці, а не діалог): `createTask` — з тим самим `ctx`, що збирає
+ *  `openNewTaskCard`; `hint(form)` — `mountRepoHint` для простору середовища. */
 const taskDialog = async (over) => {
   const form = fakeForm();
   const timers = [];
@@ -1293,31 +1295,40 @@ const taskDialog = async (over) => {
     document: form.document, setTimeout: (fn, ms) => { timers.push({ fn, ms, on: true }); return timers.length; },
     clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].on = false; }, ...over,
   });
-  await load(env, { funcs: TASK_HELPERS }).newTaskDialog();
+  const f = load(env, { funcs: TASK_HELPERS });
+  const sp = env.space;
+  const withRepo = !!sp && hasVcs(sp) && !isLegacyVcs(sp);
   const ctl = { form, focus: (n) => env.log.focus.push(n) };
-  return { env, ctl, form, timers, submit: (vals) => env.opts.onSubmit({ title: "Лендинг", id: "lend", ...vals }, ctl) };
+  const ctx = { sp, withRepo, taken: Promise.resolve(["taken-1"]), trashIds: [] };
+  return {
+    env, ctl, form, timers, withRepo,
+    hint: (f2) => f.mountRepoHint(f2, sp, withRepo),
+    submit: (vals, extra = {}) => f.createTask({ title: "Лендинг", id: "lend", ...vals }, ctl, { ...ctx, ...extra }),
+  };
 };
 const tick = () => new Promise((r) => setImmediate(r));
 
-test("форма: у звичайному просторі з роллю vcs є поле «Репозиторій»; у ЛІГА й без ролі — розмітка дослівно як була", async () => {
+test("форма: поле «Репозиторій» — лише у звичайному просторі з роллю vcs; у ЛІГА й без ролі — без нього (статично, openNewTaskCard)", async () => {
   for (const [space, withRepo] of [[PLAIN, true], [LIGA, false], [NOVCS, false]]) {
-    const { env } = await taskDialog({ space });
-    assert.equal(/id="tf-repo"/.test(env.html), withRepo, JSON.stringify(space));
-    if (!withRepo) assert.equal(env.html, taskFormHTML({ tags: true }), "розмітка без поля «Репозиторій» — рівно та, що була до 4a, плюс поле «Мітки» (4b-3)");
+    const r = await taskDialog({ space });
+    assert.equal(r.withRepo, withRepo, JSON.stringify(space));
+    assert.equal(/id="tf-repo"/.test(taskFormHTML({ inline: true, tags: true, ...(withRepo ? { repo: {} } : {}) })), withRepo);
   }
+  const b = fn("openNewTaskCard");
+  assert.match(b, /const withRepo = hasVcs\(sp\) && !isLegacyVcs\(sp\);/);
+  assert.match(b, /taskFormHTML\(\{ inline: true, tags: true, \.\.\.\(withRepo \? \{ repo: \{\} \} : \{\}\) \}\)/, "розмітка форми: інлайн, «Мітки» — завжди, «Репозиторій» — за withRepo");
+  assert.match(b, /wireTaskForm\(form, \{ taken: taken\.then\(\(ids\) => \[\.\.\.ids, \.\.\.trashIds\]\) \}\);/, "проводка id/назви лишилась; автопідстановка обходить кошик");
 });
 
 test("підказка: типовий repo з GET /api/modules?space=… (лише вмикнений модуль з роллю vcs) стає placeholder після монтування", async () => {
-  const { env } = await taskDialog();
+  const { env, hint } = await taskDialog();
   const attrs = {};
   const input = { setAttribute: (k, v) => { attrs[k] = v; } };
   const form = { isConnected: true, querySelector: (s) => (s === "#tf-repo" ? input : null) };
-  env.opts.onMount(form);
+  hint(form);
   await tick();
   assert.deepEqual(env.log.api, ["/api/modules?space=plain"], "запит із простором форми");
   assert.equal(attrs.placeholder, "git@gh.example:o/r.git");
-  assert.equal(env.log.wire.length, 1, "проводка id/назви лишилась");
-  assert.equal(env.log.wire[0][0], form);
 });
 
 test("підказка: вимкнений модуль, модуль без ролі vcs, збій запиту й порожній repo — placeholder не чіпаємо, помилки нема", async () => {
@@ -1328,32 +1339,32 @@ test("підказка: вимкнений модуль, модуль без р�
     { modules: [{ ...GIT_ENTRY, settings: [{ key: "repo", value: "" }] }] },
     {}, null,
   ]) {
-    const { env } = await taskDialog({ modules });
+    const { hint } = await taskDialog({ modules });
     const attrs = {};
-    env.opts.onMount({ isConnected: true, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
+    hint({ isConnected: true, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
     await tick();
     assert.deepEqual(attrs, {}, JSON.stringify(modules));
   }
-  const { env } = await taskDialog({ apiFails: true });
+  const { hint } = await taskDialog({ apiFails: true });
   const attrs = {};
-  env.opts.onMount({ isConnected: true, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
+  hint({ isConnected: true, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
   await tick();
   assert.deepEqual(attrs, {}, "збій запиту підказки не ламає форму");
 });
 
 test("підказка не питається там, де поля нема (ЛІГА, без ролі): жодного зайвого запиту", async () => {
   for (const space of [LIGA, NOVCS]) {
-    const { env } = await taskDialog({ space });
-    env.opts.onMount({ isConnected: true, querySelector: () => null });
+    const { env, hint } = await taskDialog({ space });
+    hint({ isConnected: true, querySelector: () => null });
     await tick();
     assert.deepEqual(env.log.api, [], JSON.stringify(space));
   }
 });
 
 test("підказка, що приїхала, коли форму вже закрито (відчеплена), нічого не пише", async () => {
-  const { env } = await taskDialog();
+  const { hint } = await taskDialog();
   const attrs = {};
-  env.opts.onMount({ isConnected: false, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
+  hint({ isConnected: false, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
   await tick();
   assert.deepEqual(attrs, {});
 });
@@ -1446,7 +1457,7 @@ test("мітки (4b-3): bad-tags від сервера — текст «Міт�
   for (const space of [PLAIN, LIGA, NOVCS]) {
     const r = await taskDialog({ space, postForm: async () => { throw Object.assign(new Error("bad"), { code: "bad-tags", status: 400 }); },
       taskPost: async () => { throw Object.assign(new Error("bad"), { code: "bad-tags", status: 400 }); } });
-    assert.match(r.env.html, /id="tf-tags"/, `${space.id}: поле «Мітки»`);
+    assert.match(taskFormHTML({ inline: true, tags: true, ...(r.withRepo ? { repo: {} } : {}) }), /id="tf-tags"/, `${space.id}: поле «Мітки»`);
     const text = await r.submit({ tags: "a,b" });
     assert.equal(text, t("tagsBad"), space.id);
     assert.deepEqual(r.env.log.focus, ["tags"], space.id);
@@ -1602,7 +1613,7 @@ test("майстер: статичний пін — deps.post(\"/api/task-new\",
 
 test("форма не ламається на полі, якого в ній нема: ctl.focus('repo') у майстрі й showError — тихий вихід", () => {
   /* `ask.js`: `ctl.focus(name)` → `namedItem(name)` → `if (!f) return;`. Виконуємо САМ метод. */
-  const m = /focus\(name\) \{[\s\S]*?\n {8}\},/.exec(asrc);
+  const m = /focus\(name\) \{[\s\S]*?\n {4}\},/.exec(asrc);
   assert.ok(m, "метод focus у askForm");
   const focus = new Function("formEl", `return { ${m[0].replace(/,\s*$/, "")} }.focus;`)({ elements: { namedItem: () => null } });
   assert.doesNotThrow(() => focus("repo"));
@@ -1873,10 +1884,9 @@ test("loadConn: перший фокус бере роль із connFocusRole і 
   assert.match(src, /\nlet connFocusRole = '';/, "стан оголошено поруч із connFocusPending (TDZ)");
 });
 
-test("newTaskDialog (статично, як просить план): поле — за hasVcs && !isLegacyVcs, vcs у тілі — лише зі значенням, довгий запит (taskPost) — лише коли він клонує", () => {
-  const b = fn("newTaskDialog");
-  assert.match(b, /const withRepo = hasVcs\(sp\) && !isLegacyVcs\(sp\);/);
-  assert.match(b, /taskFormHTML\(withRepo \? \{ repo: \{\}, tags: true \} : \{ tags: true \}\)/, "поле «Репозиторій» передається формі лише тоді (4b-3: «Мітки» — завжди)");
+test("createTask (статично, як просить план): поле — за withRepo (hasVcs && !isLegacyVcs), vcs у тілі — лише зі значенням, довгий запит (taskPost) — лише коли він клонує", () => {
+  const b = fn("createTask");
+  assert.match(fn("openNewTaskCard"), /const withRepo = hasVcs\(sp\) && !isLegacyVcs\(sp\);/);
   assert.match(b, /const repo = withRepo \? String\(vals\.repo \?\? ''\)\.trim\(\) : '';/);
   assert.match(b, /\.\.\.\(repo \? \{ vcs: \{ repo \} \} : \{\}\)/, "порожнє значення — ключа vcs у тілі нема");
   assert.match(b, /made = await \(clones \? taskPost\(body\) : postForm\('\/api\/task-new', body\)\);/);
@@ -1968,10 +1978,10 @@ test("довга стеля й рядок про клон — лише коли 
   }
 });
 
-test("невідомий простір (spaceNow() порожній): форму не відкриваємо й нічого не питаємо — як і було", async () => {
-  const r = await taskDialog({ space: null });
-  assert.equal(r.env.opts, undefined, "askForm не кликано");
-  assert.deepEqual([r.env.log.post, r.env.log.taskPost, r.env.log.api, r.timers], [[], [], [], []]);
+test("невідомий простір (spaceNow() порожній): форму не відкриваємо й нічого не питаємо — як і було (статично)", () => {
+  const b = fn("openNewTaskCard");
+  assert.match(b, /const sp = spaceNow\(\);\s*if \(!sp \|\| homeEdit\.newForm\) return;/, "нема простору чи форма вже відкрита — вихід ДО будь-якого запиту");
+  assert.ok(b.indexOf("if (!sp ||") < b.indexOf("formApi("), "перелік id не питається без простору");
 });
 
 test("звичайний запит (порожнє поле, простір без синку): поки він летить — жодних ознак довгого створення, а відмова нічого не мусить знімати", async () => {
@@ -2001,7 +2011,7 @@ test("I1: англійською — той самий рядок мовою і�
 });
 
 test("I1: showCreateWait — статично: рядок вставляється ПЕРЕД слотом помилки, не в ЛІГА-розмітку; майстер уже має «Створюю…» і не клонує", () => {
-  const b = fn("newTaskDialog");
+  const b = fn("createTask");
   assert.match(b, /const clones = taskCreateClones\(sp, body\);/, "клонує лише запит із vcs у тілі або простір з інтеграціями й роллю vcs");
   assert.match(b, /const stopWait = clones \? showCreateWait\(ctl\.form\) : null;/);
   assert.match(declSource("showCreateWait"), /slot\.before\(note\)/);

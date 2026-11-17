@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { askForm, focusBackTarget, formValues, tabWrap } from "../app/ask.js";
+import { askForm, focusBackTarget, formValues, makeFormCtl, tabWrap } from "../app/ask.js";
 
 const src = readFileSync(new URL("../app/ask.js", import.meta.url), "utf8");
 
@@ -226,8 +226,9 @@ test("askForm: відкривач запамʼятовується ПІСЛЯ с
 });
 
 test("askForm: ctl.focus(імʼя) ставить aria-invalid на поле, ctl.error('') знімає з усіх; непорожня помилка не знімає", () => {
-  assert.match(overlayBody, /focus\(name\) \{\s*const f = formEl\.elements\.namedItem\(name\);\s*if \(!f\) return;\s*f\.setAttribute\?\.\('aria-invalid', 'true'\);\s*f\.focus\?\.\(\);/);
-  assert.match(overlayBody, /if \(!msg\) for \(const f of formEl\.querySelectorAll\('\[aria-invalid\]'\)\) f\.removeAttribute\('aria-invalid'\);/);
+  /* Код ctl живе у `makeFormCtl` (етап Д), а не в тілі `overlay`. */
+  assert.match(src, /focus\(name\) \{\s*const f = formEl\.elements\.namedItem\(name\);\s*if \(!f\) return;\s*f\.setAttribute\?\.\('aria-invalid', 'true'\);\s*f\.focus\?\.\(\);/);
+  assert.match(src, /if \(!msg\) for \(const f of formEl\.querySelectorAll\('\[aria-invalid\]'\)\) f\.removeAttribute\('aria-invalid'\);/);
   /* Правка поля знімає стару відмову РАЗОМ із `aria-invalid` (обробник `input` кличе `ctl.error('')`). */
   assert.match(overlayBody, /formEl\.addEventListener\('input', \(\) => ctl\.error\(''\)\);/);
 });
@@ -242,4 +243,63 @@ test("askForm: перебитий оверлей не лишає підклад�
   /* Кнопка «Скасувати» й Esc під час запиту — тільки через `busy`; сам `cancel()` оверлея (виклик
      НОВОГО питання) його не питає: перебиття не блокується, і сирота не виникає. */
   assert.match(overlayBody, /const api = \{ cancel: \(\) => done\(cancelled\) \};/);
+});
+
+/* ── makeFormCtl (етап Д): керування формою, спільне для діалогу й інлайн-картки ───────────────────────── */
+
+/** Фальшива форма: слот помилки, два поля з `aria-invalid`, кнопка «ok»; `elements.namedItem` віддає поле за імʼям. */
+function fakeCtlForm() {
+  const attrs = new Map();
+  const mkField = (name) => ({
+    name, attrs: {}, focused: false,
+    setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; }, focus() { this.focused = true; },
+  });
+  const fields = { title: mkField("title"), id: mkField("id") };
+  const slot = { textContent: "", hidden: true };
+  const ok = { disabled: false };
+  const form = {
+    attrs,
+    setAttribute: (k, v) => attrs.set(k, v),
+    removeAttribute: (k) => attrs.delete(k),
+    elements: { namedItem: (n) => fields[n] ?? null },
+    querySelector: (s) => (s === "[data-form-error]" ? slot : null),
+    querySelectorAll: (s) => (s === "[aria-invalid]" ? Object.values(fields).filter((x) => "aria-invalid" in x.attrs)
+      : s === 'button[data-a="ok"]' ? [ok] : []),
+  };
+  return { form, fields, slot, ok };
+}
+
+test("makeFormCtl: error(текст) показує слот, error('') ховає й знімає aria-invalid", () => {
+  const { form, fields, slot } = fakeCtlForm();
+  const ctl = makeFormCtl(form);
+  assert.equal(ctl.form, form);
+  ctl.focus("title");
+  ctl.error("Біда");
+  assert.deepEqual([slot.textContent, slot.hidden], ["Біда", false]);
+  assert.equal(fields.title.attrs["aria-invalid"], "true", "error(текст) aria-invalid не знімає");
+  ctl.error("");
+  assert.deepEqual([slot.textContent, slot.hidden], ["", true]);
+  assert.equal("aria-invalid" in fields.title.attrs, false);
+});
+
+test("makeFormCtl: focus(поле) — aria-invalid і фокус; невідоме поле — нічого", () => {
+  const { form, fields } = fakeCtlForm();
+  const ctl = makeFormCtl(form);
+  ctl.focus("nope");
+  assert.equal(fields.title.focused || fields.id.focused, false);
+  ctl.focus("id");
+  assert.deepEqual([fields.id.attrs["aria-invalid"], fields.id.focused], ["true", true]);
+});
+
+test("makeFormCtl: busy(true) вимикає «ok» і ставить aria-busy, busy(false) — вертає", () => {
+  const { form, ok } = fakeCtlForm();
+  const ctl = makeFormCtl(form);
+  ctl.busy(true);
+  assert.deepEqual([ok.disabled, form.attrs.get("aria-busy")], [true, "true"]);
+  ctl.busy(false);
+  assert.deepEqual([ok.disabled, form.attrs.has("aria-busy")], [false, false]);
+});
+
+test("askForm будує ctl через makeFormCtl (одне джерело, не друга копія)", () => {
+  assert.match(src, /ctl = makeFormCtl\(formEl\);/);
 });

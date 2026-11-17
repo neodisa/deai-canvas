@@ -119,22 +119,21 @@ test("switchTask: простір відповіді порівнюється з 
   assert.match(body, /if \(spaceChanged\(spaceNow\(\)\?\.id, sw\?\.space\)\) await resetSpaceState\(\);\s*else await resetPerTaskState\(\);/);
 });
 
-test("newTaskDialog: простір називається ЯВНО, зайняті id — з усіх просторів, запит і перехід — усередині onSubmit", () => {
-  const body = fn("newTaskDialog");
+test("«Нова задача» (етап Д: картка в сітці): простір називається ЯВНО, зайняті id — з усіх просторів, запит і перехід — усередині відправки", () => {
+  assert.doesNotMatch(src, /function newTaskDialog\(/, "діалог замінила картка в сітці");
+  const open = fn("openNewTaskCard");
+  assert.match(open, /formApi\('\/api\/tasks\?all=1'\)/);
+  const body = fn("createTask");
   assert.match(body, /space: sp\.id/, "без `space` сервер пішов би в простір з інтеграціями");
-  assert.match(body, /formApi\('\/api\/tasks\?all=1'\)/);
-  assert.match(body, /onSubmit: async \(vals, ctl\) => \{[\s\S]*?postForm\('\/api\/task-new'/);
-  assert.match(body, /taskFormError\(vals, await taken\)/, "перевірка id ДО запиту");
+  assert.match(body, /postForm\('\/api\/task-new'/);
+  assert.match(body, /taskFormError\(vals, await taken, trashIds\)/, "перевірка id (з урахуванням кошика) ДО запиту");
   assert.match(body, /if \(spaceChanged\(sp\.id, made\.space\)\) await resetSpaceState\(\);\s*else await resetPerTaskState\(\);/);
   assert.match(body, /await leaveHome\(\);/);
-  /* Перехід — УСЕРЕДИНІ onSubmit, після відповіді сервера: діалог, перебитий іншим питанням, не
-     лишає сервер із задачею, а екран — без переходу. Нема `if (!v || !made) return` після askForm. */
-  const sub = body.slice(body.indexOf("onSubmit:"));
-  assert.ok(sub.indexOf("postForm('/api/task-new'") < sub.indexOf("await leaveHome();"), "перехід ПІСЛЯ відповіді сервера");
-  assert.doesNotMatch(body, /if \(!v \|\| !made\) return;/, "продовження успіху не залежить від долі діалогу");
+  /* Перехід — УСЕРЕДИНІ відправки, після відповіді сервера: картку могли закрити, а задачу вже створено. */
+  assert.ok(body.indexOf("postForm('/api/task-new'") < body.indexOf("await leaveHome();"), "перехід ПІСЛЯ відповіді сервера");
   assert.match(body, /\} catch \(e\) \{ toast\(t\('errFailed', e\.message\)\); \}\s*return undefined;/,
     "збій переходу — тост, а не «не вдалося створити» для задачі, що вже є");
-  assert.match(body, /focusBack: \(\) => homeNode\(\)\?\.querySelector\('\[data-th="newtask"\]'\),/);
+  assert.match(fn("closeNewTaskCard"), /homeNode\(\)\?\.querySelector\('\[data-th="newtask"\]'\)\?\.focus/, "після закриття фокус — на картку «+»");
   assert.match(body, /ctl\.focus\(taskErrField\(key\)\)/, "поле помилки — aria-invalid");
 });
 
@@ -289,18 +288,18 @@ test("діалоги: запити space-new / space-update / task-new і пер
     "обрив стає `code: 'timeout'` (spaceErrKey/taskErrKey → formTimeout), решта помилок — як були");
   assert.match(fa, /\.finally\(\(\) => clearTimeout\(timer\)\)/, "таймер знімається, інакше він обрізав би вже завершений запит");
   assert.match(src, /const postForm = \(path, body\) => formApi\(path, \{\s*method: 'POST'/);
-  for (const [name, url] of [["openSpaceEdit", "space-update"], ["newTaskDialog", "task-new"]]) {
+  for (const [name, url] of [["openSpaceEdit", "space-update"], ["createTask", "task-new"]]) {
     const b = fn(name);
     assert.match(b, new RegExp(`postForm\\('/api/${url}'`), `${name}: запит без стелі`);
     assert.doesNotMatch(b, new RegExp(`[^m]post\\('/api/${url}'`), `${name}: лишився голий post`);
   }
-  assert.match(fn("newTaskDialog"), /const taken = formApi\('\/api\/tasks\?all=1'\)/, "перелік id теж зі стелею: `await taken` у onSubmit не висить");
+  assert.match(fn("openNewTaskCard"), /const taken = formApi\('\/api\/tasks\?all=1'\)/, "перелік id теж зі стелею: `await taken` у відправці не висить");
 });
 
 test("екран «Задачі»: вкладка — за effectiveTab (збережена `team` не переписується), кнопки задачі й простору", () => {
   assert.match(src, /if \(effectiveTab\(homeUi, homeData\) === v\) break;/);
   assert.doesNotMatch(src, /if \(homeUi\.tab === v\) break;/, "стара перевірка вернулась");
-  assert.match(src, /case 'newtask': newTaskDialog\(\); break;/);
+  assert.match(src, /case 'newtask': openNewTaskCard\(\); break;/);
   assert.match(src, /case 'spacenew': openWizard\(\); break;/);
 });
 
