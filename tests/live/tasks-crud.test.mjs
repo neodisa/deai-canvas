@@ -279,6 +279,7 @@ test("перейменування на картці: F2 → поле з вид�
   await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
   await page.click('#tabs [data-act="home"]');
   await page.waitForSelector('#tasks-home .th-card[data-id="x"]');
+  await page.waitForLoadState("networkidle");   // початковий `loadHome` дочитався: його відповідь не перемалює екран під F2
   const dirBefore = readTasks(file).x.dir;
   await page.focus('#tasks-home .th-card[data-id="x"]');
   await page.keyboard.press("F2");
@@ -355,4 +356,69 @@ test("перейменування на картці: «клік» без pointe
   await page.waitForFunction(() => /Синтетика/.test(document.querySelector('#tasks-home .th-card[data-id="x"] .th-ttl')?.textContent || ""));
   assert.equal(readTasks(file).x.title, "Синтетика");
   assert.equal(await homeHidden(page), false, "синтетичний клік по іншій картці відкрив її");
+});
+
+test("перейменування: pointerdown + pointercancel (дотик-прокрутка) не залишає прапорця — наступний справжній клік по картці її відкриває", async (t) => {
+  const { page } = await studio(t, 1200);
+  await page.focus('#tasks-home .th-card[data-id="x"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  await page.evaluate(() => {
+    const y = document.querySelector('#tasks-home .th-card[data-id="y"]');
+    y.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 7, pointerType: "touch" }));
+    y.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: 7, pointerType: "touch" }));
+  });
+  await page.waitForFunction(() => !document.getElementById("th-ren"));
+  assert.equal(await homeHidden(page), false, "pointerdown сам відкрив картку");
+  await page.waitForTimeout(600);   // вікно ковтання кліку (500 мс) минуло
+  /* Клік БЕЗ pointerdown (клавіатурна активація): `pointerdown` прапорець скидає, а цей шлях — лише спливання вікна часу. */
+  await page.evaluate(() => document.querySelector('#tasks-home .th-card[data-id="y"]').click());
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+});
+
+test("перейменування: виділення в полі, відпущене поза ним, не комітить і нічого не робить", async (t) => {
+  const { page } = await studio(t, 1300);
+  const posts = [];
+  page.on("request", (r) => { if (r.method() === "POST") posts.push(r.url()); });
+  await page.focus('#tasks-home .th-card[data-id="x"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  await page.evaluate(() => document.getElementById("th-ren").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 3 })));
+  await page.evaluate(() => document.querySelector('#tasks-home .th-card[data-id="x"] .th-cbody').click());
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#th-ren").count(), 1, "поле закрилось");
+  assert.deepEqual(posts, [], "пішов запит");
+  assert.equal(await homeHidden(page), false);
+});
+
+test("перейменування: Tab із поля зберігає назву й НЕ тягне фокус назад на картку", async (t) => {
+  const { page, file } = await studio(t, 1400);
+  await page.focus('#tasks-home .th-card[data-id="x"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  await page.keyboard.type("Табуляція");
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(() => /Табуляція/.test(document.querySelector('#tasks-home .th-card[data-id="x"] .th-ttl')?.textContent || ""));
+  await page.waitForTimeout(200);
+  assert.equal(readTasks(file).x.title, "Табуляція");
+  const at = await page.evaluate(() => `${document.activeElement?.className}/${document.activeElement?.dataset?.id}`);
+  assert.notEqual(at, "th-card/x", "фокус забрано на картку");
+  assert.ok(!/^BODY|undefined\/undefined$/.test(at) && at !== "/undefined", `фокус нікуди: ${at}`);
+});
+
+test("перейменування: збій запиту (500) — тост, стара назва, і F2 знову працює", async (t) => {
+  const { page, file } = await studio(t, 1500);
+  await page.route("**/api/task-rename", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }));
+  await page.focus('#tasks-home .th-card[data-id="x"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  await page.keyboard.type("Не вийде");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.getElementById("cv-toast")?.textContent);
+  await page.waitForFunction(() => !document.getElementById("th-ren"));
+  assert.equal(readTasks(file).x.title, "X");
+  assert.match(await page.textContent('#tasks-home .th-card[data-id="x"] .th-ttl'), /^\s*X\s*$/);
+  await page.focus('#tasks-home .th-card[data-id="x"]');
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren", { timeout: 3000 });
 });

@@ -1043,7 +1043,7 @@ test("resetSpaceState: кеш і ключ скинуто, відкладений
     glCache: REAL_A, glKey: "plain|A|it1", glBusyTimer: 5, glSeq: 3,
     curTaskList: null, homeData: null, currentTaskId: "A", taskSwitchGen: 0, homeSeq: 0, teamsMute: {},
     tasksErr: true, tasksErrKey: "k", homeUi: { q: "x", tags: { clear() {} }, designers: { clear() {} } },
-    saveHomeUi: () => {}, resetHomeEdit: () => {}, taskQ: "q", taskCursor: 4, resetPerTaskState: async () => {}, loadSpaces: async () => {},
+    saveHomeUi: () => {}, resetHomeEdit: () => {}, closeTaskMenu: () => {}, taskQ: "q", taskCursor: 4, resetPerTaskState: async () => {}, loadSpaces: async () => {},
   });
   const q = deferredApi(env);
   const f = load(env, { funcs: ["glKeyNow", "cancelGlRetry", "dropGlState", "scheduleGlRetry", "refreshGitlab", "resetSpaceState"] });
@@ -1833,7 +1833,7 @@ test("кнопка «Підключення» на «Задачах», що ще
   const env = mkConn(null, {
     homeOpen: true, homePage: "tasks", homeData: { loading: true, space: PLAIN },
     wiz: { click: () => { throw new Error("майстер не мав би бути"); } },
-    homeEdit: { ren: null }, document: { getElementById: () => null },
+    homeEdit: { ren: null }, document: { getElementById: () => null }, homeEatUntil: 0, homeDownInRen: false,
   });
   load(env, { funcs: ["enterConnections", "loadSpaces", "wireHome"] }).wireHome({ addEventListener: (type, fn) => { handlers[type] = fn; } });
   const btn = { dataset: { th: "conn" } };

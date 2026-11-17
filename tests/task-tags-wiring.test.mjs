@@ -68,7 +68,7 @@ function wireEnv(over = {}) {
     log,
     homePage: "tasks", wiz: { click: () => { throw new Error("майстер не мав би бути"); } },
     homeUi: { tab: "mine", status: "active", tags: new Set(), designers: new Set() }, homeData: { mine: [], team: null },
-    homeEdit: { ren: null }, document: { getElementById: () => null }, closeTaskMenu: () => {}, openTaskMenu: () => {},
+    homeEatUntil: 0, homeDownInRen: false, homeEdit: { ren: null }, document: { getElementById: () => null }, closeTaskMenu: () => {}, openTaskMenu: () => {},
     startRenameCard: () => {}, commitRenameCard: () => {},
     effectiveTab, saveHomeUi: () => {}, paintHome: () => { log.paint += 1; }, paintHomeLower: () => {},
     homeOpenTask: (id) => log.open.push(id), editTaskTags: (id) => log.tags.push(id),
@@ -265,4 +265,12 @@ test("«Нова задача»: поле «Мітки» є в обох форм
   const body = fn("createTask");
   assert.match(body, /const tags = parseTags\(vals\.tags\);/);
   assert.match(body, /\.\.\.\(tags\.length \? \{ tags \} : \{\}\)/);
+});
+
+test("локальна зміна екрана: applyTaskTitle позначає зміну, loadHome порівнює лічильник і перепитує один раз", () => {
+  assert.match(fn("applyTaskTitle"), /markHomeMutated\(\);/);
+  const body = fn("loadHome");
+  assert.match(body, /const mut = homeMutGen;/);
+  assert.match(body, /if \(homeMutGen !== mut\) \{/);
+  assert.equal((body.match(/api\(`\/api\/tasks-overview/g) || []).length, 2, "рівно два запити: перший і один повтор");
 });

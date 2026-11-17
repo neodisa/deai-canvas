@@ -1385,6 +1385,7 @@ async function resetSpaceState({ reload = true } = {}) {
   tasksErr = false; tasksErrKey = null;
   homeUi.q = ''; homeUi.tags.clear(); homeUi.designers.clear(); saveHomeUi();
   resetHomeEdit();
+  closeTaskMenu(false);
   if (reload) await loadSpaces();
 }
 
@@ -3308,11 +3309,31 @@ function paintHomeLower() {
   refocusMore(menuFor);
 }
 
+/* Вікно «ковтання кліку» після `pointerdown`, що вже зробив своє (комміт перейменування, закриття меню), і прапорець «натиснули
+   всередині поля назви». Обидва скидаються на КОЖНОМУ наступному `pointerdown`, без залежності від `pointerup`/таймерів. */
+let homeEatUntil = 0;
+let homeDownInRen = false;
+/** Лічильник локальних змін екрана: відповідь `loadHome`, запитана ДО зміни, не має права її затерти (див. `loadHome`). */
+let homeMutGen = 0;
+const markHomeMutated = () => { homeMutGen += 1; };
+
+/** `pointerdown` на рівні документа (фаза захоплення): комітить перейменування й закриває меню, а наступний клік ковтає. */
+function homePointerDown(ev) {
+  homeEatUntil = 0;
+  homeDownInRen = !!ev.target.closest('#th-ren');
+  if (homeEdit.ren && !homeDownInRen) { homeEatUntil = performance.now() + 500; commitRenameCard(true); }
+  if (document.getElementById('th-menu') && !ev.target.closest('#th-menu') && !ev.target.closest('.th-more')) {
+    closeTaskMenu(false);
+    if (homeNode()?.contains(ev.target)) homeEatUntil = performance.now() + 500;
+  }
+}
+
 /** Меню картки (етап Д). `at` — `{x, y}` (правий клік) або `null` (під «⋯»). Вузол — у `#tasks-home`: його кліки ловить
  *  `wireHome` (`data-th`). Перемальовка екрана меню прибирає (`dropTaskMenu`): воно не в розмітці стану, а `aria-expanded`
  *  нова кнопка й так малює `false`. */
 function openTaskMenu(id, { trash = false, at = null } = {}) {
   closeTaskMenu(false);
+  if (renSaving) return;   // назва ще пишеться — нове перейменування з меню не мало б чим закомітитись
   const home = homeNode();
   const x = ((trash ? homeData?.trash : homeData?.mine) || []).find((y) => y.id === id);
   if (!home || !x) return;
@@ -3364,7 +3385,7 @@ const refocusMore = (id) => { if (id) homeNode()?.querySelector(`.th-more[data-i
 
 /* Перейменування назви задачі на картці (етап Д). */
 function startRenameCard(id) {
-  if (!(homeData?.mine || []).some((y) => y.id === id)) return;
+  if (renSaving || !(homeData?.mine || []).some((y) => y.id === id)) return;
   homeEdit = { ...homeEdit, ren: id, ask: null };
   paintHomeLower();
   const inp = document.getElementById('th-ren');
@@ -3381,7 +3402,12 @@ async function commitRenameCard(save) {
   const row = (homeData?.mine || []).find((y) => y.id === id);
   const next = (inp?.value ?? '').trim();
   homeEdit = { ...homeEdit, ren: null };
-  const focusCard = () => homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  /* Фокус вертаємо на картку лише коли він нікуди не пішов (поле зникло → `body`); Tab, пошук чи інше поле назви — не чіпаємо. */
+  const focusCard = () => {
+    const a = document.activeElement;
+    if (a && a !== document.body && a.isConnected) return;
+    homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  };
   if (!save || !row || !next || next === cleanTitle(row)) { paintHomeLower(); focusCard(); return; }
   renSaving = true;
   try {
@@ -3394,6 +3420,7 @@ async function commitRenameCard(save) {
 
 /** Нова назва — всюди, де її показують: рядок екрана, запис вкладки (підказка), поточна задача. */
 function applyTaskTitle(id, title) {
+  markHomeMutated();
   if (homeReady()) homeData = { ...homeData, mine: homeData.mine.map((y) => (y.id === id ? { ...y, title } : y)) };
   if (tabs.some((x) => x.id === id)) { tabs = tabs.map((x) => (x.id === id ? { ...x, title } : x)); saveTabs(); paintTabs(); }
   if (curTask && currentTaskId === id) { curTask = { ...curTask, title }; paintBar(); }
@@ -3425,8 +3452,14 @@ async function loadHome(refresh = false, { spaces = true } = {}) {
       paintHome();
       return;
     }
-    const r = await api(`/api/tasks-overview${refresh ? '?refresh=1' : ''}`);
+    const mut = homeMutGen;
+    let r = await api(`/api/tasks-overview${refresh ? '?refresh=1' : ''}`);
     if (seq !== homeSeq || !homeOpen) return;
+    /* Поки відповідь летіла, екран локально змінили (нова назва…): вона застаріла й затерла б зміну — питаємо ще раз, ОДИН раз. */
+    if (homeMutGen !== mut) {
+      r = await api(`/api/tasks-overview${refresh ? '?refresh=1' : ''}`);
+      if (seq !== homeSeq || !homeOpen) return;
+    }
     /* Переключили задачу, поки відповідь летіла, — її `current` застарів. */
     if (gen === taskSwitchGen) currentTaskId = r.current ?? currentTaskId;
     else r.current = currentTaskId;
@@ -3523,6 +3556,7 @@ async function leaveHome() {
   wiz.reset();
   homeNode()?.querySelector('.wz')?.remove();
   homeSeq += 1;
+  closeTaskMenu(false);
   homeComposing = false; homePaintPending = false;
   homeOpen = false;
   openDd = null;
@@ -3590,20 +3624,20 @@ function ensureHome() {
   el.hidden = true;
   document.body.appendChild(el);
   wireHome(el);
+  document.addEventListener('pointerdown', homePointerDown, true);
   return el;
 }
 
 function wireHome(el) {
-  /* Клік повз поле назви під час перейменування: комітимо вже на `pointerdown` і ковтаємо наступний клік. Фокус-аут (мітка
-     з `setTimeout`) спрацював би між `mousedown` і `click` — і клік по іншій картці відкрив би її. */
-  let renEatClick = false;
-  el.addEventListener('pointerdown', (ev) => {
-    if (homeEdit.ren && !ev.target.closest('#th-ren')) { renEatClick = true; commitRenameCard(true); }
-  }, true);
-  el.addEventListener('pointerup', () => { setTimeout(() => { renEatClick = false; }, 0); }, true);
+  /* Menu, що висить, зсувається разом із прокруткою сітки (воно `fixed`) — закриваємо. */
+  el.addEventListener('scroll', () => closeTaskMenu(false), true);
   el.addEventListener('click', (ev) => {
+    /* Клік, якого `pointerdown` уже обробив (комміт перейменування, закриття меню — `homePointerDown`), — ковтаємо: лише в
+       межах короткого вікна часу, тож скасований дотик (`pointercancel`) прапорець не залишає. */
+    if (homeEatUntil && performance.now() < homeEatUntil) { homeEatUntil = 0; return; }
+    /* Виділення в полі назви, відпущене поза ним, дає клік по предку: не комітимо й нічого не робимо. */
+    if (homeDownInRen) { homeDownInRen = false; return; }
     /* ⛔ Перейменування — ПЕРШИМ, до `closest('[data-th]')`: клік повз поле комітить назву й більше нічого не робить. */
-    if (renEatClick) { renEatClick = false; return; }
     if (homeEdit.ren && !ev.target.closest('#th-ren')) { commitRenameCard(true); return; }
     /* Клік повз відкрите меню (і повз «⋯») закриває його без наслідків. */
     if (document.getElementById('th-menu') && !ev.target.closest('#th-menu') && !ev.target.closest('.th-more')) { closeTaskMenu(false); return; }
