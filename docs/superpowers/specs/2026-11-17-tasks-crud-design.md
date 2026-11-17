@@ -192,7 +192,7 @@
 - **`task-new`.** Id із записом у кошику — 400 `task-in-trash`: інакше повернення стало б неможливим. Надгробок для цього id
   знімається.
 - **`GET /api/tasks-overview`** дістає поле `trash`: `[{id, title, jira, tags, at, thumb}]` поточного простору, без
-  надгробків, найновіші першими. `thumb` — `/api/task-thumb?task=<id>&trash=1&v=<sha>`: кадр читається з `trashDir`.
+  надгробків, найновіші першими. `thumb` — `/api/task-thumb?task=<id>[&v=<sha>]&trash=1`: кадр читається з `trashDir`, і лише якщо це тека всередині `.deai-trash`.
 - **`GET /api/tasks`** (смуга, вкладки, `?all=1`) кошика не бачить: він читає лише `tasks`.
 - **`bin/registry.py pull`** пропускає id, що є в `trash` (і записи, і надгробки).
 
