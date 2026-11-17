@@ -6639,7 +6639,8 @@ class CurrentTaskReadGuard(unittest.TestCase):
     охоронець ловить наступного такого."""
 
     #: функції реєстру, що ЗВІДСИ мають право торкатись `current`
-    ALLOWED = ('task_for', 'task_new', '_task_switch')
+    #: `_task_delete` (етап Д): видалення поточної переносить `current` простору задачі й віддає новий у відповіді.
+    ALLOWED = ('task_for', 'task_new', '_task_switch', '_task_delete')
 
     def _violations(self, source):
         return [(line, func) for line, func, listing in current_reads(source)
@@ -6651,7 +6652,7 @@ class CurrentTaskReadGuard(unittest.TestCase):
         bad = self._violations(source)
         self.assertEqual(
             bad, [],
-            'пряме читання `current` поза task_for/task_new/_task_switch і поза '
+            'пряме читання `current` поза task_for/task_new/_task_switch/_task_delete і поза '
             'обробниками /api/tasks, /api/tasks-overview (рядок, функція): '
             f'{bad}. Задачу запиту бери через `task_for(cfg, tid)` / '
             '`self._current_task()`: `current` один на машину і міг перемкнутись.')

@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 import isolation  # закон ізоляції й шви тестів (4d-4b; раніше `implicit.py`)
+import task_trash  # кошик задач простору (етап Д, 0.30.0): видалення без стирання, повернення, знищення
 import feedback  # відгук (0.23.0): кільце помилок, збирач діагностики, черга відправки
 import updater  # оновлення інструмента (0.23.0): перевірка тегів у remote, `update.json`, `GET /api/update`
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
@@ -1178,6 +1179,10 @@ CLAUDE_PHASES = ('understanding', 'design', 'dev', 'checks', 'fixation')
 CLAUDE_BEATS = {}
 #: Сервер багатопотоковий: запис/витіснення й читання ударів — під одним локом.
 CLAUDE_LOCK = threading.Lock()
+#: Етап Д: маршрути `task-rename/delete/restore/purge` роблять «прочитати tasks.json → змінити → записати» під ЦИМ замком —
+#: два видалення поспіль не перезапишуть одне одного. Решта маршрутів його не бере (наявний борг, `atomic_io.py`).
+#: ⛔ Не `WRITE_LOCK`: той нереентрантний і його бере `save_tasks` усередині.
+TASK_CRUD_LOCK = threading.Lock()
 
 
 def _local_origin(origin):
@@ -5985,7 +5990,8 @@ class Handler(SimpleHTTPRequestHandler):
     #: Модулі (етап 2а): `/api/modules`, `/api/module-*` (з 3c і `module-trust`/`module-untrust`), `/api/ds-tokens` — теж реєстрові: простір — параметр
     #: `space`, не задача. Точна відповідність (шлях без query), КОЖЕН маршрут окремо: широкий префікс
     #: `/api/module` зловив би будь-який майбутній маршрут.
-    _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch', '/api/task-tags', '/api/spaces',
+    _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch', '/api/task-tags', '/api/task-rename', '/api/task-delete',
+                        '/api/task-restore', '/api/task-purge', '/api/spaces',
                         '/api/space-peek', '/api/space-new', '/api/space-update',
                         '/api/space-switch',
                         '/api/modules', '/api/module-enable', '/api/module-disable',
@@ -7309,6 +7315,14 @@ class Handler(SimpleHTTPRequestHandler):
             self._task_switch(payload)
         elif self.path == '/api/task-tags':
             self._task_tags(payload)
+        elif self.path == '/api/task-rename':
+            self._task_rename(payload)
+        elif self.path == '/api/task-delete':
+            self._task_delete(payload)
+        elif self.path == '/api/task-restore':
+            self._task_restore(payload)
+        elif self.path == '/api/task-purge':
+            self._task_purge(payload)
         elif self.path == '/api/task-new':
             self._task_new(payload)
         elif self.path == '/api/space-new':
@@ -8083,6 +8097,36 @@ class Handler(SimpleHTTPRequestHandler):
         spaces.switch_space(sp['id'])
         self._send_json({'ok': True, 'current': tid, 'space': _space_id(sp)})
 
+    def _find_task_cfg(self, tid):
+        """`cfg` простору, де лежить задача `tid`, з простором запиту, зафіксованим на ньому; `None` — відмову вже надіслано.
+        Нечитабельний файл (старий чи інших просторів) — центральний 503 `space-unavailable`, а не «нема задачі»; нема — 404
+        `unknown-task`; дубль id у двох просторах — центральний 409 (`AmbiguousTask` з `find_task`)."""
+        sp = spaces.find_task(tid)
+        if sp is None:
+            raise_if_legacy_unreadable()       # задача могла лежати в файлі, який не читається
+            broken = spaces.unreadable_task_files(spaces.read_registry())
+            if broken:
+                raise SpaceUnavailable(broken[0])
+            self._space_error(404, 'unknown-task', 'task not found')
+            return None
+        spaces.set_request_space(sp['id'])
+        cfg = load_tasks()
+        if tid not in cfg.get('tasks', {}):         # вилучили між `find_task` і читанням
+            self._space_error(404, 'unknown-task', 'task not found')
+            return None
+        return cfg
+
+    def _payload_space(self, payload):
+        """Простір із тіла (`space`): кошик належить простору. Нема такого — 400 `unknown-space`, `None`."""
+        want = payload.get('space')
+        sp = (next((s for s in spaces.read_registry()['spaces'] if s['id'] == want), None)
+              if isinstance(want, str) else None)
+        if sp is None:
+            self._space_error(400, 'unknown-space', 'unknown space')
+            return None
+        spaces.set_request_space(sp['id'])
+        return sp
+
     def _task_tags(self, payload):
         """Замінити мітки задачі `id` (4b-3): `{id, tags}` → `{ok, tags}`. Задача шукається в УСІХ просторах (`find_task`), простір
         запиту фіксується на ЇЇ просторі — пишеться файл задач ТОГО простору; поточну задачу й простір машини не міняємо
@@ -8099,25 +8143,125 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_error(400, 'bad-tags', str(e))
             return
         tid = payload.get('id', '')
-        sp = spaces.find_task(tid)
-        if sp is None:
-            raise_if_legacy_unreadable()       # задача могла лежати в файлі, який не читається
-            # Те саме для файлів інших просторів: `find_task` вважає нечитабельний порожнім, і «нема такої задачі» збрехало б —
-            # центральний 503 `space-unavailable` із назвою файла (спека: «файл задач не читається»).
-            broken = spaces.unreadable_task_files(spaces.read_registry())
-            if broken:
-                raise SpaceUnavailable(broken[0])
-            self._space_error(404, 'unknown-task', 'task not found')
-            return
-        spaces.set_request_space(sp['id'])
-        cfg = load_tasks()
-        if tid not in cfg.get('tasks', {}):         # вилучили між `find_task` і читанням
-            self._space_error(404, 'unknown-task', 'task not found')
+        cfg = self._find_task_cfg(tid)
+        if cfg is None:
             return
         cfg['tasks'][tid]['tags'] = tags
         save_tasks(cfg)
         _registry_push(tid)
         self._send_json({'ok': True, 'tags': tags})
+
+    def _task_rename(self, payload):
+        """Етап Д: нова назва задачі `{id, title}` → `{ok, id, title}`. Лише `title`: id, тека й вкладка (вона показує id)
+        лишаються. Назва — `strip`, до 200 символів (як `task-new`); порожня чи не рядок — 400 `bad-title` без читання диска.
+        Збій запису — 500 `task-rename-failed`. Після запису — `_registry_push`: у ЛІГИ назва — спільне поле реєстру, як мітки."""
+        raw = payload.get('title')
+        title = raw.strip()[:200] if isinstance(raw, str) else ''
+        if not title:
+            self._space_error(400, 'bad-title', 'title must be a non-empty string')
+            return
+        tid = payload.get('id', '')
+        with TASK_CRUD_LOCK:
+            cfg = self._find_task_cfg(tid)
+            if cfg is None:
+                return
+            cfg['tasks'][tid]['title'] = title
+            try:
+                save_tasks(cfg)
+            except OSError as e:
+                self._space_error(500, 'task-rename-failed', str(e)[:300])
+                return
+        _registry_push(tid)
+        self._send_json({'ok': True, 'id': tid, 'title': title})
+
+    def _task_delete(self, payload):
+        """Етап Д: задача → кошик простору (`task_trash.delete`): `{id}` → `{ok, id, current, trash:{id, title, at}}`.
+        Тека переїжджає ДО запису `tasks.json`; збій запису вертає її (`undo`) і відповідає 500 `task-delete-failed`.
+        Видалена поточна — `current` переходить на найсвіжішу іншу (його й віддаємо: екран оновлює «відкриту зараз»).
+        Живий запис кошика з тим самим id — 409 `task-in-trash`."""
+        tid = payload.get('id', '')
+        with TASK_CRUD_LOCK:
+            cfg = self._find_task_cfg(tid)
+            if cfg is None:
+                return
+            order = [k for k, _ in tasks_by_recent(cfg)]
+            try:
+                rec, undo = task_trash.delete(cfg, tid, task_trash.utcnow(), order)
+            except task_trash.TrashError as e:
+                self._space_error(409 if e.code == 'task-in-trash' else 400, e.code, str(e))
+                return
+            except OSError as e:
+                self._space_error(500, 'task-delete-failed', str(e)[:300])
+                return
+            try:
+                save_tasks(cfg)
+            except OSError as e:
+                with contextlib.suppress(OSError):
+                    undo()
+                self._space_error(500, 'task-delete-failed', str(e)[:300])
+                return
+        self._send_json({'ok': True, 'id': tid, 'current': cfg.get('current'),
+                         'trash': {'id': tid, 'title': rec['entry'].get('title', tid), 'at': rec['at']}})
+
+    def _task_restore(self, payload):
+        """Етап Д: запис кошика простору `space` → назад: `{id, space}` → `{ok, id}`. Id зайнятий у БУДЬ-ЯКОМУ просторі —
+        409 `task-exists` (дубль між просторами, `AmbiguousTask`, теж «зайнято»); вихідна тека вже є — 409 `task-dir-exists`
+        (нічого не рухаємо); збій запису — тека назад у кошик, 500 `task-restore-failed`. `current` не змінюється."""
+        tid = payload.get('id', '')
+        with TASK_CRUD_LOCK:
+            if self._payload_space(payload) is None:
+                return
+            cfg = load_tasks()
+            if not task_trash.in_trash(cfg, tid):
+                self._space_error(404, 'not-in-trash', 'task is not in the trash')
+                return
+            try:
+                taken = spaces.find_task(tid) is not None
+            except spaces.AmbiguousTask:
+                taken = True
+            if taken:
+                self._space_error(409, 'task-exists', 'a task with this id already exists')
+                return
+            try:
+                _entry, undo = task_trash.restore(cfg, tid)
+            except task_trash.TrashError as e:
+                self._space_error(409 if e.code in ('task-dir-exists', 'task-exists') else 500, e.code, str(e))
+                return
+            except OSError as e:
+                self._space_error(500, 'task-restore-failed', str(e)[:300])
+                return
+            try:
+                save_tasks(cfg)
+            except OSError as e:
+                with contextlib.suppress(OSError):
+                    undo()
+                self._space_error(500, 'task-restore-failed', str(e)[:300])
+                return
+        self._send_json({'ok': True, 'id': tid})
+
+    def _task_purge(self, payload):
+        """Етап Д: знищити запис кошика `{id, space}` → `{ok, id}`. Тека стирається ПЕРШОЮ; збій стирання — 500
+        `task-purge-failed`, запис лишається (повтор можливий). Збій запису надгробка — теж 500 `task-purge-failed`: тека вже
+        зникла, запис лишається, повторне знищення лише допише надгробок. Надгробок не дає `registry.py pull` воскресити задачу."""
+        tid = payload.get('id', '')
+        with TASK_CRUD_LOCK:
+            if self._payload_space(payload) is None:
+                return
+            cfg = load_tasks()
+            try:
+                task_trash.purge(cfg, tid, task_trash.utcnow())
+            except task_trash.TrashError as e:
+                self._space_error(404 if e.code == 'not-in-trash' else 500, e.code, str(e))
+                return
+            except OSError as e:
+                self._space_error(500, 'task-purge-failed', str(e)[:300])
+                return
+            try:
+                save_tasks(cfg)
+            except OSError as e:
+                self._space_error(500, 'task-purge-failed', str(e)[:300])
+                return
+        self._send_json({'ok': True, 'id': tid})
 
     def _adopt_source(self, sp, tid, src, payload, tdir):
         """Перевірки `from` ДО будь-якого запису (спека 3b, «Сервер: задача з наявної теки»): `AdoptPlan(real, files,
