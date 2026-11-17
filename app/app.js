@@ -3517,8 +3517,22 @@ async function deleteTask(id) {
   loadHome();      // свіжі дані (кадр кошика, current)
 }
 
-/** Повернути задачу з кошика (тост «Повернути»): вкладка — на те саме місце, екран перечитується. */
-async function restoreTask(id, { spaceId, tabRec = null, at = -1, title = id } = {}) {
+/** Фокус після того, як картка зникла з вигляду кошика: наступна картка кошика (чи попередня, якщо була остання), інакше чип
+ *  «Кошик», інакше пошук. Чіпаємо лише коли фокус нікуди не пішов (кнопка зникла разом із карткою). */
+function focusAfterTrash(order, id) {
+  const a = document.activeElement;
+  if (a && a !== document.body && a.isConnected) return;
+  const left = [...(homeNode()?.querySelectorAll('.th-card--trash') || [])];
+  const i = order.indexOf(id);
+  const next = order.slice(i + 1).concat(order.slice(0, i).reverse()).map((k) => left.find((c) => c.dataset.id === k)).find(Boolean);
+  (next ?? homeNode()?.querySelector('[data-th="trash"]') ?? homeNode()?.querySelector('#th-q'))?.focus({ preventScroll: true });
+}
+const trashOrder = () => homeCards().filter((c) => c.dataset.trash === '1').map((c) => c.dataset.id);
+
+/** Повернути задачу з кошика (тост «Повернути» чи картка кошика): вкладка — на те саме місце, екран перечитується.
+ *  `fromTrash` — виклик із вигляду кошика: фокус іде на сусідню картку кошика, а не на повернуту. */
+async function restoreTask(id, { spaceId, tabRec = null, at = -1, title = id, fromTrash = false } = {}) {
+  const order = fromTrash ? trashOrder() : [];
   try { await postForm('/api/task-restore', { id, space: spaceId }); }
   catch (e) {
     const key = e.code === 'task-dir-exists' ? 'taskRestoreDirExists' : e.code === 'task-exists' ? 'taskRestoreIdTaken' : null;
@@ -3534,10 +3548,29 @@ async function restoreTask(id, { spaceId, tabRec = null, at = -1, title = id } =
   if (homeReady()) {
     homeData = { ...homeData, trash: (homeData.trash || []).filter((y) => y.id !== id) };
     if (!homeData.trash.length) homeEdit = { ...homeEdit, trash: false };
+    if (fromTrash) { paintHomeLower(); focusAfterTrash(order, id); }
   }
   await loadHome();
-  if (homeOpen) homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  if (homeOpen && !fromTrash) homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
   if (!tabRec) toast(t('taskRestored', title));
+}
+
+/** Видалити задачу з кошика назавжди (питання в картці вже підтверджено): тека йде з диска, лишається надгробок. */
+async function purgeFromTrash(id) {
+  const spaceId = homeData?.space?.id;
+  const row = (homeData?.trash || []).find((y) => y.id === id);
+  const order = trashOrder();
+  homeEdit = { ...homeEdit, ask: null };
+  try { await postForm('/api/task-purge', { id, space: spaceId }); }
+  catch (e) { paintHomeLower(); toast(t('errFailed', requestErrText(e))); return; }
+  markHomeMutated();
+  if (homeReady()) {
+    homeData = { ...homeData, trash: (homeData.trash || []).filter((y) => y.id !== id) };
+    if (!homeData.trash.length) homeEdit = { ...homeEdit, trash: false };
+    paintHomeLower();
+    focusAfterTrash(order, id);
+  }
+  toast(t('taskPurged', row?.title ?? id));
 }
 
 /**
@@ -3785,8 +3818,22 @@ function wireHome(el) {
       case 'rename': startRenameCard(b.dataset.id); break;
       case 'delete': askDeleteCard(b.dataset.id); break;
       case 'askno': cancelAsk(); break;
-      /* «Видалити назавжди» з кошика (`kind: 'purge'`) — Task 9; тут лише звичайне видалення. */
-      case 'askyes': if (homeEdit.ask?.kind === 'del' && homeEdit.ask.id === b.dataset.id) deleteTask(b.dataset.id); break;
+      case 'askyes':
+        if (homeEdit.ask?.id !== b.dataset.id) break;
+        if (homeEdit.ask.kind === 'del') deleteTask(b.dataset.id);
+        else if (homeEdit.ask.kind === 'purge') purgeFromTrash(b.dataset.id);
+        break;
+      /* Кошик (етап Д): чип вмикає/вимикає вигляд; форма «+», перейменування й питання в кошику не мають місця. Не зберігається. */
+      case 'trash':
+        homeEdit = { ...homeEdit, trash: !homeEdit.trash, newForm: false, ask: null, ren: null };
+        newFormEl = null; newFormCtx = null;
+        paintHomeLower();
+        break;
+      case 'restore':
+        restoreTask(b.dataset.id, { spaceId: homeData?.space?.id, fromTrash: true,
+          title: (homeData?.trash || []).find((y) => y.id === b.dataset.id)?.title ?? b.dataset.id });
+        break;
+      case 'purge': askDeleteCard(b.dataset.id, 'purge'); break;
       case 'tab':
         /* Порівнюємо з вкладкою, що справді малюється (`effectiveTab`): у просторі без
            «Команди» збережена `team` читається як `mine`, і клік по єдиній вкладці
@@ -3801,7 +3848,7 @@ function wireHome(el) {
       case 'conn': enterConnections(); break;
       case 'spacenew': openWizard(); break;
       case 'spaceopen': openWizard({ folderFirst: true }); break;
-      case 'status': homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
+      case 'status': homeEdit = { ...homeEdit, trash: false }; homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
       case 'tag': case 'designer': {
         const set = b.dataset.th === 'tag' ? homeUi.tags : homeUi.designers;
         if (!set.delete(v)) set.add(v);

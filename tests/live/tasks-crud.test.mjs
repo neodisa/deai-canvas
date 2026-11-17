@@ -600,3 +600,132 @@ test("видалення не вдалось (сервер 500, простір �
   assert.ok(readTasks(file).y, "tasks.json без задачі");
   assert.equal(await page.locator('#cv-toast [data-act="undo"]').count(), 0, "тост збою з «Повернути»");
 });
+
+/* ═══════════════════════ Task 9: вигляд кошика — повернути, видалити назавжди ═══════════════════════ */
+
+const TRASH_CARD = (id) => `#tasks-home .th-card--trash[data-id="${id}"]`;
+const trashChip = '#tasks-home [data-th="trash"]';
+/** Видалити задачу з екрана «Задачі» клавіатурою й дочекатися, що картки нема. */
+async function trashIt(page, id) {
+  await page.focus(CARD(id));
+  await page.keyboard.press("Delete");
+  await page.click(`${CARD(id)} .cfm-yes`);
+  await page.waitForFunction((k) => !document.querySelector(`#tasks-home .th-card[data-id="${k}"]`), id);
+}
+const inTrashView = (page) => page.evaluate(() => !!document.querySelector("#tasks-home .th-card--trash"));
+
+test("кошик: чип «Кошик · N» зʼявляється після видалення; вигляд — знебарвлені картки, «Повернути», без «+» і міток", async (t) => {
+  const { page } = await studio(t, 2400);
+  assert.equal(await page.locator(trashChip).count(), 0, "чип є при порожньому кошику");
+  await trashIt(page, "y");
+  await page.waitForSelector(trashChip);
+  assert.equal(await page.getAttribute(trashChip, "aria-pressed"), "false");
+  await page.click(trashChip);
+  await page.waitForSelector(TRASH_CARD("y"));
+  assert.equal(await page.getAttribute(trashChip, "aria-pressed"), "true");
+  assert.equal(await page.locator(`${TRASH_CARD("y")} [data-th="restore"]`).count(), 1, "нема «Повернути»");
+  assert.equal(await page.locator(`${TRASH_CARD("y")} [data-th="menu"][data-trash="1"]`).count(), 1, "нема «⋯»");
+  assert.equal(await page.locator('#tasks-home [data-th="newtask"]').count(), 0, "«+» у кошику");
+  assert.equal(await page.locator('#tasks-home [data-th="tag"], #tasks-home [data-th="designer"]').count(), 0, "мітки в кошику");
+  assert.equal(await page.locator('#tasks-home .th-card:not(.th-card--trash)').count(), 0, "живі картки поруч із кошиком");
+  /* Enter на картці кошика нічого не відкриває; Delete — нічого не питає. */
+  await page.focus(TRASH_CARD("y"));
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Delete");
+  await page.waitForTimeout(200);
+  assert.equal(await homeHidden(page), false, "Enter відкрив картку кошика");
+  assert.equal(await page.locator(".th-card--ask").count(), 0, "Delete спитав про видалення з кошика");
+  /* Повторний клік по чипу виходить із кошика. */
+  await page.click(trashChip);
+  await page.waitForSelector(CARD("x"));
+  assert.equal(await inTrashView(page), false);
+});
+
+test("кошик → «Повернути»: задача в «Моїх», тека на місці; порожній кошик — вигляд вимкнено, чипа нема; наступне видалення не вертає в кошик", async (t) => {
+  const { page, file, url } = await studio(t, 2500);
+  const dir = readTasks(file).y.dir;
+  await trashIt(page, "y");
+  await page.waitForSelector(trashChip);
+  await page.click(trashChip);
+  await page.waitForSelector(`${TRASH_CARD("y")} [data-th="restore"]`);
+  await page.click(`${TRASH_CARD("y")} [data-th="restore"]`);
+  await page.waitForSelector(`${CARD("y")}:not(.th-card--trash)`);
+  assert.equal(await page.locator(trashChip).count(), 0, "чип лишився при порожньому кошику");
+  assert.equal(await inTrashView(page), false, "вигляд кошика лишився");
+  assert.ok(readTasks(file).y, "tasks.json без задачі");
+  assert.ok(existsSync(dir), "теки нема");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "th-q", "фокус не на пошуку");
+  /* Вигляд справді вимкнено (а не лише прихований порожнім кошиком): нове видалення показує «Мої», а не кошик. */
+  await trashIt(page, "x");
+  await page.waitForSelector(trashChip);
+  assert.equal(await inTrashView(page), false, "кошик ожив сам");
+  assert.equal(await page.getAttribute(trashChip, "aria-pressed"), "false");
+  assert.ok(await page.locator(CARD("y")).count(), "«Мої» не показано");
+  assert.ok(url);
+});
+
+test("кошик: «Повернути» з двома в кошику — фокус на наступній картці кошика; меню «Повернути» теж працює", async (t) => {
+  const { page, file } = await studio(t, 2600);
+  await trashIt(page, "x");
+  await trashIt(page, "y");
+  await page.waitForSelector(trashChip);
+  await page.click(trashChip);
+  await page.waitForSelector(TRASH_CARD("x"));
+  await page.waitForSelector(TRASH_CARD("y"));
+  const first = await page.evaluate(() => document.querySelector("#tasks-home .th-card--trash").dataset.id);
+  const second = first === "x" ? "y" : "x";
+  await page.click(`${TRASH_CARD(first)} [data-th="menu"]`);
+  await page.click('#th-menu [data-th="restore"]');
+  await page.waitForFunction((id) => !document.querySelector(`#tasks-home .th-card--trash[data-id="${id}"]`), first);
+  assert.ok(readTasks(file)[first], "задача не повернута");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id), second, "фокус не на сусідній картці кошика");
+  assert.equal(await inTrashView(page), true, "вигляд кошика зник при непорожньому кошику");
+});
+
+test("кошик → меню → «Видалити назавжди»: питання в картці; Esc скасовує; «Видалити назавжди» → теки нема, tasks.json.trash[id] = {purged}", async (t) => {
+  const { page, file } = await studio(t, 2700);
+  await trashIt(page, "y");
+  /* Тека кошика спільна для всіх прогонів (поруч із задачею), тож дивимось саме на теку цього запису. */
+  const gone = JSON.parse(readFileSync(file, "utf8")).trash.y.trashDir;
+  assert.ok(existsSync(gone), "теки кошика нема одразу після видалення");
+  await page.waitForSelector(trashChip);
+  await page.click(trashChip);
+  await page.click(`${TRASH_CARD("y")} [data-th="menu"]`);
+  await page.click('#th-menu [data-th="purge"]');
+  await page.waitForSelector(`${TRASH_CARD("y")}.th-card--ask .cfm-yes`);
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cfm-no")), true, "фокус не на «Скасувати»");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector(".th-card--ask"));
+  assert.ok(existsSync(gone), "Esc знищив теку");
+  /* Shift+F10 на картці кошика відкриває меню кошика. */
+  await page.focus(TRASH_CARD("y"));
+  await page.keyboard.press("Shift+F10");
+  await page.waitForSelector('#th-menu [data-th="purge"]');
+  await page.keyboard.press("Escape");
+  await page.click(`${TRASH_CARD("y")} [data-th="menu"]`);
+  await page.click('#th-menu [data-th="purge"]');
+  await page.click(`${TRASH_CARD("y")} .cfm-yes`);
+  await page.waitForFunction(() => !document.querySelector("#tasks-home .th-card--trash"));
+  assert.equal(existsSync(gone), false, "теку не знищено");
+  const rec = JSON.parse(readFileSync(file, "utf8")).trash?.y;
+  assert.ok(rec && "purged" in rec, "надгробка нема");
+  assert.equal(await page.locator(trashChip).count(), 0, "чип лишився");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "th-q", "фокус не на пошуку");
+  await page.waitForSelector('#cv-toast.show');
+  assert.match(await page.textContent("#cv-toast"), /назавжди/);
+});
+
+test("кошик: клік по статусному чипу виходить із вигляду кошика; відкриття кошика закриває форму «+»", async (t) => {
+  const { page } = await studio(t, 2800);
+  await trashIt(page, "y");
+  await page.waitForSelector(trashChip);
+  await page.click('#th-grid [data-th="newtask"]');
+  await page.waitForSelector('#th-new-slot form[data-form="task"]');
+  await page.click(trashChip);
+  await page.waitForSelector(TRASH_CARD("y"));
+  assert.equal(await page.locator('form[data-form="task"]').count(), 0, "форма пережила кошик");
+  await page.click('#tasks-home [data-th="status"][data-v="all"]');
+  await page.waitForSelector(CARD("x"));
+  assert.equal(await inTrashView(page), false, "лишилась у кошику");
+  assert.equal(await page.getAttribute(trashChip, "aria-pressed"), "false");
+});
