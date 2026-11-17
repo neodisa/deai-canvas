@@ -31,7 +31,7 @@ import { barModel } from './bar-model.js';
 import { ISLAND_SHELL, applyBadge, badgeFor, islandParts } from './claude-status.js';
 import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.js';
 import { barHTML } from './shell-bar.js';
-import { cleanTitle, readHomeUi, relTime, taskKey } from './tasks-model.js';
+import { cleanTitle, readHomeUi, relTime, retitle, taskKey } from './tasks-model.js';
 import { taskMenuHTML } from './task-menu.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, thumbBrokenHTML } from './tasks-home.js';
 import {
@@ -3447,7 +3447,7 @@ async function commitRenameCard(save) {
   if (!save || !row || !next || next === cleanTitle(row)) { paintHomeLower(); focusCard(); return; }
   renSaving = true;
   try {
-    const r = await postForm('/api/task-rename', { id, title: next });
+    const r = await postForm('/api/task-rename', { id, title: retitle(row, next) });
     applyTaskTitle(id, r.title);
   } catch (e) { toast(t('errFailed', requestErrText(e))); }
   finally { renSaving = false; }
@@ -3460,17 +3460,29 @@ function applyTaskTitle(id, title) {
   pruneRenamed(renamedAt, performance.now());
   renamedAt.set(id, { title, at: performance.now() });
   if (homeReady()) homeData = { ...homeData, mine: homeData.mine.map((y) => (y.id === id ? { ...y, title } : y)) };
-  if (tabs.some((x) => x.id === id)) { tabs = tabs.map((x) => (x.id === id ? { ...x, title } : x)); saveTabs(); paintTabs(); }
+  /* Вкладка, як і при створенні (`rememberTab`), несе назву БЕЗ ключа Jira: ключ показує окремий значок. */
+  if (tabs.some((x) => x.id === id)) { tabs = tabs.map((x) => (x.id === id ? { ...x, title: cleanTitle({ id, jira: x.jira, title }) } : x)); saveTabs(); paintTabs(); }
   /* Лише справжня `curTask`: після видалення поточної вона ще вказує на видалену задачу (до `render()`), а `currentTaskId` уже
      новий — запис назви в неї отруїв би чужий обʼєкт. Смугу малюємо лише тоді, коли обʼєкт справді про цю задачу. */
   if (curTask?.id === id) { curTask = { ...curTask, title }; paintBar(); }
+  if (curTaskList?.tasks) curTaskList = { ...curTaskList, tasks: curTaskList.tasks.map((y) => (y.id === id ? { ...y, title } : y)) };
+}
+
+/** Запис задачі з ключем Jira й повною назвою: рядок екрана, перелік поточного простору, поточна задача; вкладка — крайній випадок
+ *  (її назва вже без ключа, тож ключ у ній не відновити). */
+function taskForRename(id) {
+  const tab = tabs.find((x) => x.id === id);
+  return (homeData?.mine || []).find((y) => y.id === id)
+    || (curTaskList?.tasks || []).find((y) => y.id === id)
+    || (curTask?.id === id ? curTask : null)
+    || { id, jira: tab?.jira ?? null, title: tab?.title ?? '' };
 }
 
 /** Етап Д: «Перейменувати задачу» — поповер `askForm` під вкладкою задачі `id`; нема вкладки (чи вона схована) — модальна картка. */
 async function renameTaskFromTab(id) {
   if (!id) return;
-  const tab = tabs.find((x) => x.id === id);
-  const title = tab?.title ?? (curTask?.id === id ? curTask.title : '') ?? '';
+  const task = taskForRename(id);
+  const title = cleanTitle(task);
   const anchor = () => tabsEl.querySelector(`.tab-main[data-val="${CSS.escape(id)}"]`);
   await askForm(() => taskNameFormHTML({ title }), {
     anchor: anchor(), place: 'below',
@@ -3479,7 +3491,7 @@ async function renameTaskFromTab(id) {
       const next = String(vals.title ?? '').trim();
       if (!next) { ctl.focus('title'); return t('titleRequired'); }
       if (next === title) return undefined;
-      try { const r = await postForm('/api/task-rename', { id, title: next }); applyTaskTitle(id, r.title); }
+      try { const r = await postForm('/api/task-rename', { id, title: retitle(task, next) }); applyTaskTitle(id, r.title); }
       catch (e) { return t('errFailed', requestErrText(e)); }
       if (homeOpen) paintHomeLower();
       return undefined;
@@ -3518,6 +3530,16 @@ function askDeleteCard(id, kind = 'del') {
   homeEdit = { ...homeEdit, ask: { id, kind, claude: kind === 'del' && claudeWorkingOn(row) }, ren: null };
   paintHomeLower();
   homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"] .cfm-no`)?.focus({ preventScroll: true });
+  /* Вкладок нема — `pollClaudeAll` не крутиться й `claudeAll` порожній: питання показано одразу зі звичайним текстом, а один
+     запит стану дочитується в тлі й, коли Claude справді працює, міняє текст на «Claude працює». */
+  if (kind === 'del' && !claudeAll) {
+    api('/api/claude-statuses').then((r) => {
+      const all = r && r.tasks && typeof r.tasks === 'object' ? r.tasks : null;
+      if (!all || homeEdit.ask?.id !== id || homeEdit.ask.kind !== 'del' || homeEdit.ask.claude) return;
+      const v = all[row.id] || (row.jira && all[row.jira]);
+      if (v && v.state === 'working') { homeEdit = { ...homeEdit, ask: { ...homeEdit.ask, claude: true } }; paintHomeLower(); }
+    }).catch(() => {});
+  }
 }
 
 /** Зняти питання. `refocus` — вернути фокус на картку (Esc, «Скасувати»); клік повз його не просить. */
@@ -3532,6 +3554,16 @@ function cancelAsk(refocus = true) {
 /** id, видалення яких у дорозі: другий клік по «Видалити» (картка до відповіді не перемальована) запиту не дублює. */
 const deletingIds = new Set();
 
+/** Помилки кошика, зрозумілі людині: задачі вже нема (її прибрали деінде) — екран наздоганяє; простору нема — окремий текст.
+ *  Повертає `true`, коли помилку показано (виклик далі нічого не каже). */
+function trashErrToast(e) {
+  if (e?.code === 'not-in-trash' || e?.code === 'unknown-task') {
+    toast(t('taskGone')); markHomeMutated(); loadHome(); return true;
+  }
+  if (e?.code === 'unknown-space') { toast(t('taskErrSpaceGone')); return true; }
+  return false;
+}
+
 /** Видалити задачу в кошик простору й запропонувати «Повернути» тостом. Вкладка й її місце запамʼятовуються для повернення. */
 async function deleteTask(id) {
   const row = (homeData?.mine || []).find((y) => y.id === id);
@@ -3543,7 +3575,7 @@ async function deleteTask(id) {
   deletingIds.add(id);
   let r;
   try { r = await postForm('/api/task-delete', { id }); }
-  catch (e) { deletingIds.delete(id); paintHomeLower(); toast(t('errFailed', requestErrText(e))); return; }
+  catch (e) { deletingIds.delete(id); paintHomeLower(); if (!trashErrToast(e)) toast(t('errFailed', requestErrText(e))); return; }
   deletingIds.delete(id);
   markHomeMutated();
   const at = tabs.findIndex((x) => x.id === id);
@@ -3605,6 +3637,7 @@ async function restoreTask(id, { spaceId, tabRec = null, at = -1, title = id, fr
   try { await postForm('/api/task-restore', { id, space: spaceId }); }
   catch (e) {
     restoringIds.delete(id);
+    if (trashErrToast(e)) return;
     const key = e.code === 'task-dir-exists' ? 'taskRestoreDirExists' : e.code === 'task-exists' ? 'taskRestoreIdTaken' : null;
     toast(key ? t(key) : t('errFailed', requestErrText(e)));
     return;
@@ -3639,7 +3672,7 @@ async function purgeFromTrash(id) {
   homeEdit = { ...homeEdit, ask: null };
   purgingIds.add(id);
   try { await postForm('/api/task-purge', { id, space: spaceId }); }
-  catch (e) { purgingIds.delete(id); paintHomeLower(); toast(t('errFailed', requestErrText(e))); return; }
+  catch (e) { purgingIds.delete(id); paintHomeLower(); if (!trashErrToast(e)) toast(t('errFailed', requestErrText(e))); return; }
   purgingIds.delete(id);
   markHomeMutated();
   if (homeOpen && homeReady() && homeData?.space?.id === spaceId) {
@@ -3693,6 +3726,11 @@ async function loadHome(refresh = false, { spaces = true } = {}) {
     if (gen === taskSwitchGen) currentTaskId = r.current ?? currentTaskId;
     else r.current = currentTaskId;
     homeData = r;
+    /* Картка, на яку вказувало питання чи поле назви, зникла (задачу прибрали деінде): стан без картки — привид, що перемальовка
+       намалює порожнім. Питання «назавжди» шукаємо в кошику, решту — серед «моїх». */
+    const hasRow = (list, id) => (list || []).some((y) => y.id === id);
+    if (homeEdit.ask && !hasRow(homeEdit.ask.kind === 'purge' ? r.trash : r.mine, homeEdit.ask.id)) homeEdit = { ...homeEdit, ask: null };
+    if (homeEdit.ren && !hasRow(r.mine, homeEdit.ren)) homeEdit = { ...homeEdit, ren: null };
     /* Кошик спорожнили деінде (інше вікно, агент): вигляд кошика без кошика — пастка, наступне видалення вмить перекинуло б сітку в нього. */
     if (homeEdit.trash && !(r.trash || []).length) homeEdit = { ...homeEdit, trash: false };
   } catch (e) {
@@ -3736,6 +3774,9 @@ function enterHome({ spaces = true, page } = {}) {
   /* Секрети кроку 3 живуть лише у `.value` полів, а `reset()` DOM не чистить: розмітка майстра зникає разом зі
      сторінкою — ДО перемальовки нижче (і до будь-якого await). */
   if (homePage === 'wiz' && next !== 'wiz') homeNode()?.querySelector('.wz')?.remove();
+  /* Меню задачі живе лише на «Задачах»: `paintHome` майстра й «Підключень» його не чіпає, тож закриваємо тут, на єдиному
+     шляху зміни сторінки. */
+  closeTaskMenu(false);
   /* Свіжий вхід на сторінку (з-поза оверлею чи з іншої сторінки) — зі «вантажу», а не з чужого списку; повторний
      вхід на ту саму (`afterSpaceChange`) лишає показане, поки нове летить. */
   const fresh = !was || next !== homePage;

@@ -35,7 +35,7 @@ function titleEnv(over = {}) {
     log, markHomeMutated: () => {}, homeReady: () => false, homeData: null, tabs: [], saveTabs: () => {},
     paintTabs: () => { log.tabs += 1; }, paintBar: () => { log.bar += 1; },
     renamedAt: new Map(), pruneRenamed: () => {}, performance: { now: () => 1000 },
-    curTask: null, currentTaskId: null, ...over,
+    curTask: null, curTaskList: null, currentTaskId: null, ...over,
   };
 }
 

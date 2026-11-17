@@ -43,6 +43,21 @@ export function cleanTitle(t) {
   return stripped.trim() ? stripped : base;
 }
 
+/**
+ * Повна назва для запису після перейменування. Людина бачить і править `cleanTitle` (без ключа Jira), а в сховищі
+ * (tasks.json, спільний реєстр ЛІГИ) назва мусить лишити свій ключ: якщо збережена назва починалась із `<jira> <SEP>`,
+ * вертаємо рівно той самий початок перед новим текстом. Порожній `next` — справа викликача (обидва відхиляють його раніше).
+ */
+export function retitle(t, next) {
+  const text = String(next ?? "").trim();
+  const raw = t.title || t.id;
+  if (t.jira && t.title) {
+    const clean = cleanTitle(t);
+    if (clean !== raw) return raw.slice(0, raw.length - clean.length) + text;
+  }
+  return text;
+}
+
 /** Стійкий ключ задачі: Jira, а де її нема — id (`boss-interface`). */
 export function taskKey(t) {
   return t.jira || t.id;

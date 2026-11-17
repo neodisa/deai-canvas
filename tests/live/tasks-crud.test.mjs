@@ -24,12 +24,12 @@ test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
 /** Простір «P» без дашборда з двома задачами x і y; екран «Задачі» відкрито. */
-async function studio(t, offset) {
+async function studio(t, offset, xOver = {}) {
   const X = taskFixture({ html: () => PAGE("X"), pages: ["holovna"] });
   const Y = taskFixture({ html: () => PAGE("Y"), pages: ["holovna"] });
   const server = await startServer(null, {
     portBase: PORT_BASE + offset,
-    spaces: [{ name: "P", id: "p", color: "space-3", tasks: { x: { dir: X.dir, title: "X" }, y: { dir: Y.dir, title: "Y" } } }],
+    spaces: [{ name: "P", id: "p", color: "space-3", tasks: { x: { dir: X.dir, title: "X", ...xOver }, y: { dir: Y.dir, title: "Y" } } }],
   });
   t.after(() => stop(server.child));
   const context = await browser.newContext({ viewport: VIEW });
@@ -1041,4 +1041,99 @@ test("перейменування: ⌘K «Перейменувати задач
   await page.fill("#palq", "Перейменувати задачу");
   await page.waitForTimeout(150);
   assert.equal(await page.locator('.pal-it:has-text("Перейменувати задачу")').count(), 0);
+});
+
+/* ── Фінальні правки 0.30.0 ───────────────────────────────────────────── */
+
+test("перейменування на картці береже ключ Jira: «KEY-1 · Old» → «New» на картці, «KEY-1 · New» у tasks.json", async (t) => {
+  const { page, file } = await studio(t, 4300, { jira: "KEY-1", title: "KEY-1 · Old" });
+  await page.waitForLoadState("networkidle");
+  await page.focus(CARD("x"));
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#th-ren");
+  assert.equal(await page.inputValue("#th-ren"), "Old", "поле не з назвою без ключа");
+  await page.fill("#th-ren", "New");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector('#tasks-home .th-card[data-id="x"] .th-ttl')?.textContent.trim() === "New");
+  assert.equal(readTasks(file).x.title, "KEY-1 · New", "ключ Jira зник із tasks.json");
+});
+
+test("перейменування з вкладки береже ключ Jira: у полі «Old», у tasks.json «KEY-1 · New»", async (t) => {
+  const { page, file } = await studio(t, 4400, { jira: "KEY-1", title: "KEY-1 · Old" });
+  await page.click(CARD("x"));
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await page.waitForSelector('#tabs .tab-main[data-val="x"]');
+  await page.waitForLoadState("networkidle");
+  await page.keyboard.press("F2");
+  await page.waitForSelector("#tn-title");
+  assert.equal(await page.inputValue("#tn-title"), "Old", "у полі не назва без ключа");
+  await page.fill("#tn-title", "New");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
+  assert.equal(readTasks(file).x.title, "KEY-1 · New", "ключ Jira зник із tasks.json");
+});
+
+test("кошик: запис зник із tasks.json за спиною екрана — «Видалити назавжди» дає тост «Задачі вже немає», картка зникає після перечитування", async (t) => {
+  const { page, file } = await studio(t, 4500);
+  await trashIt(page, "y");
+  await page.click(trashChip);
+  await page.waitForSelector(TRASH_CARD("y"));
+  const db = JSON.parse(readFileSync(file, "utf8"));
+  delete db.trash.y;
+  writeFileSync(file, JSON.stringify(db));
+  await page.click(`${TRASH_CARD("y")} [data-th="menu"]`);
+  await page.click('#th-menu [data-th="purge"]');
+  await page.click(`${TRASH_CARD("y")} .cfm-yes`);
+  await page.waitForFunction(() => /Задачі вже немає/.test(document.getElementById("cv-toast")?.textContent || ""), null, { timeout: 5000 })
+    .catch(async () => assert.fail(`тост не перекладено: ${await page.textContent("#cv-toast")}`));
+  assert.doesNotMatch(await page.textContent("#cv-toast"), /not in the trash/, "тост із сирим англійським текстом");
+  await page.waitForFunction(() => !document.querySelector("#tasks-home .th-card--trash"));
+});
+
+test("питання «Claude працює» без відкритих вкладок: Delete → варіант із Claude", async (t) => {
+  const { page } = await studio(t, 4600);
+  /* Поточна задача має вкладку від початку: закриваємо її, щоб `claudeAll` не опитувався зовсім. */
+  for (const id of await tabIds(page)) await page.click(`#tabs .tab-x[data-val="${id}"]`);
+  await page.waitForFunction(() => !document.querySelector("#tabs .tab-main[data-val]"));
+  assert.equal(await homeHidden(page), false, "екран закрився разом із вкладкою");
+  const ok = await page.evaluate(async () => (await fetch("/api/claude-status", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task: "y", phase: "design", status: "in_progress", note: "", session: "live" }) })).ok);
+  assert.ok(ok, "удар не прийнято");
+  await page.focus(CARD("y"));
+  await page.keyboard.press("Delete");
+  await page.waitForSelector(`${CARD("y")} .cfm`);
+  await page.waitForFunction((sel) => /Claude працює/.test(document.querySelector(sel)?.textContent || ""), `${CARD("y")} .cfm-t`);
+});
+
+test("меню задачі не переживає сторінку: відкрите меню зникає, коли ⌘K веде на «Налаштування»", async (t) => {
+  const { page } = await studio(t, 4700);
+  await page.click(`${CARD("x")} [data-th="menu"]`);
+  await page.waitForSelector("#th-menu");
+  await page.keyboard.press("Control+k");
+  await page.fill("#palq", "Налаштування");
+  await page.waitForSelector('.pal-it:has-text("Налаштування")');
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector("#tasks-home")?.textContent.includes("Налаштування") && !document.querySelector("#th-grid"));
+  assert.equal(await page.locator("#th-menu").count(), 0, "меню задачі пережило перехід на іншу сторінку");
+});
+
+test("питання на картці, яку прибрали деінде: перечитування знімає його — коли задача зʼявиться знову, питання не воскресає", async (t) => {
+  const { page, file } = await studio(t, 4800);
+  await page.waitForLoadState("networkidle");
+  const before = readFileSync(file, "utf8");
+  await page.focus(CARD("y"));
+  await page.keyboard.press("Delete");
+  await page.waitForSelector(`${CARD("y")}.th-card--ask`);
+  const db = JSON.parse(before);
+  delete db.tasks.y;
+  writeFileSync(file, JSON.stringify(db));
+  await page.waitForTimeout(1000);                       // поріг між перечитуваннями з фокуса (800 мс)
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForFunction(() => !document.querySelector('#tasks-home .th-card[data-id="y"]'));
+  writeFileSync(file, before);                           // задача повернулась (інший агент, git pull)
+  await page.waitForTimeout(1000);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForSelector(CARD("y"));
+  await page.waitForLoadState("networkidle");
+  assert.equal(await page.locator(".th-card--ask").count(), 0, "питання про зниклу картку воскресло");
 });

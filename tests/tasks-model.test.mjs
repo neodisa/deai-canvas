@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  HOME_STATUSES, SORTS, cleanTitle, filterTasks, isDone, matches, readHomeUi, relTime, sortTasks, statusCounts, tagKey, taskKey,
+  HOME_STATUSES, SORTS, cleanTitle, filterTasks, isDone, matches, readHomeUi, relTime, retitle, sortTasks, statusCounts, tagKey, taskKey,
 } from "../app/tasks-model.js";
 
 /* Дані — зліпок форми з /api/tasks-overview: `mine[i]` має `opened`/`changed`
@@ -324,4 +324,29 @@ test("relTime: кожен ключ, який вона віддає, є в обо
 
 test("HOME_STATUSES — єдиний перелік статусів екрана: active, done, all", () => {
   assert.deepEqual(HOME_STATUSES, ["active", "done", "all"]);
+});
+
+/* ── retitle ──────────────────────────────────────────────────────────── */
+
+test("retitle: ключ Jira з голови збереженої назви вертається перед новим текстом", () => {
+  assert.equal(retitle({ id: "a", jira: "LIGA-5", title: "LIGA-5 · Foo" }, "Bar"), "LIGA-5 · Bar");
+});
+
+test("retitle: без префікса в назві — просто новий текст (обрізаний)", () => {
+  assert.equal(retitle({ id: "a", jira: "LIGA-5", title: "Foo" }, "  Bar "), "Bar");
+  assert.equal(retitle({ id: "a", title: "LIGA-5 · Foo" }, "Bar"), "Bar", "без jira префікс — частина назви");
+});
+
+test("retitle: інший роздільник із SEP береться той самий, що був", () => {
+  assert.equal(retitle({ id: "a", jira: "LIGA-5", title: "liga-5: Foo" }, "Bar"), "liga-5: Bar");
+  assert.equal(retitle({ id: "a", jira: "LIGA-5", title: "LIGA-5 — Foo" }, "Bar"), "LIGA-5 — Bar");
+});
+
+test("retitle: назва = один ключ (cleanTitle її не ріже) — просто новий текст", () => {
+  assert.equal(retitle({ id: "a", jira: "LIGA-5", title: "LIGA-5" }, "Bar"), "Bar");
+});
+
+test("retitle ∘ cleanTitle: показане після перейменування — саме набраний текст", () => {
+  const t0 = { id: "a", jira: "LIGA-5", title: "LIGA-5 · Foo" };
+  assert.equal(cleanTitle({ ...t0, title: retitle(t0, "Bar") }), "Bar");
 });
