@@ -18,19 +18,21 @@
  *   ui   = { tab: 'mine'|'team', q, sort, status: 'active'|'done'|'all',
  *            tags: Set (ключі міток, `tagKey`), designers: Set, now?: мс }
  *          (`cursorId` екрана тут НЕ читається: фокус повертає `app.js`.)
+ *          `ui.edit` (етап Д, 0.30.0) — тимчасовий стан екрана з `app.js`:
+ *          `{ newForm: bool, ren: id|null, ask: {id, kind: 'del'|'purge', claude: bool}|null, trash: bool }`.
+ *          Відсутній `ui.edit` = усе вимкнено (розмітка як без етапу Д, плюс картка «+» і «⋯»).
  *   data = відповідь `/api/tasks-overview` (`{current, mine, team:{rows, error,
  *          fetchedAt, rowsAt}|null, space:{name, capabilities}|null}`), АБО
  *          `null`/`{loading:true[, space]}` до відповіді, АБО `{failed: "причина"}`,
- *          коли запит не вдався.
+ *          коли запит не вдався. `data.trash` (етап Д) — рядки кошика `{id, title, jira, tags, at, thumb}`; нема → `[]`.
  *
  * Простори (Deai 1.0, етап 1): `data.space` дає заголовок «Задачі · <простір>».
  * Простір без дашборда команди (`capabilities.dashboard == null`) не має команди —
  * `team: null`: вкладки «Команда» нема, а збережена в UI вкладка `team`
  * читається як `mine` (`effectiveTab`; без цього екран малював би порожній
- * список під вкладкою, якої нема), і в голові зʼявляється «Нова задача» — єдиний
+ * список під вкладкою, якої нема), а першою клітинкою сітки стає картка «+» («Нова задача», етап Д) — єдиний
  * спосіб завести задачу не з реєстру Jira. Порожній такий простір показує не
- * «Нічого не знайдено» (фільтрувати нема що), а підказку з тією ж кнопкою й
- * порадою попросити агента.
+ * «Нічого не знайдено» (фільтрувати нема що), а під сіткою — пораду попросити агента.
  *
  * ⛔ Усе, що приходить із даних (назва, ключ, дизайнер, статус Jira, причина
  * помилки), іде в розмітку ЛИШЕ через `esc()`/`mark()`: рядки команди пише
@@ -41,6 +43,7 @@
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { getLang, t } from "./i18n.js";
+import { confirmHTML } from "./inline-confirm.js";
 import { mark } from "./shell-bar.js";
 import {
   SORTS, cleanTitle, filterTasks, relTime, sortTasks, statusCounts, tagKey, taskKey,
@@ -117,10 +120,16 @@ const withTab = (ui, data) => {
   return tab === ui.tab ? ui : { ...ui, tab };
 };
 
-/** «Нова задача»: кнопка в голові екрана й у порожньому стані (`data-th="newtask"`). */
-const newTaskBtn = () => `<button class="ctl ctl--pri" data-th="newtask">${ico("plus")}${esc(t("newTask"))}</button>`;
+/** Етап Д: «Нова задача» — перша клітинка сітки (`data-th="newtask"`). Форма відкрита — порожній слот: живу `<form>` у нього
+ *  вставляє `app.js` (поля переживають перемальовку сітки — набраного не губимо). */
+export function newTaskCardHTML(ui) {
+  return ui.edit?.newForm
+    ? '<div class="th-card th-card--form" id="th-new-slot"></div>'
+    : `<button class="th-card th-card--new" data-th="newtask" aria-label="${esc(t("newTask"))}">`
+      + `<span class="th-new-ic">${ico("plus", 20)}</span><span>${esc(t("newTask"))}</span></button>`;
+}
 
-/** «Підключення» (етап 3a): у голові простору без інтеграцій, поряд із «Нова задача» (`data-th="conn"`). */
+/** «Підключення» (етап 3a): у голові простору без інтеграцій (`data-th="conn"`). */
 const connBtn = () => `<button class="ctl ctl--out" data-th="conn">${ico("sliders")}${esc(t("cnTitle"))}</button>`;
 
 /** Рядки вкладки: «мої» або рядки дашборда команди. */
@@ -147,25 +156,42 @@ function relText(x, tab, now) {
 
 const CAT = { done: "done", indeterminate: "ind" };
 
-/** Дія в кінці рядка бейджів: «мої» — «Мітки» (правка міток задачі) і посилання на опубліковане превʼю; команда —
- *  «Відкрити в канвасі» для своїх, інакше превʼю. ⛔ «Мітки» — кнопка ВСЕРЕДИНІ картки `data-th="open"`: клік по ній не мусить
- *  відкривати задачу, і це тримає лише порядок обробника (`app.js wireHome`: `closest('[data-th]')` бере найближчий — кнопку). */
+/** Дія в кінці рядка бейджів: «мої» — лише посилання на опубліковане превʼю (мітки, перейменування й видалення — в меню «⋯»);
+ *  команда — «Відкрити в канвасі» для своїх, інакше превʼю. */
 function actionHTML(x, team) {
   const link = (href, title) => {
     const u = safeUrl(href);
     return u ? `<a class="th-lnk" href="${esc(u)}" target="_blank" rel="noopener"`
       + `${title ? ` title="${esc(title)}"` : ""}>${ico("ext")}${esc(t("thPreview"))}</a>` : "";
   };
-  if (!team) {
-    const aria = esc(t("thTagsEditAria", taskKey(x)));
-    return `<button class="th-lnk" data-th="tags" data-id="${esc(x.id)}" title="${aria}" aria-label="${aria}">`
-      + `${ico("pencil")}${esc(t("thTagsEdit"))}</button>${link(x.published, t("thPreviewTitle"))}`;
-  }
+  if (!team) return link(x.published, t("thPreviewTitle"));
   if (x.mine) {
     return `<button class="th-lnk" data-th="open" data-id="${esc(x.id)}">`
       + `${ico("task")}${esc(t("thOpenCanvas"))}</button>`;
   }
   return link(x.preview, t("thPreviewTitle"));
+}
+
+/** Етап Д: картка задачі з кошика. Кадр знебарвлений (CSS), «видалено <коли>», «Повернути», «⋯» → меню кошика. */
+export function trashCardHTML(x, ui) {
+  const edit = ui.edit || {};
+  const asking = !!(edit.ask && edit.ask.id === x.id && edit.ask.kind === "purge");
+  const src = safeThumb(x.thumb);
+  const thumb = src ? `<img class="th-img" src="${esc(src)}" alt="" loading="lazy" draggable="false">`
+    : `<div class="th-none">${ico("camera")}${esc(t("thNoShot"))}</div>`;
+  const ms = Date.parse(x.at);
+  const when = Number.isFinite(ms) ? (() => { const r = relTime(ms, ui.now); return t(r.key, r.n); })() : "";
+  const meta = [esc((x.tags || []).join(", ")), when ? esc(t("thDeleted", when)) : ""].filter(Boolean).join(" · ");
+  const more = asking ? "" : `<button class="th-more" data-th="menu" data-id="${esc(x.id)}" data-trash="1" aria-haspopup="menu"`
+    + ` aria-expanded="false" aria-label="${esc(t("thMenuAria", x.id))}" title="${esc(t("thMenuTitle"))}">${ico("dots")}</button>`;
+  const tail = asking
+    ? confirmHTML({ title: t("taskPurgeAsk", x.title || x.id), no: t("askCancel"), yes: t("taskPurge"),
+      noAttrs: `data-th="askno" data-id="${esc(x.id)}"`, yesAttrs: `data-th="askyes" data-id="${esc(x.id)}"` })
+    : `<div class="th-badges"><button class="th-lnk" data-th="restore" data-id="${esc(x.id)}">${ico("refresh")}${esc(t("taskRestore"))}</button></div>`;
+  return `<div class="th-card th-card--trash${asking ? " th-card--ask" : ""}" tabindex="0" role="group" data-id="${esc(x.id)}" data-trash="1">`
+    + `<div class="th-thumb">${thumb}${more}</div><div class="th-cbody">`
+    + `<div class="th-krow"><span class="th-key">${esc(x.id)}</span></div>`
+    + `<div class="th-ttl">${esc(x.title || x.id)}</div><div class="th-meta">${meta}</div>${tail}</div></div>`;
 }
 
 /** Одна картка. `cur` — id поточної задачі (лише на «Моїх»). */
@@ -200,16 +226,34 @@ export function cardHTML(x, ui, cur) {
      стрілки ходять по всіх). `aria-disabled` на відсутній теці — НЕ `disabled`:
      клік мусить дійти до обробника й сказати причину тостом. */
   const actionable = !team || !!x.mine;
-  const cls = `th-card${isCur ? " th-card--cur" : ""}${missing ? " th-card--miss" : ""}`;
-  return `<div class="${cls}" tabindex="0" role="${actionable ? "button" : "group"}"`
-    + `${actionable ? ` data-th="open"` : ""} data-id="${esc(x.id)}"${missing ? ' aria-disabled="true"' : ""}>
-    <div class="th-thumb">${thumb}</div>
+  /* Етап Д: питання «Видалити?» стоїть на місці бейджів, картка тоді не відкривається і без «⋯»; поле назви — замість `.th-ttl`. */
+  const edit = ui.edit || {};
+  const asking = !team && edit.ask && edit.ask.id === x.id ? edit.ask : null;
+  const more = team || asking ? ""
+    : `<button class="th-more" data-th="menu" data-id="${esc(x.id)}" aria-haspopup="menu" aria-expanded="false"`
+      + ` aria-label="${esc(t("thMenuAria", taskKey(x)))}" title="${esc(t("thMenuTitle"))}">${ico("dots")}</button>`;
+  const ttl = !team && edit.ren === x.id
+    ? `<input id="th-ren" class="th-ren" type="text" value="${esc(cleanTitle(x))}" aria-label="${esc(t("newTaskTitle"))}"`
+      + ` autocomplete="off" spellcheck="false">`
+    : `<div class="th-ttl">${mark(cleanTitle(x), q)}</div>`;
+  const tail = asking
+    ? confirmHTML({
+      title: asking.claude ? t("taskDelAskClaude", cleanTitle(x)) : t("taskDelAsk", cleanTitle(x)),
+      no: t("askCancel"), yes: t("taskDelete"),
+      noAttrs: `data-th="askno" data-id="${esc(x.id)}"`, yesAttrs: `data-th="askyes" data-id="${esc(x.id)}"`,
+    })
+    : `<div class="th-badges">${status}${comments}${gone}${actionHTML(x, team)}</div>`;
+  const cls = `th-card${isCur ? " th-card--cur" : ""}${missing ? " th-card--miss" : ""}${asking ? " th-card--ask" : ""}`;
+  const open = actionable && !asking;
+  return `<div class="${cls}" tabindex="0" role="${open ? "button" : "group"}"`
+    + `${open ? ` data-th="open"` : ""} data-id="${esc(x.id)}"${missing ? ' aria-disabled="true"' : ""}>
+    <div class="th-thumb">${thumb}${more}</div>
     <div class="th-cbody">
       <div class="th-krow"><span class="th-key">${mark(taskKey(x), q)}</span>${isCur
     ? `<span class="th-curb">· ${esc(t("thCurrent"))}</span>` : ""}</div>
-      <div class="th-ttl">${mark(cleanTitle(x), q)}</div>
+      ${ttl}
       <div class="th-meta">${parts.filter(Boolean).join(" · ")}</div>
-      <div class="th-badges">${status}${comments}${gone}${actionHTML(x, team)}</div>
+      ${tail}
     </div></div>`;
 }
 
@@ -232,13 +276,15 @@ function trackerBanner(team, data) {
 }
 
 /** Чіпи: статус (з лічильниками після запиту), потім мітки чи дизайнери. */
-function chipsHTML(ui, data, src, shown) {
+function chipsHTML(ui, data, src, shown, inTrash = false) {
   const c = statusCounts(src, ui.q);
-  const st = (k, label) => `<button class="th-chip${ui.status === k ? " th-chip--on" : ""}"`
-    + ` data-th="status" data-v="${k}" aria-pressed="${ui.status === k}">${esc(label)}</button>`;
+  const st = (k, label) => `<button class="th-chip${!inTrash && ui.status === k ? " th-chip--on" : ""}"`
+    + ` data-th="status" data-v="${k}" aria-pressed="${!inTrash && ui.status === k}">${esc(label)}</button>`;
   const team = ui.tab === "team";
   let extra;
-  if (team) {
+  if (inTrash) {
+    extra = "";                             // у вигляді кошика мітки й дизайнери не фільтрують
+  } else if (team) {
     const names = [...new Set(src.map((x) => x.designer).filter(Boolean))].sort((a, b) => a.localeCompare(b, "uk"));
     extra = names.map((d) => `<button class="th-chip${ui.designers.has(d) ? " th-chip--on" : ""}"`
       + ` data-th="designer" data-v="${esc(d)}" aria-pressed="${ui.designers.has(d)}">${esc(d)}</button>`).join("");
@@ -261,10 +307,14 @@ function chipsHTML(ui, data, src, shown) {
       .map(([k, e]) => `<button class="th-chip${ui.tags.has(k) ? " th-chip--on" : ""}"`
         + ` data-th="tag" data-v="${esc(k)}" aria-pressed="${ui.tags.has(k)}">${esc(e.label)}</button>`).join("");
   }
+  /* Етап Д: чип «Кошик · N» — лише з непорожнім кошиком і не на «Команді». */
+  const trashN = team ? 0 : (data.trash || []).length;
+  const trashChip = trashN ? `${extra ? "" : '<span class="th-gap"></span>'}<button class="th-chip${inTrash ? " th-chip--on" : ""}" data-th="trash"`
+    + ` aria-pressed="${inTrash}">${ico("trash")}${esc(t("thTrash", trashN))}</button>` : "";
   return `<div class="th-chips" role="group" aria-label="${esc(t("thFiltersLabel"))}">`
     + st("active", t("thStActive", c.active)) + st("done", t("thStDone", c.done)) + st("all", t("thStAll", c.all))
-    + (extra ? `<span class="th-gap"></span>${extra}` : "")
-    + `<span class="th-count">${esc(t("thShown", shown, src.length))}</span></div>`;
+    + (extra ? `<span class="th-gap"></span>${extra}` : "") + trashChip
+    + `<span class="th-count">${esc(t("thShown", shown, inTrash ? shown : src.length))}</span></div>`;
 }
 
 /** Нижня частина екрана: чіпи, банер, сітка (або стани «вантажу»/«збій»). */
@@ -278,7 +328,10 @@ export function homeGridHTML(ui, data) {
   const team = ui.tab === "team";
   const src = source(ui, data);
   const sort = effectiveSort(ui);
-  const list = sortTasks(filterTasks(src, {
+  /* Етап Д: вигляд кошика — лише на «Моїх» і лише з непорожнім кошиком (порожній кошик вигляду не має). */
+  const trash = data.trash || [];
+  const inTrash = !team && !!ui.edit?.trash && trash.length > 0;
+  const list = inTrash ? trash : sortTasks(filterTasks(src, {
     q: ui.q, status: ui.status,
     tags: team ? null : ui.tags, designers: team ? ui.designers : null,
   }), sort);
@@ -292,18 +345,21 @@ export function homeGridHTML(ui, data) {
   const banner = (data.loadError ? bannerHTML(t("thLoadErr", data.loadError)) : "")
     + (err ? bannerHTML(t("thTeamErr", err), stale ? t("thStale", stale) : "") : "")
     + trackerBanner(team, data);
-  /* Порожній простір без дашборда — не «порожня видача»: скидати нічого, і кнопка
-     «Скинути фільтри» вела б у нікуди. Замість неї — шлях до першої задачі. */
-  const empty = noDashboard(data) && !src.length
-    ? `<div class="th-empty th-empty--space"><b>${esc(t("spaceEmpty"))}</b>`
-      + `${esc(t("spaceEmptyAgent", data.space.name))}`
-      + `<div class="th-empty-act">${newTaskBtn()}</div></div>`
+  /* Порожній простір без дашборда — не «порожня видача»: скидати нічого, і кнопка «Скинути фільтри» вела б у нікуди.
+     Шлях до першої задачі — картка «+» першою клітинкою сітки; під сіткою лише порада попросити агента. */
+  const spaceEmpty = noDashboard(data) && !src.length && !inTrash;
+  const empty = spaceEmpty ? ""
     : `<div class="th-empty"><b>${esc(t("thEmpty"))}</b>${esc(t("thEmptyHint"))} `
       + `<button class="th-lnk" data-th="reset">${esc(t("thReset"))}</button></div>`;
+  const plus = !team && noDashboard(data) && !inTrash ? newTaskCardHTML(ui) : "";
+  const cardsHtml = inTrash ? list.map((x) => trashCardHTML(x, ui)).join("")
+    : list.map((x) => cardHTML(x, ui, data.current)).join("");
+  const below = spaceEmpty
+    ? `<div class="th-empty th-empty--space"><b>${esc(t("spaceEmpty"))}</b>${esc(t("spaceEmptyAgent", data.space.name))}</div>` : "";
   const grid = err && !src.length ? ""
     : `<div class="th-grid" id="th-grid" role="group" aria-label="${esc(t("thGridLabel"))}">`
-      + `${list.map((x) => cardHTML(x, ui, data.current)).join("") || empty}</div>`;
-  return chipsHTML(ui, data, src, err && !src.length ? 0 : list.length) + banner + grid;
+      + `${plus}${cardsHtml || empty}</div>${below}`;
+  return chipsHTML(ui, data, src, err && !src.length ? 0 : list.length, inTrash) + banner + grid;
 }
 
 /** Повний екран. Вкладки й поле пошуку є завжди — навіть поки дані вантажаться:
@@ -320,12 +376,12 @@ export function homeHTML(ui, data) {
   const sort = effectiveSort(ui);
   const opts = sortsFor(ui.tab).map((k) =>
     `<option value="${k}"${sort === k ? " selected" : ""}>${esc(t(`sort_${k}`))}</option>`).join("");
-  /* Кнопки «Підключення» й «Нова задача» живуть у голові лише коли вони є (простір без дашборда), обидві в
-     обгортці `.th-head-acts`: без них розмітка голови — як була (один `<h1>`), і екран простору з дашбордом
-     (ЛІГА) не змінюється ні байтом. */
+  /* Кнопка «Підключення» живе в голові лише коли простір без дашборда, в обгортці `.th-head-acts`: без неї розмітка
+     голови — як була (один `<h1>`), і екран простору з дашбордом (ЛІГА) не змінюється ні байтом. «Нова задача» — картка
+     «+» у сітці (етап Д), не кнопка голови. */
   const h1 = `<h1 class="th-h">${esc(data?.space ? t("tasksIn", data.space.name) : t("tasks"))}</h1>`;
   const head = noDashboard(data)
-    ? `<div class="th-head">${h1}<div class="th-head-acts">${connBtn()}${newTaskBtn()}</div></div>` : h1;
+    ? `<div class="th-head">${h1}<div class="th-head-acts">${connBtn()}</div></div>` : h1;
   const tabs = tab("mine", t("thTabMine", nMine)) + (hasTeam(data) ? tab("team", t("thTabTeam", nTeam)) : "");
   return `<div class="th-in">
     ${head}

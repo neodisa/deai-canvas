@@ -19,6 +19,7 @@
  *   форма задачі     `form[data-form="task"]`; поля `#tf-title` (`name="title"`),
  *                    `#tf-id` (`name="id"`), необовʼязкове `#tf-repo` (`name="repo"`, 4a: лише коли в просторі є синк із git
  *                    і це не ЛІГА — `taskFormHTML({repo})`), необовʼязкове `#tf-tags` (`name="tags"`, 4b-3: `taskFormHTML({tags: true})`);
+ *   перейменування   `form[data-form="taskname"]`; поле `#tn-title` (`name="title"`) — поповер під вкладкою (`taskNameFormHTML`);
  *   діалог міток     `form[data-form="tags"]`; поле `#tg-tags` (`name="tags"`) — правка міток однієї задачі (`tagsFormHTML`);
  *   спільне          слот помилки `[data-form-error]`, кнопки `button[data-a="ok"]`
  *                    (type=submit) і `button[data-a="cancel"]`;
@@ -88,11 +89,16 @@ export function spaceDialogHTML({ name = "", color = SPACE_COLORS[0], errorKey =
  * Форма «Нова задача»: назва й ідентифікатор (id підставляє `wireTaskForm`, поки його не правили руками). `repo` (4a) —
  * `{placeholder?}` додає необовʼязкове поле «Репозиторій» після id (адреса цієї задачі замість типової з «Підключення»);
  * `null`/нема — розмітка дослівно як до 4a. `placeholder` — дані (типовий `repo` із налаштувань модуля): лише через `esc()`.
+ * `inline` (етап Д) — форма в клітинці сітки (`.th-nf`), без ролі діалогу й заголовка; решта — ті самі поля.
  * `tags` (4b-3) — `true` додає після id (і репо) необовʼязкове поле «Мітки, через кому»; без нього розмітка дослівно як була.
  */
-export function taskFormHTML({ title = "", id = "", errorKey = "", repo = null, tags = false } = {}) {
-  return `<form class="cv-form" data-form="task" novalidate role="dialog" aria-modal="true" aria-labelledby="tf-h">
-    <h2 class="cv-form-h" id="tf-h">${esc(t("newTask"))}</h2>
+export function taskFormHTML({ title = "", id = "", errorKey = "", repo = null, tags = false, inline = false } = {}) {
+  /* `inline` (етап Д): форма в клітинці сітки екрана «Задачі», а не діалог — без role=dialog/aria-modal і заголовка. */
+  const open = inline
+    ? `<form class="cv-form th-nf" data-form="task" novalidate aria-label="${esc(t("newTask"))}">`
+    : `<form class="cv-form" data-form="task" novalidate role="dialog" aria-modal="true" aria-labelledby="tf-h">
+    <h2 class="cv-form-h" id="tf-h">${esc(t("newTask"))}</h2>`;
+  return `${open}
     <div class="cv-field">
       <label for="tf-title">${esc(t("newTaskTitle"))}</label>
       <input id="tf-title" name="title" type="text" value="${esc(title)}" autocomplete="off"
@@ -114,6 +120,19 @@ export function taskFormHTML({ title = "", id = "", errorKey = "", repo = null, 
     </div>` : ""}
     ${errorSlot(errorKey)}
     ${buttons("taskCreate")}
+  </form>`;
+}
+
+/** Етап Д: поповер «Перейменувати задачу» під вкладкою: одне поле `#tn-title` (`name="title"`), слот помилки, «Скасувати · Зберегти». */
+export function taskNameFormHTML({ title = "" } = {}) {
+  return `<form class="cv-form" data-form="taskname" novalidate role="dialog" aria-label="${esc(t("taskRenamePal"))}">
+    <div class="cv-field">
+      <label for="tn-title">${esc(t("newTaskTitle"))}</label>
+      <input id="tn-title" name="title" type="text" value="${esc(title)}" maxlength="200" autocomplete="off"
+        spellcheck="false" aria-describedby="${ERR_ID}" data-autofocus>
+    </div>
+    ${errorSlot("")}
+    ${buttons("taskNameSave")}
   </form>`;
 }
 

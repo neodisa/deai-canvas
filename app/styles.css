@@ -1577,6 +1577,49 @@ body.home-open .cv-notice{display:none!important}
    шлях до першої задачі. Трохи вище за звичайний порожній стан — кнопка під текстом. */
 .th-empty--space{padding-top:48px}
 .th-empty-act{display:flex;justify-content:center;margin-top:16px}
+/* Етап Д (0.30.0): картка «Нова задача» — перша клітинка сітки; форма на її місці. */
+.th-card--new{border-style:dashed;border-color:var(--line2);background:none;color:var(--mid);align-items:center;
+  justify-content:center;gap:8px;min-height:220px;font:inherit}
+.th-card--new:hover{border-color:var(--mid);color:var(--hi);background:color-mix(in srgb,var(--s2) 50%,transparent)}
+.th-new-ic{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--s3)}
+.th-card--new:hover .th-new-ic{background:var(--s4)}
+.th-card--form{cursor:default;border-color:var(--sel)}
+.th-card--form:hover{transform:none;border-color:var(--sel)}
+.th-nf{display:flex;flex-direction:column;gap:10px;padding:14px 12px 12px;flex:1}
+.th-nf .cv-field{display:flex;flex-direction:column;gap:4px}
+.th-nf label{font-size:12px;color:var(--dim)}
+.th-nf input{height:var(--h-ctl);padding:0 10px;border:1px solid var(--line2);border-radius:var(--r-sm);background:var(--s1);
+  color:var(--hi);font:inherit;outline:0;min-width:0}
+.th-nf input:focus{border-color:var(--sel)}
+.th-nf input[aria-invalid="true"]{border-color:var(--bad)}
+.th-nf #tf-id{font-family:var(--mono);font-size:12px}
+.th-nf .cv-form-err{margin:0;font-size:12px;color:var(--bad)}
+.th-nf .cv-ask-row{display:flex;justify-content:flex-end;gap:8px;margin-top:auto}
+.th-nf .cv-ask-row button{height:var(--h-ctl);padding:0 14px;border-radius:var(--r-sm);border:1px solid var(--line2);
+  background:var(--s3);color:var(--hi);font:inherit;cursor:pointer}
+.th-nf .cv-ask-row button[data-a="ok"]{background:var(--sel);border-color:var(--sel);color:var(--on-sel);font-weight:500}
+/* «⋯» на кадрі: під мишею, у фокусі картки й поки меню відкрите; на сенсорних — завжди. */
+.th-more{position:absolute;top:8px;right:8px;display:grid;place-items:center;width:var(--h-sm);height:var(--h-sm);border:0;
+  border-radius:var(--r-sm);background:color-mix(in srgb,var(--s0) 86%,transparent);color:var(--hi);cursor:pointer;opacity:0;
+  transition:opacity var(--dur) var(--ease)}
+.th-card:hover .th-more,.th-card:focus-within .th-more,.th-more[aria-expanded="true"]{opacity:1}
+.th-more:hover{background:var(--s0)}
+.th-more:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+@media (hover:none){.th-more{opacity:1}}
+.th-ren{width:100%;height:var(--h-sm);margin:-3px 0;padding:0 6px;border:1px solid var(--sel);border-radius:var(--r-sm);
+  background:var(--s1);color:var(--hi);font:inherit;font-weight:500;outline:0}
+.th-card--ask{cursor:default;border-color:color-mix(in srgb,var(--bad) 55%,var(--line))}
+.th-card--ask:hover{transform:none}
+.th-card--ask .cfm{margin-top:auto}
+.th-card--trash .th-img,.th-card--trash .th-none{filter:grayscale(1) brightness(.55)}
+.th-card--trash{cursor:default}
+.th-card--trash .th-ttl{color:var(--mid)}
+.th-chip .ico{width:13px;height:13px}
+.th-menu kbd{margin-left:auto;font:inherit;font-size:11px;color:var(--dim)}
+.th-menu button,.th-menu a{display:flex;align-items:center;gap:9px;text-decoration:none}
+.th-menu .ico{color:var(--mid)}
+.th-menu .danger,.th-menu .danger .ico{color:var(--bad)}
+.th-menu hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
 /* Привітання (просторів ще нема): по центру, логотип великий. Колір логотипа
    веде `currentColor` (`--logo`), внутрішній прямокутник — токен `--logo-in`. */
 .th-welcome{max-width:640px;padding-top:72px;text-align:center}

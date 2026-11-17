@@ -89,10 +89,11 @@ export const validTaskId = (id) => typeof id === "string" && NAME_RE.test(id);
  * який людина ще не встигла побачити), потім форма id, потім зайнятість.
  * Зайнятість без регістру — див. `lowerSet`.
  */
-export function taskFormError({ title, id } = {}, taken = []) {
+export function taskFormError({ title, id } = {}, taken = [], trash = []) {
   if (!String(title ?? "").trim()) return "titleRequired";
   if (!validTaskId(id)) return "idBad";
   if (lowerSet(taken).has(id.toLowerCase())) return "idTaken";
+  if (lowerSet(trash).has(id.toLowerCase())) return "idInTrash";
   return null;
 }
 
@@ -408,6 +409,7 @@ export function shouldRefreshHome({ open, visible, last = 0, now = 0, gap = 800,
    виправити в самій формі або мусить прочитати окремо; решта — загальна. */
 const TASK_ERR_KEYS = new Map([
   ["task-exists", "idTaken"],
+  ["task-in-trash", "idInTrash"],
   ["bad-task-id", "idBad"],
   ["no-space", "taskErrSpaceGone"],
   ["unknown-space", "taskErrSpaceGone"],
@@ -450,7 +452,7 @@ const FROM_KEYS = new Set(["wzFromRequired", "wzErrFromNotFound", "wzErrFromNoIn
 
 /** Поле форми задачі, про яке ключ помилки (`taskFormError`/`taskErrKey`): `title`, `id`, `repo` (адреса синку), `tags` (мітки), `from` (тека майстра) або `null`. */
 export const taskErrField = (key) => (key === "titleRequired" ? "title"
-  : (key === "idBad" || key === "idTaken" || key === "wzErrTaskDirExists") ? "id"
+  : (key === "idBad" || key === "idTaken" || key === "idInTrash" || key === "wzErrTaskDirExists") ? "id"
     : key === "taskErrVcsTarget" ? "repo"
       : key === "tagsBad" ? "tags"
         : FROM_KEYS.has(key) ? "from" : null);

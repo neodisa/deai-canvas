@@ -13,7 +13,7 @@ import test from "node:test";
 import { getLang, setLang } from "../app/i18n.js";
 import { SPACE_COLORS } from "../app/spaces-model.js";
 import {
-  parseTags, spaceDialogHTML, tagsFormHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
+  parseTags, spaceDialogHTML, tagsFormHTML, taskFormHTML, taskNameFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
 } from "../app/space-dialogs.js";
 
 const CYR = /[а-яіїєґА-ЯІЇЄҐ]/;
@@ -675,4 +675,23 @@ test("`new` без `pathTouched`: тека йде за назвою (типов�
   assert.notEqual(d.pathI.value, "~/deai-work/personal");
   assert.match(d.pathI.value, /client/);
   await tick(20);
+});
+
+test("Д: taskFormHTML({inline}) — форма в клітинці: без role=dialog, aria-modal і заголовка; поля й гачки ті самі", () => {
+  setLang("uk");
+  const h = taskFormHTML({ inline: true });
+  assert.match(h, /^<form class="cv-form th-nf" data-form="task" novalidate aria-label="[^"]+">/);
+  assert.ok(!h.includes("role=\"dialog\"") && !h.includes("aria-modal") && !h.includes("<h2"));
+  for (const need of ['id="tf-title"', 'id="tf-id"', "data-form-error", 'data-a="ok"', 'data-a="cancel"']) assert.ok(h.includes(need), need);
+  assert.match(taskFormHTML(), /role="dialog" aria-modal="true"/, "без inline — діалог, як було");
+});
+
+test("Д: taskNameFormHTML — одне поле #tn-title зі значенням (екрановано), слот помилки, «Зберегти»", () => {
+  setLang("uk");
+  const h = taskNameFormHTML({ title: 'a"><b>' });
+  assert.match(h, /data-form="taskname"/);
+  assert.match(h, /<input id="tn-title" name="title" type="text" value="a&quot;&gt;&lt;b&gt;"/);
+  assert.ok(!h.includes('"><b>'));
+  assert.match(h, /data-form-error/);
+  assert.match(h, /type="submit" data-a="ok">Зберегти/);
 });

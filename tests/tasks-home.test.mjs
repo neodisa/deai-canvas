@@ -6,7 +6,7 @@ import { DICT, setLang, t } from "../app/i18n.js";
 import { filterTasks } from "../app/tasks-model.js";
 import {
   cardHTML, defaultSort, effectiveSort, effectiveTab, homeGridHTML, homeHTML, pruneFilters, safeThumb,
-  safeUrl, sortsFor, thumbBrokenHTML,
+  safeUrl, sortsFor, thumbBrokenHTML, trashCardHTML,
 } from "../app/tasks-home.js";
 
 /* Дані — форма `/api/tasks-overview`: `mine[i]` має `changed` (секунди),
@@ -51,7 +51,8 @@ const UI = (o = {}) => ({
   tab: "mine", q: "", sort: "recent", status: "all", tags: new Set(), designers: new Set(),
   now: NOW, ...o,
 });
-const cards = (html) => (html.match(/class="th-card[ "]/g) || []).length;
+/* Рахує картки задач; картка «+» і слот форми (етап Д) — не задачі. */
+const cards = (html) => (html.match(/class="th-card[ "](?!th-card--new|th-card--form)/g) || []).length;
 
 setLang("uk");
 
@@ -209,15 +210,19 @@ test("рядок картки «Моїх»: мітки через «, »; без
   assert.match(meta(cardHTML(R({ designer: "Ольга", iterations: 1 }), UI({ tab: "team" }), "z")), /^Ольга · /);
 });
 
-test("кнопка «Мітки»: на «Моїх» є (data-th=tags, data-id, підпис зі словника), на «Команді» нема", () => {
+test("Д: кнопки «Мітки» на картці нема ні на «Моїх», ні на «Команді» (мітки — в меню «⋯»), а «⋯» є лише на «Моїх»", () => {
   const mine = cardHTML(M({ id: "a<b", jira: "LIGA-1", tags: ["x"] }), UI(), "z");
-  assert.match(mine, /<button class="th-lnk" data-th="tags" data-id="a&lt;b"[^>]*>[^]*?Мітки<\/button>/);
-  assert.match(mine, /aria-label="Мітки задачі LIGA-1"/, "кнопку на кожній картці відрізняє підпис із ключем задачі");
+  assert.doesNotMatch(mine, /data-th="tags"/);
+  assert.match(mine, /<button class="th-more" data-th="menu" data-id="a&lt;b"[^>]*aria-label="Дії задачі LIGA-1"/,
+    "«⋯» на кожній картці відрізняє підпис із ключем задачі");
   const team = cardHTML(R({ id: "r", mine: true }), UI({ tab: "team" }), "z");
-  assert.doesNotMatch(team, /data-th="tags"/);
-  assert.doesNotMatch(cardHTML(R({ id: "r" }), UI({ tab: "team" }), "z"), /data-th="tags"/);
+  assert.doesNotMatch(team, /data-th="tags"|th-more/);
+  assert.doesNotMatch(cardHTML(R({ id: "r" }), UI({ tab: "team" }), "z"), /data-th="tags"|th-more/);
   const gone = cardHTML(M({ id: "g", missing: true }), UI(), "z");
-  assert.match(gone, /data-th="tags"/, "задача без теки теж має мітки (вони в реєстрі, не в теці)");
+  assert.doesNotMatch(gone, /data-th="tags"/);
+  assert.match(gone, /data-th="menu"/, "задача без теки теж має меню (мітки в реєстрі, не в теці)");
+  /* Превʼю лишається посиланням на картці. */
+  assert.match(cardHTML(M({ id: "p", published: "https://p.example/p" }), UI(), "z"), /<a class="th-lnk" href="https:\/\/p\.example\/p"/);
 });
 
 /* ── диференційний: мітки, похідні від профілів, дають те саме, що давав профільний вигляд 0.10.0 ───── */
@@ -457,7 +462,10 @@ test("простір без дашборда: заголовок «Задачі 
   assert.doesNotMatch(h, /data-v="team"/, "вкладка команди без дашборда");
   assert.doesNotMatch(h, /Команда/);
   assert.match(h, /data-v="mine"/);
-  assert.match(h, /<button[^>]*class="ctl ctl--pri"[^>]*data-th="newtask"|<button[^>]*data-th="newtask"[^>]*class="ctl ctl--pri"/);
+  /* Етап Д: «Нова задача» — картка «+» першою клітинкою сітки, а не кнопка голови. */
+  const head = h.slice(0, h.indexOf('class="th-tabs"'));
+  assert.doesNotMatch(head, /data-th="newtask"/, "у голові «Нова задача» більше нема");
+  assert.match(h, /<div class="th-grid" id="th-grid"[^>]*><button class="th-card th-card--new" data-th="newtask"/);
   assert.match(h, /Нова задача/);
 });
 
@@ -465,9 +473,10 @@ test("простір без дашборда: заголовок «Задачі 
    інтеграцій нема, — голова простору ЛІГА лишається побайтно як була (один `<h1>`). Обидві кнопки — в обгортці
    `.th-head-acts`: вона один флекс-елемент голови, тож коли довга назва простору не лишає місця, `.th-head`
    (`flex-wrap:wrap`, див. `tests/spaces-css.test.mjs`) переносить під заголовок обидві кнопки разом, а не по одній. */
-test("голова простору без дашборда: «Підключення» поряд із «Нова задача»; простір ЛІГА — без змін", () => {
+test("голова простору без дашборда: лише «Підключення» (без «Нова задача»); простір ЛІГА — без змін", () => {
   const off = homeHTML(UI(), D_OFF());
-  assert.match(off, /<div class="th-head-acts"><button class="ctl ctl--out" data-th="conn">[\s\S]*?Налаштування<\/button><button class="ctl ctl--pri" data-th="newtask">/);
+  assert.match(off, /<div class="th-head-acts"><button class="ctl ctl--out" data-th="conn">[\s\S]*?Налаштування<\/button><\/div>/);
+  assert.doesNotMatch(off.slice(0, off.indexOf('class="th-tabs"')), /data-th="newtask"/, "у голові лише «Підключення»");
   const liga = homeHTML(UI(), { ...DATA, space: { name: "Liga", capabilities: WITH_DASH } });
   assert.doesNotMatch(liga, /data-th="conn"/);
   /* Кнопка з іконкою `sliders`, а голова ЛІГА — як була: без обгортки й без `th-head`. */
@@ -499,15 +508,16 @@ test("«Підключення» в голові — англійською «Se
   } finally { setLang("uk"); }
 });
 
-test("простір без дашборда і без задач: порожній стан із підказкою агентові й кнопкою", () => {
+test("простір без дашборда і без задач: картка «+» у сітці, під сіткою — порада агентові без кнопки", () => {
   const h = homeHTML(UI(), D_OFF());
   assert.match(h, /class="th-empty[ "]/);
   assert.match(h, /Тут ще нема задач/);
   assert.match(h, /простор[іу] P/i, "підказка агентові не називає простір");
-  assert.equal((h.match(/data-th="newtask"/g) || []).length, 2, "кнопка в голові + кнопка в порожньому стані");
-  const box = /<div class="th-empty th-empty--space">[\s\S]*?<\/div><\/div>/.exec(h)?.[0];
+  assert.equal((h.match(/data-th="newtask"/g) || []).length, 1, "лише картка «+»: ні в голові, ні в порожньому стані кнопки нема");
+  const box = /<div class="th-empty th-empty--space">[\s\S]*?<\/div>/.exec(h)?.[0];
   assert.ok(box, "порожній стан простору — окремий вузол th-empty--space");
-  assert.match(box, /<div class="th-empty-act"><button[^>]*data-th="newtask"/, "кнопка в обгортці th-empty-act");
+  assert.doesNotMatch(box, /<button|th-empty-act/, "у пораді кнопки нема");
+  assert.ok(h.indexOf("th-card--new") < h.indexOf("th-empty--space"), "порада — під карткою «+»");
   assert.doesNotMatch(h, /Нічого не знайдено/, "це не «порожня видача», а порожній простір");
   assert.doesNotMatch(h, /data-th="reset"/, "скидати нічого");
 });
@@ -518,11 +528,12 @@ test("порожній стан простору — і в нижній част
   assert.match(g, /id="th-grid"/);
 });
 
-test("простір без дашборда із задачами: картки, без порожнього стану; «Нова задача» лише в голові", () => {
+test("простір без дашборда із задачами: картки, без порожнього стану; «Нова задача» — картка «+» першою", () => {
   const h = homeHTML(UI(), D_OFF({ mine: [A, B], current: "edr" }));
   assert.equal(cards(h), 2);
   assert.doesNotMatch(h, /Тут ще нема задач/);
   assert.equal((h.match(/data-th="newtask"/g) || []).length, 1);
+  assert.ok(h.indexOf("th-card--new") < h.indexOf('data-th="open"'), "«+» — перша клітинка");
 });
 
 test("простір без дашборда: фільтр сховав усе — це «Нічого не знайдено», не «порожній простір»", () => {
@@ -565,7 +576,7 @@ test("до відповіді: вкладки на місці; відомий п
   assert.doesNotMatch(h, /data-v="team"/);
   assert.match(h, /Задачі · P/);
   assert.match(h, /Завантажую задачі/);
-  assert.equal((h.match(/data-th="newtask"/g) || []).length, 1, "кнопка в голові є й до відповіді; порожнього стану ще нема");
+  assert.doesNotMatch(h, /data-th="newtask"/, "до відповіді сітки нема, а в голові «Нова задача» більше не живе");
 });
 
 test("з дашбордом: кнопки «Нова задача» нема, вкладки й заголовок як були", () => {
@@ -624,4 +635,102 @@ test("англійською: «Tasks · P», «New task»", () => {
     assert.match(h, /New task/);
     assert.match(h, /No tasks here yet/);
   } finally { setLang("uk"); }
+});
+
+/* ── етап Д (0.30.0): картка «+», «⋯», поле назви, питання в картці, кошик ───────────────────── */
+const EDIT0 = { newForm: false, ren: null, ask: null, trash: false };
+const ui0 = (o = {}) => UI({ edit: EDIT0, ...o });
+const SPACE = { name: "Studio", capabilities: { dashboard: null } };
+const dataStudio = (o = {}) => ({ current: "edr", mine: [A, B], team: null, space: SPACE, trash: [], ...o });
+
+test("Д: картка «+» першою в сітці простору без дашборда; голова без «Нова задача»", () => {
+  const h = homeHTML(ui0(), dataStudio());
+  const grid = h.slice(h.indexOf('id="th-grid"'));
+  assert.match(grid, /^id="th-grid"[^>]*><button class="th-card th-card--new" data-th="newtask"/);
+  const head = h.slice(0, h.indexOf('class="th-tabs"'));
+  assert.ok(!head.includes('data-th="newtask"'), "у голові «Нова задача» більше нема");
+});
+
+test("Д: у ЛІГА (є дашборд) картки «+» нема; на «Команді» теж", () => {
+  const liga = { ...dataStudio(), space: { name: "ЛІГА", capabilities: { dashboard: "legacy" } }, team: { rows: [] } };
+  assert.ok(!homeGridHTML(ui0(), liga).includes("th-card--new"));
+  assert.ok(!homeGridHTML(ui0({ tab: "team", sort: "changed" }), liga).includes("th-card--new"));
+});
+
+test("Д: форма відкрита — слот форми на місці картки «+»", () => {
+  const g = homeGridHTML(ui0({ edit: { ...EDIT0, newForm: true } }), dataStudio());
+  assert.match(g, /<div class="th-card th-card--form" id="th-new-slot"><\/div>/);
+  assert.ok(!g.includes("th-card--new"));
+});
+
+test("Д: «⋯» на кадрі кожної картки «Моїх», кнопки «Мітки» на картці нема", () => {
+  const c = cardHTML(A, ui0(), "edr");
+  assert.match(c, /<div class="th-thumb">.*<button class="th-more" data-th="menu" data-id="edr" aria-haspopup="menu" aria-expanded="false"/s);
+  assert.ok(!c.includes('data-th="tags"'));
+});
+
+test("Д: перейменування — поле #th-ren зі значенням назви замість .th-ttl", () => {
+  const c = cardHTML(A, ui0({ edit: { ...EDIT0, ren: "edr" } }), "edr");
+  assert.match(c, /<input id="th-ren" class="th-ren"[^>]*value="Очікування/);
+  assert.ok(!c.includes('class="th-ttl"'));
+  const evil = cardHTML(M({ id: "e", title: 'x"><b>' }), ui0({ edit: { ...EDIT0, ren: "e" } }), "z");
+  assert.ok(!evil.includes('"><b>'), "значення поля екрановано");
+});
+
+test("Д: питання в картці — замість бейджів, без «⋯», картка не відкривається; Claude — інше питання", () => {
+  const c = cardHTML(A, ui0({ edit: { ...EDIT0, ask: { id: "edr", kind: "del", claude: false } } }), "edr");
+  assert.match(c, /class="th-card th-card--cur th-card--ask"/);
+  assert.ok(!c.includes('data-th="open"') && !c.includes("th-more"));
+  assert.ok(!c.includes("th-badges"), "питання стоїть замість бейджів");
+  assert.match(c, /class="cfm"/);
+  assert.match(c, /data-th="askno" data-id="edr"/);
+  assert.match(c, /data-th="askyes" data-id="edr"/);
+  assert.match(c, /Видалити «Очікування/);
+  const cc = cardHTML(A, ui0({ edit: { ...EDIT0, ask: { id: "edr", kind: "del", claude: true } } }), "edr");
+  assert.match(cc, /Claude працює/);
+  /* Питання про іншу картку цієї не чіпає. */
+  assert.ok(cardHTML(B, ui0({ edit: { ...EDIT0, ask: { id: "edr", kind: "del", claude: false } } }), "edr").includes('data-th="open"'));
+});
+
+test("Д: чип «Кошик · N» лише з непорожнім кошиком; вигляд кошика — картки --trash, «Повернути», без «+» і міток", () => {
+  const T = { id: "old", title: "Стара", jira: null, tags: ["core"], at: "2026-10-09T09:00:00Z", thumb: null };
+  assert.ok(!homeGridHTML(ui0(), dataStudio()).includes('data-th="trash"'));
+  const g = homeGridHTML(ui0(), dataStudio({ trash: [T] }));
+  assert.match(g, /<button class="th-chip" data-th="trash" aria-pressed="false">.*Кошик · 1/s);
+  const v = homeGridHTML(ui0({ edit: { ...EDIT0, trash: true } }), dataStudio({ trash: [T] }));
+  assert.match(v, /th-card th-card--trash/);
+  assert.match(v, /data-th="restore" data-id="old"/);
+  assert.match(v, /data-th="menu" data-id="old" data-trash="1"/);
+  assert.ok(!v.includes("th-card--new"));
+  assert.ok(!v.includes('data-th="tag"'));
+  assert.match(v, /th-chip--on" data-th="trash" aria-pressed="true"/);
+  assert.match(v, /Показано 1 з 1/);
+  /* Порожній кошик вигляду не має: лишається звичайний екран. */
+  assert.match(homeGridHTML(ui0({ edit: { ...EDIT0, trash: true } }), dataStudio()), /th-card--new/);
+  /* На «Команді» кошика нема. */
+  assert.ok(!homeGridHTML(ui0({ tab: "team", sort: "changed" }), { ...DATA, trash: [T] }).includes('data-th="trash"'));
+});
+
+test("Д: картка кошика — питання «Видалити назавжди» замість «Повернути» і без «⋯»", () => {
+  const T = { id: "old", title: "Стара", jira: null, tags: [], at: "2026-10-09T09:00:00Z", thumb: null };
+  const c = trashCardHTML(T, ui0({ edit: { ...EDIT0, trash: true, ask: { id: "old", kind: "purge", claude: false } } }));
+  assert.match(c, /th-card--trash th-card--ask/);
+  assert.match(c, /Видалити назавжди «Стара»/);
+  assert.match(c, /data-th="askyes" data-id="old"/);
+  assert.ok(!c.includes("th-more") && !c.includes('data-th="restore"'));
+});
+
+test("Д: усе з даних у кошику екрановано", () => {
+  const T = { id: "x", title: "<img src=x onerror=1>", jira: null, tags: ["<b>"], at: "2026-10-09T09:00:00Z", thumb: "javascript:1" };
+  const v = homeGridHTML(ui0({ edit: { ...EDIT0, trash: true } }), dataStudio({ trash: [T] }));
+  assert.ok(!v.includes("<img src=x") && !v.includes("<b>") && !v.includes("javascript:"));
+});
+
+test("Д: ключі словника етапу Д є в обох мовах, з однаковим типом", () => {
+  for (const k of ["thMenuAria", "thMenuTitle", "taskRename", "taskTagsMenu", "taskPreviewOpen", "taskDelete", "taskRestore", "taskPurge",
+    "taskDelAsk", "taskDelAskClaude", "taskPurgeAsk", "taskDeleted", "taskRestored", "taskPurged", "taskRestoreDirExists",
+    "taskRestoreIdTaken", "thTrash", "thDeleted", "taskRenamePal", "taskNameSave", "idInTrash"]) {
+    assert.ok(DICT.uk[k] !== undefined && DICT.en[k] !== undefined, k);
+    assert.equal(typeof DICT.en[k], typeof DICT.uk[k], k);
+  }
 });

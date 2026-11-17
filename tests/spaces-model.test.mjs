@@ -392,3 +392,12 @@ test("4d-4b: capabilities без запасного постачальника (
   assert.equal(isLegacyPublish(sp), false);
   assert.equal(isRemotePublish({ publish_url: "https://pv-12345678.vercel.app" }, sp), false);
 });
+
+test("Д: taskFormError — id із кошика дає idInTrash (після idTaken, без регістру); task-in-trash → той самий ключ і поле id", () => {
+  assert.equal(taskFormError({ title: "T", id: "Old" }, [], ["old"]), "idInTrash");
+  assert.equal(taskFormError({ title: "T", id: "ok" }, [], ["old"]), null);
+  assert.equal(taskFormError({ title: "T", id: "x" }, ["x"], ["x"]), "idTaken", "зайнятість переважає");
+  assert.equal(taskFormError({ title: "T", id: "ok" }, [], undefined), null, "без кошика — нічого не блокує");
+  assert.equal(taskErrKey("task-in-trash"), "idInTrash");
+  assert.equal(taskErrField("idInTrash"), "id");
+});
