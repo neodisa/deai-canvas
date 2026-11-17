@@ -251,5 +251,14 @@ class Listing(TrashCase):
         self.assertEqual(list(cfg['trash']), ['live'])
 
 
+class InsideTrash(unittest.TestCase):
+    def test_only_a_direct_child_of_the_trash_dir(self):
+        d = tt.TRASH_DIRNAME
+        self.assertTrue(tt.inside_trash(os.path.join('/w', d, 'x-1')))
+        for bad in (os.path.join('/w', 'x'), os.path.join('/w', d), os.path.join('/w', d, 'a', 'b'),
+                    os.path.join('/w', d, '..'), '', '/'):
+            self.assertFalse(tt.inside_trash(bad), bad)
+
+
 if __name__ == '__main__':
     unittest.main()

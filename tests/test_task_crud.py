@@ -275,6 +275,27 @@ class TaskCrudApi(Fixture):
         self.assertEqual(st, 200, j)
         self.assertNotIn('x', _read(self.p_file).get('trash', {}))
 
+    def test_thumb_trash_param_for_task_not_in_trash_is_404(self):
+        self.snapshot_p()
+        st, _b = self.get('/api/task-thumb?task=x&trash=1')
+        self.assertEqual(st, 404)
+
+    def test_trash_thumb_ignores_trashdir_outside_trash(self):
+        self.snapshot_p()
+        serve.spaces.switch_space(self.p_id)
+        make_task(self.p_path, 'x', pages=['home'])
+        add_shot({'dir': self.x_dir}, 'it1', 'home', sha='out1')
+        cfg = _read(self.p_file)
+        entry = cfg['tasks'].pop('x')
+        cfg['current'] = 'gone'
+        cfg['trash'] = {'x': {'entry': entry, 'trashDir': self.x_dir, 'at': '2026-11-17T10:00:00Z'}}   # поза `.deai-trash`
+        _write(self.p_file, cfg)
+        _st, j = self.jget('/api/tasks-overview')
+        self.assertEqual([r['id'] for r in j['trash']], ['x'])
+        self.assertIsNone(j['trash'][0]['thumb'])
+        st, _b = self.get('/api/task-thumb?task=x&v=out1&trash=1')
+        self.assertEqual(st, 404)
+
 
 if __name__ == '__main__':
     unittest.main()

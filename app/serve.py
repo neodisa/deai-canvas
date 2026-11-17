@@ -2178,7 +2178,7 @@ def _trash_rows(cfg, sp=None):
     for tid, rec in task_trash.listing(cfg):
         entry, td = rec['entry'], rec.get('trashDir')
         found = (task_thumb_path({**entry, 'dir': td})
-                 if isinstance(td, str) and td and NAME_RE.fullmatch(tid) else None)
+                 if isinstance(td, str) and td and task_trash.inside_trash(td) and NAME_RE.fullmatch(tid) else None)
         rows.append({'id': tid, 'title': entry.get('title', tid), 'jira': entry.get('jira'),
                      'tags': task_tags(entry, sp), 'at': rec.get('at'),
                      'thumb': (_thumb_url(tid, found[1]) + '&trash=1') if found else None})
@@ -6547,7 +6547,8 @@ class Handler(SimpleHTTPRequestHandler):
             # Етап Д: кадр задачі з кошика — з її теки В КОШИКУ. Лише записи `trash` цього простору: довільної теки так не відкрити.
             rec = task_trash.records(cfg).get(tid)
             td = rec.get('trashDir') if rec else None
-            task = {**rec['entry'], 'dir': td} if isinstance(td, str) and td else None
+            task = ({**rec['entry'], 'dir': td}
+                    if isinstance(td, str) and td and task_trash.inside_trash(td) else None)
         else:
             task = cfg.get('tasks', {}).get(tid)
         found = task_thumb_path(task) if isinstance(task, dict) else None

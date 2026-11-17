@@ -141,6 +141,11 @@ def _inside_trash(path):
     return os.path.basename(os.path.dirname(norm)) == TRASH_DIRNAME and os.path.basename(norm) not in ('', '.', '..')
 
 
+def inside_trash(path):
+    """Публічна форма `_inside_trash`: кадр із кошика теж читається лише з теки в `.deai-trash` (як і знищення)."""
+    return _inside_trash(path)
+
+
 def purge(cfg, tid, now):
     """Знищити запис кошика `tid`: тека йде з диска (посилання — лише саме посилання), запис стає надгробком. Шлях поза
     `.deai-trash` — `task-purge-failed`, нічого не стерто. `OSError` стирання — маршруту; запис лишається, тож знищення
