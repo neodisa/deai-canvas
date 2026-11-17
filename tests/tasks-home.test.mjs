@@ -734,3 +734,23 @@ test("Д: ключі словника етапу Д є в обох мовах, �
     assert.equal(typeof DICT.en[k], typeof DICT.uk[k], k);
   }
 });
+
+test("Д: картка в режимі перейменування не відкривається (клік у #th-ren не спливає в «open»), має імʼя групи", () => {
+  const c = cardHTML(A, ui0({ edit: { ...EDIT0, ren: "edr" } }), "edr");
+  assert.ok(!c.includes('data-th="open"'));
+  assert.match(c, /role="group" aria-label="LIGA-7019 — Очікування/);
+});
+
+test("Д: картка з питанням і картка кошика мають доступне імʼя; назва в питанні екранується", () => {
+  const ask = { ...EDIT0, ask: { id: "e", kind: "del", claude: false } };
+  const c = cardHTML(M({ id: "e", title: '<img src=x onerror=1>' }), ui0({ edit: ask }), "z");
+  assert.match(c, /role="group" aria-label="[^"]* — &lt;img/);
+  assert.ok(!c.includes("<img src=x"));
+  const T = { id: "old", title: "Стара", jira: null, tags: [], at: "2026-10-09T09:00:00Z", thumb: null };
+  assert.match(trashCardHTML(T, ui0()), /role="group" aria-label="old — Стара"/);
+});
+
+test("Д: картка кошика пише «видалено …» від фіксованого now", () => {
+  const T = { id: "old", title: "Стара", jira: null, tags: [], at: "2026-10-09T09:00:00Z", thumb: null };
+  assert.match(trashCardHTML(T, ui0()), /<div class="th-meta">видалено 3 год тому<\/div>/);
+});

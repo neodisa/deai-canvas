@@ -26,3 +26,11 @@ test("розмітка: role=menu, пункти menuitem з data-th і data-id, 
   assert.match(h, /<a [^>]*data-th="preview"[^>]*href="https:\/\/p\.example\/x"[^>]*target="_blank"/);
   assert.ok(!h.includes('"><b>'), "id мусить бути екранований");
 });
+
+test("розмітка меню кошика: «Повернути» і «Видалити назавжди» (небезпечний), без превʼю", () => {
+  const h = taskMenuHTML({ id: "old", published: "https://p.example/x" }, { trash: true });
+  assert.equal((h.match(/role="menuitem"/g) || []).length, 2);
+  assert.match(h, /data-th="restore" data-id="old"/);
+  assert.match(h, /class="danger"[^>]*data-th="purge"/);
+  assert.ok(!h.includes('data-th="preview"'));
+});

@@ -226,9 +226,9 @@ body.home-open .isl-tools::before{display:none}
 .cv-ctx{position:fixed;z-index:200;background:var(--s1);border:1px solid var(--line2);
   border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:4px;min-width:190px;
   display:flex;flex-direction:column}
-.cv-ctx button{border:0;background:none;text-align:left;font:inherit;font-size:13px;
-  padding:8px 12px;border-radius:6px;cursor:pointer;color:var(--hi)}
-.cv-ctx button:hover{background:var(--s3)}
+.cv-ctx button,.cv-ctx a{border:0;background:none;text-align:left;font:inherit;font-size:13px;
+  padding:8px 12px;border-radius:6px;cursor:pointer;color:var(--hi);text-decoration:none}
+.cv-ctx button:hover,.cv-ctx a:hover,.cv-ctx a:focus-visible{background:var(--s3)}
 /* Вбудоване підтвердження (етап В, `app/inline-confirm.js`): питання на місці дії — у меню сторінки, у дропдауні ітерації,
    у картці коментаря. Лише питання й дві кнопки, без пояснень (власник 16.11.2026). Селектори `.cfm .cfm-*` (0,2,0) — щоб
    кнопки перебили `.cv-ctx button` (0,1,1) і кнопки дропдауна, а не навпаки. */
@@ -1576,10 +1576,9 @@ body.home-open .cv-notice{display:none!important}
 /* Порожній простір без інтеграцій: не «нічого не знайдено» (фільтрувати нема що), а
    шлях до першої задачі. Трохи вище за звичайний порожній стан — кнопка під текстом. */
 .th-empty--space{padding-top:48px}
-.th-empty-act{display:flex;justify-content:center;margin-top:16px}
 /* Етап Д (0.30.0): картка «Нова задача» — перша клітинка сітки; форма на її місці. */
 .th-card--new{border-style:dashed;border-color:var(--line2);background:none;color:var(--mid);align-items:center;
-  justify-content:center;gap:8px;min-height:220px;font:inherit}
+  justify-content:center;gap:8px;min-height:260px;font:inherit}
 .th-card--new:hover{border-color:var(--mid);color:var(--hi);background:color-mix(in srgb,var(--s2) 50%,transparent)}
 .th-new-ic{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--s3)}
 .th-card--new:hover .th-new-ic{background:var(--s4)}
@@ -1606,7 +1605,7 @@ body.home-open .cv-notice{display:none!important}
 .th-more:hover{background:var(--s0)}
 .th-more:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
 @media (hover:none){.th-more{opacity:1}}
-.th-ren{width:100%;height:var(--h-sm);margin:-3px 0;padding:0 6px;border:1px solid var(--sel);border-radius:var(--r-sm);
+.th-ren{width:100%;height:var(--h-sm);margin:-3px 0 -3px -7px;padding:0 6px;border:1px solid var(--sel);border-radius:var(--r-sm);
   background:var(--s1);color:var(--hi);font:inherit;font-weight:500;outline:0}
 .th-card--ask{cursor:default;border-color:color-mix(in srgb,var(--bad) 55%,var(--line))}
 .th-card--ask:hover{transform:none}

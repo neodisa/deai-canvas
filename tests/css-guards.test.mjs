@@ -910,3 +910,11 @@ test("шар острівця: вище за --z-widget, нижче за --z-bar
   const hud = widget + Number(m[1]);
   assert.ok(hud > widget && hud < bar, `шар острівця ${hud} поза (${widget}, ${bar})`);
 });
+
+test("Д: правило `.cv-ctx button` покриває й `.cv-ctx a` (пункт меню «Відкрити превʼю» — посилання)", () => {
+  const css = stripComments(readCss());
+  const rule = (re) => css.match(re)?.[1] ?? "";
+  const base = rule(/([^{}]*\.cv-ctx button[^{}]*)\{[^{}]*border:0/);
+  assert.match(base, /\.cv-ctx a\b/, "базове правило пункту меню не стилізує посилання");
+  assert.match(rule(/([^{}]*\.cv-ctx button:hover[^{}]*)\{/), /\.cv-ctx a:hover/);
+});

@@ -188,7 +188,7 @@ export function trashCardHTML(x, ui) {
     ? confirmHTML({ title: t("taskPurgeAsk", x.title || x.id), no: t("askCancel"), yes: t("taskPurge"),
       noAttrs: `data-th="askno" data-id="${esc(x.id)}"`, yesAttrs: `data-th="askyes" data-id="${esc(x.id)}"` })
     : `<div class="th-badges"><button class="th-lnk" data-th="restore" data-id="${esc(x.id)}">${ico("refresh")}${esc(t("taskRestore"))}</button></div>`;
-  return `<div class="th-card th-card--trash${asking ? " th-card--ask" : ""}" tabindex="0" role="group" data-id="${esc(x.id)}" data-trash="1">`
+  return `<div class="th-card th-card--trash${asking ? " th-card--ask" : ""}" tabindex="0" role="group" aria-label="${esc(x.id)} — ${esc(x.title || x.id)}" data-id="${esc(x.id)}" data-trash="1">`
     + `<div class="th-thumb">${thumb}${more}</div><div class="th-cbody">`
     + `<div class="th-krow"><span class="th-key">${esc(x.id)}</span></div>`
     + `<div class="th-ttl">${esc(x.title || x.id)}</div><div class="th-meta">${meta}</div>${tail}</div></div>`;
@@ -244,8 +244,11 @@ export function cardHTML(x, ui, cur) {
     })
     : `<div class="th-badges">${status}${comments}${gone}${actionHTML(x, team)}</div>`;
   const cls = `th-card${isCur ? " th-card--cur" : ""}${missing ? " th-card--miss" : ""}${asking ? " th-card--ask" : ""}`;
-  const open = actionable && !asking;
-  return `<div class="${cls}" tabindex="0" role="${open ? "button" : "group"}"`
+  const renaming = !team && edit.ren === x.id;
+  const open = actionable && !asking && !renaming;
+  /* Група без імені в фокусі нічого не каже скрінрідеру: питання й перейменування називаємо «ключ — назва». */
+  const name = !open && !team ? ` aria-label="${esc(taskKey(x))} — ${esc(cleanTitle(x))}"` : "";
+  return `<div class="${cls}" tabindex="0" role="${open ? "button" : "group"}"${name}`
     + `${open ? ` data-th="open"` : ""} data-id="${esc(x.id)}"${missing ? ' aria-disabled="true"' : ""}>
     <div class="th-thumb">${thumb}${more}</div>
     <div class="th-cbody">

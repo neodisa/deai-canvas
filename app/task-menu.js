@@ -6,6 +6,7 @@
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
+import { taskKey } from "./tasks-model.js";
 import { safeUrl } from "./tasks-home.js";
 
 /** Пункти меню: обʼєкти `{th, icon, key, kbd?, danger?, href?}` і `"sep"` (роздільник). */
@@ -33,5 +34,5 @@ export function taskMenuHTML(x, opts = {}) {
       ? `<a role="menuitem" tabindex="-1"${cls} data-th="${i.th}" data-id="${id}" href="${esc(i.href)}" target="_blank" rel="noopener">${body}</a>`
       : `<button type="button" role="menuitem" tabindex="-1"${cls} data-th="${i.th}" data-id="${id}">${body}</button>`;
   }).join("");
-  return `<div id="th-menu" class="cv-ctx th-menu" role="menu" aria-label="${esc(t("thMenuAria", x.id))}">${items}</div>`;
+  return `<div id="th-menu" class="cv-ctx th-menu" role="menu" aria-label="${esc(t("thMenuAria", opts.trash ? x.id : taskKey(x)))}">${items}</div>`;
 }
