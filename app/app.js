@@ -3844,8 +3844,13 @@ async function leaveHome() {
   /* Вернулись до задачі, а статус синку лишився «зайнято» без відкладеного повтору (його скасував `enterHome`) — повертаємо. */
   if (glCache?.busy && !glBusyTimer) scheduleGlRetry(glKeyNow());
   /* Фокус вертається на активну вкладку (чи логотип) — те, чим екран відкривали: вузол, на якому він
-     був (картка, поле), тепер схований, і клавіатура лишилась би «в нікуди». */
-  (tabsEl.querySelector('[data-act="tab"][aria-current]') ?? tabsEl.querySelector('[data-act="home"]'))?.focus({ preventScroll: true });
+     був (картка, поле), тепер схований, і клавіатура лишилась би «в нікуди». ⛔ Лише коли його справді ВТРАЧЕНО: `render()`
+     вище довгий, і за цей час людина могла перевести фокус сама — подвійний клік по вкладці з екрана «Задачі» відкриває
+     поповер перейменування, і безумовний `focus()` тут забирав би курсор із його поля. */
+  const a = document.activeElement;
+  if (!a || a === document.body || homeNode()?.contains(a) || a.closest?.('[hidden]')) {
+    (tabsEl.querySelector('[data-act="tab"][aria-current]') ?? tabsEl.querySelector('[data-act="home"]'))?.focus({ preventScroll: true });
+  }
 }
 
 /* Екран «Задачі» відкритий, а людина була деінде — у терміналі, де агент заводить простори й

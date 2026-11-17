@@ -77,3 +77,28 @@ test("focusKey: картка «+» (th-card без data-id) ключується
   assert.equal(focusKey(el(["th-card"], { th: "newtask" })), '[data-th="newtask"]');
   assert.equal(focusKey(el(["th-card"], { th: "open", id: "x" })), '.th-card[data-id="x"]');
 });
+
+test("leaveHome: фокус на вкладку — лише коли його втрачено; поле поповера, відкритого за час `render()`, фокус зберігає", async () => {
+  const run = async (where) => {
+    const focused = [];
+    const homeEl = { hidden: false, querySelector: () => null, contains: (n) => n?.inHome === true };
+    const tab = { focus: () => focused.push("tab") };
+    const body = {};
+    const nodes = { body, popField: { closest: () => null }, inHome: { inHome: true, closest: () => homeEl }, hiddenNode: { closest: (s) => (s === "[hidden]" ? {} : null) } };
+    const document = { activeElement: null, body, getElementById: () => homeEl, querySelector: () => null };
+    const env = {
+      document, closeCnDrawer: () => {}, connEntrySeq: 0, wiz: { reset: () => {} }, homeNode: () => homeEl, homeSeq: 0,
+      closeTaskMenu: () => {}, homeComposing: true, homePaintPending: true, homeOpen: true, openDd: null,
+      glCache: null, glBusyTimer: null, scheduleGlRetry: () => {}, glKeyNow: () => null,
+      tabsEl: { querySelector: (s) => (s.includes("aria-current") ? tab : null) },
+      render: async () => { document.activeElement = nodes[where]; },
+    };
+    document.body.classList = { remove: () => {} };
+    await load(env, ["leaveHome"]).leaveHome();
+    return focused;
+  };
+  assert.deepEqual(await run("popField"), [], "фокус забрано з поля поповера");
+  assert.deepEqual(await run("body"), ["tab"], "фокус на body — не повернуто на вкладку");
+  assert.deepEqual(await run("inHome"), ["tab"], "фокус у схованому екрані — не повернуто на вкладку");
+  assert.deepEqual(await run("hiddenNode"), ["tab"], "фокус у схованому вузлі — не повернуто на вкладку");
+});

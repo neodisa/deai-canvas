@@ -1137,3 +1137,21 @@ test("питання на картці, яку прибрали деінде: п
   await page.waitForLoadState("networkidle");
   assert.equal(await page.locator(".th-card--ask").count(), 0, "питання про зниклу картку воскресло");
 });
+
+test("перейменування з вкладки ПРЯМО з екрана «Задачі»: вихід з екрана (`leaveHome` → `render()`) не забирає фокус із поля поповера", async (t) => {
+  const { page, current, inactive } = await studioTabs(t, 4900);
+  for (const id of [current, inactive]) {
+    if (await homeHidden(page)) {
+      await page.click('#tabs [data-act="home"]');
+      await page.waitForSelector(CARD(id));
+      await page.waitForLoadState("networkidle");
+    }
+    await page.dblclick(tabOf(id));
+    await page.waitForSelector(POP);
+    await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+    await page.waitForLoadState("networkidle");             // `render()` дочитано — саме після нього `leaveHome` ставив фокус
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "tn-title", `фокус утік із поля (${id === current ? "активна" : "неактивна"})`);
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
+  }
+});
