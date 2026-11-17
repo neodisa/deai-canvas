@@ -801,13 +801,32 @@ function showCreateWait(form) {
   };
 }
 
-// ненав'язливе повідомлення (нема змін / надіслано тощо)
-function toast(msg) {
+// ненав'язливе повідомлення (нема змін / надіслано тощо). `action` ({label, run}) — кнопка «Повернути» й подібні: тост тоді
+// клікабельний, живе довше (`ms`, типово 8 с) і має кнопку `[data-act="undo"]` у порядку табуляції (фокус сам НЕ переходить).
+function toast(msg, { action = null, ms } = {}) {
   let t = document.getElementById('cv-toast');
   if (!t) { t = document.createElement('div'); t.id = 'cv-toast'; t.className = 'cv-toast'; document.body.appendChild(t); }
-  t.textContent = msg; t.classList.add('show');
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove('show'), 3200);
+  const hide = () => t.classList.remove('show');
+  if (action) {
+    const span = document.createElement('span');
+    span.className = 'msg'; span.textContent = msg;
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.act = 'undo'; b.textContent = action.label;
+    let done = false;
+    b.addEventListener('click', () => {
+      if (done) return;
+      done = true; clearTimeout(toast._t); hide();
+      action.run();
+    });
+    t.replaceChildren(span, b);
+    t.classList.add('has-act');
+  } else {
+    t.classList.remove('has-act');
+    t.textContent = msg;
+  }
+  t.classList.add('show');
+  toast._t = setTimeout(hide, ms ?? (action ? 8000 : 3200));
 }
 
 /**
@@ -3322,6 +3341,8 @@ function homePointerDown(ev) {
   homeEatUntil = 0;
   homeDownInRen = !!ev.target.closest('#th-ren');
   if (homeEdit.ren && !homeDownInRen) { homeEatUntil = performance.now() + 500; commitRenameCard(true); }
+  /* Питання «Видалити?»: клік повз його картку знімає питання (фокус не крадемо — він іде туди, куди клікнули), клік ковтаємо. */
+  if (homeEdit.ask && !ev.target.closest('.th-card--ask')) { homeEatUntil = performance.now() + 500; cancelAsk(false); }
   if (document.getElementById('th-menu') && !ev.target.closest('#th-menu') && !ev.target.closest('.th-more')) {
     closeTaskMenu(false);
     if (homeNode()?.contains(ev.target)) homeEatUntil = performance.now() + 500;
@@ -3424,6 +3445,99 @@ function applyTaskTitle(id, title) {
   if (homeReady()) homeData = { ...homeData, mine: homeData.mine.map((y) => (y.id === id ? { ...y, title } : y)) };
   if (tabs.some((x) => x.id === id)) { tabs = tabs.map((x) => (x.id === id ? { ...x, title } : x)); saveTabs(); paintTabs(); }
   if (curTask && currentTaskId === id) { curTask = { ...curTask, title }; paintBar(); }
+}
+
+/** Стан Claude «працює» для задачі (id чи Jira-ключ) з останнього опиту вкладок (`claudeAll`); нема даних — ні. */
+const claudeWorkingOn = (row) => {
+  const v = claudeAll && (claudeAll[row.id] || (row.jira && claudeAll[row.jira]));
+  return !!v && v.state === 'working';
+};
+
+/** Питання «Видалити?» в картці (`kind: 'del'`; `'purge'` — кошик, Task 9). Фокус — на «Скасувати»: Enter навмання нічого не знищить. */
+function askDeleteCard(id, kind = 'del') {
+  const row = (kind === 'purge' ? homeData?.trash : homeData?.mine || [])?.find((y) => y.id === id);
+  if (!row) return;
+  closeTaskMenu(false);
+  homeEdit = { ...homeEdit, ask: { id, kind, claude: kind === 'del' && claudeWorkingOn(row) }, ren: null };
+  paintHomeLower();
+  homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"] .cfm-no`)?.focus({ preventScroll: true });
+}
+
+/** Зняти питання. `refocus` — вернути фокус на картку (Esc, «Скасувати»); клік повз його не просить. */
+function cancelAsk(refocus = true) {
+  const id = homeEdit.ask?.id;
+  if (!id) return;
+  homeEdit = { ...homeEdit, ask: null };
+  paintHomeLower();
+  if (refocus) homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+}
+
+/** id, видалення яких у дорозі: другий клік по «Видалити» (картка до відповіді не перемальована) запиту не дублює. */
+const deletingIds = new Set();
+
+/** Видалити задачу в кошик простору й запропонувати «Повернути» тостом. Вкладка й її місце запамʼятовуються для повернення. */
+async function deleteTask(id) {
+  const row = (homeData?.mine || []).find((y) => y.id === id);
+  if (!row || deletingIds.has(id)) return;
+  const spaceId = homeData?.space?.id ?? spaceNow()?.id ?? null;
+  const title = cleanTitle(row);
+  const order = homeCards().filter((c) => c.dataset.th === 'open').map((c) => c.dataset.id);
+  homeEdit = { ...homeEdit, ask: null };
+  deletingIds.add(id);
+  let r;
+  try { r = await postForm('/api/task-delete', { id }); }
+  catch (e) { deletingIds.delete(id); paintHomeLower(); toast(t('errFailed', requestErrText(e))); return; }
+  deletingIds.delete(id);
+  markHomeMutated();
+  const at = tabs.findIndex((x) => x.id === id);
+  const tabRec = at >= 0 ? tabs[at] : null;
+  if (tabRec) { tabs = tabs.filter((x) => x.id !== id); saveTabs(); }
+  if (homeReady()) {
+    homeData = { ...homeData, current: r.current ?? null, mine: homeData.mine.filter((y) => y.id !== id),
+      trash: [{ id, title, jira: row.jira ?? null, tags: row.tags || [], at: r.trash?.at ?? null, thumb: null },
+        ...(homeData.trash || [])] };
+  }
+  /* Видалена була поточною: пер-задачний стан чужий. Простір не змінився (`resetSpaceState` не потрібен), сервер назвав нову
+     поточну — чи жодної (`showNoTask`: сцена порожня, екран лишається відкритим). */
+  if (id === currentTaskId) {
+    taskSwitchGen += 1;
+    if (r.current) { await resetPerTaskState(); currentTaskId = r.current; }
+    else await showNoTask();
+  }
+  paintTabs(); paintHome();
+  /* Фокус: наступна картка (чи попередня, якщо була остання), інакше «+», інакше пошук; лише коли його не забрали. */
+  const a = document.activeElement;
+  if (!a || a === document.body || !a.isConnected) {
+    const left = homeCards().filter((c) => c.dataset.th === 'open');
+    const i = order.indexOf(id);
+    const next = order.slice(i + 1).concat(order.slice(0, i).reverse()).map((k) => left.find((c) => c.dataset.id === k)).find(Boolean);
+    (next ?? homeNode()?.querySelector('[data-th="newtask"]') ?? homeNode()?.querySelector('#th-q'))?.focus({ preventScroll: true });
+  }
+  toast(t('taskDeleted', title), { action: { label: t('taskRestore'), run: () => restoreTask(id, { spaceId, tabRec, at, title }) } });
+  loadHome();      // свіжі дані (кадр кошика, current)
+}
+
+/** Повернути задачу з кошика (тост «Повернути»): вкладка — на те саме місце, екран перечитується. */
+async function restoreTask(id, { spaceId, tabRec = null, at = -1, title = id } = {}) {
+  try { await postForm('/api/task-restore', { id, space: spaceId }); }
+  catch (e) {
+    const key = e.code === 'task-dir-exists' ? 'taskRestoreDirExists' : e.code === 'task-exists' ? 'taskRestoreIdTaken' : null;
+    toast(key ? t(key) : t('errFailed', requestErrText(e)));
+    return;
+  }
+  markHomeMutated();
+  if (tabRec && !tabs.some((x) => x.id === id)) {
+    const k = Math.min(Math.max(0, at), tabs.length);
+    tabs = [...tabs.slice(0, k), tabRec, ...tabs.slice(k)];
+    saveTabs(); paintTabs();
+  }
+  if (homeReady()) {
+    homeData = { ...homeData, trash: (homeData.trash || []).filter((y) => y.id !== id) };
+    if (!homeData.trash.length) homeEdit = { ...homeEdit, trash: false };
+  }
+  await loadHome();
+  if (homeOpen) homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  if (!tabRec) toast(t('taskRestored', title));
 }
 
 /**
@@ -3639,6 +3753,8 @@ function wireHome(el) {
     if (homeDownInRen) { homeDownInRen = false; return; }
     /* ⛔ Перейменування — ПЕРШИМ, до `closest('[data-th]')`: клік повз поле комітить назву й більше нічого не робить. */
     if (homeEdit.ren && !ev.target.closest('#th-ren')) { commitRenameCard(true); return; }
+    /* Клік повз картку з питанням «Видалити?» знімає питання без інших дій (синтетичний клік без `pointerdown`; справжній уже ковтнуто). */
+    if (homeEdit.ask && !ev.target.closest('.th-card--ask')) { cancelAsk(false); return; }
     /* Клік повз відкрите меню (і повз «⋯») закриває його без наслідків. */
     if (document.getElementById('th-menu') && !ev.target.closest('#th-menu') && !ev.target.closest('.th-more')) { closeTaskMenu(false); return; }
     /* Посилання «Превʼю ↗» — своя навігація в новій вкладці: без цього рядка клік
@@ -3667,6 +3783,10 @@ function wireHome(el) {
         break;
       }
       case 'rename': startRenameCard(b.dataset.id); break;
+      case 'delete': askDeleteCard(b.dataset.id); break;
+      case 'askno': cancelAsk(); break;
+      /* «Видалити назавжди» з кошика (`kind: 'purge'`) — Task 9; тут лише звичайне видалення. */
+      case 'askyes': if (homeEdit.ask?.kind === 'del' && homeEdit.ask.id === b.dataset.id) deleteTask(b.dataset.id); break;
       case 'tab':
         /* Порівнюємо з вкладкою, що справді малюється (`effectiveTab`): у просторі без
            «Команди» збережена `team` читається як `mine`, і клік по єдиній вкладці
@@ -4502,6 +4622,8 @@ document.addEventListener('keydown', (ev) => {
     if (!newFormEl.hasAttribute('aria-busy')) closeNewTaskCard();
     return;
   }
+  /* Esc під питанням «Видалити?» знімає його (фокус — на картку); до гілки `typing`. Enter/Пробіл на кнопках питання — рідні клавіші кнопки. */
+  if (ev.key === 'Escape' && homeEdit.ask) { ev.preventDefault(); cancelAsk(); return; }
   const typing = !!a && (['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) || a.isContentEditable);
   if (ev.key === '/' && !typing) { q?.focus(); ev.preventDefault(); return; }
   if (a && a === q) {
@@ -4526,6 +4648,10 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'F2' && a.dataset.th === 'open') { ev.preventDefault(); startRenameCard(a.dataset.id); return; }
+  /* Delete/Backspace на картці задачі (є «⋯» — є й що видаляти; не «Команда» й не картка «+») → питання. */
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && a.dataset.th === 'open' && a.querySelector('.th-more')) {
+    ev.preventDefault(); askDeleteCard(a.dataset.id); return;
+  }
   const cards = homeCards();
   const i = cards.indexOf(a);
   if (ev.key === 'Enter' || ev.key === ' ') {

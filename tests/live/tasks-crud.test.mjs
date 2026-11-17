@@ -8,7 +8,7 @@
  */
 import "./_spaces-kit.mjs";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
@@ -421,4 +421,182 @@ test("перейменування: збій запиту (500) — тост, с
   await page.focus('#tasks-home .th-card[data-id="x"]');
   await page.keyboard.press("F2");
   await page.waitForSelector("#th-ren", { timeout: 3000 });
+});
+
+/* ═══════════════════════ Task 8: видалення з питанням у картці, тост «Повернути» ═══════════════════════ */
+
+const CARD = (id) => `#tasks-home .th-card[data-id="${id}"]`;
+const trashDirOf = (file, id) => path.join(path.dirname(readTasks(file)[id]?.dir ?? ""), ".deai-trash");
+const tabIds = (page) => page.$$eval("#tabs .tab-main[data-val]", (els) => els.map((e) => e.dataset.val));
+
+/** `studio`, де обидві задачі мають вкладки: спершу відкрито `current` (вкладка `inactive` лишається), потім людина зайшла на
+ *  «Задачі». */
+async function studioTabs(t, offset) {
+  const s = await studio(t, offset);
+  const first = await cur(s.url);
+  const second = first === "x" ? "y" : "x";
+  await s.page.click(CARD(second));
+  await s.page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await s.page.waitForSelector(`#tabs .tab-main[data-val="${first}"]`);
+  await s.page.click('#tabs [data-act="home"]');
+  await s.page.waitForSelector(CARD(first));
+  await s.page.waitForLoadState("networkidle");
+  return { ...s, inactive: first, current: second };
+}
+
+test("видалення: Delete на картці → питання в картці з фокусом на «Скасувати»; Esc — питання зникає, нічого не видалено", async (t) => {
+  const { page, file } = await studio(t, 1600);
+  const posts = [];
+  page.on("request", (r) => { if (r.method() === "POST" && /task-delete/.test(r.url())) posts.push(r.url()); });
+  await page.focus(CARD("y"));
+  await page.keyboard.press("Delete");
+  await page.waitForSelector(`${CARD("y")}.th-card--ask .cfm`);
+  assert.equal(await page.evaluate(() => document.activeElement?.className), "cfm-no", "фокус не на «Скасувати»");
+  assert.equal(await page.locator(`${CARD("y")} [data-th="menu"]`).count(), 0, "під питанням лишилась «⋯»");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector(".th-card--ask"));
+  assert.equal(await homeHidden(page), false, "Esc закрив ще й екран");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id), "y", "фокус не повернувся на картку");
+  assert.ok(readTasks(file).y, "Esc видалив задачу");
+  assert.deepEqual(posts, [], "пішов запит");
+  /* Backspace — те саме; Enter на «Скасувати» знімає питання (рідна клавіша кнопки, не з'їдена обробником картки). */
+  await page.keyboard.press("Backspace");
+  await page.waitForSelector(`${CARD("y")}.th-card--ask`);
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.querySelector(".th-card--ask"));
+  assert.ok(readTasks(file).y);
+  assert.deepEqual(posts, []);
+});
+
+test("видалення: через меню «Видалити»; клік повз картку з питанням знімає питання й нічого більше не робить", async (t) => {
+  const { page, file } = await studio(t, 1700);
+  const posts = [];
+  page.on("request", (r) => { if (r.method() === "POST") posts.push(r.url()); });
+  await page.click(MORE("y"));
+  await page.waitForSelector("#th-menu");
+  await page.click('#th-menu [data-th="delete"]');
+  await page.waitForSelector(`${CARD("y")}.th-card--ask`);
+  assert.equal(await page.locator("#th-menu").count(), 0, "меню лишилось");
+  await page.click(`${CARD("x")} .th-ttl`);
+  await page.waitForFunction(() => !document.querySelector(".th-card--ask"));
+  await page.waitForTimeout(200);
+  assert.equal(await homeHidden(page), false, "клік повз відкрив іншу картку");
+  assert.deepEqual(posts, [], "пішов запит");
+  assert.ok(readTasks(file).y);
+});
+
+test("видалення неактивної: «Видалити» → картки нема, вкладка закрита, тека в .deai-trash, tasks.json.trash має запис; тост із «Повернути»", async (t) => {
+  const { page, file, inactive, current, url } = await studioTabs(t, 1800);
+  const dir = readTasks(file)[inactive].dir;
+  const trash = trashDirOf(file, inactive);
+  await page.focus(CARD(inactive));
+  await page.keyboard.press("Delete");
+  await page.waitForSelector(`${CARD(inactive)} .cfm-yes`);
+  await page.click(`${CARD(inactive)} .cfm-yes`);
+  await page.waitForFunction((id) => !document.querySelector(`#tasks-home .th-card[data-id="${id}"]`), inactive);
+  assert.deepEqual(await tabIds(page), [current], "вкладка не закрита");
+  assert.equal(existsSync(dir), false, "тека лишилась на місці");
+  assert.ok(readdirSync(trash).some((n) => n.startsWith(`${inactive}-`)), "теки нема в .deai-trash");
+  assert.ok(JSON.parse(readFileSync(file, "utf8")).trash?.[inactive], "tasks.json.trash без запису");
+  assert.equal(await cur(url), current, "поточна змінилась");
+  await page.waitForSelector('#cv-toast.show [data-act="undo"]');
+  assert.match(await page.textContent("#cv-toast"), /видалено/);
+  assert.equal(await page.locator('#tasks-home [data-th="trash"]').count(), 1, "чіпа кошика нема");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id), current, "фокус не на сусідній картці");
+});
+
+test("«Повернути» з тосту: задача, тека й вкладка на своїх місцях; поточна не змінилась", async (t) => {
+  const { page, file, inactive, current, url } = await studioTabs(t, 1900);
+  const dir = readTasks(file)[inactive].dir;
+  const before = await tabIds(page);
+  assert.deepEqual([...before].sort(), ["x", "y"]);
+  await page.click(`${CARD(inactive)} [data-th="menu"]`);
+  await page.click('#th-menu [data-th="delete"]');
+  await page.click(`${CARD(inactive)} .cfm-yes`);
+  await page.waitForSelector('#cv-toast.show [data-act="undo"]');
+  /* Кнопка доступна з клавіатури, але фокус автоматично не забрано. */
+  assert.notEqual(await page.evaluate(() => document.activeElement?.dataset?.act), "undo", "фокус забрано в тост");
+  await page.click('#cv-toast [data-act="undo"]');
+  await page.waitForSelector(CARD(inactive));
+  await page.waitForFunction(() => document.querySelectorAll("#tabs .tab-main[data-val]").length === 2);
+  assert.deepEqual(await tabIds(page), before, "вкладка не на своєму місці");
+  assert.ok(readTasks(file)[inactive], "tasks.json без задачі");
+  assert.ok(existsSync(dir), "теки нема");
+  assert.equal(await cur(url), current, "поточна змінилась");
+  assert.equal(await page.locator('#tasks-home [data-th="trash"]').count(), 0, "чіп кошика лишився порожнім");
+  assert.equal(await page.evaluate(() => document.getElementById("cv-toast").classList.contains("show")), false, "тост лишився після «Повернути»");
+});
+
+test("видалення ПОТОЧНОЇ: «відкрита зараз» переходить на ту, що назвав сервер; екран лишається відкритим; вихід через вкладку не падає", async (t) => {
+  const { page, url, inactive, current } = await studioTabs(t, 2000);
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.focus(CARD(current));
+  await page.keyboard.press("Delete");
+  await page.click(`${CARD(current)} .cfm-yes`);
+  await page.waitForFunction((id) => !document.querySelector(`#tasks-home .th-card[data-id="${id}"]`), current);
+  assert.equal(await cur(url), inactive, "сервер не переніс поточну");
+  assert.equal(await homeHidden(page), false, "екран закрився");
+  await page.waitForFunction((id) => document.querySelector(`#tasks-home .th-card[data-id="${id}"] .th-curb`), inactive);
+  await page.click(`#tabs .tab-main[data-val="${inactive}"]`);
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  assert.deepEqual(errors, [], "помилки сторінки");
+});
+
+test("видалення ОБОХ задач: екран лишається, «поточної» нема, логотип не падає", async (t) => {
+  const { page, url } = await studioTabs(t, 2100);
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  for (const id of ["x", "y"]) {
+    await page.focus(CARD(id));
+    await page.keyboard.press("Delete");
+    await page.click(`${CARD(id)} .cfm-yes`);
+    await page.waitForFunction((k) => !document.querySelector(`#tasks-home .th-card[data-id="${k}"]`), id);
+  }
+  await page.waitForFunction(() => document.querySelectorAll("#tabs .tab-main[data-val]").length === 0);
+  assert.equal(await homeHidden(page), false, "екран закрився");
+  assert.equal(await cur(url), null, "сервер назвав поточну");
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForTimeout(300);
+  assert.equal(await homeHidden(page), false);
+  assert.ok(await page.locator('#tasks-home [data-th="newtask"]').count(), "нема картки «+»");
+  assert.deepEqual(errors, [], "помилки сторінки");
+});
+
+test("питання «Claude працює»: удар /api/claude-status in_progress для задачі → питання інше", async (t) => {
+  const { page } = await studio(t, 2200);
+  await page.focus(CARD("y"));
+  await page.keyboard.press("Delete");
+  await page.waitForSelector(`${CARD("y")} .cfm`);
+  assert.doesNotMatch(await page.textContent(`${CARD("y")} .cfm-t`), /Claude/, "питання без удару вже згадує Claude");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector(".th-card--ask"));
+  const ok = await page.evaluate(async () => (await fetch("/api/claude-status", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task: "y", phase: "design", status: "in_progress", note: "", session: "live" }) })).ok);
+  assert.ok(ok, "удар не прийнято");
+  /* Опит стану Claude на вкладках — одразу (`visibilitychange`); чекаємо, поки питання почне згадувати Claude. */
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await page.waitForFunction(async () => (await (await fetch("/api/claude-statuses")).json()).tasks?.y?.state === "working");
+  await page.waitForTimeout(500);
+  await page.focus(CARD("y"));
+  await page.keyboard.press("Delete");
+  await page.waitForSelector(`${CARD("y")} .cfm`);
+  assert.match(await page.textContent(`${CARD("y")} .cfm-t`), /Claude працює/, "питання не знає, що Claude працює");
+});
+
+test("видалення не вдалось (сервер 500, простір не пишеться): картка лишається, тост із причиною, теку не рушено", async (t) => {
+  const { page, file } = await studio(t, 2300);
+  const spaceDir = path.dirname(file);
+  const dir = readTasks(file).y.dir;
+  chmodSync(spaceDir, 0o555);
+  t.after(() => { try { chmodSync(spaceDir, 0o755); } catch (e) {} });
+  await page.focus(CARD("y"));
+  await page.keyboard.press("Delete");
+  await page.click(`${CARD("y")} .cfm-yes`);
+  await page.waitForFunction(() => /Не вдалося/.test(document.getElementById("cv-toast")?.textContent || ""));
+  await page.waitForFunction(() => !document.querySelector(".th-card--ask"));
+  assert.ok(await page.locator(CARD("y")).count(), "картка зникла");
+  assert.ok(existsSync(dir), "теку перенесено");
+  assert.ok(readTasks(file).y, "tasks.json без задачі");
+  assert.equal(await page.locator('#cv-toast [data-act="undo"]').count(), 0, "тост збою з «Повернути»");
 });
