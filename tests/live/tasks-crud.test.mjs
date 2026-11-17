@@ -556,6 +556,8 @@ test("видалення ОБОХ задач: екран лишається, «�
   await page.waitForFunction(() => document.querySelectorAll("#tabs .tab-main[data-val]").length === 0);
   assert.equal(await homeHidden(page), false, "екран закрився");
   assert.equal(await cur(url), null, "сервер назвав поточну");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.th), "newtask", "після останнього видалення фокус не на «+»");
+  assert.equal(await page.evaluate(() => document.getElementById("cv-toast").getAttribute("role")), "status", "тост без role=status");
   await page.click('#tabs [data-act="home"]');
   await page.waitForTimeout(300);
   assert.equal(await homeHidden(page), false);

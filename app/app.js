@@ -805,7 +805,12 @@ function showCreateWait(form) {
 // клікабельний, живе довше (`ms`, типово 8 с) і має кнопку `[data-act="undo"]` у порядку табуляції (фокус сам НЕ переходить).
 function toast(msg, { action = null, ms } = {}) {
   let t = document.getElementById('cv-toast');
-  if (!t) { t = document.createElement('div'); t.id = 'cv-toast'; t.className = 'cv-toast'; document.body.appendChild(t); }
+  if (!t) {
+    t = document.createElement('div'); t.id = 'cv-toast'; t.className = 'cv-toast';
+    /* Читачі екрана озвучують зміну тексту, а не саму появу вузла: тост — «статус», не alert. */
+    t.setAttribute('role', 'status'); t.setAttribute('aria-live', 'polite');
+    document.body.appendChild(t);
+  }
   clearTimeout(toast._t);
   const hide = () => t.classList.remove('show');
   if (action) {
@@ -3444,7 +3449,9 @@ function applyTaskTitle(id, title) {
   markHomeMutated();
   if (homeReady()) homeData = { ...homeData, mine: homeData.mine.map((y) => (y.id === id ? { ...y, title } : y)) };
   if (tabs.some((x) => x.id === id)) { tabs = tabs.map((x) => (x.id === id ? { ...x, title } : x)); saveTabs(); paintTabs(); }
-  if (curTask && currentTaskId === id) { curTask = { ...curTask, title }; paintBar(); }
+  /* Лише справжня `curTask`: після видалення поточної вона ще вказує на видалену задачу (до `render()`), а `currentTaskId` уже
+     новий — запис назви в неї отруїв би чужий обʼєкт. Смугу малюємо лише тоді, коли обʼєкт справді про цю задачу. */
+  if (curTask?.id === id) { curTask = { ...curTask, title }; paintBar(); }
 }
 
 /** Стан Claude «працює» для задачі (id чи Jira-ключ) з останнього опиту вкладок (`claudeAll`); нема даних — ні. */
@@ -3492,19 +3499,22 @@ async function deleteTask(id) {
   const at = tabs.findIndex((x) => x.id === id);
   const tabRec = at >= 0 ? tabs[at] : null;
   if (tabRec) { tabs = tabs.filter((x) => x.id !== id); saveTabs(); }
-  if (homeReady()) {
+  /* Відповідь про ІНШИЙ простір (людина перемкнула його, поки летів запит) у чужий список не лягає: екран перечитається. */
+  if (homeReady() && homeData?.space?.id === spaceId) {
     homeData = { ...homeData, current: r.current ?? null, mine: homeData.mine.filter((y) => y.id !== id),
       trash: [{ id, title, jira: row.jira ?? null, tags: row.tags || [], at: r.trash?.at ?? null, thumb: null },
         ...(homeData.trash || [])] };
-  }
+  } else homeData = null;
+  /* Перемальовка ДО довгих await: видалена картка не має лишатись клікабельною, поки скидається пер-задачний стан. */
+  paintTabs(); paintHome();
   /* Видалена була поточною: пер-задачний стан чужий. Простір не змінився (`resetSpaceState` не потрібен), сервер назвав нову
      поточну — чи жодної (`showNoTask`: сцена порожня, екран лишається відкритим). */
+  let noTask = false;
   if (id === currentTaskId) {
     taskSwitchGen += 1;
     if (r.current) { await resetPerTaskState(); currentTaskId = r.current; }
-    else await showNoTask();
+    else { await showNoTask(); noTask = true; }
   }
-  paintTabs(); paintHome();
   /* Фокус: наступна картка (чи попередня, якщо була остання), інакше «+», інакше пошук; лише коли його не забрали. */
   const a = document.activeElement;
   if (!a || a === document.body || !a.isConnected) {
@@ -3513,6 +3523,8 @@ async function deleteTask(id) {
     const next = order.slice(i + 1).concat(order.slice(0, i).reverse()).map((k) => left.find((c) => c.dataset.id === k)).find(Boolean);
     (next ?? homeNode()?.querySelector('[data-th="newtask"]') ?? homeNode()?.querySelector('#th-q'))?.focus({ preventScroll: true });
   }
+  /* `showNoTask` кличе `enterHome`, що ставить фокус у пошук; задач нема — осмислена ціль «+» (якщо простір без дашборда). */
+  if (noTask) homeNode()?.querySelector('[data-th="newtask"]')?.focus({ preventScroll: true });
   toast(t('taskDeleted', title), { action: { label: t('taskRestore'), run: () => restoreTask(id, { spaceId, tabRec, at, title }) } });
   loadHome();      // свіжі дані (кадр кошика, current)
 }
@@ -3545,11 +3557,12 @@ async function restoreTask(id, { spaceId, tabRec = null, at = -1, title = id, fr
     tabs = [...tabs.slice(0, k), tabRec, ...tabs.slice(k)];
     saveTabs(); paintTabs();
   }
-  if (homeReady()) {
+  /* Екран закрито чи відповідь про інший простір — місцевий список не чіпаємо, а скидаємо: наступний вхід перечитає чисто. */
+  if (homeOpen && homeReady() && homeData?.space?.id === spaceId) {
     homeData = { ...homeData, trash: (homeData.trash || []).filter((y) => y.id !== id) };
     if (!homeData.trash.length) homeEdit = { ...homeEdit, trash: false };
     if (fromTrash) { paintHomeLower(); focusAfterTrash(order, id); }
-  }
+  } else homeData = null;
   await loadHome();
   if (homeOpen && !fromTrash) homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
   if (!tabRec) toast(t('taskRestored', title));
@@ -3564,12 +3577,12 @@ async function purgeFromTrash(id) {
   try { await postForm('/api/task-purge', { id, space: spaceId }); }
   catch (e) { paintHomeLower(); toast(t('errFailed', requestErrText(e))); return; }
   markHomeMutated();
-  if (homeReady()) {
+  if (homeOpen && homeReady() && homeData?.space?.id === spaceId) {
     homeData = { ...homeData, trash: (homeData.trash || []).filter((y) => y.id !== id) };
     if (!homeData.trash.length) homeEdit = { ...homeEdit, trash: false };
     paintHomeLower();
     focusAfterTrash(order, id);
-  }
+  } else homeData = null;
   toast(t('taskPurged', row?.title ?? id));
 }
 
