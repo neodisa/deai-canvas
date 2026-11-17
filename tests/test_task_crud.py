@@ -12,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_spaces_serve import Fixture, _read, _write, _md5  # noqa: E402  (модуль сам ставить app/ і bin/)
+from test_tasks_overview import make_task, add_shot  # noqa: E402
 import serve  # noqa: E402
 import spaces_guard  # noqa: E402
 
@@ -28,6 +29,12 @@ def tearDownModule():
 
 
 class TaskCrudApi(Fixture):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # `task-new` робить простір задачі поточним (запис реєстру): ізоляцію `DEAI_HOME` фіксуємо явно, як і охоронець файлів просторів
+        os.environ['DEAI_HOME'] = cls.deai
+
     def snapshot_p(self):
         """Повернути tasks.json простору P, теку `x` і кошик у стан «до тесту»: тести видаляють, повертають, додають кадри."""
         self.restore_bytes(self.p_file)
@@ -214,6 +221,59 @@ class TaskCrudApi(Fixture):
             st, j = self.post('/api/task-restore', {'id': 'x', 'space': self.p_id})
         self.assertEqual((st, j['code']), (409, 'task-exists'))
         self.assertIn('entry', _read(self.p_file)['trash']['x'])
+
+    # ── кошик у екрані задач, кадр із кошика, id у кошику ──
+    def test_overview_lists_trash_of_the_space(self):
+        self.snapshot_p()
+        serve.spaces.switch_space(self.p_id)
+        self.post('/api/task-delete', {'id': 'x'})
+        st, j = self.jget('/api/tasks-overview')
+        self.assertEqual(st, 200)
+        self.assertEqual([r['id'] for r in j['trash']], ['x'])
+        row = j['trash'][0]
+        self.assertEqual(row['title'], 'Ікс')
+        self.assertTrue(row['at'].endswith('Z'))
+        self.assertNotIn('x', [r['id'] for r in j['mine']])
+
+    def test_overview_hides_tombstones(self):
+        self.snapshot_p()
+        serve.spaces.switch_space(self.p_id)
+        self.post('/api/task-delete', {'id': 'x'})
+        self.post('/api/task-purge', {'id': 'x', 'space': self.p_id})
+        _st, j = self.jget('/api/tasks-overview')
+        self.assertEqual(j['trash'], [])
+
+    def test_task_list_does_not_see_trash(self):
+        self.snapshot_p()
+        serve.spaces.switch_space(self.p_id)
+        self.post('/api/task-delete', {'id': 'x'})
+        _st, j = self.jget('/api/tasks')
+        self.assertNotIn('x', [r['id'] for r in j['tasks']])
+
+    def test_thumb_from_trash(self):
+        self.snapshot_p()
+        serve.spaces.switch_space(self.p_id)
+        make_task(self.p_path, 'x', pages=['home'])
+        add_shot({'dir': self.x_dir}, 'it1', 'home', sha='tr1')
+        self.post('/api/task-delete', {'id': 'x'})
+        _st, j = self.jget('/api/tasks-overview')
+        url = j['trash'][0]['thumb']
+        self.assertIn('trash=1', url)
+        st, _body = self.get(url)
+        self.assertEqual(st, 200)
+        st, _body = self.get('/api/task-thumb?task=x')     # без trash=1 — живої задачі `x` нема
+        self.assertEqual(st, 404)
+
+    def test_new_task_refuses_an_id_in_trash_and_clears_a_tombstone(self):
+        self.snapshot_p()
+        self.post('/api/task-delete', {'id': 'x'})
+        st, j = self.post('/api/task-new', {'id': 'x', 'title': 'X', 'space': self.p_id})
+        self.assertEqual((st, j['code']), (400, 'task-in-trash'))
+        self.post('/api/task-purge', {'id': 'x', 'space': self.p_id})
+        self.assertIn('x', _read(self.p_file)['trash'])          # надгробок є
+        st, j = self.post('/api/task-new', {'id': 'x', 'title': 'X', 'space': self.p_id})
+        self.assertEqual(st, 200, j)
+        self.assertNotIn('x', _read(self.p_file).get('trash', {}))
 
 
 if __name__ == '__main__':

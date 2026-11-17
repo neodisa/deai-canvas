@@ -2171,6 +2171,20 @@ def _last_changed(task, st):
     return int(m) if m else None
 
 
+def _trash_rows(cfg, sp=None):
+    """Етап Д: рядки кошика простору для екрана «Задачі» — найновіші першими, без надгробків. Кадр — з ТЕКИ В КОШИКУ
+    (`/api/task-thumb?…&trash=1`); мітки — як у «Моїх» (`task_tags`, похідна мітка напрямку для запису без власних)."""
+    rows = []
+    for tid, rec in task_trash.listing(cfg):
+        entry, td = rec['entry'], rec.get('trashDir')
+        found = (task_thumb_path({**entry, 'dir': td})
+                 if isinstance(td, str) and td and NAME_RE.fullmatch(tid) else None)
+        rows.append({'id': tid, 'title': entry.get('title', tid), 'jira': entry.get('jira'),
+                     'tags': task_tags(entry, sp), 'at': rec.get('at'),
+                     'thumb': (_thumb_url(tid, found[1]) + '&trash=1') if found else None})
+    return rows
+
+
 def tasks_overview(cfg, team, now=None, rows_at=None, tracker=None):
     """Відповідь `/api/tasks-overview` без `current`. ЧИСТА збірка: мережі нема,
     `team` = `(rows, error)` від `team_rows()`.
@@ -2389,6 +2403,9 @@ def task_new(cfg, tid, title='', jira='', track=None, gitlab=None, vcs=None, roo
         raise TaskRefused('bad-task-id', 'bad task id')
     if tid in cfg.get('tasks', {}):
         raise TaskRefused('task-exists', 'task already exists')
+    if task_trash.in_trash(cfg, tid):
+        # Етап Д: id зайнятий записом кошика — нова задача з ним зробила б повернення неможливим.
+        raise TaskRefused('task-in-trash', 'a task with this id is in the trash')
     tdir = os.path.join(root or default_task_root(cfg), tid)
     if adopt_src is not None:
         try:
@@ -2401,6 +2418,7 @@ def task_new(cfg, tid, title='', jira='', track=None, gitlab=None, vcs=None, roo
             cfg['tasks'][tid]['tags'] = list(tags)
         cfg['current'] = tid
         mark_opened(cfg, tid)
+        task_trash.clear_tombstone(cfg, tid)   # «назавжди» знищену задачу заводять знову — надгробок більше не потрібен
         save_tasks(cfg)
     except BaseException:
         if adopt_src is not None:
@@ -6259,7 +6277,7 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 cfg = load_tasks()
             except spaces.NoTask:
-                self._send_json({'current': None, 'mine': [], 'team': None, 'tracker': None, 'space': None})
+                self._send_json({'current': None, 'mine': [], 'team': None, 'tracker': None, 'trash': [], 'space': None})
                 return
             refresh = q.get('refresh', [''])[0] == '1'
             # Статуси трекера (4c-2) — НЕЗАЛЕЖНО від вкладки «Команда»: ключі «Моїх» задач, свій кеш і лок. Збій рішення ролі
@@ -6286,6 +6304,7 @@ class Handler(SimpleHTTPRequestHandler):
                 else:
                     rows, err, rows_at = team_snapshot(refresh=refresh, resolved=resolved)
                     out = tasks_overview(cfg, (rows, err), rows_at=rows_at, tracker=trk)
+            out['trash'] = _trash_rows(cfg)      # кошик простору запиту (етап Д): одним місцем для всіх гілок вище
             self._send_json({'current': cfg.get('current'), **out,
                              'space': space_view(spaces.active_space())})
             return
@@ -6523,7 +6542,14 @@ class Handler(SimpleHTTPRequestHandler):
         if not NAME_RE.fullmatch(tid):
             self.send_error(400, 'bad task')
             return
-        task = load_tasks().get('tasks', {}).get(tid)
+        cfg = load_tasks()
+        if q.get('trash', [''])[0] == '1':
+            # Етап Д: кадр задачі з кошика — з її теки В КОШИКУ. Лише записи `trash` цього простору: довільної теки так не відкрити.
+            rec = task_trash.records(cfg).get(tid)
+            td = rec.get('trashDir') if rec else None
+            task = {**rec['entry'], 'dir': td} if isinstance(td, str) and td else None
+        else:
+            task = cfg.get('tasks', {}).get(tid)
         found = task_thumb_path(task) if isinstance(task, dict) else None
         if not found:
             self.send_error(404, 'no thumb')
