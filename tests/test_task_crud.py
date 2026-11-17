@@ -189,6 +189,32 @@ class TaskCrudApi(Fixture):
         self.assertEqual(st, 200)
         self.assertIn('purged', _read(self.p_file)['trash']['x'])
 
+    # ── дозаписано за ревʼю Task 2 ──
+    def test_restore_and_purge_with_non_string_id_are_404(self):
+        for route in ('/api/task-restore', '/api/task-purge'):
+            for bad in ([1], {'a': 1}, 5, None):
+                st, j = self.post(route, {'id': bad, 'space': self.p_id})
+                self.assertEqual((st, j['code']), (404, 'not-in-trash'), f'{route} {bad!r}')
+
+    def test_restore_failed_save_puts_folder_back_into_trash(self):
+        self.snapshot_p()
+        self.post('/api/task-delete', {'id': 'x'})
+        td = _read(self.p_file)['trash']['x']['trashDir']
+        with mock.patch.object(serve, 'save_tasks', side_effect=OSError('disk full')):
+            st, j = self.post('/api/task-restore', {'id': 'x', 'space': self.p_id})
+        self.assertEqual((st, j['code']), (500, 'task-restore-failed'))
+        self.assertTrue(os.path.isdir(td))
+        self.assertFalse(os.path.exists(self.x_dir))
+        self.assertIn('entry', _read(self.p_file)['trash']['x'])
+
+    def test_restore_ambiguous_task_is_task_exists(self):
+        self.snapshot_p()
+        self.post('/api/task-delete', {'id': 'x'})
+        with mock.patch.object(serve.spaces, 'find_task', side_effect=serve.spaces.AmbiguousTask('x')):
+            st, j = self.post('/api/task-restore', {'id': 'x', 'space': self.p_id})
+        self.assertEqual((st, j['code']), (409, 'task-exists'))
+        self.assertIn('entry', _read(self.p_file)['trash']['x'])
+
 
 if __name__ == '__main__':
     unittest.main()

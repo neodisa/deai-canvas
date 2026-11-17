@@ -8200,6 +8200,7 @@ class Handler(SimpleHTTPRequestHandler):
                     undo()
                 self._space_error(500, 'task-delete-failed', str(e)[:300])
                 return
+        # `current` лише луна: `task_trash.delete` щойно його перенесла, віддаємо для відповіді
         self._send_json({'ok': True, 'id': tid, 'current': cfg.get('current'),
                          'trash': {'id': tid, 'title': rec['entry'].get('title', tid), 'at': rec['at']}})
 
@@ -8208,6 +8209,9 @@ class Handler(SimpleHTTPRequestHandler):
         409 `task-exists` (дубль між просторами, `AmbiguousTask`, теж «зайнято»); вихідна тека вже є — 409 `task-dir-exists`
         (нічого не рухаємо); збій запису — тека назад у кошик, 500 `task-restore-failed`. `current` не змінюється."""
         tid = payload.get('id', '')
+        if not isinstance(tid, str) or not tid:        # не рядок (`[1]`, `{}`) не хешується: без цього — обрив зʼєднання
+            self._space_error(404, 'not-in-trash', 'task is not in the trash')
+            return
         with TASK_CRUD_LOCK:
             if self._payload_space(payload) is None:
                 return
@@ -8244,6 +8248,9 @@ class Handler(SimpleHTTPRequestHandler):
         `task-purge-failed`, запис лишається (повтор можливий). Збій запису надгробка — теж 500 `task-purge-failed`: тека вже
         зникла, запис лишається, повторне знищення лише допише надгробок. Надгробок не дає `registry.py pull` воскресити задачу."""
         tid = payload.get('id', '')
+        if not isinstance(tid, str) or not tid:        # не рядок (`[1]`, `{}`) не хешується: без цього — обрив зʼєднання
+            self._space_error(404, 'not-in-trash', 'task is not in the trash')
+            return
         with TASK_CRUD_LOCK:
             if self._payload_space(payload) is None:
                 return
