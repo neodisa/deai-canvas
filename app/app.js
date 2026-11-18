@@ -11,7 +11,7 @@ import {
 import { buildRows } from './rows-model.js';
 import { flatten as flattenTree, pathOf, topIds, visibleIds, visibleRows, statsOf, stepRow, firstChildRow, rowRange, errKey } from './tree-model.js';
 import { canMove } from './page-order.js';
-import { assetsPageOf } from './frame-nav.js';
+import { assetsPageOf, followDecision, hashFor } from './frame-nav.js';
 import { readFlow, shotKey, shotVersion, stateQuery } from './flow-model.js';
 import { flowLayout } from './flow-layout.js';
 import { confirmHTML, confirmedId } from './inline-confirm.js';
@@ -2064,7 +2064,9 @@ function frameCmtKey(ev) {
   if (k === 'c' || ev.code === 'KeyC') { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.comments(); }
   else if ((k === 'h' || ev.code === 'KeyH') && cmtOpen) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.cmtpins(); }
 }
-let frameHash = '';   // одноразовий хвіст `#…` для наступного `frame.src` (посилання всередині макета)
+let frameHash = null;   // одноразовий `{it, page, hash}` для наступного `frame.src` (посилання всередині макета)
+let followLatched = false;
+let followStamps = [];  // мітки часу переходів за посиланнями — лічильник запобіжника від циклу редиректів
 frame.addEventListener('load', () => {
   let w = null;
   try { w = frame.contentWindow; w.addEventListener('keydown', frameCmtKey, true); } catch (e) {
@@ -2076,8 +2078,12 @@ frame.addEventListener('load', () => {
   if (!w.CommentLayer && mode === 'single' && picked && panelPagesIt === picked) {
     let id = null;
     try { id = assetsPageOf(w.location.pathname, picked, panelPages); } catch (e) { /* чужий документ */ }
-    if (id) {
-      try { frameHash = w.location.hash || ''; } catch (e) { frameHash = ''; }
+    const fd = id && !followLatched ? followDecision(followStamps, Date.now()) : null;
+    if (fd) { followStamps = fd.stamps; if (!fd.follow) followLatched = true; }   // зупинка тримається до свідомого кроку користувача
+    if (fd && fd.follow) {   // понад 3 переходи за 3 с — цикл редиректів: лишаємо стару поведінку
+      let h = '';
+      try { h = w.location.hash || ''; } catch (e) { /* чужий документ */ }
+      frameHash = { it: picked, page: id, hash: h };
       pickedPage = id; pickedState = null;
       render();
       return;
@@ -5316,7 +5322,7 @@ const PANEL_ACTIONS = {
     /* Стан скидаємо навіть коли рядок ТОЙ САМИЙ: сторінка не змінилась, тож
        охорона в `loadPages` тут не спрацює, а той, хто клікнув «Пошук», чекає
        звичайний пошук, а не «нічого не знайдено» з кадру флоу. */
-    pickedPage = val; pickedState = null;
+    pickedPage = val; pickedState = null; followStamps = []; followLatched = false;   // свідомий перехід користувача скидає запобіжник
     /* У «Огляді» клік по рядку ВЕДЕ КАМЕРУ до кадру цієї сторінки й підсвічує
        його. Повного `render()` при цьому НЕ робимо: він перебудував би
        канвас і сів у `fitAll()`, тобто затер би щойно порахований переліт
@@ -7437,6 +7443,7 @@ function maybeAutoShoot() {
    документ). Для «Огляду» не діє: полотно перебудовується завжди, рамка там схована. */
 function applyMode(task, { keepFrame = false } = {}) {
   if (mode === 'canvas') {
+    frameHash = null;
     // ховаємо СЦЕНУ, а не рамку: рамка лежить у сцені, і сцена зі своєю підкладкою
     // накрила б полотно «Огляду» світлим прямокутником
     stage.hidden = true; canvasEl.hidden = false;
@@ -7453,9 +7460,9 @@ function applyMode(task, { keepFrame = false } = {}) {
     if (!keepFrame) {
       frame.src = (picked && pickedPage)
         ? `/commented?it=${encodeURIComponent(picked)}&page=${encodeURIComponent(pickedPage)}`
-          + `&host=1${stateQuery(pickedState)}${frameHash}`
+          + `&host=1${stateQuery(pickedState)}${hashFor(frameHash, picked, pickedPage)}`
         : (picked ? `/commented?it=${encodeURIComponent(picked)}&host=1` : 'about:blank');
-      frameHash = '';
+      frameHash = null;
       /* Нова сторінка в рамці — новий коментатор: старий знімок і готовність уже не про неї (`ready` поверне нове). */
       /* Змінилась адреса (ітерація/канал/сторінка) — вибір, редагування й чернетка належать старому документу. */
       const srcNow = frame.getAttribute('src');

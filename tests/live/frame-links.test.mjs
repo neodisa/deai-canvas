@@ -47,3 +47,25 @@ test("посилання в макеті на іншу сторінку: ком�
   await page.waitForFunction(() => /page=holovna/.test(document.querySelector("#frame").contentWindow.location.search));
   assert.equal(await page.evaluate(() => document.querySelector("#frame").contentWindow.location.hash), "");
 });
+
+test("редирект-цикл сирих сторінок не крутить оболонку нескінченно", async (t) => {
+  const { dir } = taskFixture({ html: (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
+<script>setTimeout(() => location.replace('../${id === "holovna" ? "poshuk" : "holovna"}/index.html'), 400)</script></body></html>` });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 50 });
+  t.after(() => child.kill());
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  let n = 0;
+  page.on("request", (r) => { if (/\/commented\?/.test(r.url())) n++; });
+  await page.goto(`${url}/app/`);
+  await page.waitForSelector('[data-act="page"][data-val="holovna"]');
+  await new Promise((r) => setTimeout(r, 6000));
+  const settled = n;
+  assert.ok(settled <= 5, `запитів /commented: ${settled}`);
+  await page.click('[data-act="page"][data-val="poshuk"]');
+  await page.waitForFunction(() => /page=poshuk/.test(document.querySelector("#frame").getAttribute("src") || ""));
+  assert.deepEqual(errors, []);
+});

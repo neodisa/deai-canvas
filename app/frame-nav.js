@@ -22,3 +22,15 @@ export function assetsPageOf(pathname, it, pages) {
   const f = flatten(pages).find((x) => x.page.id === id);
   return f && f.kind === "page" ? id : null;
 }
+
+/** Запобіжник від циклу редиректів: не більше `max` переходів за `windowMs`. Чиста — час і мітки приходять ззовні. */
+export function followDecision(stamps, now, max = 3, windowMs = 3000) {
+  const live = (stamps || []).filter((t) => now - t < windowMs);
+  if (live.length >= max) return { follow: false, stamps: live };
+  return { follow: true, stamps: [...live, now] };
+}
+
+/** Хвіст `#…` із посилання — лише для тієї самої ітерації й сторінки, що чекають у `pending`; інакше порожньо. */
+export function hashFor(pending, it, page) {
+  return pending && pending.it === it && pending.page === page ? (pending.hash || "") : "";
+}
