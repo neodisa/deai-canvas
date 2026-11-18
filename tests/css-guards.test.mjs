@@ -900,6 +900,15 @@ test("острівець: смужка крізь порожнє пропуск�
   assert.match(cssRule(css, ".island"), /pointer-events\s*:\s*auto/);
 });
 
+test("острівець не рухається: .cv-hud не залежить від відкритих панелей (центр = центр вікна)", () => {
+  const css = stripComments(readCss());
+  const hud = cssRule(css, ".cv-hud");
+  assert.match(hud, /left\s*:\s*0/);
+  assert.match(hud, /right\s*:\s*0/);
+  const bad = css.split("}").map((r) => r.split("{")[0]).filter((sel) => /\.cv-hud\b/.test(sel) && /body\./.test(sel));
+  assert.deepEqual(bad, [], "правила панелей не мають чіпати .cv-hud");
+});
+
 test("шар острівця: вище за --z-widget, нижче за --z-bar (випадаючі меню його накривають)", () => {
   const css = readCss();
   const z = (n) => Number((new RegExp(`--${n}\\s*:\\s*(\\d+)`).exec(stripComments(css)) || [])[1]);

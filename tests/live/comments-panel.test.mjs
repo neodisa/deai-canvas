@@ -123,6 +123,9 @@ test("2б: режими коментування — в острівці (4 кн
   assert.equal(await page.getAttribute('#hud [data-act="cmtfreeze"]', "aria-pressed"), "true", "заморозка типово ввімкнена");
   assert.equal(await shadowShown(frame, ".modes"), "none", "смужка режимів коментатора видима поряд з острівцем");
   const bottomOpen = await isl();
+  /* Острівець по центру ВІКНА, хоч права панель коментарів (і ліва шарів) відкриті. */
+  const cx = await page.evaluate(() => { const r = document.querySelector("#hud .island").getBoundingClientRect(); return Math.abs((r.left + r.right) / 2 - innerWidth / 2); });
+  assert.ok(cx <= 2, `острівець зсунуто від центру вікна на ${cx}px`);
   await page.click('#hud [data-act="cmtmode"][data-val="text"]');
   assert.equal(await frame.evaluate(() => window.CommentLayer.tool().mode), "text");
   assert.equal(await page.getAttribute('#hud [data-act="cmtmode"][data-val="text"]', "aria-pressed"), "true");

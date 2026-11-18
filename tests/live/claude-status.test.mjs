@@ -95,15 +95,13 @@ test("A+B: удар → острівець «Claude працює» внизу п
     /Claude працює/.test(document.querySelector("#claude-hud .claude-island")?.textContent || ""), null, { timeout: 12000 });
   assert.equal(await page.locator("#bar .claude-chip, #bar .claude-island").count(), 0, "статус лишився в смузі");
   assert.equal(await page.locator("#claude-hud .claude-island").count(), 1, "сегмент Claude відсутній у острівці");
-  /* Унизу й по центру ВИДИМОЇ робочої області: панель шарів відкрита, тож центр
-     області зсунутий праворуч від центру вікна. */
+  /* Унизу й по центру ВІКНА (не області): панель шарів відкрита, а острівець не рухається. */
   const geo = await page.evaluate(() => {
     const i = document.querySelector("#hud .island").getBoundingClientRect();
-    const s = document.getElementById("stage").getBoundingClientRect();
-    return { gap: innerHeight - i.bottom, delta: Math.abs((i.left + i.right) / 2 - (s.left + s.right) / 2) };
+    return { gap: innerHeight - i.bottom, delta: Math.abs((i.left + i.right) / 2 - innerWidth / 2) };
   });
   assert.ok(geo.gap >= 8 && geo.gap <= 24, `острівець не внизу: відступ ${geo.gap}px`);
-  assert.ok(geo.delta <= 2, `острівець не по центру робочої області: зсув ${geo.delta}px`);
+  assert.ok(geo.delta <= 2, `острівець не по центру вікна: зсув ${geo.delta}px`);
 
   stub = { state: null };
   await page.waitForFunction(() => !document.querySelector("#claude-hud .claude-island"), null, { timeout: 12000 });
@@ -374,7 +372,7 @@ test("H: острівець по центру робочої області за
       const s = document.getElementById("stage").getBoundingClientRect();
       return { delta: Math.abs((i.left + i.right) / 2 - (s.left + s.right) / 2), stage: [s.left, s.right] };
     });
-    assert.ok(g.delta <= 2, `${what}: острівець не по центру робочої області: зсув ${g.delta}px, сцена ${g.stage}`);
+    assert.ok(g.delta <= 2, `${what}: острівець не по центру вікна: зсув ${g.delta}px, сцена ${g.stage}`);
   };
   const collapse = () => page.click('#pages-panel button[data-act="panel"]');
 
