@@ -65,7 +65,7 @@ The screenshots show a made-up budgeting app on demo data. `node ops/readme-shot
 
 ## Status
 
-Version 0.30.1 (18.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
+Version 0.30.2 (18.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
 cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Feature reference

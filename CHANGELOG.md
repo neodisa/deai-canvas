@@ -3,6 +3,21 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.30.2] — 18.11.2026
+
+Patch: owner-requested UI fixes. The bottom island stays centered on the window, the status shows no seconds, the iteration
+dropdown lists the newest first, the crumb has no designer name, and the UI says "AI" instead of "Claude".
+
+### Змінено
+- Острівець унизу центрований по вікну й ніколи не рухається: відкриття чи закриття лівої (шари) або правої (коментарі,
+  інспектор) панелі його не зсуває. Смужка `.cv-hud` більше не залежить від панелей.
+- Статус «AI працює» не показує секунд: до хвилини вік порожній, далі — «N хв тому». Ключ `ageSec` прибрано.
+- Дропдаун ітерацій: найновіша ітерація зверху, далі вниз за спаданням. Порядок `iterations` у задачі не змінено.
+- Крошка ітерації без імені автора: лише ітерація та її назва. Позначка чужої ітерації (пунктир і підказка) і підписи
+  авторів у рядках дропдауна лишились.
+- Скрізь в інтерфейсі «Claude»/«Клод» замінено на нейтральне «AI» (обидві мови): статус, острівець, вкладки задач,
+  коментарі («Для AI», «Доручити AI»), тюнер, питання про видалення задачі, вкладка адресата на сторінках превʼю.
+
 ## [0.30.1] — 18.11.2026
 
 Patch: sending a comment no longer freezes the shell on heavy pages, and the commenter survives in-mockup links.
