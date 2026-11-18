@@ -3,13 +3,18 @@
  * і синхронно копіює стилі кожного SVG-вузла та псевдоелемента — на важких сторінках
  * це секунди заморозки. `ignoreElements` лишає лише ланцюжок предків цілі, її
  * піддерево, <head>/стилі та елементи поза ціллю, на які посилається піддерево.
+ *
+ * Відомe прийняте обмеження: селектори, що залежать від сусідів (`:nth-child`, `+`, `~`), можуть
+ * стилізувати ціль у мініатюрі інакше, ніж у живому макеті.
  */
+const SVG_NS = 'http://www.w3.org/2000/svg';
 const URL_ATTRS = ['fill', 'stroke', 'mask', 'clip-path', 'filter', 'marker-start', 'marker-mid', 'marker-end'];
 const URL_RE = /url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/g;
 
 function refIds(el) {
   const ids = [];
-  for (const name of ['href', 'xlink:href']) {
+  // `href="#…"` — посилання лише в SVG (use/image/textPath); звичайне <a href="#main"> якорем не є.
+  for (const name of el.namespaceURI === SVG_NS ? ['href', 'xlink:href'] : []) {
     const v = el.getAttribute && el.getAttribute(name);
     if (v && v.charAt(0) === '#' && v.length > 1) ids.push(v.slice(1));
   }

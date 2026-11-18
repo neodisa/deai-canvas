@@ -1291,13 +1291,22 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     // stays faithful across pages; coordinate-cropped document renders drift.
     async _captureShot(target) {
       try {
-        if (target && target.nodeType === 1 && target.getElementsByTagName('*').length > SHOT_MAX_NODES) return null;
+        if (target && target.nodeType === 1 && (target.getElementsByTagName('*').length > SHOT_MAX_NODES
+          || target.getElementsByTagNameNS('http://www.w3.org/2000/svg', '*').length > SHOT_MAX_SVG)) return null;
         const h2c = await loadShotLib();
         const base = { backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false };
         let canvas;
         if (target && target.nodeType === 1) {
           target.classList.remove('cl-hl');            // don't bake the hover outline into the shot
-          canvas = await h2c(target, { ...base, ignoreElements: shotScope(target) });
+          // Без сусідів розкладка цілі в клоні може попливти (flex:1, grid, space-between) — фіксуємо її бокс.
+          const r = target.getBoundingClientRect();
+          const onclone = (doc, el) => {
+            if (!el || !el.style) return;
+            const set = (n, v) => el.style.setProperty(n, v, 'important');
+            set('width', r.width + 'px'); set('height', r.height + 'px'); set('box-sizing', 'border-box');
+            set('flex', '0 0 auto'); set('max-width', 'none'); set('min-width', '0'); set('max-height', 'none');
+          };
+          canvas = await h2c(target, { ...base, ignoreElements: shotScope(target), onclone });
         } else { return null; }
         const maxW = 360, k = Math.min(1, maxW / (canvas.width || maxW)) || 1;
         const out = document.createElement('canvas');
@@ -2040,6 +2049,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   // core bundle stays dependency-free. Fails soft: no lib → no screenshot, comment still works.
   // Забагато вузлів — знімок заморозить оболонку: зберігаємо коментар без нього.
   const SHOT_MAX_NODES = 1500;
+  // SVG-вузли найдорожчі для клонування html2canvas (~10 мс кожен) — окремий ліміт.
+  const SHOT_MAX_SVG = 300;
   let _shotLibPromise = null;
   function loadShotLib() {
     if (typeof window !== 'undefined' && window.html2canvas) return Promise.resolve(window.html2canvas);

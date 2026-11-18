@@ -20,9 +20,9 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>t</title><
 <style id="bodystyle">p{margin:0}</style>
 <main id="m"><section id="s1"><div id="d1"><p id="p">Абзац для коментаря
 <svg id="u" width="8" height="8"><use href="#ic"/></svg>
-<svg id="f" width="8" height="8"><rect id="r" width="8" height="8" fill="url(#g)"/></svg></p></div></section>
+<a id="skip" href="#far">x</a><svg id="f" width="8" height="8"><rect id="r" width="8" height="8" fill="url(#g)"/></svg></p></div></section>
 <section id="s2"><svg id="o" width="8" height="8"><circle r="3"/></svg><p id="q">Інша секція</p></section></main>
-<div id="big"></div></body></html>`;
+<section id="far"><div id="farin"><p>далеко</p></div></section><div id="big"></div></body></html>`;
 
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
@@ -66,7 +66,12 @@ test("ignoreElements лишає предків, піддерево, head/сти�
     if (!call) return null;
     const ig = call.opts.ignoreElements;
     const q = (s) => document.querySelector(s);
+    const rect = call.el.getBoundingClientRect();
+    const clone = document.createElement("p");
+    call.opts.onclone(document, clone);
     const out = {
+      rect: [rect.width, rect.height],
+      pin: ["width", "height", "box-sizing", "flex", "max-width", "min-width", "max-height"].map((n) => [clone.style.getPropertyValue(n), clone.style.getPropertyPriority(n)]),
       hasFn: typeof ig === "function",
       target: call.el.id,
       outsideSection: ig(q("#s2")), outsideChild: ig(q("#q")), outsideSvg: ig(q("#o")), big: ig(q("#big")),
@@ -74,12 +79,17 @@ test("ignoreElements лишає предків, піддерево, head/сти�
       desc: ["#u", "#f", "#r", "#u use"].map((s) => ig(q(s))),
       bodyStyle: ig(q("#bodystyle")),
       head: [...document.head.children].map((n) => ig(n)),
+      far: ig(q("#far")), farin: ig(q("#farin")),
       ic: ig(q("#ic")), sprite: ig(q("#sprite")), other: ig(q("#other")), g: ig(q("#g")),
     };
     return out;
   });
   assert.ok(r, "html2canvas має бути викликаний");
   assert.equal(r.hasFn, true);
+  assert.equal(r.pin[0][0], `${r.rect[0]}px`);
+  assert.equal(r.pin[1][0], `${r.rect[1]}px`);
+  assert.deepEqual(r.pin.slice(2).map((x) => x[0]), ["border-box", "0 0 auto", "none", "0px", "none"]);
+  assert.ok(r.pin.every((x) => x[1] === "important"));
   assert.equal(r.target, "p");
   assert.equal(r.outsideSection, true);
   assert.equal(r.outsideChild, true);
@@ -89,6 +99,8 @@ test("ignoreElements лишає предків, піддерево, head/сти�
   assert.deepEqual(r.desc, [false, false, false, false]);
   assert.equal(r.bodyStyle, false);
   assert.ok(r.head.length > 0 && r.head.every((v) => v === false));
+  assert.equal(r.far, true, "<a href=#far> не робить секцію якорем");
+  assert.equal(r.farin, true);
   assert.equal(r.ic, false);
   assert.equal(r.sprite, false);
   assert.equal(r.other, true, "непов'язаний symbol відсікається");
@@ -107,5 +119,17 @@ test("ціль із понад 1500 нащадків: html2canvas не викл�
   assert.equal(await page.evaluate(() => window.__calls.length), 0, "html2canvas не мав викликатись");
   const c = await page.evaluate(() => window.__mem.find((x) => x.text === "без знімка"));
   assert.equal(c.meta && c.meta.shot, undefined);
+  await page.close();
+});
+
+test("ціль із понад 300 SVG-вузлами (але <1500 елементів): знімка нема", async () => {
+  const page = await boot();
+  await page.evaluate(() => {
+    const big = document.querySelector("#big");
+    big.style.padding = "30px";
+    big.innerHTML = '<svg width="10" height="10">' + "<circle r=\"1\"/>".repeat(400) + "</svg>";
+  });
+  await addComment(page, "#big", "svg-важкий", { x: 5, y: 5 });
+  assert.equal(await page.evaluate(() => window.__calls.length), 0);
   await page.close();
 });
