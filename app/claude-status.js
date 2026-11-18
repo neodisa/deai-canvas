@@ -13,8 +13,8 @@ import { t } from "./i18n.js";
 const STATES = ["working", "waiting", "blocked", "done"];
 
 /** Підпис острівця з відповіді сервера або `null` (серцебиття згасло / ще не було).
- *  Вік — лише в «працює»: «працює · 2 хв тому» чесніше за голе «працює», коли довга
- *  команда йде без жодного інструменту; у решти станів вік нічого не додає.
+ *  Вік — лише в «працює» і лише від хвилини: «працює · 2 хв тому» чесніше за голе «працює», коли довга
+ *  команда йде без жодного інструменту; до 60 с вік порожній (секунди — шум), у решти станів теж.
  *  Нотатка (`note`) в острівець не йде: він клікопрозорий (`pointer-events: none`), тож
  *  підказка-`title` ніколи б не показалась, а власник обрав короткий острівець.
  *  Рядки — звичайний текст, НЕ HTML: у DOM — лише через `textContent`, ніколи через
@@ -26,7 +26,7 @@ export function islandParts(view) {
   const ageS = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
   const label = state === "working" ? t("claudeWorking") : t(`claude_${state}`);
   const age = state === "working"
-    ? (ageS < 60 ? t("ageSec", ageS) : t("ageMin", Math.floor(ageS / 60)))
+    ? (ageS < 60 ? "" : t("ageMin", Math.floor(ageS / 60)))
     : "";
   return { state, label, age };
 }

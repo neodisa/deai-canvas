@@ -65,12 +65,12 @@ test("islandParts: підписи станів; вік — лише в «пра�
   const w = islandParts({ state: "working", age_s: 20, note: "", phase: "design" });
   assert.equal(w.state, "working");
   assert.equal(w.label, t("claudeWorking"));
-  assert.equal(w.age, t("ageSec", 20));
+  assert.equal(w.age, "", "до хвилини секунд не показуємо");
   assert.equal(islandParts({ state: "working", age_s: 125 }).age, t("ageMin", 2));
-  assert.equal(islandParts({ state: "working", age_s: 59 }).age, t("ageSec", 59), "межа хвилини");
+  assert.equal(islandParts({ state: "working", age_s: 59 }).age, "", "межа хвилини");
   assert.equal(islandParts({ state: "working", age_s: 60 }).age, t("ageMin", 1), "межа хвилини");
-  assert.equal(islandParts({ state: "working", age_s: -5 }).age, t("ageSec", 0), "годинник сервера назад");
-  assert.equal(islandParts({ state: "working", age_s: Infinity }).age, t("ageSec", 0));
+  assert.equal(islandParts({ state: "working", age_s: -5 }).age, "", "годинник сервера назад");
+  assert.equal(islandParts({ state: "working", age_s: Infinity }).age, "");
   const wt = islandParts({ state: "waiting", age_s: 400 });
   assert.equal(wt.label, t("claude_waiting"));
   assert.equal(wt.age, "");
