@@ -193,7 +193,8 @@ export function barModel(s) {
       pub: !!s.iterPub, onGl: !!s.iterOnGl,
       author: s.iterAuthor || "", mine: s.iterMine !== false,
       origin: s.iterOrigin || null,
-      items: (s.iterList || []).map((x) => ({
+      /* найновіша зверху: `iterList` лишається від старої до новішої, перевертається лише перелік дропдауна */
+      items: (s.iterList || []).slice().reverse().map((x) => ({
         id: x.id, label: x.label, note: x.note || "",
         pub: !!x.pub, onGl: !!x.onGl, on: x.id === s.iterId,
         author: x.author || "", mine: x.mine !== false, origin: x.origin || null,

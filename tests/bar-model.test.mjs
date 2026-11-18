@@ -290,13 +290,14 @@ test("крошка ітерації несе перелік, а не лише п
   };
   const it = barModel(st).zone1.find((x) => x.id === "iter");
   assert.equal(it.items.length, 3, "переліку ітерацій немає — перемкнути нічим");
-  assert.deepEqual(it.items.map((x) => x.id), ["it1", "it2", "it3"]);
+  assert.deepEqual(it.items.map((x) => x.id), ["it3", "it2", "it1"], "найновіша зверху");
   const cur = it.items.filter((x) => x.on);
   assert.deepEqual(cur.map((x) => x.id), ["it2"], "поточна позначена не одна");
   /* Позначки їдуть у перелік: інакше довелось би відкривати кожну ітерацію,
      щоб дізнатись, яка в превью і яку бачить колега на GitLab. */
-  assert.equal(it.items[0].pub, true);
-  assert.equal(it.items[0].onGl, true);
+  const first = it.items.find((x) => x.id === "it1");
+  assert.equal(first.pub, true);
+  assert.equal(first.onGl, true);
 });
 
 /* Підпис автора й ознака чужої ітерації — те, заради чого вся задача про
@@ -317,8 +318,8 @@ test("крошка ітерації несе автора, ознаку «сво
   assert.equal(it.author, "Lead");
   assert.equal(it.mine, true);
   assert.deepEqual(it.items.map((x) => [x.author, x.mine]),
-    [["Ольга Сидорук", false], ["Lead", true]]);
-  assert.equal(it.items[0].origin.it, "it3", "номер ітерації в автора загубився");
+    [["Lead", true], ["Ольга Сидорук", false]]);
+  assert.equal(it.items[1].origin.it, "it3", "номер ітерації в автора загубився");
 });
 
 /* Стара задача без підписів: «своя» за замовчуванням. Інакше вся наявна
