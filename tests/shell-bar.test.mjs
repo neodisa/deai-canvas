@@ -218,7 +218,10 @@ const FOREIGN = {
 test("КРОШКА чужої ітерації підписана автором і помічена", () => {
   const st = S(FOREIGN);
   const { crumb } = iterParts(barHTML(barModel(st), st));
-  assert.match(crumb, /Ольга Сидорук/, "імені автора в крошці немає");
+  /* Імені автора ВИДИМИМ текстом у крошці нема (лише в title-підказці): власник просив — «ітерація та її назва». */
+  const visible = crumb.replace(/ title="[^"]*"/g, "").replace(/<[^>]*>/g, " ");
+  assert.doesNotMatch(visible, /Ольга Сидорук/, "імʼя автора видно в крошці");
+  assert.match(crumb, /title="[^"]*Ольга Сидорук/, "title-підказка мусить лишити автора");
   assert.match(crumb, /crumb--foreign/, "крошка не помічена як чужа");
   /* Пунктирна рамка без пояснення — загадка, а не сигнал. */
   assert.match(crumb, /працювати у своїй/,
@@ -243,7 +246,8 @@ test("своя ітерація мітки чужої не має ніде", () 
   const { crumb, dd } = iterParts(h);
   assert.ok(!/crumb--foreign/.test(crumb), "своя крошка помічена як чужа");
   assert.ok(!/dd-item--foreign/.test(dd), "свій пункт переліку помічений як чужий");
-  assert.match(crumb, /Lead/, "власний підпис зник — перевірка вище вакуумна");
+  assert.ok(!/Lead/.test(crumb), "автор у крошці");
+  assert.match(dd, /Lead/, "підпис автора в рядку переліку зник");
 });
 
 /* Гейт превʼю — НЕ захист, і смуга мусить це казати саме там, де людина

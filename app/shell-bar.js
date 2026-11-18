@@ -201,12 +201,8 @@ function crumbIter(model, openDd, iterDelAsk = false) {
     ${ddItem({ act: "dupit", icon: "copy", title: t("dupIteration") })}
     <div class="dd-sep"></div>
     ${ddItem({ act: "delitask", icon: "trash", title: t("delIteration"), danger: true })}</div>`;
-  /* Підпис автора — ще один `txt--soft`, тобто тиснеться разом із приміткою і
-     НЕ тисне тег `Іт.N` (межу стереже живий тест «довга примітка тисне на
-     примітку, а не на тег ітерації»). Чужа ітерація має видимий клас, а не
-     лише `title`: про межу треба дізнатись ДО того, як почав у ній працювати. */
-  const who = it.author
-    ? `<span class="txt txt--soft">${esc(t("iterBy", it.author))}</span>` : "";
+  /* Імені автора в крошці нема (власник: лише ітерація та її назва); чужа ітерація — видимий клас `crumb--foreign`
+     і title-підказка: про межу треба дізнатись ДО того, як почав у ній працювати. Автор лишився в рядках переліку. */
   const foreign = it.mine ? "" : " crumb--foreign";
   /* Пояснення («працювати у своїй») у title ЗАВЖДИ, а походження — додатком.
      Раніше `origin` витісняв пояснення, а він є майже в кожній реальній чужій
@@ -222,7 +218,7 @@ function crumbIter(model, openDd, iterDelAsk = false) {
     <button class="ctl crumb crumb--iter${foreign}" data-dd="iter"${foreignTitle}
       aria-expanded="${open}" aria-haspopup="true">
       ${ico("iter")}<span class="txt txt--fix">${esc(it.label)}</span>
-      <span class="txt txt--soft">· ${esc(it.note)}</span>${who}${marks}
+      <span class="txt txt--soft">· ${esc(it.note)}</span>${marks}
       ${ico("chevdown", 14, "ico caret")}</button>
     ${open ? dd : ""}
   </div>`;
