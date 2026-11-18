@@ -830,6 +830,21 @@ test("кошик → «Видалити назавжди»: збій серве�
 /* ── Етап Д, Task 10: перейменування з вкладки, F2 у макеті, ⌘K ─────────────────────────────────────────────────── */
 const POP = '.cv-ask-pop [data-form="taskname"]';
 const tabOf = (id) => `#tabs .tab-main[data-val="${id}"]`;
+/* `render()` після виходу з екрана «Задачі» дочитано: його останній запит — сторінки ітерації (`loadPages`), далі синхронно
+   смуга, рамка, панель і хвіст `leaveHome`. ⛔ `waitForLoadState("networkidle")` тут не годиться: стан, якого сторінка вже
+   досягала, він повертає одразу — і перевірка йшла ДО того, як `render()` скінчився. Кликати ДО дії, що запускає `render()`. */
+const renderDrawn = async (page) => {
+  await page.waitForEvent("requestfinished", { predicate: (r) => r.url().includes("/api/iteration-pages"), timeout: 15000 });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 150)));
+};
+/* Притримати сторінки ітерації: `render()` після відкриття задачі стоїть, доки не відпустимо, — вікно, в яке людина встигає
+   повернутись на «Задачі» й клікнути ще раз. */
+async function holdPages(page) {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  await page.route("**/api/iteration-pages**", async (route) => { await gate; await route.continue(); });
+  return () => release();
+}
 const titleOf = (file, id) => readTasks(file)[id]?.title;
 const tabTip = (page, id) => page.getAttribute(tabOf(id), "title");
 
@@ -1146,12 +1161,54 @@ test("перейменування з вкладки ПРЯМО з екрана 
       await page.waitForSelector(CARD(id));
       await page.waitForLoadState("networkidle");
     }
+    const drawn = renderDrawn(page);
     await page.dblclick(tabOf(id));
     await page.waitForSelector(POP);
     await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
-    await page.waitForLoadState("networkidle");             // `render()` дочитано — саме після нього `leaveHome` ставив фокус
+    await drawn;                                            // `render()` дочитано — саме після нього `leaveHome` ставив фокус
     assert.equal(await page.evaluate(() => document.activeElement?.id), "tn-title", `фокус утік із поля (${id === current ? "активна" : "неактивна"})`);
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => !document.querySelector(".cv-ask-pop"));
   }
+});
+
+test("відкриття ще дочитується, а людина вже повернулась на «Задачі» й клікнула іншу вкладку — клік не губиться: відкривається ОСТАННЯ вибрана", async (t) => {
+  const { page, url, current, inactive } = await studioTabs(t, 5000);
+  const release = await holdPages(page);
+  await page.click(CARD(inactive));                           // відкриття `inactive`: `render()` стоїть на сторінках ітерації
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector(CARD(current));
+  await page.click(tabOf(current));                           // поки перше відкриття ще летить
+  release();
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden, null, { timeout: 8000 });
+  assert.equal(await cur(url), current, "відкрилась не остання вибрана задача");
+});
+
+test("відкриття дочиталось, коли людина вже знову на «Задачах»: хвіст `leaveHome` не забирає фокус із картки й не закриває екран", async (t) => {
+  const { page, current, inactive } = await studioTabs(t, 5100);
+  const release = await holdPages(page);
+  await page.click(CARD(inactive));
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector(CARD(current));
+  await page.focus(CARD(current));
+  const drawn = renderDrawn(page);
+  release();
+  await drawn;
+  assert.equal(await homeHidden(page), false, "екран «Задачі» закрився сам");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id), current, "фокус утік із картки");
+});
+
+test("двічі по картці на «Задачах»: другий клік пари не відкриває задачу вдруге (одне дочитування сторінок, не два)", async (t) => {
+  const { page, url, inactive } = await studioTabs(t, 5200);
+  const loads = [];
+  page.on("request", (r) => { if (r.url().includes("/api/iteration-pages")) loads.push(r.url()); });
+  const drawn = renderDrawn(page);
+  await page.dblclick(CARD(inactive));
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await drawn;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 400)));
+  assert.equal(await cur(url), inactive);
+  assert.equal(loads.length, 1, `сторінки дочитано ${loads.length} раз(и) — задачу відкрито вдруге`);
 });

@@ -3256,6 +3256,9 @@ let homeComposing = false;
 let homePaintPending = false;
 /* Задача відкривається (запит у дорозі): другий Enter/клік не запускає друге. */
 let homeOpening = false;
+/* Вибір, зроблений, поки попереднє відкриття ще дочитувалось (`leaveHome` → `render()`), а людина тим часом повернулась на
+   «Задачі». Відкриваємо його, коли попереднє скінчиться, — лише якщо людина й далі на екрані (інакше це другий клік пари). */
+let homeQueued = null;
 
 /* Етап Д: тимчасовий стан екрана «Задачі» — НЕ зберігається (`homeUi` пишеться в localStorage, це — ні). Скидається на вході
    на екран і на зміні простору. `newForm`: відкрита форма «Нова задача» (жива `<form>` — `newFormEl`); `ren`: id задачі, назву
@@ -3863,6 +3866,9 @@ async function leaveHome() {
      `render()` перезавантажував СТАРИЙ документ поверх щойно відкритої іншої задачі (404 у рамці), а при простому
      «назад» ще й робив другий запит `/commented`. */
   await render();
+  /* Поки `render()` дочитувався, людина знову відкрила «Задачі»: хвіст нижче вже не про неї — фокус на вкладку забрав би
+     його з картки екрана, а повтор синку `enterHome` щойно скасував свідомо. */
+  if (homeOpen) return;
   /* Вернулись до задачі, а статус синку лишився «зайнято» без відкладеного повтору (його скасував `enterHome`) — повертаємо. */
   if (glCache?.busy && !glBusyTimer) scheduleGlRetry(glKeyNow());
   /* Фокус вертається на активну вкладку (чи логотип) — те, чим екран відкривали: вузол, на якому він
@@ -3903,7 +3909,10 @@ document.addEventListener('visibilitychange', refreshHomeOnReturn);
 /** Відкрити задачу з картки: нема теки — причина тостом і ми лишаємось; уже
  *  поточна — просто вийти з екрана; інакше переключити й вийти. */
 async function homeOpenTask(id) {
-  if (homeOpening || !id) return;
+  if (!id) return;
+  /* ⛔ Не губити: раніше тут був мовчазний `return` — клік по вкладці чи картці одразу після повернення на «Задачі»
+     пропадав, доки попередній `render()` не дочитав сторінки (сотні мс, на важкій задачі й довше). */
+  if (homeOpening) { homeQueued = id; return; }
   if (refuseMissingTask(id, homeData && homeData.mine)) return;
   homeOpening = true;
   try {
@@ -3912,7 +3921,11 @@ async function homeOpenTask(id) {
        другий лише відповідь екрана, яка при відкритті ще в дорозі. */
     if (id !== currentTaskId && !(await switchTask(id))) return;
     await leaveHome();
-  } finally { homeOpening = false; }
+  } finally {
+    homeOpening = false;
+    const q = homeQueued; homeQueued = null;
+    if (q && homeOpen) await homeOpenTask(q);
+  }
 }
 
 function ensureHome() {

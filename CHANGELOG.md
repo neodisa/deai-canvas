@@ -6,7 +6,8 @@ All notable changes to Deai Canvas, newest first. Format follows
 ## [0.30.2] — 18.11.2026
 
 Patch: owner-requested UI fixes. The bottom island stays centered on the window, the status shows no seconds, the iteration
-dropdown lists the newest first, the crumb has no designer name, and the UI says "AI" instead of "Claude".
+dropdown lists the newest first, the crumb has no designer name, and the UI says "AI" instead of "Claude". Also fixes a
+lost click on the Tasks screen while the previous task was still loading.
 
 ### Змінено
 - Острівець унизу центрований по вікну й ніколи не рухається: відкриття чи закриття лівої (шари) або правої (коментарі,
@@ -17,6 +18,12 @@ dropdown lists the newest first, the crumb has no designer name, and the UI says
   авторів у рядках дропдауна лишились.
 - Скрізь в інтерфейсі «Claude»/«Клод» замінено на нейтральне «AI» (обидві мови): статус, острівець, вкладки задач,
   коментарі («Для AI», «Доручити AI»), тюнер, питання про видалення задачі, вкладка адресата на сторінках превʼю.
+
+### Виправлено
+- Екран «Задачі»: клік по вкладці чи картці одразу після повернення на екран більше не губиться. Поки попередня задача
+  ще дочитувалась, клік мовчки пропадав; тепер відкривається остання вибрана, коли попереднє відкриття скінчиться.
+  Другий клік подвійного кліку задачу вдруге не відкриває.
+- Попереднє відкриття, що дочиталось уже після повернення на «Задачі», більше не забирає фокус із картки на вкладку.
 
 ## [0.30.1] — 18.11.2026
 
