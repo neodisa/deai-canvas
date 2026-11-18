@@ -574,7 +574,7 @@ test("питання «AI працює»: удар /api/claude-status in_progres
   await page.focus(CARD("y"));
   await page.keyboard.press("Delete");
   await page.waitForSelector(`${CARD("y")} .cfm`);
-  assert.doesNotMatch(await page.textContent(`${CARD("y")} .cfm-t`), /Claude/, "питання без удару вже згадує Claude");
+  assert.doesNotMatch(await page.textContent(`${CARD("y")} .cfm-t`), /AI працює/, "питання без удару вже каже «AI працює»");
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => !document.querySelector(".th-card--ask"));
   const ok = await page.evaluate(async () => (await fetch("/api/claude-status", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1090,7 +1090,7 @@ test("кошик: запис зник із tasks.json за спиною екра
   await page.waitForFunction(() => !document.querySelector("#tasks-home .th-card--trash"));
 });
 
-test("питання «AI працює» без відкритих вкладок: Delete → варіант із Claude", async (t) => {
+test("питання «AI працює» без відкритих вкладок: Delete → варіант із «AI працює»", async (t) => {
   const { page } = await studio(t, 4600);
   /* Поточна задача має вкладку від початку: закриваємо її, щоб `claudeAll` не опитувався зовсім. */
   for (const id of await tabIds(page)) await page.click(`#tabs .tab-x[data-val="${id}"]`);

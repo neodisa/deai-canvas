@@ -3553,7 +3553,7 @@ function askDeleteCard(id, kind = 'del') {
   paintHomeLower();
   homeNode()?.querySelector(`.th-card[data-id="${CSS.escape(id)}"] .cfm-no`)?.focus({ preventScroll: true });
   /* Вкладок нема — `pollClaudeAll` не крутиться й `claudeAll` порожній: питання показано одразу зі звичайним текстом, а один
-     запит стану дочитується в тлі й, коли Claude справді працює, міняє текст на «Claude працює». */
+     запит стану дочитується в тлі й, коли агент справді працює, міняє текст на «AI працює». */
   if (kind === 'del' && !claudeAll) {
     api('/api/claude-statuses').then((r) => {
       const all = r && r.tasks && typeof r.tasks === 'object' ? r.tasks : null;
