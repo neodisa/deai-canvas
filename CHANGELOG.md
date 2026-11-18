@@ -3,6 +3,18 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.30.1] — 18.11.2026
+
+Patch: sending a comment no longer freezes the shell on heavy pages, and the commenter survives in-mockup links.
+
+### Виправлено
+- Після «Надіслати» на важкій сторінці (сотні SVG-вузлів і псевдоелементів) оболонка зависала на секунди: знімок
+  клонував увесь документ. Тепер у знімок потрапляє лише обрана ділянка з її предками, стилями та тим, на що вона
+  посилається (`<use>`, `url(#…)`). Коментар на дуже велику ділянку (понад 1500 елементів) зберігається без скриншота,
+  а не зависає.
+- Коментатор зникав на сторінках, відкритих посиланням усередині макета (`../poshuk/index.html#sec`): рамка йшла на
+  сирий файл без коментатора. Тепер оболонка відкриває цю сторінку як клік по рядку панелі, зі збереженим `#…`.
+
 ## [0.30.0] — 17.11.2026
 
 Shell redesign, stage Д: tasks. A task can now be created, renamed and deleted right on the «Tasks» screen, and a deleted
