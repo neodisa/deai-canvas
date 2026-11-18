@@ -833,9 +833,13 @@ const tabOf = (id) => `#tabs .tab-main[data-val="${id}"]`;
 /* `render()` після виходу з екрана «Задачі» дочитано: його останній запит — сторінки ітерації (`loadPages`), далі синхронно
    смуга, рамка, панель і хвіст `leaveHome`. ⛔ `waitForLoadState("networkidle")` тут не годиться: стан, якого сторінка вже
    досягала, він повертає одразу — і перевірка йшла ДО того, як `render()` скінчився. Кликати ДО дії, що запускає `render()`. */
-const renderDrawn = async (page) => {
-  await page.waitForEvent("requestfinished", { predicate: (r) => r.url().includes("/api/iteration-pages"), timeout: 15000 });
-  await page.evaluate(() => new Promise((r) => setTimeout(r, 150)));
+const renderDrawn = (page) => {
+  const p = (async () => {
+    await page.waitForEvent("requestfinished", { predicate: (r) => r.url().includes("/api/iteration-pages"), timeout: 15000 });
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 150)));
+  })();
+  p.catch(() => {});                                        // тест упав раніше за `await` — без «необробленої» відмови в чужому тесті
+  return p;
 };
 /* Притримати сторінки ітерації: `render()` після відкриття задачі стоїть, доки не відпустимо, — вікно, в яке людина встигає
    повернутись на «Задачі» й клікнути ще раз. */
@@ -1211,4 +1215,44 @@ test("двічі по картці на «Задачах»: другий клі�
   await page.evaluate(() => new Promise((r) => setTimeout(r, 400)));
   assert.equal(await cur(url), inactive);
   assert.equal(loads.length, 1, `сторінки дочитано ${loads.length} раз(и) — задачу відкрито вдруге`);
+});
+
+test("двічі по картці, а потім одразу назад на «Задачі»: другий клік пари не відкриває задачу після повернення", async (t) => {
+  const { page, url, current, inactive } = await studioTabs(t, 5300);
+  const release = await holdPages(page);
+  await page.dblclick(CARD(inactive));                        // другий клік пари стає в чергу, поки перший відкриває
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector(CARD(current));
+  const drawn = renderDrawn(page);
+  release();
+  await drawn;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 400)));
+  assert.equal(await homeHidden(page), false, "екран «Задачі» закрився: черга пережила повернення на екран");
+  assert.equal(await cur(url), inactive);
+});
+
+test("відкриття не вдалось, а людина клікнула ту саму картку двічі: другого запиту й другої помилки нема", async (t) => {
+  const { page, inactive } = await studioTabs(t, 5400);
+  const posts = [];
+  page.on("request", (r) => { if (r.method() === "POST" && r.url().includes("/api/task-switch")) posts.push(r.url()); });
+  await page.route("**/api/task-switch", (route) => route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' }));
+  await page.dblclick(CARD(inactive));
+  await page.waitForFunction(() => !document.getElementById("tasks-home").hidden);
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 800)));
+  assert.equal(posts.length, 1, `запитів task-switch: ${posts.length}`);
+  assert.equal(await homeHidden(page), false);
+});
+
+test("відкриття ще дочитується, а людина повернулась на «Задачі» й клікнула ТУ САМУ задачу — екран закривається на ній", async (t) => {
+  const { page, url, current, inactive } = await studioTabs(t, 5500);
+  const release = await holdPages(page);
+  await page.click(CARD(inactive));
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector(CARD(current));
+  await page.click(tabOf(inactive));
+  release();
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden, null, { timeout: 8000 });
+  assert.equal(await cur(url), inactive);
 });

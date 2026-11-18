@@ -1408,6 +1408,7 @@ async function resetPerTaskState() {
  * до `render()`.
  */
 async function resetSpaceState({ reload = true } = {}) {
+  homeQueued = null;                     // вибір на «Задачах» іншого простору
   await resetPerTaskState();
   curTask = null; curTaskList = null; homeData = null; currentTaskId = null;
   taskSwitchGen += 1; homeSeq += 1;
@@ -3782,6 +3783,7 @@ async function loadHome(refresh = false, { spaces = true } = {}) {
 /** `spaces: false` — не перепитувати перелік просторів (див. `loadHome`). `page` — `tasks` («Задачі») чи `conn`
  *  («Підключення»); без нього відкрита сторінка лишається, закрита відкривається на «Задачах». */
 function enterHome({ spaces = true, page } = {}) {
+  homeQueued = null;                     // клік, зроблений ДО повернення на екран (другий клік пари), — не вибір на ньому
   if (cmtOpen) setCommentsOpen(false);   // екран «Задачі» не про макет: панель і режим коментування закриваємо
   /* Явна сторінка — це навігація людини: вхід на «Підключення», що ще чекає перелік просторів, відступає (`enterConnections`). */
   if (page !== undefined) connEntrySeq += 1;
@@ -3915,16 +3917,20 @@ async function homeOpenTask(id) {
   if (homeOpening) { homeQueued = id; return; }
   if (refuseMissingTask(id, homeData && homeData.mine)) return;
   homeOpening = true;
+  let left = false;
   try {
     /* Порівнюємо з `currentTaskId` (див. його опис): ні `curTaskList`, ні
        `homeData.current` самі по собі не свіжі — перший оновлює лише `render()`,
        другий лише відповідь екрана, яка при відкритті ще в дорозі. */
     if (id !== currentTaskId && !(await switchTask(id))) return;
     await leaveHome();
+    left = true;
   } finally {
     homeOpening = false;
     const q = homeQueued; homeQueued = null;
-    if (q && homeOpen) await homeOpenTask(q);
+    /* Відкриття не вдалось (людина й не виходила з екрана) — та сама задача в черзі лише повторила б той самий запит
+       і ту саму помилку; інша — це новий вибір. */
+    if (q && homeOpen && (left || q !== id)) await homeOpenTask(q);
   }
 }
 
