@@ -15,6 +15,7 @@
  */
 import { buildContextBundle, iterationOf } from './context-bundle.js';
 import { audiencesHTML, notifyAudience } from './audiences.js';
+import { shotScope } from './shot-scope.js';
 import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
 
 (function (global) {
@@ -1290,12 +1291,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     // stays faithful across pages; coordinate-cropped document renders drift.
     async _captureShot(target) {
       try {
+        if (target && target.nodeType === 1 && target.getElementsByTagName('*').length > SHOT_MAX_NODES) return null;
         const h2c = await loadShotLib();
         const base = { backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false };
         let canvas;
         if (target && target.nodeType === 1) {
           target.classList.remove('cl-hl');            // don't bake the hover outline into the shot
-          canvas = await h2c(target, base);
+          canvas = await h2c(target, { ...base, ignoreElements: shotScope(target) });
         } else { return null; }
         const maxW = 360, k = Math.min(1, maxW / (canvas.width || maxW)) || 1;
         const out = document.createElement('canvas');
@@ -2036,6 +2038,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   // A UUID is unique without server coordination, so multi-reviewer save is safe.
   // Lazy-load html2canvas from CDN only when a screenshot is first captured, so the
   // core bundle stays dependency-free. Fails soft: no lib → no screenshot, comment still works.
+  // Забагато вузлів — знімок заморозить оболонку: зберігаємо коментар без нього.
+  const SHOT_MAX_NODES = 1500;
   let _shotLibPromise = null;
   function loadShotLib() {
     if (typeof window !== 'undefined' && window.html2canvas) return Promise.resolve(window.html2canvas);

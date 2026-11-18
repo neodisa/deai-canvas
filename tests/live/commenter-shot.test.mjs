@@ -1,0 +1,111 @@
+/**
+ * Область знімка коментатора (0.30.1): html2canvas отримує `ignoreElements`, що лишає лише предків цілі,
+ * її піддерево, <head>/стилі та елементи, на які посилається піддерево (<use>, url(#id)); завеликий
+ * таргет знімка не отримує. html2canvas підмінено шпигуном — мережа не потрібна.
+ */
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+import { chromium } from "playwright";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const BUNDLE = readFileSync(path.join(ROOT, "app", "vendor", "comment-layer.min.js"), "utf8");
+const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>t</title><link rel="stylesheet" href="data:text/css,"></head>
+<body style="margin:40px">
+<svg id="sprite" width="0" height="0"><defs><linearGradient id="g"><stop offset="0" stop-color="#000"/></linearGradient></defs>
+<symbol id="ic"><path d="M0 0h4v4z"/></symbol><symbol id="other"><path d="M0 0h2v2z"/></symbol></svg>
+<style id="bodystyle">p{margin:0}</style>
+<main id="m"><section id="s1"><div id="d1"><p id="p">Абзац для коментаря
+<svg id="u" width="8" height="8"><use href="#ic"/></svg>
+<svg id="f" width="8" height="8"><rect id="r" width="8" height="8" fill="url(#g)"/></svg></p></div></section>
+<section id="s2"><svg id="o" width="8" height="8"><circle r="3"/></svg><p id="q">Інша секція</p></section></main>
+<div id="big"></div></body></html>`;
+
+let browser;
+test.before(async () => { browser = await chromium.launch(); });
+test.after(async () => { await browser?.close(); });
+
+async function boot() {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.setContent(PAGE);
+  await page.addScriptTag({ content: BUNDLE });
+  await page.evaluate(() => {
+    window.__calls = [];
+    window.html2canvas = (el, opts) => {
+      window.__calls.push({ el, opts });
+      const c = document.createElement("canvas"); c.width = 20; c.height = 10; return Promise.resolve(c);
+    };
+    const mem = [];
+    window.__mem = mem;
+    const store = { load: () => mem.slice(), save: (l) => { mem.length = 0; mem.push(...l); } };
+    window.CommentLayer.init({ projectId: "t", storage: store, version: "1", user: { name: "Тест" },
+      host: { onReady() {}, onChange() {}, onSelect() {}, onMode() {} } });
+    window.CommentLayer.setCommentMode(true);
+  });
+  return page;
+}
+async function addComment(page, sel, text, position) {
+  await page.click(sel, position ? { position } : undefined);
+  await page.waitForFunction(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea"));
+  await page.evaluate((t) => {
+    const ta = document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea");
+    ta.value = t; ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }, text);
+  await page.evaluate(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose .save").click());
+  await page.waitForFunction((t) => window.__mem.some((c) => c.text === t), text);
+}
+
+test("ignoreElements лишає предків, піддерево, head/стилі та посилання з піддерева", async () => {
+  const page = await boot();
+  await addComment(page, "#p", "знімок");
+  const r = await page.evaluate(() => {
+    const call = window.__calls[0];
+    if (!call) return null;
+    const ig = call.opts.ignoreElements;
+    const q = (s) => document.querySelector(s);
+    const out = {
+      hasFn: typeof ig === "function",
+      target: call.el.id,
+      outsideSection: ig(q("#s2")), outsideChild: ig(q("#q")), outsideSvg: ig(q("#o")), big: ig(q("#big")),
+      anc: ["main", "#s1", "#d1", "body", "html"].map((s) => ig(q(s))),
+      desc: ["#u", "#f", "#r", "#u use"].map((s) => ig(q(s))),
+      bodyStyle: ig(q("#bodystyle")),
+      head: [...document.head.children].map((n) => ig(n)),
+      ic: ig(q("#ic")), sprite: ig(q("#sprite")), other: ig(q("#other")), g: ig(q("#g")),
+    };
+    return out;
+  });
+  assert.ok(r, "html2canvas має бути викликаний");
+  assert.equal(r.hasFn, true);
+  assert.equal(r.target, "p");
+  assert.equal(r.outsideSection, true);
+  assert.equal(r.outsideChild, true);
+  assert.equal(r.outsideSvg, true);
+  assert.equal(r.big, true);
+  assert.deepEqual(r.anc, [false, false, false, false, false]);
+  assert.deepEqual(r.desc, [false, false, false, false]);
+  assert.equal(r.bodyStyle, false);
+  assert.ok(r.head.length > 0 && r.head.every((v) => v === false));
+  assert.equal(r.ic, false);
+  assert.equal(r.sprite, false);
+  assert.equal(r.other, true, "непов'язаний symbol відсікається");
+  assert.equal(r.g, false);
+  await page.close();
+});
+
+test("ціль із понад 1500 нащадків: html2canvas не викликається, коментар без meta.shot", async () => {
+  const page = await boot();
+  await page.evaluate(() => {
+    const big = document.querySelector("#big");
+    big.style.padding = "30px";
+    big.innerHTML = "<i>x</i>".repeat(1600);
+  });
+  await addComment(page, "#big", "без знімка", { x: 5, y: 5 });
+  assert.equal(await page.evaluate(() => window.__calls.length), 0, "html2canvas не мав викликатись");
+  const c = await page.evaluate(() => window.__mem.find((x) => x.text === "без знімка"));
+  assert.equal(c.meta && c.meta.shot, undefined);
+  await page.close();
+});

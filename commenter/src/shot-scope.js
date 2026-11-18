@@ -1,0 +1,46 @@
+/**
+ * Область знімка для html2canvas. Бібліотека клонує ВЕСЬ документ незалежно від цілі
+ * і синхронно копіює стилі кожного SVG-вузла та псевдоелемента — на важких сторінках
+ * це секунди заморозки. `ignoreElements` лишає лише ланцюжок предків цілі, її
+ * піддерево, <head>/стилі та елементи поза ціллю, на які посилається піддерево.
+ */
+const URL_ATTRS = ['fill', 'stroke', 'mask', 'clip-path', 'filter', 'marker-start', 'marker-mid', 'marker-end'];
+const URL_RE = /url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/g;
+
+function refIds(el) {
+  const ids = [];
+  for (const name of ['href', 'xlink:href']) {
+    const v = el.getAttribute && el.getAttribute(name);
+    if (v && v.charAt(0) === '#' && v.length > 1) ids.push(v.slice(1));
+  }
+  for (const name of URL_ATTRS) {
+    const v = el.getAttribute && el.getAttribute(name);
+    if (!v) continue;
+    URL_RE.lastIndex = 0;
+    let m;
+    while ((m = URL_RE.exec(v))) ids.push(m[1]);
+  }
+  return ids;
+}
+
+export function shotScope(target) {
+  const doc = target.ownerDocument;
+  const anchors = [target];
+  const seen = new Set([target]);
+  const all = [target, ...target.getElementsByTagName('*')];
+  for (const el of all) {
+    for (const id of refIds(el)) {
+      const ref = doc.getElementById(id);
+      if (ref && !seen.has(ref)) { seen.add(ref); anchors.push(ref); }
+    }
+  }
+  return function ignoreElements(node) {
+    if (node.closest && node.closest('head')) return false;
+    const tag = node.tagName;
+    if (tag === 'STYLE' || tag === 'LINK') return false;
+    for (const a of anchors) {
+      if (node === a || node.contains(a) || a.contains(node)) return false;
+    }
+    return true;
+  };
+}
