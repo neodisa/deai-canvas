@@ -37,8 +37,8 @@ window.__deaiCommentsCfg = {"url": "{SB_URL}", "key": "{SB_KEY}", "shotsBucket":
       window.CommentLayer.init({ projectId: cfg.channel, storage: store,
         version: "1",
         audiences: (function () {
-          var uk = { local: 'Клод', team: 'Команда' };
-          var en = { local: 'Claude', team: 'Team' };
+          var uk = { local: 'AI', team: 'Команда' };
+          var en = { local: 'AI', team: 'Team' };
           var L = uk;
           try { if (localStorage.getItem('dc-lang') === 'en') L = en; } catch (e) {}
           // `icon` — імена з набору САМОГО коментатора (`bot`/`team`), не наші

@@ -78,7 +78,7 @@ test("audOf: без _aud — локальний; assignedToClaude — лише m
 
 const ASG = { comments: [...MIX.comments, A("p3", 5, "project", { meta: { assignee: "claude" } })] };
 
-test("commentSections: «Для Claude» = локальні + доручені командні; «Команда» — усі командні", () => {
+test("commentSections: «Для AI» = локальні + доручені командні; «Команда» — усі командні", () => {
   const ids = (f) => { const s = commentSections(ASG, { filter: f }); return [...s.open, ...s.closed].map((c) => c.id).sort(); };
   assert.deepEqual(ids("all"), ["l1", "l2", "p1", "p2", "p3"]);
   assert.deepEqual(ids("local"), ["l1", "l2", "p3"]);

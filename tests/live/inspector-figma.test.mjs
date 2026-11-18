@@ -295,7 +295,7 @@ test("4. скраб підпису: значення міняється живц
   assert.equal(await page.frameLocator("#frame").locator("#card").evaluate((e) => getComputedStyle(e).gap), "22px");
 });
 
-test("7. «Надіслати Клоду» → status: ready на диску і «Готово» в панелі", async (t) => {
+test("7. «Надіслати AI» → status: ready на диску і «Готово» в панелі", async (t) => {
   const { dir, page } = await boot(t);
   await pin(page, "#card");
   await page.focus('#insp-panel .insp-f[data-prop="gap"] .insp-fi');

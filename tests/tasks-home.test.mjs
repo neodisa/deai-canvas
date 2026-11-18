@@ -687,7 +687,7 @@ test("Д: питання в картці — замість бейджів, бе
   assert.match(c, /data-th="askyes" data-id="edr"/);
   assert.match(c, /Видалити «Очікування/);
   const cc = cardHTML(A, ui0({ edit: { ...EDIT0, ask: { id: "edr", kind: "del", claude: true } } }), "edr");
-  assert.match(cc, /Claude працює/);
+  assert.match(cc, /AI працює/);
   /* Питання про іншу картку цієї не чіпає. */
   assert.ok(cardHTML(B, ui0({ edit: { ...EDIT0, ask: { id: "edr", kind: "del", claude: false } } }), "edr").includes('data-th="open"'));
 });

@@ -569,7 +569,7 @@ test("видалення ОБОХ задач: екран лишається, «�
   assert.deepEqual(errors, [], "помилки сторінки");
 });
 
-test("питання «Claude працює»: удар /api/claude-status in_progress для задачі → питання інше", async (t) => {
+test("питання «AI працює»: удар /api/claude-status in_progress для задачі → питання інше", async (t) => {
   const { page } = await studio(t, 2200);
   await page.focus(CARD("y"));
   await page.keyboard.press("Delete");
@@ -587,7 +587,7 @@ test("питання «Claude працює»: удар /api/claude-status in_pro
   await page.focus(CARD("y"));
   await page.keyboard.press("Delete");
   await page.waitForSelector(`${CARD("y")} .cfm`);
-  assert.match(await page.textContent(`${CARD("y")} .cfm-t`), /Claude працює/, "питання не знає, що Claude працює");
+  assert.match(await page.textContent(`${CARD("y")} .cfm-t`), /AI працює/, "питання не знає, що AI працює");
 });
 
 test("видалення не вдалось (сервер 500, простір не пишеться): картка лишається, тост із причиною, теку не рушено", async (t) => {
@@ -1090,7 +1090,7 @@ test("кошик: запис зник із tasks.json за спиною екра
   await page.waitForFunction(() => !document.querySelector("#tasks-home .th-card--trash"));
 });
 
-test("питання «Claude працює» без відкритих вкладок: Delete → варіант із Claude", async (t) => {
+test("питання «AI працює» без відкритих вкладок: Delete → варіант із Claude", async (t) => {
   const { page } = await studio(t, 4600);
   /* Поточна задача має вкладку від початку: закриваємо її, щоб `claudeAll` не опитувався зовсім. */
   for (const id of await tabIds(page)) await page.click(`#tabs .tab-x[data-val="${id}"]`);
@@ -1102,7 +1102,7 @@ test("питання «Claude працює» без відкритих вкла�
   await page.focus(CARD("y"));
   await page.keyboard.press("Delete");
   await page.waitForSelector(`${CARD("y")} .cfm`);
-  await page.waitForFunction((sel) => /Claude працює/.test(document.querySelector(sel)?.textContent || ""), `${CARD("y")} .cfm-t`);
+  await page.waitForFunction((sel) => /AI працює/.test(document.querySelector(sel)?.textContent || ""), `${CARD("y")} .cfm-t`);
 });
 
 test("меню задачі не переживає сторінку: відкрите меню зникає, коли ⌘K веде на «Налаштування»", async (t) => {

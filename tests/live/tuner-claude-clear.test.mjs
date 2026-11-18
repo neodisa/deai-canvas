@@ -1,6 +1,6 @@
 /**
  * Живий тест: Клод застосував пакет тюнера й очистив його — вкладка канваса
- * НЕ повертає його назад і НЕ показує «чекає на Клода» на застосованому.
+ * НЕ повертає його назад і НЕ показує «чекає на AI» на застосованому.
  *
  * ⛔ Звідки (fb-22092026-c11bff, 22.09.2026, задача lu-auth). Записка
  * звинувачувала сервер у кеші в памʼяті — його там немає: GET читає файл щоразу.
@@ -48,7 +48,7 @@ body{margin:0;height:900px;font:14px/1.4 sans-serif;
 </body></html>`;
 
 const SEL = "body > div.row > p.card";
-/** Пакет «дизайнер натиснув «Надіслати Клоду»» — формат `packageJSON`. */
+/** Пакет «дизайнер натиснув «Надіслати AI»» — формат `packageJSON`. */
 const READY_PKG = {
   kind: "design-canvas.tuner.recommendations", version: 1, status: "ready",
   page: null, note: "", editCount: 1, instructions: [],
@@ -99,7 +99,7 @@ async function until(fn, want, ms = 4000) {
   return got;
 }
 
-test("A: Клод очистив пакет — на поверненні у вкладку «чекає на Клода» зникає", async (t) => {
+test("A: Клод очистив пакет — на поверненні у вкладку «чекає на AI» зникає", async (t) => {
   const { dir } = taskFixture({ html: PAGE });
   writeFileSync(path.join(dir, ".dc-tuner.json"), JSON.stringify(READY_PKG, null, 1));
   const { child, url } = await startServer(dir, { portBase: PORT_BASE });
@@ -112,7 +112,7 @@ test("A: Клод очистив пакет — на поверненні у в�
   /* Свідок: позначка СПРАВДІ висіла. Без цього тест зеленів би й тоді, коли
      панель не показує стан пакета взагалі. */
   assert.equal(await until(() => readyShown(page), true), true,
-    "фікстура не відтворила стан: позначки «чекає на Клода» не було й до очищення");
+    "фікстура не відтворила стан: позначки «чекає на AI» не було й до очищення");
 
   const r = await claudeClears(url);
   assert.equal(r.cleared, true, "сервер не очистив пакет — міряти вкладку нема чого");
@@ -123,7 +123,7 @@ test("A: Клод очистив пакет — на поверненні у в�
   await page.waitForFunction(() => document.getElementById("frame")
     ?.contentWindow?.CanvasInspector, null, { timeout: 15000 });
   assert.equal(await until(() => readyShown(page), false), false,
-    "пакета на диску вже немає, а вкладка далі каже «чекає на Клода»");
+    "пакета на диску вже немає, а вкладка далі каже «чекає на AI»");
   assert.equal(await changeRows(page), 0,
     "список змін показує правки з пакета, який Клод уже забрав");
   assert.equal(existsSync(path.join(dir, ".dc-tuner.json")), false,

@@ -3,7 +3,7 @@
  * бейдж — 12.10.2026).
  *
  *   A справжній удар (POST /api/claude-status) поточної задачі → унизу робочої
- *     області, по центру видимої частини, острівець «Claude працює»; у смузі — нічого;
+ *     області, по центру видимої частини, острівець «AI працює»; у смузі — нічого;
  *   B сервер сказав «згасло» (state: null) → острівець ЗНИКАЄ, а не висить старим —
  *     несуча вимога власника: не брехати «працює», коли нічого не відбувається;
  *   C файли сторінки змінились щойно → у рядку панелі точка «Змінено щойно»;
@@ -78,7 +78,7 @@ const stubWorking = (page, extra = {}) => page.route("**/api/claude-status", (ro
   status: 200, contentType: "application/json",
   body: JSON.stringify({ state: "working", phase: "design", note: "", age_s: 4, ...extra }) }));
 
-test("A+B: удар → острівець «Claude працює» внизу по центру; сервер сказав «згасло» → острівця немає", async (t) => {
+test("A+B: удар → острівець «AI працює» внизу по центру; сервер сказав «згасло» → острівця немає", async (t) => {
   const { page, url } = await boot(t, 0);
   let stub = null;
   await page.route("**/api/claude-status", (route) => (stub
@@ -92,7 +92,7 @@ test("A+B: удар → острівець «Claude працює» внизу п
     body: JSON.stringify({ task: "fixture", phase: "design", status: "in_progress", note: "Іт.1", session: "live" }) });
   assert.ok(r.ok);
   await page.waitForFunction(() =>
-    /Claude працює/.test(document.querySelector("#claude-hud .claude-island")?.textContent || ""), null, { timeout: 12000 });
+    /AI працює/.test(document.querySelector("#claude-hud .claude-island")?.textContent || ""), null, { timeout: 12000 });
   assert.equal(await page.locator("#bar .claude-chip, #bar .claude-island").count(), 0, "статус лишився в смузі");
   assert.equal(await page.locator("#claude-hud .claude-island").count(), 1, "сегмент Claude відсутній у острівці");
   /* Унизу й по центру ВІКНА (не області): панель шарів відкрита, а острівець не рухається. */
@@ -359,7 +359,7 @@ test("G: з увімкненим коментуванням острівець �
   assert.equal(await page.locator('#isl-tools [data-act="cmtmode"]').count(), 0);
 });
 
-test("H: острівець по центру робочої області за згорнутої панелі й відкритого інспектора", async (t) => {
+test("H: острівець по центру ВІКНА за згорнутої панелі й відкритого інспектора", async (t) => {
   const { page, url } = await boot(t, 600);
   await stubWorking(page);
   await page.goto(`${url}/app/`);
@@ -370,7 +370,7 @@ test("H: острівець по центру робочої області за
     const g = await page.evaluate(() => {
       const i = document.querySelector("#hud .island").getBoundingClientRect();
       const s = document.getElementById("stage").getBoundingClientRect();
-      return { delta: Math.abs((i.left + i.right) / 2 - (s.left + s.right) / 2), stage: [s.left, s.right] };
+      return { delta: Math.abs((i.left + i.right) / 2 - innerWidth / 2), stage: [s.left, s.right] };
     });
     assert.ok(g.delta <= 2, `${what}: острівець не по центру вікна: зсув ${g.delta}px, сцена ${g.stage}`);
   };
@@ -390,11 +390,11 @@ test("H: острівець по центру робочої області за
 
 test("I: опит не пересотворює острівець — вузол і текст підпису ті самі, міняється лише вік", async (t) => {
   const { page, url } = await boot(t, 700);
-  /* Вік росте на кожен опит: кожен опит міняє стан, тож перемальовка йде щоразу —
+  /* Вік росте на кожен опит (кроком 40 с: до хвилини вік порожній, тож треба перейти межу): кожен опит міняє стан, тож перемальовка йде щоразу —
      саме той випадок, коли пересотворений вузол змусив би читач екрана читати знову. */
   let n = 1;
   await page.route("**/api/claude-status", (route) => route.fulfill({ status: 200, contentType: "application/json",
-    body: JSON.stringify({ state: "working", phase: "design", note: "", age_s: n++ * 5 }) }));
+    body: JSON.stringify({ state: "working", phase: "design", note: "", age_s: n++ * 40 }) }));
   await page.goto(`${url}/app/`);
   await page.waitForSelector("#claude-hud .claude-island", { timeout: 12000 });
   await page.evaluate(() => {

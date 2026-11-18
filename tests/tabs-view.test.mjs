@@ -35,7 +35,7 @@ test("колір простору — лише токен у style; без ко�
 
 test("стан Claude — крапка з класом стану й іменем для читача", () => {
   const h = tabsHTML(vm());
-  assert.match(h, /class="tab-claude tab-claude--working" role="img" aria-label="Claude працює"/);
+  assert.match(h, /class="tab-claude tab-claude--working" role="img" aria-label="AI працює"/);
   assert.equal((h.match(/tab-claude--/g) || []).length, 1);
 });
 

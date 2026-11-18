@@ -10,8 +10,8 @@
       window.CommentLayer.init({ projectId: 'x/local', storage: store,
         version: '1', local: true,
         audiences: (function () {
-          var uk = { local: 'Клод', team: 'Команда' };
-          var en = { local: 'Claude', team: 'Team' };
+          var uk = { local: 'AI', team: 'Команда' };
+          var en = { local: 'AI', team: 'Team' };
           var L = uk;
           try { if (localStorage.getItem('dc-lang') === 'en') L = en; } catch (e) {}
           // `icon` — імена з набору САМОГО коментатора (`bot`/`team`), не наші

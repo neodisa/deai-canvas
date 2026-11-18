@@ -34,10 +34,10 @@ test("cmtfilter: лише значення з FILTERS, вибір памʼята
   assert.match(a, /if \(!FILTERS\.includes\(f\)\) return;/, "довільне значення не мусить потрапити ні в стан, ні в localStorage");
   assert.match(a, /localStorage\.setItem\('dc-cmt-filter', f\)/);
   assert.ok(a.indexOf("FILTERS.includes") < a.indexOf("cmtFilter = f"));
-  assert.match(src, /localStorage\.getItem\('dc-cmt-filter'\); return FILTERS\.includes\(v\) \? v : 'local'/, "немає чи сміття — вкладка «Для Claude» (рішення власника 16.11.2026)");
+  assert.match(src, /localStorage\.getItem\('dc-cmt-filter'\); return FILTERS\.includes\(v\) \? v : 'local'/, "немає чи сміття — вкладка «Для AI» (рішення власника 16.11.2026)");
 });
 
-test("тост новин: «Показати» з вкладки «Для Claude» веде на «Команду» через спільний шлях; з «Команда»/«Усі» вкладку не чіпає", () => {
+test("тост новин: «Показати» з вкладки «Для AI» веде на «Команду» через спільний шлях; з «Команда»/«Усі» вкладку не чіпає", () => {
   const body = fn("newsToast");
   assert.match(body, /if \(cmtFilter === 'local'\) setCmtFilter\('project'\);/);
   assert.ok(body.indexOf("setCmtFilter('project')") < body.indexOf("setCommentsOpen(true)"), "вкладку міняємо до відкриття панелі");
@@ -57,7 +57,7 @@ test("тост новин: «Показати» з вкладки «Для Claud
   assert.deepEqual(run("project"), [["open"]]);
 });
 
-test("«Огляд»: аудиторія «Claude» має підказку під чипом, як і «Команді»", () => {
+test("«Огляд»: аудиторія «AI» має підказку під чипом, як і «Команді»", () => {
   assert.match(src, /\{ id: 'local', label: t\('audChipLocal'\), icon: 'bot', color: LOCAL_PIN_COLOR, private: true \}/);
   assert.match(src, /\{ id: 'project', label: t\('audChipTeam'\), icon: 'team', note: t\('audChipTeamNote'\) \}/);
 });

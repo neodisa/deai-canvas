@@ -1961,8 +1961,8 @@ class GoldenPinTest(unittest.TestCase):
         'config-legacy-project.json': '1902c6bb59f0e32bd20068d5979940a97ad392a2752b161bbc841509c4ef5892',
         'config-none-local.json': '02da2eb3d4f6b11c77b32765877cbdd7cd498c2b4bb02af86cb340c5d49024a3',
         'config-none-project.json': 'c995db0e753b0270167a9e610c1aac33bee715677792cf86cfb430cd50e7bb32',
-        'page-legacy-local.html': '2dc27d049848297412db855195a4a469a9d8e92bd585d74b82aeea34e07aff08',
-        'page-legacy-project.html': '28ebf5739a8580881964c44194fe9a45d0b68223c184d97f0715575317c560fb',
+        'page-legacy-local.html': '82ee59522bf41fb3baf57a7511362c8c24a5dc28a79076e4766344d0670078f1',
+        'page-legacy-project.html': '6c53afc06a5c5fca9653af12aa2d82a63aab7a076842715acf0dd0346f7b3fc9',
         'page-none-project.html': '56b9b4779251d9157e4ccd490f0ceb2643bde1504aeebdba591259f70acc5dfb',
     }
 

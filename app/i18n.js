@@ -623,8 +623,8 @@ const UK = {
   // Питання називає ЧИСЛО і прямо каже, чого воно НЕ чіпає: записка —
   // окрема робота, і втратити її разом із правками було б несподіванкою.
   inspTunerResetAllAsk: (n) => `Скинути всі накручені зміни на цій сторінці (${n})?\n`
-    + 'Записка Клоду лишиться.',
-  inspTunerNote: 'Записка для Клода',
+    + 'Записка для AI лишиться.',
+  inspTunerNote: 'Записка для AI',
   inspTunerNotePh: 'що саме не так і чого хочеться…',
   // T-39 — ПІДВАЛ панелі: кручення й відправка одним потоком.
   //
@@ -633,14 +633,14 @@ const UK = {
   // «я закінчив» (`status: ready`, `app/tuner-model.js`). Тому й позначка
   // поруч говорить про ОЧІКУВАННЯ, а не про відправлення: сказати
   // «надіслано» означало б назвати подію, якої не було.
-  inspTunerSend: 'Надіслати Клоду',
-  inspTunerSendHint: 'Позначити пакет готовим — Клод побачить, що ти закінчив. '
+  inspTunerSend: 'Надіслати AI',
+  inspTunerSendHint: 'Позначити пакет готовим — AI побачить, що ти закінчив. '
     + 'Зміни й так зберігаються одразу.',
-  inspTunerReadyMark: 'готово — чекає на Клода',
+  inspTunerReadyMark: 'готово — чекає на AI',
   // Відмова запису 409 (`saveTune`): пакет на диску змінив хтось інший — найчастіше
   // Клод, що вже застосував і очистив його. Кажемо ДВІ речі: що показано диск і що
   // останній поворот ручки не ліг, — інакше дизайнер шукав би правку, якої немає.
-  tuneTakenElsewhere: 'Пакет тюнера змінено поза цією вкладкою\n(найімовірніше, Клод його вже '
+  tuneTakenElsewhere: 'Пакет тюнера змінено поза цією вкладкою\n(найімовірніше, AI його вже '
     + 'застосував). Показую те, що на диску; останню правку не збережено — поверни її ще раз.',
   // «Скасувати» — це саме «скинути все» (та сама дія, що й посилання вище):
   // скасувати тут можна лише накручене, бо більше нічого й не сталось.
@@ -652,7 +652,7 @@ const UK = {
   // ділось: мовчазна позначка читалась би як «правку загублено», і дизайнер
   // накрутив би її вдруге.
   inspTunerNotApplied: 'Не лягло на цю сторінку: елемента за цим селектором тут '
-    + 'немає. Правка лишається в пакеті для Клода.',
+    + 'немає. Правка лишається в пакеті для AI.',
 
   // Підписи сторін для панелі властивостей (`app/insp-model.js`).
   inspDirTop: 'Зверху',
@@ -699,11 +699,11 @@ const UK = {
      (`localStorage`), а сніпет пише сервер, який про цей вибір не знає.
      Сніпет читає `dc-lang` сам і бере свій рядок; щоб дві копії не
      розійшлись, їх приколює тест `test_audience_labels_match_dictionary`. */
-  audTabLocal: 'Клод',
+  audTabLocal: 'AI',
   audTabTeam: 'Команда',
   /* Чипи адресата в формі піна (0.27.0): ті самі три підписи дублює `DUAL_AUDIENCES_JS` у `app/serve.py` — парність
      приколює `test_dual_audience_labels_match_dictionary`. */
-  audChipLocal: 'Claude',
+  audChipLocal: 'AI',
   audChipTeam: 'Команді',
   audChipTeamNote: 'Командні коментарі видно колегам у превʼю',
   keysTitle: 'Гарячі клавіші',
@@ -753,18 +753,17 @@ const UK = {
   treeErrTooDeep: 'Забагато рівнів вкладеності.',
   treeErrBadKind: 'Тип цього шару тут змінити не можна.',
   treeErrNotFound: 'Шар не знайдено — дерево могло змінитись.',
-  treeStale: 'Дерево змінилось (можливо, Claude додав сторінку) — повторіть дію.',
+  treeStale: 'Дерево змінилось (можливо, AI додав сторінку) — повторіть дію.',
   treeLost: (names) => `Дерево сторінок перезаписали ззовні — зникли теки: ${names}.`,
   treeRestore: 'Відновити',
   treeRestored: (n) => `Відновлено тек: ${n}.`,
   noticeDismiss: 'Закрити',
   frameChanged: 'Макет змінився на диску.',
   frameReload: 'Оновити',
-  claudeWorking: 'Claude працює',
-  claude_waiting: 'Claude чекає відповіді',
-  claude_blocked: 'Claude: заблоковано',
-  claude_done: 'Claude: готово',
-  ageSec: (n) => `${n} с тому`,
+  claudeWorking: 'AI працює',
+  claude_waiting: 'AI чекає відповіді',
+  claude_blocked: 'AI: заблоковано',
+  claude_done: 'AI: готово',
   ageMin: (n) => `${n} хв тому`,
   pageRecent: 'Змінено щойно',
   treeBusy: 'Дерево зайняте іншим записом — повторіть за мить.',
@@ -1200,7 +1199,7 @@ const UK = {
   taskRestore: 'Повернути',
   taskPurge: 'Видалити назавжди',
   taskDelAsk: (title) => `Видалити «${title}»?`,
-  taskDelAskClaude: (title) => `Claude працює в «${title}». Видалити?`,
+  taskDelAskClaude: (title) => `AI працює в «${title}». Видалити?`,
   taskPurgeAsk: (title) => `Видалити назавжди «${title}»?`,
   taskDeleted: (title) => `Задачу «${title}» видалено`,
   taskRestored: (title) => `«${title}» повернуто`,
@@ -1315,13 +1314,13 @@ const UK = {
   cmtSearch: 'Пошук — текст, автор, #5',
   cmtFilter: 'Кому',
   cmtFAll: 'Усі',
-  cmtFLocal: 'Для Claude',
+  cmtFLocal: 'Для AI',
   cmtFTeam: 'Команда',
-  cmtAudLocal: 'Claude',
+  cmtAudLocal: 'AI',
   cmtAudTeam: 'Команда',
-  cmtAssign: 'Доручити Claude',
-  cmtUnassign: 'Забрати в Claude',
-  cmtAssignedBadge: 'Доручено Claude',
+  cmtAssign: 'Доручити AI',
+  cmtUnassign: 'Забрати в AI',
+  cmtAssignedBadge: 'Доручено AI',
   cmtTeamDown: (why) => `Командні коментарі недоступні: ${why}`,
   cmtNewTitle: 'Нові від команди',
   cmtNewToast: (who) => `Новий коментар від ${who}`,
@@ -1364,10 +1363,10 @@ const UK = {
   inspectorKey: 'Інспектор · I · Alt — відстані · Esc / ↵ — батько / дочірній · ← → — сусід',
   inspKeyAlt: 'Відстані до сусіда',
   inspKeyChild: 'Дочірній елемент',
-  claudeTab_working: 'Claude працює',
-  claudeTab_waiting: 'Claude чекає на вас',
-  claudeTab_blocked: 'Claude заблоковано',
-  claudeTab_done: 'Claude завершив',
+  claudeTab_working: 'AI працює',
+  claudeTab_waiting: 'AI чекає на вас',
+  claudeTab_blocked: 'AI заблоковано',
+  claudeTab_done: 'AI завершив',
   fbTitle: 'Відгук про Deai Canvas',
   fbKind: 'Тип відгуку',
   fbKindBug: 'Баг',
@@ -1823,23 +1822,23 @@ const EN = {
   inspTunerDrop: 'Reset this change',
   inspTunerResetAll: 'Reset all',
   inspTunerResetAllAsk: (n) => `Reset every tuned change on this page (${n})?\n`
-    + 'The note for Claude stays.',
-  inspTunerNote: 'Note for Claude',
+    + 'The note for AI stays.',
+  inspTunerNote: 'Note for AI',
   inspTunerNotePh: 'what feels wrong and what you want…',
   // T-39 — see the UK block: the button SENDS NOTHING, it marks the package
   // finished (`status: ready`); saving happens on every knob turn anyway.
-  inspTunerSend: 'Send to Claude',
-  inspTunerSendHint: 'Mark the package ready — Claude will see that you are done. '
+  inspTunerSend: 'Send to AI',
+  inspTunerSendHint: 'Mark the package ready — AI will see that you are done. '
     + 'Your changes are saved as you go regardless.',
-  inspTunerReadyMark: 'ready — waiting for Claude',
-  tuneTakenElsewhere: 'The tuner package was changed outside this tab\n(most likely Claude has '
+  inspTunerReadyMark: 'ready — waiting for AI',
+  tuneTakenElsewhere: 'The tuner package was changed outside this tab\n(most likely AI has '
     + 'already applied it). Showing what is on disk; your last edit was not saved — redo it.',
   inspTunerCancel: 'Cancel',
   // See the UK block: the change stays in the package (it describes what the
   // designer did), it just is not on THIS page — and the wording has to say
   // both, or the marker reads as "your change was lost".
   inspTunerNotApplied: 'Not applied on this page: no element matches this '
-    + 'selector here. The change stays in the package for Claude.',
+    + 'selector here. The change stays in the package for AI.',
 
   // Side captions for the properties panel (`app/insp-model.js`).
   inspDirTop: 'Top',
@@ -1869,9 +1868,9 @@ const EN = {
   langEn: 'Interface language: English',
   langCur: 'already selected',
   langDone: 'Language changed · ⌘K to switch back',
-  audTabLocal: 'Claude',
+  audTabLocal: 'AI',
   audTabTeam: 'Team',
-  audChipLocal: 'Claude',
+  audChipLocal: 'AI',
   audChipTeam: 'Team',
   audChipTeamNote: 'Team comments are visible to colleagues in the preview',
   keysTitle: 'Keyboard shortcuts',
@@ -1916,18 +1915,17 @@ const EN = {
   treeErrTooDeep: 'Too many nesting levels.',
   treeErrBadKind: 'The type of this layer cannot be changed here.',
   treeErrNotFound: 'Layer not found — the tree may have changed.',
-  treeStale: 'The tree changed (Claude may have added a page) — please retry.',
+  treeStale: 'The tree changed (AI may have added a page) — please retry.',
   treeLost: (names) => `The page tree was overwritten from outside — folders gone: ${names}.`,
   treeRestore: 'Restore',
   treeRestored: (n) => `Folders restored: ${n}.`,
   noticeDismiss: 'Dismiss',
   frameChanged: 'The mockup changed on disk.',
   frameReload: 'Reload',
-  claudeWorking: 'Claude is working',
-  claude_waiting: 'Claude is waiting for your reply',
-  claude_blocked: 'Claude: blocked',
-  claude_done: 'Claude: done',
-  ageSec: (n) => `${n} s ago`,
+  claudeWorking: 'AI is working',
+  claude_waiting: 'AI is waiting for your reply',
+  claude_blocked: 'AI: blocked',
+  claude_done: 'AI: done',
   ageMin: (n) => `${n} min ago`,
   pageRecent: 'Changed just now',
   treeBusy: 'The tree is busy with another write — try again in a moment.',
@@ -2357,7 +2355,7 @@ const EN = {
   taskRestore: 'Restore',
   taskPurge: 'Delete forever',
   taskDelAsk: (title) => `Delete “${title}”?`,
-  taskDelAskClaude: (title) => `Claude is working in “${title}”. Delete?`,
+  taskDelAskClaude: (title) => `AI is working in “${title}”. Delete?`,
   taskPurgeAsk: (title) => `Delete “${title}” forever?`,
   taskDeleted: (title) => `Task “${title}” deleted`,
   taskRestored: (title) => `“${title}” restored`,
@@ -2471,13 +2469,13 @@ const EN = {
   cmtSearch: 'Search — text, author, #5',
   cmtFilter: 'Addressee',
   cmtFAll: 'All',
-  cmtFLocal: 'For Claude',
+  cmtFLocal: 'For AI',
   cmtFTeam: 'Team',
-  cmtAudLocal: 'Claude',
+  cmtAudLocal: 'AI',
   cmtAudTeam: 'Team',
-  cmtAssign: 'Assign to Claude',
-  cmtUnassign: 'Take back from Claude',
-  cmtAssignedBadge: 'Assigned to Claude',
+  cmtAssign: 'Assign to AI',
+  cmtUnassign: 'Take back from AI',
+  cmtAssignedBadge: 'Assigned to AI',
   cmtTeamDown: (why) => `Team comments are unavailable: ${why}`,
   cmtNewTitle: 'New from the team',
   cmtNewToast: (who) => `New comment from ${who}`,
@@ -2520,10 +2518,10 @@ const EN = {
   inspectorKey: 'Inspector · I · Alt — distances · Esc / ↵ — parent / child · ← → — neighbour',
   inspKeyAlt: 'Distances to a neighbour',
   inspKeyChild: 'Child element',
-  claudeTab_working: 'Claude is working',
-  claudeTab_waiting: 'Claude is waiting for you',
-  claudeTab_blocked: 'Claude is blocked',
-  claudeTab_done: 'Claude is done',
+  claudeTab_working: 'AI is working',
+  claudeTab_waiting: 'AI is waiting for you',
+  claudeTab_blocked: 'AI is blocked',
+  claudeTab_done: 'AI is done',
   fbTitle: 'Feedback on Deai Canvas',
   fbKind: 'Feedback type',
   fbKindBug: 'Bug',

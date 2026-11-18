@@ -387,8 +387,9 @@ test("чужа ітерація в смузі підписана автором 
   await crumb.locator("xpath=.").waitFor();
   assert.match(await crumb.innerText(), /Іт\.2/, "канвас відкрив не останню ітерацію");
 
-  assert.match(await crumb.innerText(), /Ольга Сидорук/,
-    "підпису автора в крошці немає — author або my_key не доїхали від сервера");
+  assert.doesNotMatch(await crumb.innerText(), /Ольга Сидорук/, "імʼя автора видно в крошці");
+  assert.match(await crumb.getAttribute("title"), /Ольга Сидорук/,
+    "автора немає в title — author або my_key не доїхали від сервера");
   assert.equal(await crumb.evaluate((e) => e.classList.contains("crumb--foreign")), true,
     "чужа ітерація не помічена — mine порахувався як «своя»");
 

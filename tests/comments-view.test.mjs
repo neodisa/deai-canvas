@@ -61,7 +61,7 @@ test("попередні й закриті згорнуті: заголовок 
   assert.match(open, /Іт\.2/);
 });
 
-test("фільтр — окремим рядком під пошуком, порядок Для Claude · Команда · Усі, з числами; без dual — нема", () => {
+test("фільтр — окремим рядком під пошуком, порядок Для AI · Команда · Усі, з числами; без dual — нема", () => {
   assert.equal(commentsPanelHTML(base()).includes('data-act="cmtfilter"'), false);
   assert.equal(commentsPanelHTML(base()).includes('class="cmt-filter"'), false);
   assert.equal(commentsPanelHTML(base()).includes('data-act="cmtch"'), false, "перемикача каналу більше нема (поправка 10)");
@@ -73,7 +73,7 @@ test("фільтр — окремим рядком під пошуком, пор
   const html = commentsPanelHTML(base({ dual: true, filter: "project", fresh: new Set(["p"]), snapshot: { iteration: "3", comments } }));
   const order = [...html.matchAll(/data-act="cmtfilter" data-val="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(order, ["local", "project", "all"]);
-  assert.match(html, /data-val="local" aria-pressed="false"><span>Для Claude<\/span><span class="cmt-fn">2<\/span><\/button>/);
+  assert.match(html, /data-val="local" aria-pressed="false"><span>Для AI<\/span><span class="cmt-fn">2<\/span><\/button>/);
   assert.match(html, /data-val="project" aria-pressed="true"><span>Команда<\/span><span class="cmt-fn">2<\/span><span class="cmt-fnew"[^>]*>\+1<\/span><\/button>/);
   assert.match(html, /data-val="all" aria-pressed="false"><span>Усі<\/span><span class="cmt-fn">3<\/span><\/button>/);
   assert.ok(html.indexOf('id="cmt-q"') < html.indexOf('class="cmt-filter"'), "фільтр — під пошуком, не в шапці");
@@ -84,7 +84,7 @@ test("фільтр — окремим рядком під пошуком, пор
   assert.equal(commentsPanelHTML(base({ dual: true, filter: "local" })).includes("cmt-fnew"), false, "без нових мітки нема");
 });
 
-test("невідоме значення фільтра — вкладка «Для Claude»", () => {
+test("невідоме значення фільтра — вкладка «Для AI»", () => {
   const html = commentsPanelHTML(base({ dual: true, filter: "сміття" }));
   assert.match(html, /data-val="local" aria-pressed="true"/);
 });
@@ -97,12 +97,12 @@ test("шапка: іконка, назва, кнопки icob; icon-btn біль
   assert.match(html, /<div class="insp-top cmt-top"><svg[^>]*>.*?<\/svg><span class="panel-title">Коментарі<\/span><span class="cmt-total">1<\/span>/s);
 });
 
-test("картка: номер локального — фіолетовий лише з dual; бейдж «Доручено Claude»; іконкові дії — cmt-ib", () => {
+test("картка: номер локального — фіолетовий лише з dual; бейдж «Доручено AI»; іконкові дії — cmt-ib", () => {
   const comments = [{ ...C({ id: "l", n: 1 }), _aud: "local" }, { ...C({ id: "a", n: 2, meta: { assignee: "claude" } }), _aud: "project" }];
   const dual = commentsPanelHTML(base({ dual: true, filter: "all", snapshot: { iteration: "3", comments } }));
   assert.match(dual, /<span class="cmt-n cmt-n--local">1<\/span>/);
   assert.match(dual, /<span class="cmt-n">2<\/span>/);
-  assert.match(dual, /<span class="cmt-badge">Доручено Claude<\/span>/);
+  assert.match(dual, /<span class="cmt-badge">Доручено AI<\/span>/);
   assert.match(dual, /class="cmt-act" data-act="cmtshow"/);
   for (const act of ["cmtedit", "cmtres", "cmtdel"]) assert.match(dual, new RegExp(`class="cmt-ib" data-act="${act}"`));
   const single = commentsPanelHTML(base({ snapshot: { iteration: "3", comments: [C({ id: "l", n: 1 })] } }));
@@ -123,7 +123,7 @@ test("адресат і бейдж доручення — лише в dual", () 
   const cs = [D({ id: "a", n: 1, aud: "project", meta: { assignee: "claude" } }), D({ id: "b", n: 2 })];
   const html = dual(cs);
   assert.match(html, /<span class="cmt-aud cmt-aud--project">Команда<\/span>/);
-  assert.match(html, /<span class="cmt-aud cmt-aud--local">Claude<\/span>/);
+  assert.match(html, /<span class="cmt-aud cmt-aud--local">AI<\/span>/);
   assert.equal((html.match(/class="cmt-badge"/g) || []).length, 1);
   const single = commentsPanelHTML(base({ snapshot: { iteration: "3", comments: cs } }));
   assert.equal(single.includes("cmt-aud"), false);
@@ -134,8 +134,8 @@ test("адресат і бейдж доручення — лише в dual", () 
 test("«Доручити» / «Забрати» — лише на відкритих командних; не на локальних і не на закритих", () => {
   const html = dual([D({ id: "a", n: 1, aud: "project" }), D({ id: "b", n: 2, aud: "project", meta: { assignee: "claude" } }),
     D({ id: "c", n: 3 }), D({ id: "z", n: 4, aud: "project", status: "resolved" })], { expanded: { earlier: false, closed: true } });
-  assert.match(html, /data-act="cmtassign" data-val="a"[^>]*>Доручити Claude</);
-  assert.match(html, /data-act="cmtunassign" data-val="b"[^>]*>Забрати в Claude</);
+  assert.match(html, /data-act="cmtassign" data-val="a"[^>]*>Доручити AI</);
+  assert.match(html, /data-act="cmtunassign" data-val="b"[^>]*>Забрати в AI</);
   assert.equal(/data-act="cmt(un)?assign" data-val="c"/.test(html), false, "локальний");
   assert.equal(/data-act="cmt(un)?assign" data-val="z"/.test(html), false, "закритий");
   assert.ok(html.indexOf('data-act="cmtassign" data-val="a"') < html.indexOf('data-act="cmtedit" data-val="a"'), "перед «Редагувати»");

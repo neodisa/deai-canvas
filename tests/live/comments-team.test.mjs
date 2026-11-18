@@ -183,8 +183,8 @@ test("1: форма має два чипи (Claude типово), «Команд
   await frame.click("h1");
   await frame.waitForFunction(`!!${SHADOW}.querySelector('.compose textarea')`);
   assert.deepEqual(await chips(frame), [["local", "true"], ["project", "false"]], "типово — Claude, чипів рівно два");
-  // Під «Claude» підпису нема: власник 16.11.2026 — підписи, про які не просили, загромождають форму.
-  assert.equal(await frame.evaluate(`${SHADOW}.querySelector('.compose .caud-note')?.textContent ?? ""`), "", "під «Claude» зʼявився підпис");
+  // Під «AI» підпису нема: власник 16.11.2026 — підписи, про які не просили, загромождають форму.
+  assert.equal(await frame.evaluate(`${SHADOW}.querySelector('.compose .caud-note')?.textContent ?? ""`), "", "під «AI» зʼявився підпис");
   await frame.evaluate(`${SHADOW}.querySelector('.compose .caud-b[data-pick="project"]').click()`);
   assert.deepEqual(await chips(frame), [["local", "false"], ["project", "true"]]);
   assert.ok((await frame.evaluate(`${SHADOW}.querySelector('.compose .caud-note').textContent`)).length > 0, "нема рядка-примітки «команда бачить це в превʼю»");
@@ -239,7 +239,7 @@ test("3: фільтр «Усі / Claude / Команда» — картки, в�
   await openShell(env);
   await openPanel(page);
   const press = async (val) => { await page.click(`#cmt-panel [data-act="cmtfilter"][data-val="${val}"]`); };
-  /* 0.27.1: типова вкладка — «Для Claude» (недоручений командний там не видно), тож «обидві» — на вкладці «Усі». */
+  /* 0.27.1: типова вкладка — «Для AI» (недоручений командний там не видно), тож «обидві» — на вкладці «Усі». */
   await press("all");
   await until(async () => (await cardIds(page)).length === 2, "обидві картки");
 
@@ -264,13 +264,13 @@ test("3: фільтр «Усі / Claude / Команда» — картки, в�
 
 /* ── 4: доручення ─────────────────────────────────────────────────────────────────────────────────── */
 
-test("4: «Доручити Claude» → meta.assignee у memo, бейдж, /comments бачить пін; «Забрати» — ні (hidden:1), ?all=1 — є", async (t) => {
+test("4: «Доручити AI» → meta.assignee у memo, бейдж, /comments бачить пін; «Забрати» — ні (hidden:1), ?all=1 — є", async (t) => {
   const env = await boot(t);
   const { page, memo, url } = env;
   const pin = await seedTeam(env, { id: "team-1", author: "Колега", text: "Командний" });
   await openShell(env);
   await openPanel(page);
-  /* 0.27.1: недоручений командний пін не в типовій вкладці «Для Claude» — дивимось на вкладці «Команда». */
+  /* 0.27.1: недоручений командний пін не в типовій вкладці «Для AI» — дивимось на вкладці «Команда». */
   await page.click('#cmt-panel [data-act="cmtfilter"][data-val="project"]');
   const card = `#cmt-panel .cmt-card[data-cid="${pin.id}"]`;
   await page.waitForSelector(card);
@@ -327,7 +327,7 @@ test("5: пін колеги → «нових» на острівці, плаш�
   assert.match(await row.evaluate((el) => el.closest("[data-val], li, .row")?.textContent ?? ""), /Пошук/, "число в дереві не на сторінці піна");
 
   await page.click('.cv-notice[data-notice="cmt-news"] [data-act="cmtshownew"]');
-  /* 0.27.1: «Показати» з вкладки «Для Claude» сам веде на «Команду» — картку видно без ручного перемикання. */
+  /* 0.27.1: «Показати» з вкладки «Для AI» сам веде на «Команду» — картку видно без ручного перемикання. */
   await page.waitForSelector("#cmt-panel:not([hidden]) .cmt-sec--new .cmt-card");
   assert.equal(await page.getAttribute('#cmt-panel [data-act="cmtfilter"][data-val="project"]', "aria-pressed"), "true", "«Показати» не перемкнув на «Команду»");
   assert.equal(await page.locator("#cmt-panel .cmt-sec--new .cmt-card").count(), 1);
@@ -499,9 +499,9 @@ test("9: /commented?ch=project напряму (без host) — ручка ко�
   assert.equal(st.banner, false);
 });
 
-/* ── 10: латка 0.27.1 — типова вкладка, шапка, доручений командний у «Для Claude» ──────────────────── */
+/* ── 10: латка 0.27.1 — типова вкладка, шапка, доручений командний у «Для AI» ──────────────────── */
 
-test("10: типово «Для Claude»; фільтр під пошуком, заголовок не обрізано, кнопки шапки без білої плашки; доручений командний переходить у «Для Claude»; вкладка памʼятається", async (t) => {
+test("10: типово «Для AI»; фільтр під пошуком, заголовок не обрізано, кнопки шапки без білої плашки; доручений командний переходить у «Для AI»; вкладка памʼятається", async (t) => {
   const env = await boot(t);
   const { page } = env;
   await seedLocal(env, { id: "loc-1", author: "Фікстура", text: "Локальний" });
@@ -512,8 +512,8 @@ test("10: типово «Для Claude»; фільтр під пошуком, з
   const tab = (val) => `#cmt-panel [data-act="cmtfilter"][data-val="${val}"]`;
   const fn = (val) => page.locator(`${tab(val)} .cmt-fn`).textContent();
 
-  assert.equal(await page.getAttribute(tab("local"), "aria-pressed"), "true", "типова вкладка — «Для Claude»");
-  await until(async () => JSON.stringify(await cardIds(page)) === '["loc-1"]', "у «Для Claude» — лише локальна, недоручений командний не видно");
+  assert.equal(await page.getAttribute(tab("local"), "aria-pressed"), "true", "типова вкладка — «Для AI»");
+  await until(async () => JSON.stringify(await cardIds(page)) === '["loc-1"]', "у «Для AI» — лише локальна, недоручений командний не видно");
   assert.equal(await fn("local"), "1");
   assert.equal(await fn("project"), "1");
   assert.equal(await fn("all"), "2");
@@ -536,10 +536,10 @@ test("10: типово «Для Claude»; фільтр під пошуком, з
   await page.waitForSelector(card);
   await page.click(`${card} [data-act="cmtassign"]`);
   await page.waitForSelector(`${card} [data-act="cmtunassign"]`);
-  await until(async () => (await fn("local")) === "2", "число «Для Claude» зросло");
+  await until(async () => (await fn("local")) === "2", "число «Для AI» зросло");
   assert.equal(await fn("project"), "1", "доручений лишається й у «Команді»");
   await page.click(tab("local"));
-  await until(async () => JSON.stringify((await cardIds(page)).sort()) === '["loc-1","team-1"]', "доручений командний — у «Для Claude»");
+  await until(async () => JSON.stringify((await cardIds(page)).sort()) === '["loc-1","team-1"]', "доручений командний — у «Для AI»");
 
   await page.click(tab("all"));
   await page.reload();

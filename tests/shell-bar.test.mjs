@@ -300,7 +300,7 @@ test("у смузі статусу Клода немає ніколи — він
   assert.equal(barModel(S({ claude: live })).zone1.some((x) => x.id === "claude"), false);
   for (const o of [{ claude: live }, { claude: { state: "waiting", age_s: 400 } }, { homeOpen: true, claude: live }]) {
     const h = html(o);
-    assert.ok(!/claude-chip|claude-island|Claude працює|Claude чекає/.test(h), JSON.stringify(o));
+    assert.ok(!/claude-chip|claude-island|AI працює|AI чекає/.test(h), JSON.stringify(o));
   }
 });
 
