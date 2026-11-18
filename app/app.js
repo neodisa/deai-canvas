@@ -11,6 +11,7 @@ import {
 import { buildRows } from './rows-model.js';
 import { flatten as flattenTree, pathOf, topIds, visibleIds, visibleRows, statsOf, stepRow, firstChildRow, rowRange, errKey } from './tree-model.js';
 import { canMove } from './page-order.js';
+import { assetsPageOf } from './frame-nav.js';
 import { readFlow, shotKey, shotVersion, stateQuery } from './flow-model.js';
 import { flowLayout } from './flow-layout.js';
 import { confirmHTML, confirmedId } from './inline-confirm.js';
@@ -2063,11 +2064,24 @@ function frameCmtKey(ev) {
   if (k === 'c' || ev.code === 'KeyC') { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.comments(); }
   else if ((k === 'h' || ev.code === 'KeyH') && cmtOpen) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.cmtpins(); }
 }
+let frameHash = '';   // одноразовий хвіст `#…` для наступного `frame.src` (посилання всередині макета)
 frame.addEventListener('load', () => {
   let w = null;
   try { w = frame.contentWindow; w.addEventListener('keydown', frameCmtKey, true); } catch (e) {
     dropFrameCmt(); // чужий документ: коментатора там нема, старі картки з мертвими діями не лишаємо
     return;
+  }
+  /* Посилання всередині макета повело рамку на сирий файл сторінки (без коментатора): проводимо її
+     через оболонку, як клік по рядку панелі — вона підніме `/commented` із коментатором. */
+  if (!w.CommentLayer && mode === 'single' && picked && panelPagesIt === picked) {
+    let id = null;
+    try { id = assetsPageOf(w.location.pathname, picked, panelPages); } catch (e) { /* чужий документ */ }
+    if (id) {
+      try { frameHash = w.location.hash || ''; } catch (e) { frameHash = ''; }
+      pickedPage = id; pickedState = null;
+      render();
+      return;
+    }
   }
   // Той самий origin, але сторінка без коментатора (перейшли на статичний файл): те саме.
   if (!w.CommentLayer) dropFrameCmt();
@@ -7439,8 +7453,9 @@ function applyMode(task, { keepFrame = false } = {}) {
     if (!keepFrame) {
       frame.src = (picked && pickedPage)
         ? `/commented?it=${encodeURIComponent(picked)}&page=${encodeURIComponent(pickedPage)}`
-          + `&host=1${stateQuery(pickedState)}`
+          + `&host=1${stateQuery(pickedState)}${frameHash}`
         : (picked ? `/commented?it=${encodeURIComponent(picked)}&host=1` : 'about:blank');
+      frameHash = '';
       /* Нова сторінка в рамці — новий коментатор: старий знімок і готовність уже не про неї (`ready` поверне нове). */
       /* Змінилась адреса (ітерація/канал/сторінка) — вибір, редагування й чернетка належать старому документу. */
       const srcNow = frame.getAttribute('src');
