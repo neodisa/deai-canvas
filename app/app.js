@@ -2065,7 +2065,8 @@ function frameCmtKey(ev) {
   else if ((k === 'h' || ev.code === 'KeyH') && cmtOpen) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.cmtpins(); }
 }
 let frameHash = null;   // одноразовий `{it, page, hash}` для наступного `frame.src` (посилання всередині макета)
-let followLatched = false;
+/* Запобіжник спрацював — ключ «задача|ітерація», де саме: інша задача чи ітерація ходить за посиланнями як звичайно. */
+let followLatchKey = null;
 let followStamps = [];  // мітки часу переходів за посиланнями — лічильник запобіжника від циклу редиректів
 frame.addEventListener('load', () => {
   let w = null;
@@ -2078,8 +2079,9 @@ frame.addEventListener('load', () => {
   if (!w.CommentLayer && mode === 'single' && picked && panelPagesIt === picked) {
     let id = null;
     try { id = assetsPageOf(w.location.pathname, picked, panelPages); } catch (e) { /* чужий документ */ }
-    const fd = id && !followLatched ? followDecision(followStamps, Date.now()) : null;
-    if (fd) { followStamps = fd.stamps; if (!fd.follow) followLatched = true; }   // зупинка тримається до свідомого кроку користувача
+    const latchKey = `${currentTaskId}|${picked}`;
+    const fd = id && followLatchKey !== latchKey ? followDecision(followStamps, Date.now()) : null;
+    if (fd) { followStamps = fd.stamps; if (!fd.follow) followLatchKey = latchKey; }   // зупинка тримається до свідомого кроку користувача
     if (fd && fd.follow) {   // понад 3 переходи за 3 с — цикл редиректів: лишаємо стару поведінку
       let h = '';
       try { h = w.location.hash || ''; } catch (e) { /* чужий документ */ }
@@ -5322,7 +5324,7 @@ const PANEL_ACTIONS = {
     /* Стан скидаємо навіть коли рядок ТОЙ САМИЙ: сторінка не змінилась, тож
        охорона в `loadPages` тут не спрацює, а той, хто клікнув «Пошук», чекає
        звичайний пошук, а не «нічого не знайдено» з кадру флоу. */
-    pickedPage = val; pickedState = null; followStamps = []; followLatched = false;   // свідомий перехід користувача скидає запобіжник
+    pickedPage = val; pickedState = null; followStamps = []; followLatchKey = null;   // свідомий перехід користувача скидає запобіжник
     /* У «Огляді» клік по рядку ВЕДЕ КАМЕРУ до кадру цієї сторінки й підсвічує
        його. Повного `render()` при цьому НЕ робимо: він перебудував би
        канвас і сів у `fitAll()`, тобто затер би щойно порахований переліт
