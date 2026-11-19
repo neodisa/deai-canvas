@@ -35,6 +35,7 @@ import spaces  # простори машини: який файл задач д�
 import isolation  # закон ізоляції й шви тестів (4d-4b; раніше `implicit.py`)
 import task_trash  # кошик задач простору (етап Д, 0.30.0): видалення без стирання, повернення, знищення
 import feedback  # відгук (0.23.0): кільце помилок, збирач діагностики, черга відправки
+import agents_md  # AGENTS.md простору (етап Е, 0.31.0): блок з шаблону + «Ваше»
 import updater  # оновлення інструмента (0.23.0): перевірка тегів у remote, `update.json`, `GET /api/update`
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
 import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
@@ -6018,7 +6019,7 @@ class Handler(SimpleHTTPRequestHandler):
                         '/api/space-switch',
                         '/api/modules', '/api/module-enable', '/api/module-disable',
                         '/api/module-settings', '/api/module-check', '/api/ds-tokens',
-                        '/api/module-trust', '/api/module-untrust')
+                        '/api/module-trust', '/api/module-untrust', '/api/agents-md')
 
     #: Маршрути МАШИНИ (оновлення, відгук): потрібні саме тоді, коли щось зламано (порожня машина, битий реєстр, нечитабельний
     #: `tasks.json`). `_take_task` для них НЕ фіксує простір і не читає задач; префіксна форма `/t/<id>/api/…` відхиляється 400.
@@ -6176,6 +6177,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path.split('?')[0] == '/api/module-trust':
             self._module_trust_get()
+            return
+        if self.path.split('?')[0] == '/api/agents-md':
+            self._agents_md(parse_qs(urlparse(self.path).query).get('space', [None])[0], False)
             return
         if self.path.split('?')[0] == '/api/ds-tokens':
             self._ds_tokens_get()
@@ -7362,6 +7366,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_update(payload)
         elif self.path == '/api/space-tool':
             self._space_tool(payload)
+        elif self.path == '/api/agents-md':
+            self._agents_md_post(payload)
         elif self.path == '/api/space-switch':
             self._space_switch(payload)
         elif self.path == '/api/module-enable':
@@ -8571,7 +8577,17 @@ class Handler(SimpleHTTPRequestHandler):
         except (spaces.InputError, KeyError, spaces.SpacesError) as e:
             self._space_failed(e)
             return
+        self._write_space_agents_md(sid)
         self._send_json({'ok': True, 'id': sid})
+
+    @staticmethod
+    def _write_space_agents_md(sid):
+        """Новий простір дістає AGENTS.md одразу; збій запису НЕ валить створення простору — лише лог (stderr)."""
+        try:
+            sp = next(s for s in spaces.read_registry()['spaces'] if s['id'] == sid)
+            agents_md.write(sp['path'], version=updater.current_version(UPDATER_ROOT))
+        except Exception as e:    # noqa: BLE001 — навмисно: AGENTS.md — додаток до простору, не його умова
+            print(f'agents-md: not written for new space {sid}: {type(e).__name__}', file=sys.stderr)
 
     def _space_update(self, payload):
         """Змінити назву й колір простору (`space.json`); решта його ключів лишається."""
@@ -8593,6 +8609,35 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_failed(e)
             return
         self._send_json({'ok': True, 'space': sid, 'tools': tools})
+
+    def _agents_md_post(self, payload):
+        """`POST /api/agents-md {space}`: створити/оновити блок."""
+        self._agents_md(payload.get('space'), True)
+
+    def _agents_md(self, want, write):
+        """`GET|POST /api/agents-md[?space=]` → `{ok, space, …agents_md.status, paths}`. POST створює/оновлює блок (`ValueError('newer')` →
+        409 `newer`, файл цілий). Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
+        у відповіді, у файл вони не потрапляють. Версія — та сама, що `current` у `GET /api/update`."""
+        sp = self._module_space(want)
+        if sp is None:
+            return
+        folder = sp.get('path') or ''
+        if spaces._is_implicit(sp) or not folder or not os.path.isdir(folder):
+            self._space_error(409, 'no-folder', 'no-folder')
+            return
+        version = updater.current_version(UPDATER_ROOT)
+        try:
+            if write:
+                st = agents_md.write(folder, version=version)
+            else:
+                st = agents_md.status(folder, version=version)
+        except ValueError as e:
+            self._space_error(409 if str(e) == 'newer' else 503, str(e), str(e))
+            return
+        deai = UPDATER_ROOT
+        self._send_json({'ok': True, 'space': sp['id'], **st,
+                         'paths': {'deai': deai, 'inbox': os.path.join(deai, 'bin', 'inbox.py'),
+                                   'authoring': os.path.join(deai, 'docs', 'modules', 'authoring.md')}})
 
     def _space_switch(self, payload):
         """Зробити простір поточним; відповідь — його поточна задача (`null`, коли її нема).
