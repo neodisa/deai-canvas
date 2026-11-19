@@ -182,20 +182,24 @@ Live: новий кейс у `tests/live/connections.test.mjs`.
 **Файли:** Create `app/agents_md.py`, `app/templates/agents.md`, `tests/test_agents_md.py`. Modify `app/serve.py`
 (маршрути), майстер нового простору (де створюється тека простору — `spaces.py`/`serve.py` `space-new`).
 
-- [ ] Шаблон `app/templates/agents.md` (англійською), підстановки `{space_name}`, `{inbox}` (абс. шлях `bin/inbox.py`),
-  `{authoring}` (абс. шлях `docs/modules/authoring.md`), `{canvas}` (адреса канваса, напр. `http://127.0.0.1:8765`), `{version}`.
-  Зміст — розділи спеки §4. Перший рядок блоку — маркер begin, останній — `<!-- deai:end -->`.
+- [ ] Шаблон `app/templates/agents.md` (англійською), єдина підстановка — `{version}` (у маркері begin). Блок НЕ залежить
+  від компʼютера (спека §4): жодних абсолютних шляхів, імені користувача, імені простору. Шляхи установки — як
+  `<deai>/bin/inbox.py`, `<deai>/docs/modules/authoring.md` + рядок, як дізнатись `<deai>`: `GET
+  http://127.0.0.1:8765/api/agents-md?space=<id>` → `paths.deai` (або Settings → AGENTS.md). Зміст — розділи спеки §4.
+  Перший рядок блоку — маркер begin, останній — `<!-- deai:end -->`.
 - [ ] `agents_md.py`:
   ```python
   BEGIN_RE = re.compile(r'^<!-- deai:begin v(?P<v>[0-9.]+)[^\n]*-->$', re.M)
   END = '<!-- deai:end -->'
-  def render_block(space_name, *, version, paths, canvas) -> str  # з маркерами, закінчується '\n'
-  def split(text) -> tuple[str | None, str, str | None]           # (block|None, own, file_version|None)
-  def status(space_dir, space_name, *, version, paths, canvas) -> dict  # {path, exists, hasBlock, outdated, version, fileVersion, block, own}
-  def write(space_dir, space_name, *, version, paths, canvas) -> dict    # створює/оновлює; атомарно; повертає status
+  def render_block(*, version) -> str                      # з маркерами, закінчується '\n'; без машинних даних
+  def split(text) -> tuple[str | None, str, str | None]    # (block|None, own, file_version|None)
+  def status(space_dir, *, version) -> dict                # {path, exists, hasBlock, outdated, newer, version, fileVersion, block, own}
+  def write(space_dir, *, version) -> dict                 # створює/оновлює; атомарно; newer → відмова (ValueError 'newer')
   ```
-  - `outdated` = `hasBlock` і текст блоку без рядка begin ≠ згенерований без рядка begin; файла нема / блоку нема →
+  - `newer` = версія файла > поточної (semver, порівняння кортежами цілих). `outdated` = `hasBlock` і НЕ `newer` і версія
+    файла < поточної і текст блоку без рядка begin ≠ згенерований без рядка begin. Файла нема / блоку нема →
     `outdated: False`, клієнт показує «Створити» / «Оновити з шаблону» за `exists`/`hasBlock`.
+  - Маршрут додає `paths: {deai, inbox, authoring}` — абсолютні шляхи ЦІЄЇ установки (лише у відповіді, не у файлі).
   - Блоку нема, а файл є → новий блок + `'\n'` + увесь старий текст (байт-у-байт).
   - Блок є → замінюється лише він; текст до блоку й після — байт-у-байт.
   - Атомарно: `tempfile.NamedTemporaryFile(dir=space_dir, delete=False)` → `os.replace`; виняток → тимчасовий файл прибрати,
@@ -204,7 +208,9 @@ Live: новий кейс у `tests/live/connections.test.mjs`.
   `{error:'no-folder'}`. Версія — та сама, що `/api/update` `current`. Origin/машинні маршрути — як `space-update`.
 - [ ] Майстер нового простору: після створення теки — `agents_md.write(...)` (помилка запису AGENTS.md не валить створення
   простору — лише лог).
-- [ ] Тести (`tests/test_agents_md.py`): render містить імʼя/шляхи/маркери; write на порожній теці; оновлення зберігає текст
+- [ ] Тести (`tests/test_agents_md.py`): render містить маркери й `<deai>/bin/inbox.py`; render НЕ містить `/Users/`,
+  `/home/`, `C:\\`, домашньої теки чи теки установки (дві різні установки/`DEAI_HOME` → байт-у-байт однаковий блок);
+  `newer` (файл 9.9.9) → не outdated, `write` відмовляє, файл цілий; write на порожній теці; оновлення зберігає текст
   до і після блоку байт-у-байт (з CRLF і без кінцевого `\n` у «Ваше»); файл без маркерів; outdated за вмістом (змінена версія
   при незмінному тексті → не outdated); збій `os.replace` (patch) → старий файл цілий, тимчасових файлів нема;
   **кожна команда шаблону існує**: `bin/inbox.py` містить підкоманду `resolve` і прапорці `--task`, `--reason`; кожен
@@ -219,12 +225,13 @@ Live: `tests/live/agents-md.test.mjs` (новий).
 
 - [ ] Розділ `agents`: `h1` + «Скопіювати» (`navigator.clipboard`, тост «AGENTS.md скопійовано») + «Оновити з шаблону»
   (активна лише при `outdated` або `exists && !hasBlock`); плашка `.note` при `outdated`: «Шаблон Deai {v} новіший за цей
-  файл ({fv}).» + кнопка; нема файла → «AGENTS.md ще нема» + «Створити»; `409 no-folder` → «У цього простору нема теки».
+  файл ({fv}).» + кнопка; `newer` → плашка «Цей блок записав новіший Deai ({fv}) — оновіть Deai.», «Оновити з шаблону»
+  неактивна; нема файла → «AGENTS.md ще нема» + «Створити»; `409 no-folder` → «У цього простору нема теки».
   Переглядач `.ag`: `.ag-bar` (шлях моно + копіювати шлях), `.ag-part` «З шаблону · Deai {v}» (`pre` блоку), `.ag-part.ag-own`
   «Ваше · не чіпається» (`pre` own; порожнє «Ваше» — частину не показувати).
 - [ ] Після «Оновити»/«Створити» — тост «AGENTS.md оновлено · ваші нотатки на місці» / «AGENTS.md створено».
 - [ ] Крапка в навігації (`agentsOutdated`) — з того самого GET (робиться при вході на сторінку налаштувань).
-- [ ] Юніт: view для 5 станів (нема файла, без блоку, актуальний, застарілий, no-folder); екранування вмісту.
+- [ ] Юніт: view для 6 станів (нема файла, без блоку, актуальний, застарілий, новіший, no-folder); екранування вмісту.
 - [ ] Живий: фікстура простору з AGENTS.md, де блок старий і є «Ваше» → плашка є, крапка в навігації → «Оновити» → файл
   на диску: «Ваше» байт-у-байт, блок новий, плашки нема; простір без файла → «Створити» → файл є.
 - [ ] Коміт: `feat(0.31.0): розділ AGENTS.md у Налаштуваннях`.
