@@ -818,3 +818,39 @@ test("toolMenuHTML: єдиний пункт «Вимкнути» (toolask) з id
   const [o] = toolCards({ figma: false });
   assert.match(toolCardHTML(o, new Map([["tool:figma", "tool"]]), null), /aria-busy="true"[^]*data-cn="toolon"[^>]* disabled/);
 });
+
+test("картка «В Figma»: питання вимкнення — лише питання й наслідок, без «налаштування й секрети лишаться» (в інструмента їх нема); модуль зберігає свій текст", () => {
+  const card = toolCardOf(connPageHTML(view({ tools: { figma: true }, ask: { id: "tool:figma" } })));
+  assert.match(card, /<p class="cfm-t">Вимкнути «В Figma»\? Кнопки «В Figma» в смузі нема\.<\/p>/);
+  assert.doesNotMatch(card, /Налаштування й секрети/);
+  setLang("en");
+  const en = toolCardOf(connPageHTML(view({ tools: { figma: true }, ask: { id: "tool:figma" } })));
+  assert.match(en, /<p class="cfm-t">Turn off “To Figma”\? No «To Figma» button in the bar\.<\/p>/);
+  assert.doesNotMatch(en, /settings and secrets/);
+  setLang("uk");
+  assert.match(connPageHTML(view({ ask: { id: "static-publish" } })), /Вимкнути «Публікація в теку»\? Налаштування й секрети лишаться/, "картка модуля — без змін");
+});
+
+const AGF = { ok: true, path: "/u/studio/AGENTS.md", exists: true, hasBlock: true, outdated: true, newer: false,
+  version: "0.31.0", fileVersion: "0.30.0", block: "<!-- deai:begin v0.30.0 -->\nx\n<!-- deai:end -->\n", own: "\nмоє\n" };
+
+test("розділ «AGENTS.md»: голова — h1 і кнопки праворуч; плашка й переглядач під нею; крапка в навігації лише коли шаблон новіший", () => {
+  const h = connPageHTML(view({ sec: "agents", agents: AGF }));
+  assert.match(h, /<div class="th-head"><h1 class="th-h" id="cn-title">AGENTS\.md<\/h1><div class="ag-acts">[^]*?data-v="copy"[^]*?data-v="update"[^>]*>/);
+  assert.match(h, /<div class="note" role="status">[^]*Шаблон Deai 0\.31\.0 новіший за цей файл \(0\.30\.0\)\./);
+  assert.match(h, /<div class="ag">[^]*ag-own/);
+  assert.match(navBtn(h, "agents")[1], /<span class="set-dotb" title="Є новіший шаблон"><\/span>/);
+  const cur = connPageHTML(view({ sec: "mods", agents: { ...AGF, outdated: false } }));
+  assert.doesNotMatch(navBtn(cur, "agents")[1], /set-dotb/);
+  assert.match(navBtn(connPageHTML(view({ sec: "mods", agents: AGF })), "agents")[1], /set-dotb/, "крапка видна й з іншого розділу");
+});
+
+test("розділ «AGENTS.md»: нема файла, нема теки, завантаження — без кнопок голови, окремі повідомлення", () => {
+  const nof = connPageHTML(view({ sec: "agents", agents: { exists: false, hasBlock: false, path: "/p/AGENTS.md" } }));
+  assert.match(nof, /AGENTS\.md ще нема[^]*data-v="create"/);
+  assert.doesNotMatch(nof, /class="ag-acts"/);
+  const nfd = connPageHTML(view({ sec: "agents", agents: { failed: { code: "no-folder" } } }));
+  assert.match(nfd, /У цього простору нема теки/);
+  assert.doesNotMatch(nfd, /data-th="ag"/);
+  assert.match(connPageHTML(view({ sec: "agents", agents: null })), /role="status"/);
+});

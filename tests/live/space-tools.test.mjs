@@ -90,7 +90,8 @@ test("вимкнути на картці → у задачі нема кнопк
   await page.waitForSelector("#th-menu");
   await page.click('#th-menu [data-cn="toolask"]');
   await page.waitForSelector(`.mc--ask[data-id="tool:figma"]`);
-  assert.match(await page.locator('.mc--ask[data-id="tool:figma"]').textContent(), /Кнопки «В Figma» в смузі нема\./);
+  const askText = (await page.locator('.mc--ask[data-id="tool:figma"] .cfm-t').textContent()).trim();
+  assert.equal(askText, "Вимкнути «В Figma»? Кнопки «В Figma» в смузі нема.", "в інструмента нема налаштувань і секретів — про них не кажемо");
   assert.equal(await page.evaluate(() => document.activeElement?.className.includes("cfm-no")), true, "фокус — на «Скасувати»");
   await askNo(page, "tool:figma");
   await page.waitForSelector(CARD);

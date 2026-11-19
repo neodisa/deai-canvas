@@ -34,6 +34,7 @@ import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { navItems, readSec, trustWaitingOf } from "./settings-model.js";
+import { agentsActsHTML, agentsBodyHTML } from "./agents-view.js";
 import { confirmHTML } from "./inline-confirm.js";
 import { BADGE_CLASS, cardModel, emptyRoles, failedRole, gridEntries, sentence, toolCardModel, toolCards } from "./modules-grid.js";
 import { spaceColorToken } from "./spaces-model.js";
@@ -165,7 +166,7 @@ export function toolCardHTML(c, busy, ask) {
     + `<span>${esc(t(c.roleKey))}</span></div>${more}</div>`;
   if (ask && ask.id === c.id) {
     return `<div class="mc mc--ask" role="group" aria-label="${esc(name)}" data-id="${id}">${top("")}${confirmHTML({
-      title: [t("cnDisableAsk", name), t(m.askKey)].join(" "), no: t("askCancel"), yes: t("cnDisable"),
+      title: [t("toolDisableQ", name), t(m.askKey)].join(" "), no: t("askCancel"), yes: t("cnDisable"),
       noAttrs: `data-cn="askno" data-id="${id}"`, yesAttrs: `data-cn="askyes" data-id="${id}"`,
     })}</div>`;
   }
@@ -224,8 +225,8 @@ function notesHTML(notes) {
 }
 
 /** Ліва навігація «Налаштувань»: групи «Простір · {імʼя}» і «Застосунок»; поточний розділ — `aria-current`. */
-function setNavHTML(sp, sec, list) {
-  const items = navItems({ trustWaiting: trustWaitingOf(list) });
+function setNavHTML(sp, sec, list, agentsOutdated = false) {
+  const items = navItems({ trustWaiting: trustWaitingOf(list), agentsOutdated });
   const dot = `<span class="space-dot" style="background:var(--${spaceColorToken(sp.color)})"></span>`;
   const head = { space: `<h6>${dot}${esc(t("setNavSpace", sp.name))}</h6>`, app: `<h6>${esc(t("setNavApp"))}</h6>` };
   let out = "";
@@ -249,7 +250,8 @@ export function connPageHTML(v) {
   const h1 = `<h1 class="th-h" id="cn-title">${esc(t(navItems().find((x) => x.id === sec).labelKey))}</h1>`;
   /* Розділ «Модулі»: у голові праворуч «Додати модуль» (лише коли список прочитано — є що додавати). */
   const addBtn = `<button type="button" class="ctl ctl--out" data-cn="cat">${ico("plus")}${esc(t("mcAdd"))}</button>`;
-  const wrap = (inner, withAdd = false) => `<div class="set">${setNavHTML(sp, sec, v.list)}<div class="set-main"><div class="set-in cn-in">${withAdd ? `<div class="th-head">${h1}${addBtn}</div>` : h1}${inner}</div></div></div>`;
+  const wrap = (inner, head = "") => `<div class="set">${setNavHTML(sp, sec, v.list, v.agents?.outdated === true)}<div class="set-main"><div class="set-in cn-in">${head ? `<div class="th-head">${h1}${head}</div>` : h1}${inner}</div></div></div>`;
+  if (sec === "agents") return wrap(agentsBodyHTML(v.agents, v.agentsBusy === true), agentsActsHTML(v.agents, v.agentsBusy === true));
   if (sec !== "mods") return wrap("");
   /* space.json не читається — двома шляхами: сервер сказав `capabilities.error === "space-json-unreadable"` або відмовив
      списку модулів (`409 space-json-unreadable`). В обох випадках решта `capabilities` нічого не варта, картки не малюємо.
@@ -262,7 +264,7 @@ export function connPageHTML(v) {
       + `<button class="ctl ctl--out" data-cn="retry">${ico("refresh")}${esc(t("retry"))}</button></div>`);
   }
   if (!Array.isArray(v.list)) return wrap(`<p class="cn-loading" role="status">${esc(t("cnLoading"))}</p>`);
-  return wrap(`${notesHTML(v.notes)}${gridHTML(v)}`, true);
+  return wrap(`${notesHTML(v.notes)}${gridHTML(v)}`, addBtn);
 }
 
 /* Стан секрету за `set` (`true|false|null`) → ключ словника. Не таблицею з ключами «true»/«null»: `set` — поле даних. */

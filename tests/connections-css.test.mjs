@@ -174,17 +174,24 @@ test("етап Е: кожен клас діалогу каталогу з роз
 });
 
 /* Список каталогу обрізається рівно по межі рядка — «Свій модуль» унизу не видно, і нічого не каже, що список прокручується.
-   Тінь на краю — чистий CSS (прийом `local`/`scroll`): плашки кольору поверхні діалогу (`.cv-ask`, `--s2`) затуляють тінь, поки край
-   не відлипне, тож вона з'являється лише там, де є що прокручувати. */
-test("етап Е: `.cat-b` має підказку прокрутки — плашки поверхні діалогу (local) над тінями (scroll), без літералів кольору", () => {
-  const body = RULES.filter((r) => r.sels.includes(".cat-b")).map((r) => r.body).join(";");
-  const surface = /background:var\(--s2\)|var\(--s2\)/.exec(rule(".cv-ask") ?? "") ? "var(--s2)" : "";
-  assert.equal(surface, "var(--s2)", "поверхня діалогу — токен --s2; плашки мусять бути того ж кольору");
-  assert.match(body, /linear-gradient\(var\(--s2\) 30%,transparent\) top\/100% 28px no-repeat local/, "верхня плашка поверхні, local");
-  assert.match(body, /linear-gradient\(transparent,var\(--s2\) 70%\) bottom\/100% 28px no-repeat local/, "нижня плашка поверхні, local");
-  assert.equal((body.match(/radial-gradient\(/g) || []).length, 2, "дві тіні — зверху й знизу");
-  assert.equal((body.match(/no-repeat scroll/g) || []).length, 2, "тіні прикріплені до видимого краю (scroll)");
-  assert.equal((body.match(/no-repeat local/g) || []).length, 2, "плашки їдуть із вмістом (local)");
-  assert.doesNotMatch(body, /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i, "тінь із токена, без літерала кольору");
-  assert.match(body, /overflow-y:auto/, "прокрутка лишилась");
+   Підказка — затухання нижнього краю маскою по вмісту (тінь поверх вмісту на темній поверхні діалогу практично невидима). Довжину
+   затухання `--cat-fade` веде анімація від прокрутки списку: 32px, поки є що читати, і до 0 в останні 32px; без переповнення
+   таймлайна нема, і `--cat-fade` лишається 0px. Без `animation-timeline` затухання нема. Без JS і без підписів. */
+test("етап Е: `.cat-b` затухає знизу маскою, а довжину веде анімація від прокрутки самого списку (лише в @supports); старого трюку з фоном нема", () => {
+  const outside = css.replace(/@supports \(animation-timeline:scroll\(\)\)\{[^]*?\}\s*\}/, "");
+  const base = [...outside.matchAll(/(?:^|\})\s*\.cat-b\{([^{}]*)\}/g)].map((m) => m[1]).join(";");
+  assert.match(base, /overflow-y:auto/, "прокрутка лишилась");
+  assert.match(base, /(?<!-webkit-)mask-image:linear-gradient\(#000 calc\(100% - var\(--cat-fade\)\),transparent\)/, "маска: непрозорий вмістом, затухання на --cat-fade");
+  assert.match(base, /-webkit-mask-image:linear-gradient\(#000 calc\(100% - var\(--cat-fade\)\),transparent\)/, "і з префіксом");
+  assert.doesNotMatch(base, /radial-gradient|no-repeat|background:/, "старий трюк local/scroll знято");
+  assert.match(rule("@property --cat-fade") ?? "", /syntax:'<length>';inherits:false;initial-value:0px/, "зареєстрована довжина, початково 0 — без анімації затухання нема");
+  assert.match(css, /@keyframes cat-fade\{from\{--cat-fade:32px\}to\{--cat-fade:0px\}\}/, "від 32px до 0");
+  /* Анімація — ЛИШЕ в @supports: без нього `animation-timeline` у старому браузері лишив би анімацію за часом (довгу, нескінченну в очах). */
+  const sup = /@supports \(animation-timeline:scroll\(\)\)\{\s*\.cat-b\{([^{}]*)\}\s*\}/.exec(css)?.[1] ?? "";
+  assert.match(sup, /animation:cat-fade linear both/);
+  assert.match(sup, /animation-timeline:scroll\(self\)/);
+  assert.ok(sup.indexOf("animation-timeline") > sup.indexOf("animation:"), "timeline ПІСЛЯ шортхенда animation, інакше той його скидає");
+  assert.match(sup, /animation-range:calc\(100% - 32px\) 100%/, "затухання щезає в останні 32px прокрутки");
+  assert.doesNotMatch(base, /animation/, "поза @supports анімації нема");
+  assert.doesNotMatch(base, /#(?!000\b)[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i, "жодних інших літералів кольору");
 });

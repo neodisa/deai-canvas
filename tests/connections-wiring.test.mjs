@@ -490,10 +490,10 @@ test("етап Е: розділ «Налаштувань» — памʼятає�
   assert.match(src, /let connSec = \(\(\) => \{ try \{ return readSec\(localStorage\.getItem\(SEC_KEY\)\); \}/);
   assert.match(fnc("setConnSec"), /connAsk = null;\s*connSec = readSec\(sec\);\s*try \{ localStorage\.setItem\(SEC_KEY, connSec\); \} catch/);
   assert.match(fnc("enterHome"), /if \(connFocusRole\) setConnSec\('mods'\);\s*paintHome\(\);\s*loadConn/, "вхід із роллю → «Модулі»");
-  assert.match(fnc("wireHome"), /case 'csec': if \(readSec\(v\) !== connSec\) \{ setConnSec\(v\); paintHome\(\); \} break;/);
+  assert.match(fnc("wireHome"), /case 'csec': if \(readSec\(v\) !== connSec\) \{ setConnSec\(v\); paintHome\(\); if \(connSec === 'agents'\) loadAgents\(\); \} break;/);
   const settings = /\n  settings: async \(\) => \{[\s\S]*?\n  \},/.exec(src)[0];
   assert.doesNotMatch(settings, /setConnSec/, "шестерня веде в ОСТАННІЙ розділ, не скидає його");
-  assert.match(src, /sec: connSec, ask: connAsk \}\);/, "connView несе розділ і питання «Вимкнути?» у розмітку");
+  assert.match(src, /sec: connSec, ask: connAsk, agents: agentsSt\.data, agentsBusy: agentsSt\.busy \}\);/, "connView несе розділ, питання «Вимкнути?» і стан AGENTS.md у розмітку");
 });
 
 /* ── «Налаштування → Модулі» (етап Е, Task 2): меню «⋯», клавіатура картки, питання «Вимкнути?» ── */
@@ -581,4 +581,27 @@ test("інструмент простору: `tool:…` не доходить д
   assert.match(p, /curTask = \{ \.\.\.curTask, space: patch\(curTask\.space\) \}/);
   assert.match(p, /paintBar\(\);/);
   assert.match(fnc("toggleConnMenu"), /toolMenuHTML\(card\)/);
+});
+
+/* ── «Налаштування → AGENTS.md» (етап Е, Task 6) ── */
+test("AGENTS.md: читається при вході на сторінку (loadConn) і при переході в розділ; свіжий вхід скидає стан", () => {
+  assert.match(fnc("loadConn"), /connAsk = null;\s*paintHome\(\);\s*\}\s*loadAgents\(\);/, "після перемикання простору — читання AGENTS.md");
+  assert.match(fnc("enterHome"), /agentsSt\.spaceId = null; agentsSt\.data = null; agentsSt\.busy = false;/, "свіжий вхід не показує дані попереднього візиту");
+  assert.match(fnc("wireHome"), /case 'ag': agentsAction\(v\); break;/);
+  const b = fnc("loadAgents");
+  assert.match(b, /api\(`\/api\/agents-md\?space=\$\{encodeURIComponent\(sid\)\}`\)/, "явний простір сторінки");
+  assert.match(b, /seq !== agentsSt\.seq \|\| !connOpen\(\) \|\| connState\.spaceId !== sid\) return;/, "запізніла відповідь відкидається");
+  assert.match(b, /data = \{ failed: \{ code: e\?\.code \?\? null \} \}/, "збій не кидає — малює розділ");
+});
+
+test("AGENTS.md: запис — POST з явним простором, тост за створення/оновлення, фокус на «Скопіювати»; копіювання — writeText синхронно з кліку", () => {
+  const w = fnc("agentsWrite");
+  assert.match(w, /post\('\/api\/agents-md', \{ space: sid \}\)/);
+  assert.match(w, /toast\(t\(created \? 'agCreated' : 'agUpdated'\)\)/);
+  assert.match(w, /agentsSt\.seq \+= 1;/, "читання, що летіло до запису, застаріло");
+  assert.match(w, /if \(connSec === 'agents'\) focusAgents\(\);/);
+  const c = fnc("agentsCopy");
+  assert.match(c, /navigator\.clipboard\.writeText\(text\)\.then\(\(\) => toast\(t\(doneKey\)\), sel\)/);
+  assert.match(c, /selectAllChildren/, "відмова буфера — виділяємо текст");
+  assert.doesNotMatch(fnc("agentsAction"), /await/, "writeText — у тому ж такті, що й клік");
 });

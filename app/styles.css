@@ -1917,6 +1917,26 @@ body:not(.home-open) .cn-drawer{display:none}
 .nav-i .set-dotb{margin-left:auto;width:7px;height:7px;border-radius:50%;background:var(--open)}
 .set-main{min-width:0}
 .set-in{padding:22px 28px 60px}
+/* Розділ «AGENTS.md» (етап Е): плашка про новіший шаблон (бурштин), переглядач файла — рядок шляху + дві частини з лівою колонкою
+   («З шаблону» / «Ваше»). Текст файла — `pre`, що переносить рядки; широкий рядок не розпирає сторінку. */
+.ag-acts{display:flex;align-items:center;gap:8px}
+.ag-empty{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0;color:var(--mid)}
+.ag-empty p{margin:0}
+.note{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px;padding:10px 12px;border-radius:var(--r);
+  background:color-mix(in srgb,var(--open) 12%,transparent);border:1px solid color-mix(in srgb,var(--open) 35%,transparent)}
+.note .ico{flex:none;color:var(--open)}
+.note p{flex:1;min-width:200px;margin:0;color:var(--hi)}
+.ag{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--s0);overflow:hidden}
+.ag-bar{display:flex;align-items:center;gap:8px;min-width:0;padding:6px 6px 6px 12px;border-bottom:1px solid var(--line);
+  font-family:var(--mono);font-size:12px;color:var(--mid)}
+.ag-bar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ag-body{overflow-x:auto}
+.ag-part{display:grid;grid-template-columns:96px minmax(0,1fr);border-bottom:1px solid var(--line)}
+.ag-part:last-child{border-bottom:0}
+.ag-g{padding:12px 10px;font-size:11px;font-weight:600;color:var(--dim);border-right:1px solid var(--line)}
+.ag-own .ag-g{color:var(--mid)}
+.ag pre{margin:0;padding:12px 14px;font:12px/1.6 var(--mono);color:var(--mid);white-space:pre-wrap;overflow-wrap:anywhere}
+.ag-own pre{color:var(--hi)}
 /* Розділ «Модулі» (етап Е): сітка карток із однією дією. Клік по картці — це кнопка-назва `.mc-open`, розтягнута на картку (`::after`, шухляда
    чи діалог довіри); «⋯» і кнопка дії стоять над нею (`z-index`) і лишаються клікабельними; «⋯» — меню `.cv-ctx`
    (`#th-menu`, як у картки задачі); питання «Вимкнути?» стоїть у самій картці (`.mc--ask` + `.cfm`). Пунктирна картка — роль без модуля.
@@ -1969,13 +1989,17 @@ h2.sub{margin:26px 0 10px;font-size:12px;font-weight:600;letter-spacing:.05em;te
 .cat-h h2{flex:1;min-width:0}
 .cat-h [hidden]{display:none}
 .cat-b{display:flex;flex-direction:column;gap:2px;max-height:58vh;overflow-y:auto;margin:0 -8px;padding:0 8px}
-/* Підказка, що список прокручується: тінь на краю з'являється лише там, де є що прокручувати (прийом local/scroll — «ліниві» плашки кольору
-   поверхні діалогу `.cv-ask` затуляють тіні, поки край не відлипне). Без JS і без підписів. */
-.cat-b{background:
-  linear-gradient(var(--s2) 30%,transparent) top/100% 28px no-repeat local,
-  linear-gradient(transparent,var(--s2) 70%) bottom/100% 28px no-repeat local,
-  radial-gradient(farthest-side at 50% 0,color-mix(in srgb,var(--s0) 85%,transparent),transparent) top/100% 10px no-repeat scroll,
-  radial-gradient(farthest-side at 50% 100%,color-mix(in srgb,var(--s0) 85%,transparent),transparent) bottom/100% 10px no-repeat scroll}
+/* Підказка, що список прокручується: нижній край затухає (маска по вмісту, а не тінь поверх нього — тінь на темній поверхні не видно).
+   Затухання `--cat-fade` веде анімація від прокрутки самого списку: 32px, поки нижче є що читати, і плавно до 0 в останні 32px
+   прокрутки. Список без переповнення таймлайна не має — `--cat-fade` лишається 0px (початкове значення `@property`), маска нічого не ховає.
+   Без підтримки `animation-timeline` (старі браузери) затухання нема зовсім. Без JS і без підписів. */
+@property --cat-fade{syntax:'<length>';inherits:false;initial-value:0px}
+.cat-b{-webkit-mask-image:linear-gradient(#000 calc(100% - var(--cat-fade)),transparent);
+  mask-image:linear-gradient(#000 calc(100% - var(--cat-fade)),transparent)}
+@keyframes cat-fade{from{--cat-fade:32px}to{--cat-fade:0px}}
+@supports (animation-timeline:scroll()){
+  .cat-b{animation:cat-fade linear both;animation-timeline:scroll(self);animation-range:calc(100% - 32px) 100%}
+}
 .cat-b--pad{gap:14px;margin:0;padding:0}
 .cat-f{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .cat-g{margin:10px 0 4px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
@@ -1998,4 +2022,6 @@ h2.sub{margin:26px 0 10px;font-size:12px;font-weight:600;letter-spacing:.05em;te
   .set-nav h6{display:none}
   .nav-i{flex:none}
   .set-in{padding:18px 16px 60px}
+  .ag-part{grid-template-columns:1fr}
+  .ag-g{border-right:0;border-bottom:1px solid var(--line);padding:6px 12px}
 }

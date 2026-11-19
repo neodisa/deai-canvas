@@ -218,6 +218,9 @@ const connState = { spaceId: null, list: null, tools: null, notes: [], authoring
 let connFocusPending = false;
 /* Питання «Вимкнути?» в картці модуля (етап Е): `{id}` або `null`. Не зберігається; скидається зміною розділу, виходом зі сторінки й зміною простору. */
 let connAsk = null;
+/* Розділ «AGENTS.md» (етап Е): `data` — відповідь `GET /api/agents-md` | `{failed:{code}}` | `null` (ще не читали); `busy` — запис у польоті.
+   Оголошено ТУТ (серед стану сторінки), бо `connView` читає його з першого `paintHome`. Скидається свіжим входом і зміною простору. */
+const agentsSt = { spaceId: null, data: null, busy: false, seq: 0 };
 /* Розділ сторінки «Налаштування» (`settings-model.js`): памʼятається в localStorage, як `homeUi`; типово `mods`. Шестерня веде в останній,
    ⌘K, фішка простору й кнопка «Задач» (`BAR_ACTIONS.conn`) і вхід із роллю — у `mods`. */
 let connSec = (() => { try { return readSec(localStorage.getItem(SEC_KEY)); } catch (e) { return 'mods'; } })();
@@ -3859,6 +3862,7 @@ function enterHome({ spaces = true, page } = {}) {
     /* Свіжий вхід забуває й ПРОСТІР попереднього візиту: «вантаження» малює заголовок поточного простору (`connSpace`
        без `spaceId` бере `currentSpace`), а `loadConn` побачить зміну й почистить решту (зайнятість, панель). */
     if (fresh) { connState.spaceId = null; connState.list = null; connState.failed = null; connFocusPending = true; connAsk = null; }
+    if (fresh) { agentsSt.spaceId = null; agentsSt.data = null; agentsSt.busy = false; }
     /* Вхід із роллю (`enterConnections('vcs')`) веде до картки модуля — тобто в «Модулі», хоч би який розділ був останнім. */
     if (connFocusRole) setConnSec('mods');
     paintHome();
@@ -4054,7 +4058,8 @@ function wireHome(el) {
       case 'tags': editTaskTags(b.dataset.id); break;
       case 'conn': setConnSec('mods'); enterConnections(); break;
       /* Розділ «Налаштувань» (ліва навігація): перемальовка без перезапиту модулів. */
-      case 'csec': if (readSec(v) !== connSec) { setConnSec(v); paintHome(); } break;
+      case 'csec': if (readSec(v) !== connSec) { setConnSec(v); paintHome(); if (connSec === 'agents') loadAgents(); } break;
+      case 'ag': agentsAction(v); break;
       case 'spacenew': openWizard(); break;
       case 'spaceopen': openWizard({ folderFirst: true }); break;
       case 'status': homeEdit = { ...homeEdit, trash: false }; homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
@@ -4130,7 +4135,7 @@ const connOpen = () => homeOpen && homePage === 'conn';
 const connSpace = () => (connState.spaceId == null
   ? currentSpace(spacesResp)
   : (Array.isArray(spacesResp?.spaces) ? spacesResp.spaces : []).find((x) => x.id === connState.spaceId) ?? null);
-const connView = () => ({ space: connSpace(), list: connState.list, tools: connState.tools, notes: connState.notes, failed: connState.failed, busy: connState.busy, sec: connSec, ask: connAsk });
+const connView = () => ({ space: connSpace(), list: connState.list, tools: connState.tools, notes: connState.notes, failed: connState.failed, busy: connState.busy, sec: connSec, ask: connAsk, agents: agentsSt.data, agentsBusy: agentsSt.busy });
 
 /**
  * Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). `role` — вести до картки модуля
@@ -4206,6 +4211,7 @@ async function loadConn({ spaces = true } = {}) {
     connState.spaceId = sp.id; connState.list = null; connState.tools = null; connState.notes = []; connState.authoring = ''; connState.failed = null; connState.busy.clear(); connAsk = null;
     paintHome();
   }
+  loadAgents();
   try {
     const r = await api(`/api/modules?space=${encodeURIComponent(sp.id)}`);
     if (seq !== connState.seq || !connOpen()) return;
@@ -4226,6 +4232,63 @@ async function loadConn({ spaces = true } = {}) {
     /* Не з-під палітри чи діалогу: їм фокус належить. */
     if (!paletteOverlay && !askUp()) focusConnLanding(role);
   }
+}
+
+/**
+ * Читає AGENTS.md простору, що на сторінці (`connState.spaceId`), і малює. Без «вантажу» поверх уже прочитаного: оновлення мовчки
+ * замінює дані (крапка в навігації й плашка — з тієї самої відповіді). Відповідь, що спізнилась (новіший запит, інший простір,
+ * людина пішла), відкидається. Збій не кидає: `{failed:{code}}` малює розділ («Спробувати ще» чи «нема теки»).
+ */
+async function loadAgents() {
+  const sid = connState.spaceId;
+  if (!sid) return;
+  const seq = ++agentsSt.seq;
+  if (agentsSt.spaceId !== sid) { agentsSt.spaceId = sid; agentsSt.data = null; agentsSt.busy = false; }
+  let data;
+  try { data = await api(`/api/agents-md?space=${encodeURIComponent(sid)}`); }
+  catch (e) { data = { failed: { code: e?.code ?? null } }; }
+  if (seq !== agentsSt.seq || !connOpen() || connState.spaceId !== sid) return;
+  agentsSt.data = data;
+  paintHome();
+}
+
+/** Фокус розділу «AGENTS.md» після перемальовки: «Скопіювати» (стабільна, завжди активна), інакше що є. */
+const focusAgents = () => (homeNode()?.querySelector('[data-th="ag"][data-v="copy"]') ?? homeNode()?.querySelector('.set-in [data-th="ag"]:not([disabled])'))
+  ?.focus({ preventScroll: true });
+
+/** Кладе текст у буфер. Виклик `writeText` — синхронно з кліку (жест). Відмова (не-https, права) — виділяємо текст, щоб скопіювати руками. */
+function agentsCopy(text, doneKey, selector) {
+  const sel = () => { const n = homeNode()?.querySelector(selector); if (n) getSelection()?.selectAllChildren(n); };
+  try {
+    navigator.clipboard.writeText(text).then(() => toast(t(doneKey)), sel);
+  } catch (e) { sel(); }
+}
+
+/** Створити/оновити блок: `POST /api/agents-md`. «Ваше» сервер лишає байт-у-байт; тост каже саме це. */
+async function agentsWrite() {
+  const sid = agentsSt.spaceId;
+  if (agentsSt.busy || !sid || sid !== connState.spaceId) return;
+  const created = agentsSt.data?.exists !== true;
+  agentsSt.busy = true;
+  paintHome();
+  let data = null;
+  try { data = await post('/api/agents-md', { space: sid }); } catch (e) { data = null; }
+  agentsSt.seq += 1; // читання, що летіло до запису, застаріло
+  agentsSt.busy = false;
+  if (!connOpen() || connState.spaceId !== sid) return;
+  if (data) { agentsSt.data = data; toast(t(created ? 'agCreated' : 'agUpdated')); }
+  else { toast(t('agErrWrite')); loadAgents(); }
+  paintHome();
+  if (connSec === 'agents') focusAgents();
+}
+
+/** Кнопки розділу «AGENTS.md» (`data-th="ag"`, `data-v`). */
+function agentsAction(v) {
+  const a = agentsSt.data;
+  if (v === 'copy' && a?.exists) agentsCopy((a.block ?? '') + (a.own ?? ''), 'agCopied', '.ag-body');
+  else if (v === 'copypath' && a?.path) agentsCopy(a.path, 'agPathCopied', '.ag-bar span');
+  else if (v === 'update' || v === 'create') agentsWrite();
+  else if (v === 'retry') { agentsSt.data = null; paintHome(); loadAgents(); }
 }
 
 /**
