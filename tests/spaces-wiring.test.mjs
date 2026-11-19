@@ -317,7 +317,7 @@ test("палітра ⌘K: простори — масив лише коли ш�
   assert.match(body, /spaceId: st\.space\?\.id \?\? null,/);
   /* Task 8 (модулі 2а): до вимикача додано `capabilities` — на них тепер стоїть публікація в ⌘K
      (`hasPublish`); прапорця `integrations` сервер більше не шле (4d-4c). */
-  assert.match(body, /space: st\.space \? \{ id: st\.space\.id, capabilities: st\.space\.capabilities, compat: st\.space\.compat \} : null,/);
+  assert.match(body, /space: st\.space \? \{ id: st\.space\.id, capabilities: st\.space\.capabilities, compat: st\.space\.compat, tools: st\.space\.tools \} : null,/);
   assert.match(fn("openPalette"), /loadSpaces\(\)\.then\(\(\) => \{ if \(paletteOverlay === 'pal'\) repaintPaletteList\(\); \}\);/);
 });
 
@@ -440,7 +440,7 @@ test("«Відкрити превью» і «Скопіювати посилан
 });
 
 test("палітра й смуга: публікація — на hasPublish, GitLab — на hasVcs", () => {
-  assert.match(pal, /import \{ hasPublish, hasVcs \} from "\.\/spaces-model\.js";/);
+  assert.match(pal, /import \{ figmaOff, hasPublish, hasVcs \} from "\.\/spaces-model\.js";/);
   assert.match(pal, /const noVcs = !hasVcs\(s\.space\);/, "синк із git — на ролі `vcs`");
   assert.match(pal, /if \(hasPublish\(s\.space\)\) \{\n    out\.push\(\{\n      id: "publish"/);
   assert.match(pal, /if \(!noVcs\) \{\n    \/\/ Той самий трьохгілковий розгляд/);

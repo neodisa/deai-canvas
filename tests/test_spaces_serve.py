@@ -1309,7 +1309,7 @@ class SpaceRoutes(Fixture):
         for s in body['spaces']:
             # `capabilities` (етап 2а, Task 6) додає `serve.spaces_listing`; `spaces.listing()` і `describe` — без нього
             self.assertEqual(set(s) - {'compat'}, {'id', 'name', 'color', 'path', 'tasks', 'available',
-                                                   'legacy', 'capabilities', 'tracks', 'default_track'})   # `tracks` — 4d-1
+                                                   'legacy', 'capabilities', 'tracks', 'default_track', 'tools'})   # `tracks` — 4d-1, `tools` — етап Е
             self.assertEqual('compat' in s, s['id'] == self.legacy_id, s['id'])      # `compat` — лише простір з явним `vercel-publish` у режимі ЛІГА (4d-3c)
         legacy, p, e = body['spaces']
         self.assertEqual(legacy['capabilities'], LIGA_CAPABILITIES)   # з інтеграціями: явні записи ролей ЛІГИ (4d-4b), а не запасний `legacy`
@@ -1571,7 +1571,8 @@ class TaskResponses(Fixture):
         self.assertEqual(body['space'], {'id': self.legacy_id, 'name': os.path.basename(os.path.dirname(self.a_dir)),
                                          'color': 'space-1', 'path': os.path.dirname(self.a_dir),
                                          'legacy': True,
-                                         'capabilities': LIGA_CAPABILITIES, 'compat': LIGA_COMPAT})
+                                         'capabilities': LIGA_CAPABILITIES, 'compat': LIGA_COMPAT,
+                                         'tools': {'figma': True}})   # `tools` — етап Е (0.31.0): вимикачі інструментів простору
         self.assertEqual(body['comment_channel'], 'dc/a')
         # задача іншого простору — його простір, і без інтеграцій каналу коментарів немає
         st, body = self.jget('/t/x/api/task')

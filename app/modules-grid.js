@@ -90,3 +90,24 @@ export function emptyRoles(list, caps) {
   return ROLE_ORDER.filter((r) => !covered.has(r))
     .map((role) => ({ role, icon: roleIcon(role), titleKey: roleKeys(role).title, noneKey: roleKeys(role).none, error: roleError(caps, role) }));
 }
+
+/**
+ * Інструменти простору в сітці «Модулів» (етап Е): не модулі, а вимикачі в `space.json` (`tools`). Зараз один — «В Figma».
+ * Картка — не запис модуля: `id` має префікс `tool:` (щоб не зіткнутись із id модуля), шухляди й меню налаштувань нема.
+ * `tools` — `{figma: bool}` відповіді `GET /api/modules`; ключа нема (старий сервер) = увімкнено.
+ */
+export const TOOL_IDS = ["figma"];
+const TOOL_CARD = { figma: { icon: "figma", nameKey: "toFigma" } };
+
+export function toolCards(tools) {
+  return TOOL_IDS.map((tool) => ({ id: `tool:${tool}`, tool, ...TOOL_CARD[tool], roleKey: "roleTools", on: tools?.[tool] !== false }));
+}
+
+/**
+ * Стан картки інструмента → `{badge, badgeKey, action, menu, askKey}`: увімкнено — бейдж «Увімкнено» без дії на картці, у «⋯» —
+ * «Вимкнути» (`toolask`: питання в картці з наслідком `askKey`); вимкнено — «Вимкнено» й кнопка «Увімкнути» (`toolon`), меню порожнє.
+ */
+export function toolCardModel(c) {
+  if (c.on) return { badge: "ok", badgeKey: "toolOn", action: null, menu: [{ act: "toolask", key: "cnDisable", danger: true }], askKey: "toolFigmaNone" };
+  return { badge: "off", badgeKey: "toolOff", action: { act: "toolon", key: "toolEnable" }, menu: [], askKey: "toolFigmaNone" };
+}

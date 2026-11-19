@@ -57,7 +57,8 @@ import {
   filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from './shell-palette.js';
 import { initPwa } from './pwa.js';
-import { connMenuHTML, connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
+import { connMenuHTML, connPageHTML, drawerHTML, modName, roleTitle, toolMenuHTML } from './connections-view.js';
+import { toolCards } from './modules-grid.js';
 import { cardModel } from './modules-grid.js';
 import { catalogGroups, ownPrompt } from './catalog-model.js';
 import { catFormHTML, catListHTML, catOwnHTML } from './catalog-view.js';
@@ -212,7 +213,7 @@ let homePage = 'tasks';
    записи `GET /api/modules` (`null` — вантажиться), `notes` — примітки своїх модулів простору (3c, `[{folder, code}]`),
    збій читання і дії в польоті (id → 'check'|'disable'|'save'). `seq` відкидає відповіді, що прийшли після виходу
    зі сторінки чи після новішого запиту. */
-const connState = { spaceId: null, list: null, notes: [], authoring: '', failed: null, busy: new Map(), seq: 0 };
+const connState = { spaceId: null, list: null, tools: null, notes: [], authoring: '', failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
 let connFocusPending = false;
 /* Питання «Вимкнути?» в картці модуля (етап Е): `{id}` або `null`. Не зберігається; скидається зміною розділу, виходом зі сторінки й зміною простору. */
@@ -1654,6 +1655,15 @@ function applySpaceMeta(id, { name, color }) {
   if (homeData?.space) homeData = { ...homeData, space: patch(homeData.space) };
   paintBar();
   if (homeOpen) paintHome();
+}
+
+/** Нові вимикачі інструментів — у всі місця, що їх читають (смуга, ⌘K), без перезавантаження макета. */
+function applySpaceTools(id, tools) {
+  const patch = (x) => (x && x.id === id ? { ...x, tools } : x);
+  if (spacesResp?.spaces) spacesResp = { ...spacesResp, spaces: spacesResp.spaces.map(patch) };
+  if (curTask?.space) curTask = { ...curTask, space: patch(curTask.space) };
+  if (homeData?.space) homeData = { ...homeData, space: patch(homeData.space) };
+  paintBar();
 }
 
 /**
@@ -4120,7 +4130,7 @@ const connOpen = () => homeOpen && homePage === 'conn';
 const connSpace = () => (connState.spaceId == null
   ? currentSpace(spacesResp)
   : (Array.isArray(spacesResp?.spaces) ? spacesResp.spaces : []).find((x) => x.id === connState.spaceId) ?? null);
-const connView = () => ({ space: connSpace(), list: connState.list, notes: connState.notes, failed: connState.failed, busy: connState.busy, sec: connSec, ask: connAsk });
+const connView = () => ({ space: connSpace(), list: connState.list, tools: connState.tools, notes: connState.notes, failed: connState.failed, busy: connState.busy, sec: connSec, ask: connAsk });
 
 /**
  * Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). `role` — вести до картки модуля
@@ -4193,13 +4203,14 @@ async function loadConn({ spaces = true } = {}) {
     /* Панель, відкрита для іншого простору, не лишається: людина свідомо перейшла (питання не треба), а запис із неї
        пішов би в простір, якого вона вже не бачить. */
     closeCnDrawer({ focus: false });
-    connState.spaceId = sp.id; connState.list = null; connState.notes = []; connState.authoring = ''; connState.failed = null; connState.busy.clear(); connAsk = null;
+    connState.spaceId = sp.id; connState.list = null; connState.tools = null; connState.notes = []; connState.authoring = ''; connState.failed = null; connState.busy.clear(); connAsk = null;
     paintHome();
   }
   try {
     const r = await api(`/api/modules?space=${encodeURIComponent(sp.id)}`);
     if (seq !== connState.seq || !connOpen()) return;
     connState.list = Array.isArray(r?.modules) ? r.modules : [];
+    connState.tools = r?.tools && typeof r.tools === 'object' ? r.tools : null;
     connState.notes = Array.isArray(r?.notes) ? r.notes : [];
     connState.authoring = typeof r?.deai?.authoring === 'string' ? r.deai.authoring : '';
     connState.failed = null;
@@ -4231,6 +4242,8 @@ async function connAction(act, id, role, via = '') {
   if (act === 'retry') { loadConn(); return; }
   /* «Додати модуль» / «Додати» ролі: каталог (`role` — підсвітити роль, з чиєї пунктирної картки відкрито). */
   if (act === 'cat') { connCatalog(role); return; }
+  /* Інструмент простору («В Figma», `tool:…`) — не модуль: свої дії, без шухляди й довіри. */
+  if (id?.startsWith('tool:')) { connToolAction(act, id); return; }
   let e = (connState.list || []).find((x) => x.id === id);
   if (!e || connState.busy.has(id)) return;
   if (act === 'menu') { toggleConnMenu(id); return; }
@@ -4320,11 +4333,12 @@ function toggleConnMenu(id) {
   if (m && m.dataset.for === id) { closeTaskMenu(); return; }
   closeTaskMenu(false);
   const home = homeNode();
-  const e = (connState.list || []).find((x) => x.id === id);
+  const card = id.startsWith('tool:') ? toolCards(connState.tools).find((c) => c.id === id) : null;
+  const e = card ?? (connState.list || []).find((x) => x.id === id);
   const btn = home?.querySelector(`.mc-more[data-id="${CSS.escape(id)}"]`);
   if (!home || !e || !btn) return;
   const tpl = document.createElement('template');
-  tpl.innerHTML = connMenuHTML(e).trim();
+  tpl.innerHTML = (card ? toolMenuHTML(card) : connMenuHTML(e)).trim();
   const menu = tpl.content.firstChild;
   menu.style.position = 'fixed';
   home.appendChild(menu);
@@ -4333,6 +4347,42 @@ function toggleConnMenu(id) {
   btn.setAttribute('aria-expanded', 'true');
   menu.dataset.for = id;
   menu.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
+}
+
+/** Дії картки інструмента простору: «⋯» · «Вимкнути» (питання в картці) · «Скасувати»/«Вимкнути» питання · «Увімкнути». */
+function connToolAction(act, id) {
+  const card = toolCards(connState.tools).find((c) => c.id === id);
+  if (!card || connState.busy.has(id)) return;
+  if (act === 'menu') { toggleConnMenu(id); return; }
+  if (act === 'askno') { cancelConnAsk(); return; }
+  if (act === 'toolask') {
+    connAsk = { id };
+    paintHome();
+    homeNode()?.querySelector(`.mc--ask[data-id="${CSS.escape(id)}"] .cfm-no`)?.focus({ preventScroll: true });
+  } else if (act === 'askyes') { if (connAsk?.id === id) connToolSet(card.tool, false); }
+  else if (act === 'toolon') connToolSet(card.tool, true);
+}
+
+/**
+ * Вимикач інструмента простору (`POST /api/space-tool`). Простір — `connState.spaceId` (той самий, що малює сторінку). Відповідь —
+ * новий стан `tools`: ним оновлюємо картку й просторові рядки (`applySpaceTools`), тож смуга й ⌘K бачать його одразу, без
+ * `render()` — макет не перезавантажується.
+ */
+async function connToolSet(tool, on) {
+  const spaceId = connState.spaceId;
+  const id = `tool:${tool}`;
+  connAsk = null;
+  connState.busy.set(id, 'tool'); paintHome();
+  let saved = null;
+  try { saved = await postForm('/api/space-tool', { space: spaceId, tool, on }); }
+  catch (err) { const r = refusalView(err); tell([t(r.key), r.detail].filter(Boolean).join('\n\n')); }
+  finally { connState.busy.delete(id); }
+  if (saved?.tools && connState.spaceId === spaceId) {
+    connState.tools = saved.tools;
+    applySpaceTools(spaceId, saved.tools);
+  }
+  paintHome();
+  if (connOpen() && connState.spaceId === spaceId) refocusCard(id, 'menu');
 }
 
 /** «Вимкнути» з меню: питання в самій картці (`.mc--ask`); фокус — на «Скасувати», Enter навмання нічого не вимкне. */
@@ -8802,7 +8852,7 @@ function paletteState() {
        постачальниками (`capabilities.publish`/`capabilities.comments`). */
     spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : undefined,
     spaceId: st.space?.id ?? null,
-    space: st.space ? { id: st.space.id, capabilities: st.space.capabilities, compat: st.space.compat } : null,
+    space: st.space ? { id: st.space.id, capabilities: st.space.capabilities, compat: st.space.compat, tools: st.space.tools } : null,
     update: st.update,
     hasTask: !!st.taskId,
   };

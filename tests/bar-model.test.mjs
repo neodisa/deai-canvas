@@ -738,3 +738,13 @@ test("оновлення в стані не додає контролів у с�
     }
   }
 });
+
+/* «В Figma» вимкнено в просторі (`tools.figma === false`, етап Е) — кнопки в смузі нема; решта зони 3 на місці. */
+test("«В Figma» вимкнено в просторі — кнопки нема; увімкнено/без ключа — є", () => {
+  const ids = (space) => barModel({ ...base, space }).zone3.map((x) => x.id);
+  const sp = { id: "p", name: "P", color: "space-1" };
+  assert.ok(!ids({ ...sp, tools: { figma: false } }).includes("figma"));
+  assert.ok(ids({ ...sp, tools: { figma: true } }).includes("figma"));
+  assert.ok(ids(sp).includes("figma"), "відповідь без `tools` — увімкнено");
+  assert.ok(ids({ ...sp, tools: { figma: false } }).includes("publish"), "решта зони 3 лишається");
+});

@@ -172,3 +172,19 @@ test("етап Е: кожен клас діалогу каталогу з роз
     assert.doesNotMatch(rule(sel) ?? "", /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i, `${sel}: літерал кольору замість токена`);
   }
 });
+
+/* Список каталогу обрізається рівно по межі рядка — «Свій модуль» унизу не видно, і нічого не каже, що список прокручується.
+   Тінь на краю — чистий CSS (прийом `local`/`scroll`): плашки кольору поверхні діалогу (`.cv-ask`, `--s2`) затуляють тінь, поки край
+   не відлипне, тож вона з'являється лише там, де є що прокручувати. */
+test("етап Е: `.cat-b` має підказку прокрутки — плашки поверхні діалогу (local) над тінями (scroll), без літералів кольору", () => {
+  const body = RULES.filter((r) => r.sels.includes(".cat-b")).map((r) => r.body).join(";");
+  const surface = /background:var\(--s2\)|var\(--s2\)/.exec(rule(".cv-ask") ?? "") ? "var(--s2)" : "";
+  assert.equal(surface, "var(--s2)", "поверхня діалогу — токен --s2; плашки мусять бути того ж кольору");
+  assert.match(body, /linear-gradient\(var\(--s2\) 30%,transparent\) top\/100% 28px no-repeat local/, "верхня плашка поверхні, local");
+  assert.match(body, /linear-gradient\(transparent,var\(--s2\) 70%\) bottom\/100% 28px no-repeat local/, "нижня плашка поверхні, local");
+  assert.equal((body.match(/radial-gradient\(/g) || []).length, 2, "дві тіні — зверху й знизу");
+  assert.equal((body.match(/no-repeat scroll/g) || []).length, 2, "тіні прикріплені до видимого краю (scroll)");
+  assert.equal((body.match(/no-repeat local/g) || []).length, 2, "плашки їдуть із вмістом (local)");
+  assert.doesNotMatch(body, /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i, "тінь із токена, без літерала кольору");
+  assert.match(body, /overflow-y:auto/, "прокрутка лишилась");
+});

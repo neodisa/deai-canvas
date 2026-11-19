@@ -1969,6 +1969,13 @@ h2.sub{margin:26px 0 10px;font-size:12px;font-weight:600;letter-spacing:.05em;te
 .cat-h h2{flex:1;min-width:0}
 .cat-h [hidden]{display:none}
 .cat-b{display:flex;flex-direction:column;gap:2px;max-height:58vh;overflow-y:auto;margin:0 -8px;padding:0 8px}
+/* Підказка, що список прокручується: тінь на краю з'являється лише там, де є що прокручувати (прийом local/scroll — «ліниві» плашки кольору
+   поверхні діалогу `.cv-ask` затуляють тіні, поки край не відлипне). Без JS і без підписів. */
+.cat-b{background:
+  linear-gradient(var(--s2) 30%,transparent) top/100% 28px no-repeat local,
+  linear-gradient(transparent,var(--s2) 70%) bottom/100% 28px no-repeat local,
+  radial-gradient(farthest-side at 50% 0,color-mix(in srgb,var(--s0) 85%,transparent),transparent) top/100% 10px no-repeat scroll,
+  radial-gradient(farthest-side at 50% 100%,color-mix(in srgb,var(--s0) 85%,transparent),transparent) bottom/100% 10px no-repeat scroll}
 .cat-b--pad{gap:14px;margin:0;padding:0}
 .cat-f{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .cat-g{margin:10px 0 4px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}

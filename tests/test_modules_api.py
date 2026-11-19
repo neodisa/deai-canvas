@@ -467,7 +467,7 @@ class Listing(World):
 
     def test_the_listing_is_alphabetical_and_has_nothing_else(self):
         st, body = self.get('/api/modules')
-        self.assertEqual((st, list(body)), (200, ['modules', 'deai']))
+        self.assertEqual((st, list(body)), (200, ['modules', 'deai', 'tools']))
         self.assertEqual([m['id'] for m in body['modules']], BUILTIN_IDS)
 
     def test_the_listing_names_the_authoring_guide_of_this_install(self):

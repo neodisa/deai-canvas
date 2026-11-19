@@ -76,7 +76,7 @@
  */
 
 import { figmaWhyKey, flowWhyKey, linkWhyKey } from "./bar-model.js";
-import { hasPublish, hasVcs } from "./spaces-model.js";
+import { figmaOff, hasPublish, hasVcs } from "./spaces-model.js";
 import { pillModel } from "./update-model.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
@@ -383,10 +383,13 @@ export function paletteActions(state) {
      причина вимкнення (`figmaWhyKey`, `bar-model.js`). Активація з клавіатури
      ⌘K теж доходить до рамки: Enter у палітрі — такий самий жест, як клік. */
   const figmaWhy = figmaWhyKey(s);
-  out.push({
-    id: "figma", group: "gPub", labelKey: "toFigma", icon: "figma", act: "figma",
-    disabled: !!figmaWhy, whyKey: figmaWhy,
-  });
+  /* Вимкнено в просторі (`tools.figma === false`, «Налаштування → Модулі») — пункту нема, як і кнопки в смузі. */
+  if (!figmaOff(s.space)) {
+    out.push({
+      id: "figma", group: "gPub", labelKey: "toFigma", icon: "figma", act: "figma",
+      disabled: !!figmaWhy, whyKey: figmaWhy,
+    });
+  }
   if (hasPublish(s.space)) {
     out.push({
       id: "publish", group: "gPub", labelKey: s.published ? "update" : "publish",

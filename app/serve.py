@@ -5341,6 +5341,7 @@ def space_view(sp):
     out = spaces.describe(sp)
     if out is not None:
         out['capabilities'] = deai_modules.capabilities(sp)
+        out['tools'] = spaces.space_tools(sp)           # вимикачі інструментів («В Figma»): смуга й ⌘K
         compat = deai_modules.compat_view(sp, out['capabilities'])
         if compat:                       # ключ лише коли непорожній (Поправка 4): точні тести `describe`/`listing` не зачеплені
             out['compat'] = compat
@@ -5361,6 +5362,7 @@ def spaces_listing():
     for e in out['spaces']:
         sp = {'id': e['id'], 'path': e['path']}
         e['capabilities'] = deai_modules.capabilities(sp)
+        e['tools'] = spaces.space_tools(sp)         # вимикачі інструментів («В Figma»): смуга й ⌘K читають їх зі списку
         compat = deai_modules.compat_view(sp, e['capabilities'])
         if compat:
             e['compat'] = compat
@@ -5469,7 +5471,8 @@ def modules_payload(space):
     """Тіло `GET /api/modules`: `{modules}` і — ЛИШЕ коли є — `notes` своїх модулів простору (`[{folder, code}]`: теку
     пропущено чи не прочитано) і `deai.authoring` — АБСОЛЮТНИЙ шлях до `docs/modules/authoring.md` цієї установки (від кореня
     репо, як `bin/`): діалог «Свій модуль» кладе його в запит агенту."""
-    out = {'modules': module_list(space), 'deai': {'authoring': os.path.join(ROOT, 'docs', 'modules', 'authoring.md')}}
+    out = {'modules': module_list(space), 'deai': {'authoring': os.path.join(ROOT, 'docs', 'modules', 'authoring.md')},
+           'tools': spaces.space_tools(space)}
     notes = deai_modules.own_notes(space)
     if notes:
         out['notes'] = notes
@@ -6011,7 +6014,7 @@ class Handler(SimpleHTTPRequestHandler):
     #: `/api/module` зловив би будь-який майбутній маршрут.
     _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch', '/api/task-tags', '/api/task-rename', '/api/task-delete',
                         '/api/task-restore', '/api/task-purge', '/api/spaces',
-                        '/api/space-peek', '/api/space-new', '/api/space-update',
+                        '/api/space-peek', '/api/space-new', '/api/space-update', '/api/space-tool',
                         '/api/space-switch',
                         '/api/modules', '/api/module-enable', '/api/module-disable',
                         '/api/module-settings', '/api/module-check', '/api/ds-tokens',
@@ -7357,6 +7360,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_new(payload)
         elif self.path == '/api/space-update':
             self._space_update(payload)
+        elif self.path == '/api/space-tool':
+            self._space_tool(payload)
         elif self.path == '/api/space-switch':
             self._space_switch(payload)
         elif self.path == '/api/module-enable':
@@ -8577,6 +8582,17 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_failed(e)
             return
         self._send_json({'ok': True, 'id': sid, **meta})
+
+    def _space_tool(self, payload):
+        """`POST /api/space-tool {space, tool, on}` → `{ok, space, tools}`: вимикач інструмента простору (`space.json`, `tools`).
+        Ті самі відмови, що `space-update` (невідомий простір — 404, шар вимкнено — 409); невідомий інструмент — 400."""
+        sid = payload.get('space')
+        try:
+            tools = spaces.set_space_tool(sid, payload.get('tool'), payload.get('on'))
+        except (spaces.InputError, KeyError, spaces.SpacesError) as e:
+            self._space_failed(e)
+            return
+        self._send_json({'ok': True, 'space': sid, 'tools': tools})
 
     def _space_switch(self, payload):
         """Зробити простір поточним; відповідь — його поточна задача (`null`, коли її нема).

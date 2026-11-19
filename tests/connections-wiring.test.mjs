@@ -298,16 +298,16 @@ test("loadConn: `spaces` вирішує, чи перечитувати прос�
   const b = fnc("loadConn");
   assert.match(b, /if \(spaces\) \{\s*await loadSpaces\(\);/);
   assert.match(b, /const sp = currentSpace\(spacesResp\);\s*if \(!sp\) \{ enterHome\(\{ page: 'tasks' \}\); return; \}/);
-  assert.match(b, /if \(sp\.id !== connState\.spaceId\) \{[\s\S]*?closeCnDrawer\(\{ focus: false \}\);\s*connState\.spaceId = sp\.id; connState\.list = null; connState\.notes = \[\]; connState\.authoring = ''; connState\.failed = null; connState\.busy\.clear\(\); connAsk = null;\s*paintHome\(\);\s*\}/);
+  assert.match(b, /if \(sp\.id !== connState\.spaceId\) \{[\s\S]*?closeCnDrawer\(\{ focus: false \}\);\s*connState\.spaceId = sp\.id; connState\.list = null; connState\.tools = null; connState\.notes = \[\]; connState\.authoring = ''; connState\.failed = null; connState\.busy\.clear\(\); connAsk = null;\s*paintHome\(\);\s*\}/);
 });
 
 test("3c: примітки своїх модулів — зі списку модулів у стан сторінки; зміна простору їх чистить", () => {
-  assert.match(src, /const connState = \{ spaceId: null, list: null, notes: \[\], authoring: '', failed: null, busy: new Map\(\), seq: 0 \};/);
+  assert.match(src, /const connState = \{ spaceId: null, list: null, tools: null, notes: \[\], authoring: '', failed: null, busy: new Map\(\), seq: 0 \};/);
   const b = fnc("loadConn");
   assert.match(b, /connState\.notes = Array\.isArray\(r\?\.notes\) \? r\.notes : \[\];/);
   assert.match(b, /connState\.authoring = typeof r\?\.deai\?\.authoring === 'string' \? r\.deai\.authoring : '';/, "шлях до інструкції агенту — з відповіді сервера");
-  assert.match(b, /connState\.list = null; connState\.notes = \[\];/, "інший простір — без чужих приміток");
-  assert.match(src, /const connView = \(\) => \(\{ space: connSpace\(\), list: connState\.list, notes: connState\.notes,/);
+  assert.match(b, /connState\.list = null; connState\.tools = null; connState\.notes = \[\];/, "інший простір — без чужих приміток");
+  assert.match(src, /const connView = \(\) => \(\{ space: connSpace\(\), list: connState\.list, tools: connState\.tools, notes: connState\.notes,/);
 });
 
 test("connAction: дія над модулем, що вже в польоті, ігнорується; кожна дія веде у свою функцію", () => {
@@ -563,4 +563,22 @@ test("каталог: шухляда з каталогу не питає «За�
   assert.match(fnc("closeCnDrawer"), /if \(op\.act === 'cat'\) \{[\s\S]*?\.th-head \[data-cn="cat"\][\s\S]*?return;\s*\}/);
 });
 
-
+/* ── «В Figma» як інструмент простору (етап Е): проводка в app.js ── */
+test("інструмент простору: `tool:…` не доходить до пошуку модуля; дії toolon/toolask/askyes; запис — space-tool зі станом із відповіді", () => {
+  const a = fnc("connAction");
+  assert.match(a, /if \(id\?\.startsWith\('tool:'\)\) \{ connToolAction\(act, id\); return; \}\s*let e = \(connState\.list/, "інструмент — ДО `find` у списку модулів");
+  const t = fnc("connToolAction");
+  assert.match(t, /act === 'toolask'[\s\S]*?connAsk = \{ id \};/);
+  assert.match(t, /act === 'askyes'\) \{ if \(connAsk\?\.id === id\) connToolSet\(card\.tool, false\);/, "«Так» лише на питанні САМОЇ картки");
+  assert.match(t, /act === 'toolon'\) connToolSet\(card\.tool, true\);/);
+  assert.match(t, /act === 'askno'\) \{ cancelConnAsk\(\); return; \}/);
+  const s = fnc("connToolSet");
+  assert.match(s, /postForm\('\/api\/space-tool', \{ space: spaceId, tool, on \}\)/);
+  assert.match(s, /connState\.tools = saved\.tools;\s*applySpaceTools\(spaceId, saved\.tools\);/, "смуга й ⌘K — з відповіді, без render()");
+  assert.doesNotMatch(s, /render\(/, "макет не перезавантажується");
+  const p = fnc("applySpaceTools");
+  assert.match(p, /spacesResp = \{ \.\.\.spacesResp, spaces: spacesResp\.spaces\.map\(patch\) \}/);
+  assert.match(p, /curTask = \{ \.\.\.curTask, space: patch\(curTask\.space\) \}/);
+  assert.match(p, /paintBar\(\);/);
+  assert.match(fnc("toggleConnMenu"), /toolMenuHTML\(card\)/);
+});

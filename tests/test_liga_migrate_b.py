@@ -878,7 +878,7 @@ class VcsCompat(_VcsStand):
             self.assertIs(m.pop(flag), False, flag)
             self.assertIs(wm.pop(flag), True, flag)
         self.assertEqual(m, wm, 'прапорці форми «Нова задача» й підписи — як у ЛІГИ 0.17')
-        self.assertEqual(sorted(keys), sorted([k for k in wkeys if k != 'integrations'] + ['compat']),
+        self.assertEqual(sorted(keys), sorted([k for k in wkeys if k != 'integrations'] + ['compat', 'tools']),
                          'єдина різниця обʼєкта простору — ключ compat (і зник `integrations`, 4d-4c)')
         self.assertEqual(got['form']['space_row']['compat'], {'vcs': DC})
         self.assertEqual(got['form']['capabilities']['vcs'], VCS_ID)
@@ -2501,6 +2501,9 @@ def _expect_diff():
     exp['/vcs/form/space_row/compat/comments'] = (_ABSENT, 'comment-layer')
     exp['/vcs/form/space_row/compat/vcs'] = (_ABSENT, 'design-canvas')
     exp['/vcs/form/model/space_keys/compat'] = (_ABSENT, True)
+    # 0.31.0 (етап Е): запис простору дістає `tools` — вимикачі інструментів («В Figma»); у знімку 0.17.0 їх не було
+    exp['/vcs/form/space_row/tools/figma'] = (_ABSENT, True)
+    exp['/vcs/form/model/space_keys/tools'] = (_ABSENT, True)
     # 4d-4c: прапорець `integrations` сервер більше не віддає (запис ЛІГИ без ключа; знімок 0.17.0 мав `True`)
     exp['/vcs/form/space_row/integrations'] = (True, _ABSENT)
     exp['/vcs/form/model/space_keys/integrations'] = (True, _ABSENT)

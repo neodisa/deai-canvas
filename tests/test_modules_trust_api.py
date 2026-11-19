@@ -138,7 +138,7 @@ class TrustApi(World):
 
     def test_notes_only_when_present(self):
         st, body = self.get('/api/modules')
-        self.assertEqual(sorted(body), ['modules'])
+        self.assertEqual(sorted(body), ['deai', 'modules', 'tools'])
         self.own('css-tokens')
         st, body = self.get('/api/modules')
         self.assertEqual(body['notes'], [{'folder': 'modules/css-tokens', 'code': 'id-taken'}])

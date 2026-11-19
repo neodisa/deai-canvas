@@ -35,7 +35,7 @@ import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { navItems, readSec, trustWaitingOf } from "./settings-model.js";
 import { confirmHTML } from "./inline-confirm.js";
-import { BADGE_CLASS, cardModel, emptyRoles, failedRole, gridEntries, sentence } from "./modules-grid.js";
+import { BADGE_CLASS, cardModel, emptyRoles, failedRole, gridEntries, sentence, toolCardModel, toolCards } from "./modules-grid.js";
 import { spaceColorToken } from "./spaces-model.js";
 import {
   DETAIL_MAX, builtinText, canErase, cardView, disableConsequences, isOwn, noteView, roleIcon, roleKeys, spaceJsonBad, trustLine, whyOf,
@@ -153,6 +153,40 @@ export function mcardHTML(e, busy, ask, space) {
     + `${why}<div class="mc-foot">${bdg}${act}</div></div>`;
 }
 
+/**
+ * Картка інструмента простору («В Figma», `toolCards` у `modules-grid.js`): та сама оболонка `.mc`, що в модуля, але ім'я — звичайний текст
+ * (шухляди нема), а дія — `data-cn="toolon"`; «⋯» веде в `toolask` → питання в картці (`.mc--ask`, `askno`/`askyes` із id картки).
+ */
+export function toolCardHTML(c, busy, ask) {
+  const id = esc(c.id);
+  const name = t(c.nameKey);
+  const m = toolCardModel(c);
+  const top = (more) => `<div class="mc-top"><span class="mc-ic">${ico(c.icon, 18)}</span><div class="mc-name"><b>${esc(name)}</b>`
+    + `<span>${esc(t(c.roleKey))}</span></div>${more}</div>`;
+  if (ask && ask.id === c.id) {
+    return `<div class="mc mc--ask" role="group" aria-label="${esc(name)}" data-id="${id}">${top("")}${confirmHTML({
+      title: [t("cnDisableAsk", name), t(m.askKey)].join(" "), no: t("askCancel"), yes: t("cnDisable"),
+      noAttrs: `data-cn="askno" data-id="${id}"`, yesAttrs: `data-cn="askyes" data-id="${id}"`,
+    })}</div>`;
+  }
+  const b = busy?.get?.(c.id) ?? null;
+  const more = m.menu.length
+    ? `<button type="button" class="mc-more" data-cn="menu" data-id="${id}" aria-haspopup="menu" aria-expanded="false"`
+      + ` aria-label="${esc(t("mcMore", name))}" title="${esc(t("mcMore", name))}">${ico("dots")}</button>` : "";
+  const bdg = `<span class="bdg bdg--${BADGE_CLASS[m.badge]}">${esc(t(m.badgeKey))}</span>`;
+  const act = m.action
+    ? `<button type="button" class="ctl ctl--out" data-cn="${m.action.act}" data-id="${id}"${b ? " disabled" : ""}>${ico("plus")}${esc(t(m.action.key))}</button>` : "";
+  return `<div class="mc" data-id="${id}"${b ? ' aria-busy="true"' : ""}>${top(more)}<div class="mc-foot">${bdg}${act}</div></div>`;
+}
+
+/** Меню «⋯» картки інструмента: той самий `#th-menu`, пункти — `data-cn` + `data-id` картки. */
+export function toolMenuHTML(c) {
+  const id = esc(c.id);
+  const items = toolCardModel(c).menu.map((i) => `<button type="button" role="menuitem" tabindex="-1"${i.danger ? ' class="danger"' : ""}`
+    + ` data-cn="${i.act}" data-id="${id}"><span>${esc(t(i.key))}</span></button>`).join("");
+  return `<div id="th-menu" class="cv-ctx th-menu" role="menu" aria-label="${esc(t("mcMore", t(c.nameKey)))}">${items}</div>`;
+}
+
 /** Пунктирна картка ролі без модуля: іконка, назва ролі, наслідок («none» ролі) реченням — або збій ролі (`r.error`), «Додати» (каталог). */
 export function emptyCardHTML(r) {
   const line = r.error ? t("mcRoleError") : sentence(t(r.noneKey));
@@ -174,7 +208,8 @@ export function connMenuHTML(e) {
 
 /** Сітка розділу «Модулі»: картки (увімкнені, свої, «Не встановлено») + «Без модуля · N». */
 function gridHTML(v) {
-  const cards = gridEntries(v.list).map((e) => mcardHTML(e, v.busy, v.ask, v.space)).join("");
+  const cards = gridEntries(v.list).map((e) => mcardHTML(e, v.busy, v.ask, v.space)).join("")
+    + toolCards(v.tools).map((c) => toolCardHTML(c, v.busy, v.ask)).join("");
   const empty = emptyRoles(v.list, v.space?.capabilities);
   return `${cards ? `<div class="mg">${cards}</div>` : ""}`
     + (empty.length ? `<h2 class="sub">${esc(t("mcEmptyH", empty.length))}</h2><div class="mg">${empty.map(emptyCardHTML).join("")}</div>` : "");

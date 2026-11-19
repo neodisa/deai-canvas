@@ -644,6 +644,7 @@ class ReadParity(unittest.TestCase):
         # 4d-4b: у знімку 0.11.0 ролі ЛІГИ — `'legacy'`; тепер це явні записи: `comments` — `supabase-comments`, а зашитих `publish`/`vcs` нема
         # (`None`). Решту тіла знімок диктує як було.
         want['body']['space'].pop('integrations', None)         # 4d-4c: прапорець `integrations` сервер більше не віддає
+        want['body']['space']['tools'] = {'figma': True}        # 0.31.0 (етап Е): вимикачі інструментів простору; знімок 0.11.0 їх не знає
         # 0.30.0 (етап Д): новий ключ `trash` — кошик простору; знімок 0.11.0 його не знає, а в цьому просторі кошик порожній
         self.assertEqual(got['body'].pop('trash', None), [], 'новий ключ trash — порожній кошик')
         caps = want['body']['space']['capabilities']

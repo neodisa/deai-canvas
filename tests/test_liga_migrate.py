@@ -2142,7 +2142,7 @@ class AfterMigrationParity(unittest.TestCase):
                              ('jira-tracker', 'supabase-dashboard', 'supabase-teams'))
             for k in ('id', 'legacy'):
                 self.assertEqual(gs[k], os_[k], k)
-            self.assertEqual(gs['keys'], [k for k in os_['keys'] if k != 'integrations'])      # 4d-4c: `integrations` сервер більше не віддає
+            self.assertEqual(gs['keys'], sorted([k for k in os_['keys'] if k != 'integrations'] + ['tools']))      # 0.31.0: `tools` (вимикачі інструментів). 4d-4c: `integrations` сервер більше не віддає
         row, old = a['spaces']['rows'][0], want['spaces']['rows'][0]
         self.assertEqual((row['id'], row['legacy']), (old['id'], old['legacy']))
         self.assertIsNone(row['integrations'])           # збирач стенда мапить відсутній ключ у `None`

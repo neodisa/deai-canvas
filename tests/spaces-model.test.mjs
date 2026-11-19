@@ -4,7 +4,7 @@ import test from "node:test";
 import { DICT } from "../app/i18n.js";
 import {
   CHECK_POST_MARGIN_S, FORM_POST_TIMEOUT_MS, ID_MAX, NAME_RE, SPACE_COLORS, defaultSpacePath, isRegisteredPath, spaceColorToken, spaceErrField,
-  checkPostTimeoutMs, hasNotify, hasPublish, hasTeamComments, hasVcs, isLegacyPublish, isLegacyVcs, isRemotePublish, previewTarget, publishReaction, pwView, spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
+  checkPostTimeoutMs, figmaOff, hasNotify, hasPublish, hasTeamComments, hasVcs, isLegacyPublish, isLegacyVcs, isRemotePublish, previewTarget, publishReaction, pwView, spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
 } from "../app/spaces-model.js";
 
 /* Модель UI просторів — чисті функції без DOM, `t()` і мережі. Усе, що вони
@@ -400,4 +400,11 @@ test("Д: taskFormError — id із кошика дає idInTrash (після id
   assert.equal(taskFormError({ title: "T", id: "ok" }, [], undefined), null, "без кошика — нічого не блокує");
   assert.equal(taskErrKey("task-in-trash"), "idInTrash");
   assert.equal(taskErrField("idInTrash"), "id");
+});
+
+test("figmaOff: лише справжній `tools.figma === false` вимикає; невідомий простір і відповідь без `tools` — увімкнено", () => {
+  assert.equal(figmaOff({ tools: { figma: false } }), true);
+  for (const sp of [{ tools: { figma: true } }, { tools: {} }, { tools: null }, {}, null, undefined, { tools: { figma: "false" } }, { tools: { figma: 0 } }]) {
+    assert.equal(figmaOff(sp), false, JSON.stringify(sp));
+  }
 });

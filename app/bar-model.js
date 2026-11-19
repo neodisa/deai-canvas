@@ -36,7 +36,7 @@
  * смузі: на вузькому вікні фішка з'їдала крихти задачі й ітерації.
  */
 
-import { hasNotify, hasPublish, hasVcs, isLegacyPublish, vcsBrand } from "./spaces-model.js";
+import { figmaOff, hasNotify, hasPublish, hasVcs, isLegacyPublish, vcsBrand } from "./spaces-model.js";
 
 /**
  * Яруси зникнення в зоні 2, ширина вікна в пікселях. Значення підтверджені
@@ -344,11 +344,11 @@ export function barModel(s) {
        «Сітка/Флоу» — з підписом зона 3 не влазила на 1360 (живий
        `shell.test.mjs`, рішення власника 28.09.2026). GitLab і публікація при
        цьому не зсуваються: зона 3 притиснута вправо. */
-    {
+    ...(figmaOff(s.space) ? [] : [{
       id: "figma", tier: 0, labelTier: TIERS.gl, labelKey: "toFigma",
       iconOnly: s.mode === "overview",
       busy: !!s.figmaBusy, disabled: !!figmaWhy, whyKey: figmaWhy,
-    },
+    }]),
     ...(hasVcs(s.space) ? [{
       id: "gl", tier: 0, labelTier: TIERS.gl,
       labelKey: brand ? VCS_LABEL_KEYS[brand] : "gitlab", status: s.gl, items: glItems,

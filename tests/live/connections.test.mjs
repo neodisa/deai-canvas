@@ -304,7 +304,7 @@ test("1: вхід із дропдауна, сітка карток, ролі б�
   await openConnections(page);
   /* Етап Е: у сітці — лише увімкнений static-publish; вимкнені вбудовані (git-sync, дашборд, трекер, Teams, css-tokens…) — лише в каталозі
      (Task 3), а їхні ролі — пунктирні картки «Без модуля · N» у порядку ROLE_ORDER. */
-  assert.deepEqual(await page.locator(".mg .mc:not(.mc--empty)").evaluateAll((els) => els.map((e) => e.dataset.id)), ["static-publish"]);
+  assert.deepEqual(await page.locator(".mg .mc:not(.mc--empty)").evaluateAll((els) => els.map((e) => e.dataset.id)), ["static-publish", "tool:figma"]);   // картки модулів, далі картка інструмента «В Figma» (етап Е, Task 4)
   assert.deepEqual(await page.locator(".mc--empty").evaluateAll((els) => els.map((e) => e.dataset.role)),
     ["comments", "vcs", "dashboard", "tracker", "notify", "tokens"], "сім ролей, одна з модулем: решта — пунктирні");
   assert.equal(await page.locator("h2.sub").textContent(), "Без модуля · 6");

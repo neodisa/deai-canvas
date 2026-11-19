@@ -1072,3 +1072,11 @@ test("rentask: є з відкритою задачею (act, kbd F2), нема �
   assert.equal(paletteActions(S()).some((x) => x.id === "rentask"), false, "є без ключа hasTask");
   assert.equal(paletteActions(S({ hasTask: true, homeOpen: true })).some((x) => x.id === "rentask"), false, "є на екрані «Задачі»");
 });
+
+test("«В Figma» вимкнено в просторі — пункту в ⌘K нема; увімкнено/без ключа — є", () => {
+  const has = (space) => paletteActions(S({ space })).some((a) => a.id === "figma");
+  assert.equal(has({ id: "p", tools: { figma: false } }), false);
+  assert.equal(has({ id: "p", tools: { figma: true } }), true);
+  assert.equal(has({ id: "p" }), true);
+  assert.equal(has(null), true);
+});

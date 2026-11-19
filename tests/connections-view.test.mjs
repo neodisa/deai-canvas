@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DICT, setLang } from "../app/i18n.js";
-import { connMenuHTML, connPageHTML, drawerHTML, emptyCardHTML, fieldHTML, mcardHTML, modName, roleTitle } from "../app/connections-view.js";
+import { connMenuHTML, connPageHTML, drawerHTML, emptyCardHTML, fieldHTML, mcardHTML, modName, roleTitle, toolCardHTML, toolMenuHTML } from "../app/connections-view.js";
+import { toolCards } from "../app/modules-grid.js";
 import {
   builtinText, formFields, initialForm, refusalView, roleKeys, verdictText,
 } from "../app/connections-model.js";
@@ -45,7 +46,8 @@ test("сторінка: заголовок з «Додати модуль», с�
   const h = connPageHTML(view());
   assert.match(h, /<h6>[^]*?Простір · Studio<\/h6>/, "назва простору — у групі лівої навігації");
   assert.match(h, /<div class="th-head"><h1 class="th-h" id="cn-title">Модулі<\/h1><button type="button" class="ctl ctl--out" data-cn="cat">[^]*?Додати модуль<\/button><\/div>/);
-  assert.equal((h.match(/class="mc"/g) || []).length, 1, "у сітці лише увімкнений static-publish (вимкнені вбудовані — лише в каталозі)");
+  assert.equal((h.match(/class="mc"/g) || []).length, 2, "у сітці увімкнений static-publish і картка інструмента «В Figma» (вимкнені вбудовані — лише в каталозі)");
+  assert.equal((h.match(/data-cn="card"/g) || []).length, 1, "картка «В Figma» без шухляди: назва — текст, а не кнопка «card»");
   assert.match(h, /data-cn="card" data-id="static-publish"/);
   assert.match(h, /<h2 class="sub">Без модуля · 6<\/h2>/, "шість ролей без модуля");
   const order = ["Командні коментарі", "Синхронізація з git", "Токени дизайн-системи"].map((r) => h.indexOf(`<b>${r}</b>`));
@@ -770,4 +772,49 @@ test("наслідки ролей на пунктирних картках — �
       assert.match(l, /[.!?…]$/, `${lang}: «${l}» — з крапкою`);
     }
   }
+});
+
+/* ── «В Figma» як інструмент простору (етап Е) ── */
+/** Розмітка картки інструмента: від її відкривального тега до наступної картки (`.mc`) чи кінця. */
+const toolCardOf = (h) => {
+  const i = h.search(/<div class="mc(?: mc--ask)?"[^>]*data-id="tool:figma"/);
+  if (i < 0) return "";
+  const rest = h.slice(i + 1);
+  const j = rest.search(/<div class="mc[ "]/);
+  return h.slice(i, j < 0 ? undefined : i + 1 + j);
+};
+test("картка «В Figma»: увімкнено — бейдж, «⋯», назва текстом без шухляди; вимкнено — «Увімкнути» без «⋯»", () => {
+  const on = connPageHTML(view({ tools: { figma: true } }));
+  const card = toolCardOf(on);
+  assert.ok(card, "картка інструмента в сітці");
+  assert.match(card, /<b>В Figma<\/b><span>Інструменти<\/span>/);
+  assert.match(card, /bdg bdg--ok">Увімкнено<\/span>/);
+  assert.match(card, /data-cn="menu" data-id="tool:figma"/);
+  assert.doesNotMatch(card, /data-cn="card"|mc-open|data-cn="toolon"/, "шухляди нема, дії «Увімкнути» нема");
+  const off = connPageHTML(view({ tools: { figma: false } }));
+  const c2 = toolCardOf(off);
+  assert.match(c2, /bdg bdg--off">Вимкнено<\/span>/);
+  assert.equal(btnText(c2, "toolon"), "Увімкнути");
+  assert.doesNotMatch(c2, /data-cn="menu"/, "вимкнений — меню «⋯» порожнє, тож кнопки нема");
+});
+
+test("картка «В Figma»: питання «Вимкнути?» у картці з наслідком, «Скасувати» / «Вимкнути» несуть id картки; en", () => {
+  const h = connPageHTML(view({ tools: { figma: true }, ask: { id: "tool:figma" } }));
+  const card = toolCardOf(h);
+  assert.match(card, /Вимкнути «В Figma»\?[^]*Кнопки «В Figma» в смузі нема\./);
+  assert.match(card, /data-cn="askno" data-id="tool:figma"/);
+  assert.match(card, /data-cn="askyes" data-id="tool:figma"/);
+  assert.doesNotMatch(connPageHTML(view({ tools: { figma: true }, ask: { id: "static-publish" } })), /Кнопки «В Figma» в смузі нема/, "питання лише на своїй картці");
+  setLang("en");
+  const en = connPageHTML(view({ tools: { figma: false } }));
+  assert.match(en, /<b>To Figma<\/b><span>Tools<\/span>/);
+  assert.match(en, /bdg--off">Off<[^]*Turn on</);
+  assert.match(connPageHTML(view({ tools: { figma: true }, ask: { id: "tool:figma" } })), /No «To Figma» button in the bar\./);
+});
+
+test("toolMenuHTML: єдиний пункт «Вимкнути» (toolask) з id картки; busy — кнопка «Увімкнути» вимкнена", () => {
+  const [c] = toolCards({ figma: true });
+  assert.match(toolMenuHTML(c), /role="menuitem"[^>]*class="danger" data-cn="toolask" data-id="tool:figma"><span>Вимкнути<\/span>/);
+  const [o] = toolCards({ figma: false });
+  assert.match(toolCardHTML(o, new Map([["tool:figma", "tool"]]), null), /aria-busy="true"[^]*data-cn="toolon"[^>]* disabled/);
 });

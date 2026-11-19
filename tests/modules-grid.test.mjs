@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BADGE_CLASS, cardModel, emptyRoles, failedRole, gridEntries, sentence } from "../app/modules-grid.js";
+import { BADGE_CLASS, TOOL_IDS, cardModel, emptyRoles, failedRole, gridEntries, sentence, toolCardModel, toolCards } from "../app/modules-grid.js";
 
 const bi = (over = {}) => ({ id: "static-publish", name: "Static", roles: ["publish"], builtin: true, enabled: true, implicit: false,
   status: "ok", settings: [{ key: "folder", type: "path" }], ...over });
@@ -154,4 +154,25 @@ test("sentence: перша літера велика, у кінці крапка
   assert.equal(sentence("  "), "");
   assert.equal(sentence(undefined), "");
   assert.equal(sentence("їжак"), "Їжак.", "кирилична «ї» — з великої, не розбита на сурогати");
+});
+
+/* ── Інструменти простору («В Figma», етап Е): вимикачі в `space.json`, а не модулі ── */
+test("toolCards: один інструмент — «В Figma» під ролею «Інструменти»; ключа нема = увімкнено, лише `false` вимикає", () => {
+  const on = toolCards({ figma: true })[0];
+  assert.deepEqual([on.id, on.tool, on.icon, on.nameKey, on.roleKey, on.on], ["tool:figma", "figma", "figma", "toFigma", "roleTools", true]);
+  assert.equal(toolCards(undefined)[0].on, true, "старий сервер без `tools`");
+  assert.equal(toolCards({})[0].on, true, "відсутній ключ");
+  assert.equal(toolCards(null)[0].on, true);
+  assert.equal(toolCards({ figma: false })[0].on, false);
+  assert.equal(toolCards({ figma: "false" })[0].on, true, "не-булеве не вимикає");
+  assert.deepEqual(TOOL_IDS, ["figma"]);
+});
+
+test("toolCardModel: увімкнено — «Увімкнено», без дії, «⋯ → Вимкнути»; вимкнено — «Вимкнено» й кнопка «Увімкнути», меню порожнє", () => {
+  const on = toolCardModel(toolCards({})[0]);
+  assert.deepEqual([on.badge, on.badgeKey, on.action], ["ok", "toolOn", null]);
+  assert.deepEqual(on.menu, [{ act: "toolask", key: "cnDisable", danger: true }]);
+  assert.equal(on.askKey, "toolFigmaNone");
+  const off = toolCardModel(toolCards({ figma: false })[0]);
+  assert.deepEqual([off.badge, off.badgeKey, off.action, off.menu], ["off", "toolOff", { act: "toolon", key: "toolEnable" }, []]);
 });

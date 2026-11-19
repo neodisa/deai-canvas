@@ -910,3 +910,9 @@ export function publishErr(e) {
   }
   return { key: "errFailed", args: [e?.message ?? ""] };
 }
+
+/**
+ * «В Figma» вимкнено в просторі (`space.json` → `tools.figma === false`, етап Е): кнопки в смузі й пункту ⌘K тоді нема.
+ * Лише справжній `false` вимикає — невідомий простір, відповідь без `tools` (старий сервер) чи будь-яке інше значення = увімкнено.
+ */
+export const figmaOff = (space) => space?.tools?.figma === false;

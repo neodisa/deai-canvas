@@ -875,6 +875,60 @@ def update_space(sid, name=None, color=None):
     return {'name': out['name'], 'color': out['color']}
 
 
+#: Інструменти простору — вимикачі в `space.json` (`"tools": {"figma": false}`): не модулі, а прапорці. Ключа/обʼєкта нема — увімкнено.
+SPACE_TOOLS = ('figma',)
+
+
+def space_tools(sp):
+    """`{інструмент: bool}` простору за `space.json`: лише `false` вимикає (нема файла, ключа, обʼєкта чи значення не-`false` — увімкнено).
+    Порожній шлях (неявний простір) — без звернення до диска."""
+    off = {}
+    if sp.get('path'):
+        try:
+            m = _read_json(os.path.join(sp['path'], 'space.json'))
+        except (OSError, ValueError, KeyError):
+            m = None
+        if isinstance(m, dict) and isinstance(m.get('tools'), dict):
+            off = m['tools']
+    return {k: off.get(k) is not False for k in SPACE_TOOLS}
+
+
+def set_space_tool(sid, tool, on):
+    """Увімкнути/вимкнути інструмент простору в `space.json` (атомарно, під `WRITE_LOCK`, решта ключів файла збережена).
+    Увімкнути = прибрати ключ (порожній `tools` теж зникає: файл мінімальний). Невідомий інструмент чи не-`bool` — `InputError`.
+    Повертає `{інструмент: bool}`."""
+    _require_layer()
+    if tool not in SPACE_TOOLS:
+        raise InputError('unknown-tool', str(tool)[:40])
+    if not isinstance(on, bool):
+        raise InputError('bad-value', 'on must be boolean')
+    sp = _space(load_registry(), sid)   # ПОЗА локом: load_registry може мігрувати
+    if not sp.get('path'):
+        raise InputError('path-unwritable')
+    path = os.path.join(sp['path'], 'space.json')
+    with WRITE_LOCK:
+        try:
+            old = _read_json(path)
+        except (OSError, ValueError):
+            old = None
+        out = dict(old) if isinstance(old, dict) else {}
+        tools = dict(out['tools']) if isinstance(out.get('tools'), dict) else {}
+        if on:
+            tools.pop(tool, None)
+        else:
+            tools[tool] = False
+        if tools:
+            out['tools'] = tools
+        else:
+            out.pop('tools', None)
+        try:
+            os.makedirs(sp['path'], exist_ok=True)
+            _write_public(path, out)
+        except OSError as e:
+            raise InputError('path-unwritable') from e
+    return space_tools(sp)
+
+
 def switch_space(sid):
     """Зробити простір поточним. Шар вимкнено — НАВМИСНИЙ no-op (і для невідомого id):
     поточного простору там нема, є лише неявний."""
