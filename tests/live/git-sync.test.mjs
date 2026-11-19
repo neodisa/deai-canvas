@@ -49,7 +49,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
-import { VIEW, clickEnable, guardRealDeai, goTasks, openCard, postJson, sleep, stop, waitBadge, waitBarReady } from "./_spaces-kit.mjs";
+import { VIEW, pickFromCatalog, guardRealDeai, goTasks, openCard, postJson, sleep, stop, waitBadge, waitBarReady } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга. ⚠️ Не 13600: ту займає `own-modules.test.mjs`, а `tests/live-ports.test.mjs` забороняє дві бази на одну смугу
@@ -267,9 +267,9 @@ test("2: «Підключення» — секція «Синхронізаці�
   assert.equal(await page.locator('.mc[data-id="git-sync"]').count(), 0, "вимкнений git-sync — не в сітці");
   const empty = page.locator('.mc--empty[data-role="vcs"]');
   assert.equal((await empty.locator(".mc-name b").textContent()).trim(), "Синхронізація з git");
-  assert.match(await empty.locator(".mc-name span").textContent(), /макети лише на цьому компʼютері/, "наслідок «без модуля» — у пунктирній картці ролі");
+  assert.match(await empty.locator(".mc-name span").textContent(), /Макети лише на цьому компʼютері\./, "наслідок «без модуля» — у пунктирній картці ролі, реченням");
 
-  await clickEnable(page, "git-sync");
+  await pickFromCatalog(page, "git-sync");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="repo"]');
   for (const key of ["branch", "path", "ssh_key", "host_ip", "autosync"]) {
     assert.equal(await page.locator(`#cn-drawer [data-cn-field="${key}"]`).count(), 1, `поле «${key}» у панелі`);

@@ -53,25 +53,29 @@ export async function goTasks(page, timeout = 15000) {
 
 /**
  * Розділ «Модулі» (етап Е): картка в сітці — `.mc[data-id]` з бейджем `.bdg--{ok|err|off|unchecked|trust|missing}`. Вимкнений ВБУДОВАНИЙ
- * модуль у сітці не показується (він лише в каталозі, Task 3), тож його «картка» — це відсутність `.mc` (`waitGone`).
+ * модуль у сітці не показується (він лише в каталозі), тож його «картка» — це відсутність `.mc` (`waitGone`).
  */
 export const BDG = { ok: "ok", error: "err", off: "off", unchecked: "unchecked", untrusted: "trust", missing: "missing" };
 export const waitBadge = (page, id, kind, timeout = 15000) => page.waitForSelector(`.mc[data-id="${id}"] .bdg--${BDG[kind]}`, { timeout });
 export const waitGone = (page, id, timeout = 15000) => page.waitForSelector(`.mc[data-id="${id}"]`, { state: "detached", timeout });
 /** Клас бейджа картки (`bdg bdg--ok`). */
 export const badgeClass = (page, id) => page.locator(`.mc[data-id="${id}"] .bdg`).getAttribute("class");
+/** Каталог «Додати модуль»: відкрити з голови сторінки (`role` не задано) чи з пунктирної картки ролі; чекає діалог. */
+export async function openCatalog(page, role = "", { dom = false } = {}) {
+  const sel = role ? `.mc--empty[data-role="${role}"] [data-cn="cat"]` : '.th-head [data-cn="cat"]';
+  /* `dom` — клік подією, а не мишею: відкрита шухляда налаштувань лежить поверх голови сторінки й перехоплює справжній клік. */
+  if (dom) await page.locator(sel).dispatchEvent("click"); else await page.click(sel);
+  await page.waitForSelector('.cv-ask form[data-form="catalog"] .cat');
+}
 /**
- * «Підключити» вимкненого вбудованого модуля: у сітці його нема, а каталог («Додати модуль») — Task 3. Дія `enable` у `connAction` уже
- * є (шухляда в режимі «Підключити»), і саме її викличе рядок каталогу, тож тут її викликає кнопка-свідок, вставлена в сторінку.
+ * «Підключити» вимкненого вбудованого модуля — справжнім шляхом: «Додати модуль» → рядок каталогу. Далі — наявна шухляда в режимі
+ * «Підключити» (модуль без налаштувань вмикається одразу). Кнопка каже «Підключити» або «Замінити {поточний}»: питання «Замінити?»
+ * після неї вже нема (спека §3), крім випадку, коли тримачі ролі змінились, поки шухляда була відкрита.
  */
-export async function clickEnable(page, id) {
-  await page.evaluate((mod) => {
-    document.querySelector("[data-test-enable]")?.remove();
-    const b = document.createElement("button");
-    b.dataset.testEnable = "1"; b.dataset.cn = "enable"; b.dataset.id = mod; b.textContent = "enable";
-    document.querySelector("#tasks-home .set-in").appendChild(b);
-  }, id);
-  await page.click("[data-test-enable]");
+export async function pickFromCatalog(page, id, opts = {}) {
+  await openCatalog(page, "", opts);
+  await page.click(`.cat [data-cat-pick="${id}"]`);
+  await page.waitForSelector('form[data-form="catalog"]', { state: "detached" });
 }
 /** Клік по картці (назва): увімкнений модуль → шухляда налаштувань. */
 export async function openCard(page, id) {

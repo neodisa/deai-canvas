@@ -7,7 +7,8 @@
  *
  * Мапа «сценарій → запобіжник», знята мутаційно:
  *   1 (картка помилки)       — `cardModel`: помилка → дія `configure` (одна кнопка), клік по картці → шухляда (`connAction('card')`).
- *   2 (клавіатура картки)    — слухач Enter/Пробіл у `keydown` розділу (`app.js`); `role=button tabindex=0` у `mcardHTML`.
+ *   2 (клавіатура картки)    — кнопка-назва `.mc-open` (нативні Enter/Пробіл; Tab доходить до неї) і розтягнутий `::after`; ні `role=button`,
+ *        ні `tabindex` на самій картці (a11y: кнопки не вкладаються в кнопку); «⋯» і дія стоять над шаром (`z-index`).
  *   3 (меню «⋯»)             — `toggleConnMenu`/`menuKeys`: стрілки по колу, Esc → фокус на «⋯»; `.mc-more` у `moreSel`.
  *   4 (питання «Вимкнути?»)  — `askConnDisable` (фокус на «Скасувати»); Esc → `cancelConnAsk` без запиту; клік повз картку знімає питання.
  *   5 (вимкнення)            — `askyes` → `connDisable` → `POST /api/module-disable`; картка зникає, роль — пунктирна, «Без модуля · N» росте.
@@ -77,7 +78,7 @@ const active = (page) => page.evaluate(() => {
 /** Модуль `memo-publish` з `note: "fail"` → перевірка «ні» → `status: error` (картка помилки). */
 const failMemo = (url) => postJson(url, "/api/module-enable", { space: "studio", id: "memo-publish", settings: { note: "fail" }, replace: true });
 
-test("1–2: картка помилки — рівно одна кнопка «Налаштувати» (→ шухляда); клік і Enter/Пробіл по самій картці теж відкривають шухляду", async (t) => {
+test("1–2: картка помилки — рівно одна кнопка «Налаштувати» (→ шухляда); клік по картці й Enter/Пробіл на кнопці-назві теж відкривають шухляду", async (t) => {
   const { page, url, errors } = await boot(t);
   const r = await failMemo(url);
   assert.equal(r.status, 200);
@@ -87,8 +88,10 @@ test("1–2: картка помилки — рівно одна кнопка «
   assert.equal(await card.locator(".mc-foot button").count(), 1, "одна дія на картці");
   assert.equal((await card.locator(".mc-foot button").textContent()).trim(), "Налаштувати");
   assert.match(await card.locator(".mc-why").textContent(), /memo-says-no|note is fail/, "причина помилки — рядком у картці");
-  assert.equal(await card.getAttribute("role"), "button");
-  assert.equal(await card.getAttribute("tabindex"), "0");
+  assert.equal(await card.getAttribute("role"), null, "a11y: сама картка не кнопка");
+  assert.equal(await card.getAttribute("tabindex"), null);
+  assert.equal(await card.locator('[role="button"]').count(), 0);
+  assert.equal(await card.locator("button").count(), 3, "назва, «⋯», дія — три окремі кнопки, жодна не вкладена в іншу");
 
   await card.locator(".mc-foot button").click();
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
@@ -96,17 +99,30 @@ test("1–2: картка помилки — рівно одна кнопка «
   await page.click('#cn-drawer [data-cn-dr="close"]');
   await page.waitForSelector("#cn-drawer", { state: "hidden" });
 
-  await card.locator(".mc-name b").click();                     // клік по самій картці
+  await card.locator(".mc-name b").click();                     // клік по назві
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
   await page.click('#cn-drawer [data-cn-dr="close"]');
   await page.waitForSelector("#cn-drawer", { state: "hidden" });
 
-  await card.focus();                                           // клавіатура: Enter, потім Пробіл
+  await card.click({ position: { x: 6, y: 6 } });                // клік по порожньому краю: розтягнутий шар кнопки-назви
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
+  await page.click('#cn-drawer [data-cn-dr="close"]');
+  await page.waitForSelector("#cn-drawer", { state: "hidden" });
+
+  await card.locator(".mc-more").click();                        // «⋯» над шаром: відкриває меню, а не шухляду
+  await page.waitForSelector("#th-menu");
+  assert.equal(await page.locator("#cn-drawer").isHidden(), true, "клік по «⋯» не відкриває шухляду");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#th-menu", { state: "detached" });
+
+  await card.locator(".mc-more").focus();                        // клавіатура: Shift+Tab із «⋯» доходить до кнопки-назви; Enter, потім Пробіл
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.className), "mc-open", "Tab доходить до кнопки-назви картки");
   await page.keyboard.press("Enter");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
   await page.click('#cn-drawer [data-cn-dr="close"]');
   await page.waitForSelector("#cn-drawer", { state: "hidden" });
-  await card.focus();
+  await card.locator(".mc-open").focus();
   await page.keyboard.press("Space");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
   assert.deepEqual(errors, []);

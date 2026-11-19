@@ -3,13 +3,25 @@
  * функції — ні DOM, ні `t()`: лише ІМЕНА ключів словника. Джерело правди про дозволені дії — `cardView` моделі
  * «Підключень»; тут із них обирається ОДНА дія на картці, решта йде в меню «⋯».
  */
-import { ROLE_ORDER, cardView, isOwn, ownRuns, roleIcon, roleKeys } from "./connections-model.js";
+import { ROLE_ORDER, cardView, isOwn, ownRuns, roleError, roleIcon, roleKeys } from "./connections-model.js";
 
 /** Бейдж картки → суфікс класу `.bdg--*` (`error` → `err`, `untrusted` → `trust`; решта — як є). */
 export const BADGE_CLASS = { ok: "ok", error: "err", unchecked: "unchecked", off: "off", missing: "missing", untrusted: "trust" };
 
 /** Чи є в модуля що налаштовувати: порожній `settings[]` — нема; невідомо (нема поля) — вважаємо, що є. */
 const hasSettings = (e) => !(Array.isArray(e?.settings) && e.settings.length === 0);
+
+/**
+ * Рядок словника, що був хвостом фрази, — реченням: перша літера велика, у кінці крапка (якщо там уже нема `.`, `!`, `?`, `…`).
+ * Наслідки ролей (`cnNone*`) писались продовженням «Зараз: нікого — …», тож частина починається з малої й без крапки.
+ */
+export function sentence(text) {
+  const s = String(text ?? "").trim();
+  if (!s) return "";
+  const first = Array.from(s)[0];
+  const up = first.toLocaleUpperCase() + s.slice(first.length);
+  return /[.!?…]$/.test(up) ? up : `${up}.`;
+}
 
 /**
  * Стан картки → `{badge, action, click, menu}`:
@@ -19,8 +31,12 @@ const hasSettings = (e) => !(Array.isArray(e?.settings) && e.settings.length ===
  *   menu   — пункти «⋯»: `{act, key, danger?}` і `"sep"`: Налаштувати (є налаштування) · Перевірити (увімкнений) ·
  *            Код (свій) · Забрати довіру (свій довірений) · Чому не можна (свій, нова версія не годиться) · — · Вимкнути.
  */
-export function cardModel(e) {
+/* `roleFailed` — модуль ТРИМАЄ роль, чий збій записано в `capabilities.errors[роль]` (`failedRole`): картка тоді «Помилка» з дією
+   «Налаштувати», навіть якщо сам запис ще «Підключено»/«Не перевірено». */
+export function cardModel(e, roleFailed = false) {
   const v = cardView(e);
+  const failed = roleFailed === true && e?.enabled === true && e?.status !== "missing" && (v.badge === "ok" || v.badge === "unchecked");
+  if (failed) v.badge = "error";
   const own = isOwn(e);
   let action = null;
   if (e?.status === "missing") action = null;
@@ -47,6 +63,13 @@ export function cardModel(e) {
   return { badge: v.badge, action, click, menu };
 }
 
+/** Роль, чий збій записано в `capabilities` і яку ТРИМАЄ цей модуль (увімкнений, не `missing`): код збою або `""`. */
+export function failedRole(e, caps) {
+  if (!e || e.enabled !== true || e.status === "missing") return "";
+  for (const r of Array.isArray(e.roles) ? e.roles : []) if (roleError(caps, r)) return r;
+  return "";
+}
+
 const valid = (e) => e && typeof e === "object" && typeof e.id === "string";
 const firstRole = (e) => (Array.isArray(e.roles) && typeof e.roles[0] === "string" ? e.roles[0] : "");
 
@@ -60,9 +83,10 @@ export function gridEntries(list) {
   return items.map((e, i) => ({ e, i })).sort((a, b) => rank(a.e) - rank(b.e) || a.i - b.i).map((x) => x.e);
 }
 
-/** Ролі зі списку ROLE_ORDER, яких не покриває жоден модуль із сітки («Інше» ніколи): `[{role, icon, titleKey, noneKey}]`. */
-export function emptyRoles(list) {
+/** Ролі зі списку ROLE_ORDER, яких не покриває жоден модуль із сітки («Інше» ніколи): `[{role, icon, titleKey, noneKey, error}]`
+ *  (`error` — код збою ролі з `capabilities.errors`, коли відомий, інакше `""`: пунктирна картка тоді каже про збій). */
+export function emptyRoles(list, caps) {
   const covered = new Set(gridEntries(list).flatMap((e) => (Array.isArray(e.roles) ? e.roles : [])));
   return ROLE_ORDER.filter((r) => !covered.has(r))
-    .map((role) => ({ role, icon: roleIcon(role), titleKey: roleKeys(role).title, noneKey: roleKeys(role).none }));
+    .map((role) => ({ role, icon: roleIcon(role), titleKey: roleKeys(role).title, noneKey: roleKeys(role).none, error: roleError(caps, role) }));
 }

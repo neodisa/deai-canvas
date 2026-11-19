@@ -1868,16 +1868,18 @@ test("glsetup на холодному старті: клік веде на «П�
   assert.deepEqual(env.told, [], "повідомлення про tasks.json — лише в ЛІГА");
 });
 
-/** Вузол сторінки для `focusConnLanding` (етап Е): картки `.mc[data-id]`, пунктирні `.mc--empty[data-role]` (з «Додати»); `focus` пише в журнал. */
+/** Вузол сторінки для `focusConnLanding` (етап Е): картки `.mc[data-id]` (фокус — на кнопці-назві `.mc-open`: сама картка не фокусна), пунктирні
+ *  `.mc--empty[data-role]` (з «Додати»); `focus` пише в журнал. */
 function mkHome(cards, empties, log) {
-  const card = (id) => ({ focus: (o) => log.push([`card:${id}`, o]) });
+  const open = (id) => ({ focus: (o) => log.push([`card:${id}`, o]) });
+  const card = (id) => ({ querySelector: (s) => (s === ".mc-open" ? open(id) : null) });
   return {
     querySelector: (sel) => {
       const c = /^\.mc\[data-id="(.+)"\]$/.exec(sel);
       if (c) return cards.includes(c[1]) ? card(c[1]) : null;
       const e = /^\.mc--empty\[data-role="(.+)"\]$/.exec(sel);
       if (e) return empties.includes(e[1]) ? { querySelector: (s) => (s === '[data-cn="cat"]' ? { focus: (o) => log.push([`cat:${e[1]}`, o]) } : null) } : null;
-      if (sel === '.mc[data-cn="card"], [data-cn="retry"], [data-cn="cat"]') return cards.length ? card(cards[0]) : null;
+      if (sel === '.mc-open, [data-cn="retry"], [data-cn="cat"]') return cards.length ? open(cards[0]) : null;
       return null;
     },
   };

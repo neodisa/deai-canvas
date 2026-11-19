@@ -60,7 +60,8 @@ test("сторінка: ЛІГА-модулі, missing-картка, заван�
   const h = connPageHTML(view({ space: liga, list: [...LIST, missing] }));
   assert.doesNotMatch(h, /вбудована інтеграція ЛІГА/, "4d-4c: вбудованої інтеграції нема");
   assert.doesNotMatch(h, /Не встановлені на цьому компʼютері/, "окремої секції нема: «Не встановлено» — бейдж картки");
-  assert.match(h, /<div class="mc" role="button" tabindex="0" data-cn="card" data-id="gone"[^>]*>[^]*?bdg bdg--missing">[^]*?Не встановлено<\/span>/);
+  assert.match(h, /<div class="mc" data-id="gone">[^]*?<b>gone<\/b>[^]*?bdg bdg--missing">[^]*?Не встановлено<\/span>/);
+  assert.doesNotMatch(h, /data-cn="card" data-id="gone"/, "a11y: «Не встановлено» на клік нічого не робить — назва лишається текстом, а не мертвою кнопкою");
   assert.match(h, /data-cn="menu" data-id="gone"/, "«Вимкнути» для missing — у меню «⋯», а не кнопкою картки");
   assert.doesNotMatch(h, /data-cn="disable"/, "у розмітці сторінки «Вимкнути» нема — лише в меню (воно відкривається за кліком)");
   assert.match(connPageHTML(view({ list: null })), /class="cn-loading" role="status">Завантажую модулі…</,
@@ -563,7 +564,7 @@ test("питання «Вимкнути?» в картці: .mc--ask, .cfm з «
   assert.match(h, /^<div class="mc mc--ask" role="group" aria-label="Публікація в теку" data-id="static-publish">/);
   assert.match(h, /<div class="cfm" role="group"[^>]*><p class="cfm-t">Вимкнути «Публікація в теку»\? Налаштування й секрети лишаться[^<]*Після цього роль «Публікація» лишиться без модуля: кнопки публікації в смузі нема\.<\/p>/);
   assert.match(h, /<button type="button" class="cfm-no" data-cn="askno" data-id="static-publish">Скасувати<\/button><button type="button" class="cfm-yes" data-cn="askyes" data-id="static-publish">Вимкнути<\/button>/);
-  assert.doesNotMatch(h, /mc-more|data-cn="card"|role="button"/, "під питанням ні «⋯», ні кліку по картці");
+  assert.doesNotMatch(h, /mc-more|data-cn="card"|mc-open|role="button"/, "під питанням ні «⋯», ні кліку по картці");
   assert.doesNotMatch(mcardHTML(e, new Map(), { id: "other" }, SP), /mc--ask/, "питання лише в своєї картки");
   assert.doesNotMatch(mcardHTML(e, new Map(), { id: "static-publish" }, { ...SP, capabilities: { publish: "x" } }), /Після цього роль/, "роль тримає інший — наслідку нема");
   const page = connPageHTML(view({ ask: { id: "static-publish" } }));
@@ -573,7 +574,7 @@ test("питання «Вимкнути?» в картці: .mc--ask, .cfm з «
 test("пунктирна картка ролі без модуля: іконка, назва ролі, наслідок «none», «Додати» з data-role", () => {
   const h = emptyCardHTML({ role: "comments", icon: "comment", titleKey: "cnRoleComments", noneKey: "cnNoneComments" });
   assert.match(h, /^<div class="mc mc--empty" data-role="comments">/);
-  assert.match(h, /<b>Командні коментарі<\/b><span>коментарі лише локальні — для вас і агента<\/span>/);
+  assert.match(h, /<b>Командні коментарі<\/b><span>Коментарі лише локальні — для вас і агента\.<\/span>/, "наслідок — реченням: велика літера й крапка");
   assert.match(h, /<button type="button" class="ctl ctl--out" data-cn="cat" data-role="comments">[^]*?Додати<\/button>/);
   assert.doesNotMatch(h, /role="button"|tabindex/, "пунктирна картка сама не фокусна й не клікається");
 });
@@ -649,7 +650,8 @@ const GIT = { id: "git-sync", name: "Синхронізація з git", roles: 
 test("сторінка: картка git-sync стоїть у ролі vcs (після коментарів), без дашборда-секції; vcs не порожня", () => {
   const sp = { ...SP, capabilities: { publish: "static-publish", comments: null, vcs: "git-sync", tokens: null } };
   const h = connPageHTML(view({ space: sp, list: [...LIST, GIT] }));
-  assert.match(h, /<div class="mc" role="button" tabindex="0" data-cn="card" data-id="git-sync" aria-label="Git">/);
+  assert.match(h, /<div class="mc" data-id="git-sync"><div class="mc-top">[^]*?<b><button type="button" class="mc-open" data-cn="card" data-id="git-sync">Git<\/button><\/b>/,
+    "a11y: картка — не role=button; кнопка-назва всередині `b`");
   assert.match(h, /<h2 class="sub">Без модуля · 5<\/h2>/, "vcs тепер із модулем — порожніх ролей п'ять");
   assert.doesNotMatch(h, /<b>Синхронізація з git<\/b>/, "vcs не порожня");
   assert.doesNotMatch(h, /Відправляти ітерації в git-репозиторій|Будь-який git-репозиторій/, "ні ліду ролі, ні опису модуля на картці");
@@ -716,4 +718,56 @@ test("каркас: назва простору в навігації екран
   const h = connPageHTML(view({ space: { ...SP, name: '<i>"x', color: '"><b>' }, sec: "space" }));
   assert.doesNotMatch(h, /<i>|<b>/);
   assert.match(h, /&lt;i&gt;&quot;x/);
+});
+
+/* ── a11y карток, збій ролі, наслідки реченнями (рев'ю Task 2 → Task 3) ── */
+
+test("a11y: картка сама не role=button і без tabindex; назва — справжня кнопка `.mc-open` у `b` (stretched link); ⋯ й дія — окремі кнопки", () => {
+  const h = mcardHTML(LIST[1], new Map(), null, SP);
+  assert.doesNotMatch(h, /role="button"|tabindex=/, "жодного role=button / tabindex на картці");
+  assert.match(h, /^<div class="mc" data-id="static-publish">/);
+  assert.match(h, /<div class="mc-name"><b><button type="button" class="mc-open" data-cn="card" data-id="static-publish">Публікація в теку<\/button><\/b>/);
+  const buttons = h.match(/<button\b/g) || [];
+  assert.equal(buttons.length, 3, "назва, «⋯», дія — три незалежні кнопки, жодної вкладеної в іншу");
+  assert.doesNotMatch(h, /<button[^>]*>(?:(?!<\/button>)[^])*<button/, "кнопка в кнопці");
+  assert.doesNotMatch(connPageHTML(view()), /role="button"/, "на сторінці розділу «Модулі» role=button нема взагалі");
+  assert.match(mcardHTML(LIST[1], new Map([["static-publish", "check"]]), null, SP), /^<div class="mc" data-id="static-publish" aria-busy="true">/, "дія в польоті — aria-busy на картці");
+});
+
+test("збій ролі з capabilities.errors: картка модуля, що її тримає, — «Помилка» + причина в `.mc-why`; без збою — як було", () => {
+  const caps = { ...SP.capabilities, errors: { publish: "module-error" } };
+  const h = mcardHTML(LIST[1], new Map(), null, { ...SP, capabilities: caps });
+  assert.match(h, /bdg bdg--err">Помилка<\/span>/);
+  assert.match(h, /<p class="mc-why">Модуль цієї ролі не завантажився\.<\/p>/);
+  assert.match(h, /data-cn="configure" data-id="static-publish"/, "дія картки у помилки — «Налаштувати»");
+  assert.doesNotMatch(h, /data-cn="check"/, "одна дія на картці: «Перевірити» лишилось у «⋯»");
+  const calm = mcardHTML(LIST[1], new Map(), null, SP);
+  assert.match(calm, /bdg bdg--unchecked/);
+  assert.doesNotMatch(calm, /mc-why/);
+  const other = mcardHTML(LIST[1], new Map(), null, { ...SP, capabilities: { ...SP.capabilities, errors: { vcs: "module-error" } } });
+  assert.match(other, /bdg--unchecked/, "збій ІНШОЇ ролі цієї картки не стосується");
+  const off = mcardHTML({ ...LIST[1], enabled: false }, new Map(), null, { ...SP, capabilities: caps });
+  assert.doesNotMatch(off, /bdg--err/, "вимкнений модуль роль не тримає");
+});
+
+test("збій ролі без картки: пунктирна картка каже про збій замість наслідку; на сторінці — з capabilities.errors простору", () => {
+  const e = emptyCardHTML({ role: "vcs", icon: "cloud", titleKey: "cnRoleVcs", noneKey: "cnNoneVcs", error: "module-error" });
+  assert.match(e, /<span>Модуль цієї ролі не завантажився\.<\/span>/);
+  assert.doesNotMatch(e, /Макети лише/);
+  const page = connPageHTML(view({ space: { ...SP, capabilities: { ...SP.capabilities, errors: { vcs: "module-error" } } } }));
+  assert.match(page, /data-role="vcs"[^]*?Модуль цієї ролі не завантажився\./);
+  assert.match(page, /data-role="comments"[^]*?Коментарі лише локальні — для вас і агента\./, "ролі без збою — наслідок як завжди");
+});
+
+test("наслідки ролей на пунктирних картках — реченнями: велика літера й крапка, обома мовами", () => {
+  for (const lang of ["uk", "en"]) {
+    setLang(lang);
+    const h = connPageHTML(view());
+    const lines = [...h.matchAll(/mc--empty[^]*?<span>([^<]*)<\/span>/g)].map((m) => m[1]);
+    assert.equal(lines.length, 6, lang);
+    for (const l of lines) {
+      assert.match(l, /^[A-ZА-ЯІЇЄҐ]/, `${lang}: «${l}» — з великої`);
+      assert.match(l, /[.!?…]$/, `${lang}: «${l}» — з крапкою`);
+    }
+  }
 });

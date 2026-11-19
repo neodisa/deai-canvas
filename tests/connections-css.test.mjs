@@ -117,7 +117,7 @@ test("3c (ревʼю Task 6): рамка «Забрати довіру» в па
 
 test("етап Е: кожен клас сітки модулів із розмітки (`mcardHTML`, `emptyCardHTML`, `gridHTML`) має правило як суб'єкт", () => {
   const src = read("connections-view.js").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/[^\n]*/g, "");
-  const want = ["mg", "mc", "mc-top", "mc-ic", "mc-name", "mc-tag", "mc-more", "mc-why", "mc-foot", "bdg", "mc--empty", "mc--ask", "sub"];
+  const want = ["mg", "mc", "mc-top", "mc-ic", "mc-name", "mc-tag", "mc-open", "mc-more", "mc-why", "mc-foot", "bdg", "mc--empty", "mc--ask", "sub"];
   for (const c of want) {
     assert.ok(new RegExp(`class="[^"]*\\b${c}\\b`).test(src) || src.includes(`"${c}"`), `розмітка не вживає клас ${c} — список застарів`);
     assert.ok(isSubjectOfSomeRule(c), `клас ${c} без власного правила`);
@@ -128,7 +128,12 @@ test("етап Е: кожен клас сітки модулів із розмі
 test("етап Е: картка — flex-колонка з фокус-кільцем, «⋯» має фокус-кільце, сітка — auto-fill від 250px, питання не клікабельне", () => {
   assert.match(rule(".mg") ?? "", /grid-template-columns:repeat\(auto-fill,minmax\(min\(250px,100%\),1fr\)\)/);
   assert.match(rule(".mc") ?? "", /display:flex[\s\S]*flex-direction:column/);
-  assert.match(rule(".mc:focus-visible") ?? "", /outline:2px solid var\(--sel\)/);
+  /* a11y: картка сама не `role=button`; кнопка-назва розтягнута на неї, а «⋯» і дія стоять НАД розтягнутим шаром. */
+  assert.match(rule(".mc") ?? "", /position:relative/);
+  assert.match(rule(".mc-open::after") ?? "", /content:"";position:absolute;inset:0/);
+  assert.match(rule(".mc-open:focus-visible::after") ?? "", /outline:2px solid var\(--sel\)/);
+  assert.match(rule(".mc-more") ?? "", /position:relative;z-index:1/);
+  assert.match(rule(".mc-foot .ctl") ?? "", /position:relative;z-index:1/);
   assert.match(rule(".mc-more:focus-visible") ?? "", /outline:2px solid var\(--sel\)/);
   assert.match(rule(".mc--empty") ?? "", /border-style:dashed/);
   assert.match(rule(".mc--ask") ?? "", /cursor:default/);
@@ -141,6 +146,29 @@ test("етап Е: бейдж стану — крапка лише токена�
   assert.match(rule(".bdg--err") ?? "", /color:var\(--hi\)/, "червоний текст на --s2 дає лише ≈4.1:1 (див. шапку розділу)");
   assert.match(rule(".bdg--trust .ico") ?? "", /color:var\(--open\)/);
   for (const sel of [".mg", ".mc", ".mc-why", ".bdg", ".mc--ask", ".mc--empty"]) {
+    assert.doesNotMatch(rule(sel) ?? "", /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i, `${sel}: літерал кольору замість токена`);
+  }
+});
+
+/* ── «Додати модуль» (етап Е): діалог каталогу й «Свій модуль» (`catalog-view.js`) ── */
+
+test("етап Е: кожен клас діалогу каталогу з розмітки має правило як суб'єкт; підсвічена група й пунктирний рядок — окремі правила", () => {
+  const src = read("catalog-view.js").replace(/\/\*[\s\S]*?\*\//g, "");
+  const found = new Set();
+  for (const m of src.matchAll(/class="([^"]+)"/g)) for (const c of m[1].replace(/\$\{[^}]*\}/g, " ").split(/\s+/)) if (/^[a-z][\w-]*[a-z0-9]$/.test(c)) found.add(c);
+  for (const c of ["cat-d", "cat-h", "cat-pg", "cat-b", "cat-b--pad", "cat-f", "cat-g", "cat", "cat--own", "steps", "ta", "prompt"]) {
+    assert.ok(found.has(c) || src.includes(`"${c}"`) || src.includes(`${c}"`), `розмітка не вживає клас ${c} — список застарів`);
+    assert.ok(isSubjectOfSomeRule(c), `клас ${c} без власного правила`);
+  }
+  assert.ok(src.includes("cat--hl"), "підсвічена група в розмітці");
+  assert.ok(isSubjectOfSomeRule("cat--hl"), "cat--hl без правила");
+  assert.match(rule(".cat--own") ?? "", /border:1px dashed var\(--line2\)/);
+  assert.match(rule(".cat--hl") ?? "", /color-mix\(in srgb,var\(--sel\) 10%,transparent\)/);
+  assert.match(rule(".cv-ask--form:has(.cat-d)") ?? "", /width:600px/);
+  assert.match(rule(".cat-h [hidden]") ?? "", /display:none/, "`.icob` задає display — без цього правила схований «‹» усе одно видно");
+  assert.match(rule(".cat-b") ?? "", /overflow-y:auto/, "довгий каталог прокручується, а не розтягує вікно");
+  assert.match(rule(".ta:focus-visible") ?? "", /outline:2px solid var\(--sel\)/);
+  for (const sel of [".cat", ".cat--hl", ".cat--own", ".ta", ".prompt"]) {
     assert.doesNotMatch(rule(sel) ?? "", /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i, `${sel}: літерал кольору замість токена`);
   }
 });

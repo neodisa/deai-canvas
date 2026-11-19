@@ -29,7 +29,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { askNo, clickEnable, guardRealDeai, goTasks, menuDisable, postJson, sleep, stop, waitBadge } from "./_spaces-kit.mjs";
+import { askNo, pickFromCatalog, guardRealDeai, goTasks, menuDisable, postJson, sleep, stop, waitBadge } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 import { hermeticLiga } from "./_liga-supabase.mjs";
 
@@ -240,7 +240,7 @@ test("3: «Підключення» — роль «Командний дашбо
   assert.match(await page.locator('.mc--empty[data-role="dashboard"]').textContent(), /Командний дашборд/);
   assert.equal(await page.locator('.mc[data-id="fake-dashboard"], .mc[data-id="supabase-dashboard"]').count(), 0, "вимкнені модулі ролі — не в сітці");
 
-  await clickEnable(page, "fake-dashboard");
+  await pickFromCatalog(page, "fake-dashboard");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="rows_file"]');
   await page.fill('#cn-drawer [data-cn-field="rows_file"]', w.rowsFile);
   await page.click('#cn-drawer [data-cn-dr="submit"]');

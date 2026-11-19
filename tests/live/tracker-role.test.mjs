@@ -25,7 +25,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { askNo, clickEnable, guardRealDeai, goTasks, menuDisable, postJson, stop, waitBadge } from "./_spaces-kit.mjs";
+import { askNo, pickFromCatalog, guardRealDeai, goTasks, menuDisable, postJson, stop, waitBadge } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 import { hermeticLiga } from "./_liga-supabase.mjs";
 
@@ -232,7 +232,7 @@ test("4: «Підключення» — роль «Трекер задач» б�
   assert.deepEqual(roles.slice(at - 1, at + 2), ["dashboard", "tracker", "notify"], "4c-3: після трекера — «Сповіщення Teams», токени далі");
   assert.equal(await page.locator('.mc[data-id="fake-tracker"], .mc[data-id="jira-tracker"]').count(), 0, "вимкнені модулі ролі — не в сітці (лише в каталозі)");
 
-  await clickEnable(page, "fake-tracker");
+  await pickFromCatalog(page, "fake-tracker");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="statuses_file"]');
   await page.fill('#cn-drawer [data-cn-field="statuses_file"]', w.statusesFile);
   await page.click('#cn-drawer [data-cn-dr="submit"]');

@@ -59,6 +59,8 @@ import {
 import { initPwa } from './pwa.js';
 import { connMenuHTML, connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
 import { cardModel } from './modules-grid.js';
+import { catalogGroups, ownPrompt } from './catalog-model.js';
+import { catFormHTML, catListHTML, catOwnHTML } from './catalog-view.js';
 import { TRUST_POST_TIMEOUT_MS, trustDialogHTML } from './trust-view.js';
 import {
   RESTART_POLL_MS, UPDATE_POLL_MS, blockedHelp, bootBefore, codeOfBody, nextUpdateInfo, pillModel, waitRestart,
@@ -210,7 +212,7 @@ let homePage = 'tasks';
    записи `GET /api/modules` (`null` — вантажиться), `notes` — примітки своїх модулів простору (3c, `[{folder, code}]`),
    збій читання і дії в польоті (id → 'check'|'disable'|'save'). `seq` відкидає відповіді, що прийшли після виходу
    зі сторінки чи після новішого запиту. */
-const connState = { spaceId: null, list: null, notes: [], failed: null, busy: new Map(), seq: 0 };
+const connState = { spaceId: null, list: null, notes: [], authoring: '', failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
 let connFocusPending = false;
 /* Питання «Вимкнути?» в картці модуля (етап Е): `{id}` або `null`. Не зберігається; скидається зміною розділу, виходом зі сторінки й зміною простору. */
@@ -4166,10 +4168,11 @@ function focusConnLanding(role) {
   const id = role ? roleCardId(role, connSpace()?.capabilities, connState.list) : null;
   const card = id ? home?.querySelector(`.mc[data-id="${CSS.escape(id)}"]`) : null;
   const empty = role && !card ? home?.querySelector(`.mc--empty[data-role="${CSS.escape(role)}"]`) : null;
-  /* Пунктирна картка не фокусна сама: фокус — на її «Додати». */
-  if (card) { card.focus(); return; }
+  /* Картка й пунктирна картка самі не фокусні (a11y): фокус — на кнопці-назві картки (`.mc-open`, а в картки без кліку — на першій її кнопці),
+     а в пунктирної — на її «Додати». */
+  if (card) { (card.querySelector('.mc-open') ?? card.querySelector('[data-cn]:not([disabled])'))?.focus(); return; }
   if (empty) { empty.querySelector('[data-cn="cat"]')?.focus(); return; }
-  (home?.querySelector('.mc[data-cn="card"], [data-cn="retry"], [data-cn="cat"]'))?.focus({ preventScroll: true });
+  (home?.querySelector('.mc-open, [data-cn="retry"], [data-cn="cat"]'))?.focus({ preventScroll: true });
 }
 
 /**
@@ -4190,7 +4193,7 @@ async function loadConn({ spaces = true } = {}) {
     /* Панель, відкрита для іншого простору, не лишається: людина свідомо перейшла (питання не треба), а запис із неї
        пішов би в простір, якого вона вже не бачить. */
     closeCnDrawer({ focus: false });
-    connState.spaceId = sp.id; connState.list = null; connState.notes = []; connState.failed = null; connState.busy.clear(); connAsk = null;
+    connState.spaceId = sp.id; connState.list = null; connState.notes = []; connState.authoring = ''; connState.failed = null; connState.busy.clear(); connAsk = null;
     paintHome();
   }
   try {
@@ -4198,6 +4201,7 @@ async function loadConn({ spaces = true } = {}) {
     if (seq !== connState.seq || !connOpen()) return;
     connState.list = Array.isArray(r?.modules) ? r.modules : [];
     connState.notes = Array.isArray(r?.notes) ? r.notes : [];
+    connState.authoring = typeof r?.deai?.authoring === 'string' ? r.deai.authoring : '';
     connState.failed = null;
   } catch (e) {
     if (seq !== connState.seq || !connOpen()) return;
@@ -4223,9 +4227,9 @@ async function loadConn({ spaces = true } = {}) {
  * «Вимкнути» ІНШОГО модуля — теж (його панелі нема). Після питання світ міг змінитись (простір, список, зайнятість) —
  * картка перечитується зі свіжого списку, і дія йде далі лише в тому ж просторі.
  */
-async function connAction(act, id, role) {
+async function connAction(act, id, role, via = '') {
   if (act === 'retry') { loadConn(); return; }
-  /* «Додати модуль» / «Додати» ролі: каталог — Task 3. Поки без дії (обробник уже на місці, `role` — підсвітити роль). */
+  /* «Додати модуль» / «Додати» ролі: каталог (`role` — підсвітити роль, з чиєї пунктирної картки відкрито). */
   if (act === 'cat') { connCatalog(role); return; }
   let e = (connState.list || []).find((x) => x.id === id);
   if (!e || connState.busy.has(id)) return;
@@ -4243,14 +4247,72 @@ async function connAction(act, id, role) {
     e = (connState.list || []).find((x) => x.id === id);
     if (!e || connState.busy.has(id)) return;
   }
-  if (act === 'enable') openCnDrawer(e, 'enable');
+  if (act === 'enable') openCnDrawer(e, 'enable', via === 'catalog' ? { role } : null);
   else if (act === 'configure') openCnDrawer(e, 'edit');
   else if (act === 'disable') askConnDisable(e);
   else if (act === 'trust' || act === 'trustinfo') connTrust(e, act);
 }
 
-/** Каталог «Додати модуль» — Task 3 етапу Е; до нього кнопки «Додати» стоять, але нічого не відкривають. */
-function connCatalog(role) {}
+/**
+ * Каталог «Додати модуль» (етап Е, `catalog-model.js` / `catalog-view.js`): діалог `askForm` у двох сторінках. Сторінка 1 — вимкнені вбудовані
+ * модулі за ролями («Підключити» або «Замінити {поточний}»), роль із пунктирної картки (`role`) підсвічена; пункт «Свій модуль» → сторінка 2
+ * в тому самому діалозі («‹» назад): кроки, поле «Що має робити модуль», живий запит агенту й «Скопіювати запит».
+ * Вибір модуля закриває діалог і відкриває наявну шухляду в режимі «Підключити» (`connAction('enable', …, 'catalog')`): «Замінити» вдруге
+ * не питає — назва кнопки й є згода (`cnConfirmReplace` лише звіряє тримачів ролі зі свіжим списком).
+ * Фокус: на першу кнопку (підсвіченої групи); Esc закриває на обох сторінках; фокус вертається на того, хто відкрив — «Додати модуль»
+ * в голові чи «Додати» пунктирної картки (`askForm` запамʼятовує відкривача; `focusBack` — запасний, коли смугу перемалювали).
+ */
+async function connCatalog(role = '') {
+  if (!connOpen() || connState.list == null) return;
+  const spaceId = connState.spaceId;
+  const sp = connSpace();
+  const groups = catalogGroups(connState.list, modName);
+  let picked = null;
+  let what = '';
+  const promptNow = () => ownPrompt({ space: sp?.name ?? '', folder: sp?.path ?? '', authoring: connState.authoring, what, lang: getLang() });
+  await askForm(() => catFormHTML(catListHTML(groups, role), 'list'), {
+    onMount(form) {
+      const x = form.querySelector('[data-a="cancel"]');       // хрестик шапки: єдиний «Скасувати», до якого `askForm` чіпляє закриття
+      const page = (kind) => {
+        form.dataset.page = kind;
+        form.querySelector('.cat-pg').innerHTML = kind === 'own' ? catOwnHTML(promptNow(), what) : catListHTML(groups, role);
+        form.querySelector('[data-cat-back]').hidden = kind !== 'own';
+        form.querySelector('#cat-h').textContent = t(kind === 'own' ? 'catOwn' : 'catTitle');
+      };
+      form.querySelector('.cat--hl')?.scrollIntoView({ block: 'nearest' });
+      form.addEventListener('click', async (ev) => {
+        const b = ev.target.closest('button');
+        if (!b || !form.contains(b) || b === x) return;
+        if (b.dataset.catPick !== undefined) { picked = b.dataset.catPick; form.requestSubmit(); return; }
+        if (b.hasAttribute('data-cat-own')) { page('own'); form.querySelector('#own-what')?.focus(); return; }
+        if (b.hasAttribute('data-cat-back')) { page('list'); form.querySelector('[data-cat-own]')?.focus(); return; }
+        if (b.dataset.a === 'cancel') { x?.click(); return; }  // «Закрити» другої сторінки — як хрестик
+        if (b.hasAttribute('data-cat-copy')) {
+          const pre = form.querySelector('#own-prompt');
+          try {
+            await navigator.clipboard.writeText(pre.textContent);
+            toast(t('ownCopied'));
+          } catch (err) {
+            getSelection()?.selectAllChildren(pre);              // буфер недоступний (не-https, відмовлені права) — виділяємо запит, щоб скопіювати руками
+          }
+        }
+      });
+      form.addEventListener('input', (ev) => {
+        if (ev.target.id !== 'own-what') return;
+        what = ev.target.value;
+        form.querySelector('#own-prompt').textContent = promptNow();
+      });
+    },
+    focusBack: () => (role ? homeNode()?.querySelector(`[data-cn="cat"][data-role="${CSS.escape(role)}"]`) : null)
+      ?? homeNode()?.querySelector('.th-head [data-cn="cat"]'),
+  });
+  if (picked === null || !connOpen() || connState.spaceId !== spaceId) return;
+  const e = (connState.list || []).find((x) => x.id === picked);
+  if (!e) return;
+  await connAction('enable', picked, role, 'catalog');
+  /* Модуль без налаштувань нічого не питає: вмикається одразу (той самий тост «Підключено: …»). */
+  if (cnDrawer?.id === picked && cnDrawer.mode === 'enable' && cnDrawer.fields.length === 0) cnSubmit();
+}
 
 /** «⋯» картки модуля: меню `.cv-ctx` (`#th-menu`) під кнопкою; повторний клік закриває. Позиція й клавіші — як у меню картки задачі. */
 function toggleConnMenu(id) {
@@ -4594,11 +4656,14 @@ function syncCnDrawer() {
   if (check) { check.disabled = !!cnDrawer.busy || dirty; check.title = dirty ? t('cnCheckSavedFirst') : ''; }
 }
 
-function openCnDrawer(e, mode) {
+function openCnDrawer(e, mode, fromCatalog = null) {
   const fields = formFields(e);
   const init = initialForm(fields);
+  /* З каталогу: кнопка там уже сказала «Замінити {тримач}» — це й є згода (`catalogHolders`: кого вона називала); закриття шухляди
+     вертає фокус на «Додати» (картки ще нема). */
   cnDrawer = { id: e.id, entry: e, mode, fields, init, form: init, busy: false, result: null, errors: {},
-    spaceId: connState.spaceId, opener: { act: mode === 'enable' ? 'enable' : 'configure', id: e.id } };
+    spaceId: connState.spaceId, opener: fromCatalog ? { act: 'cat', id: e.id, role: fromCatalog.role || '' } : { act: mode === 'enable' ? 'enable' : 'configure', id: e.id },
+    ...(fromCatalog ? { catalogHolders: roleHolders(e, connState.list) } : {}) };
   paintCnDrawer();
   const el = cnDrawerNode();
   (el.querySelector('[data-cn-field]') ?? el.querySelector('[data-cn-dr="submit"]'))?.focus({ preventScroll: true });
@@ -4614,6 +4679,11 @@ function closeCnDrawer({ focus = true } = {}) {
   if (!focus || !op) return;
   const home = homeNode();
   const id = CSS.escape(op.id);
+  if (op.act === 'cat') {
+    (home?.querySelector(`[data-cn="cat"][data-role="${CSS.escape(op.role || '')}"]`) ?? home?.querySelector('.th-head [data-cn="cat"]')
+      ?? home?.querySelector(`[data-cn][data-id="${id}"]`))?.focus({ preventScroll: true });
+    return;
+  }
   (home?.querySelector(`[data-cn="${op.act}"][data-id="${id}"]`) ?? home?.querySelector(`[data-cn][data-id="${id}"]`))
     ?.focus({ preventScroll: true });
 }
@@ -4706,7 +4776,9 @@ async function cnConfirmReplace(mine) {
     for (let round = 0; ; round += 1) {
       const shared = (mine.entry.roles || []).filter((r) => holders.some((h) => (h.roles || []).includes(r)));
       const q = t('cnReplaceAsk', roleTitle(shared[0]), holders.map(modName).join(', '), modName(mine.entry));
-      if (!(await askYesNo(q, { yes: t('cnReplace') }))) return null;
+      /* Каталог: першого разу не питаємо, якщо тримачі ті самі, що назвала кнопка «Замінити {…}»; змінились — питаємо як завжди. */
+      const named = round === 0 && mine.catalogHolders && sameHolders(holders, mine.catalogHolders);
+      if (!named && !(await askYesNo(q, { yes: t('cnReplace') }))) return null;
       if (cnDrawer !== mine) return null;
       let list;
       try { list = (await formApi(`/api/modules?space=${encodeURIComponent(mine.spaceId)}`))?.modules; }
@@ -4893,18 +4965,14 @@ function menuKeys(ev, a) {
   return true;
 }
 
-/** Клавіатура розділу «Модулі»: меню «⋯» (як у картки задачі), Esc знімає питання «Вимкнути?» (фокус — на «⋯»), Enter/Пробіл
- *  на самій картці роблять те, що клік по ній. Палітра, діалог питання й IME-композиція клавіш не віддають. */
+/** Клавіатура розділу «Модулі»: меню «⋯» (як у картки задачі), Esc знімає питання «Вимкнути?» (фокус — на «⋯»). Enter/Пробіл на
+ *  назві картки — рідне натискання кнопки `.mc-open` (власного обробника нема). Палітра, діалог питання й IME-композиція клавіш не віддають. */
 document.addEventListener('keydown', (ev) => {
   if (!homeOpen || homePage !== 'conn' || ev.isComposing || paletteOverlay || askUp()) return;
   if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
   const a = document.activeElement;
   if (menuKeys(ev, a)) return;
   if (ev.key === 'Escape' && connAsk) { ev.preventDefault(); cancelConnAsk(); return; }
-  if ((ev.key === 'Enter' || ev.key === ' ') && a && a.classList?.contains('mc') && a.dataset.cn === 'card') {
-    ev.preventDefault();
-    connAction('card', a.dataset.id);
-  }
 });
 
 /** Клавіатура екрана. `/` — у пошук; в пошуку: Esc чистить, потім знімає фокус,

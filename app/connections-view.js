@@ -35,7 +35,7 @@ import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { navItems, readSec, trustWaitingOf } from "./settings-model.js";
 import { confirmHTML } from "./inline-confirm.js";
-import { BADGE_CLASS, cardModel, emptyRoles, gridEntries } from "./modules-grid.js";
+import { BADGE_CLASS, cardModel, emptyRoles, failedRole, gridEntries, sentence } from "./modules-grid.js";
 import { spaceColorToken } from "./spaces-model.js";
 import {
   DETAIL_MAX, builtinText, canErase, cardView, disableConsequences, isOwn, noteView, roleIcon, roleKeys, spaceJsonBad, trustLine, whyOf,
@@ -120,20 +120,25 @@ export function mcardHTML(e, busy, ask, space) {
   const name = modName(e);
   const ic = ico(isOwn(e) ? "puzzle" : roleIcon(e.roles?.[0]), 18);
   const roles = rolesLine(e);
-  const top = (more) => `<div class="mc-top"><span class="mc-ic">${ic}</span><div class="mc-name">`
-    + `<b>${esc(name)}${ownTagHTML(e, "mc-tag")}</b>${roles ? `<span>${esc(roles)}</span>` : ""}</div>${more}</div>`;
+  /* Назва картки — справжня кнопка (`.mc-open`), яку CSS розтягує на всю картку (`::after`): картка клікається мишею, а для
+     клавіатури й читача це ОДНА кнопка, а не `role=button` із вкладеними кнопками (⋯, дія). Картка без дії на клік — звичайний текст. */
+  const top = (more, open) => `<div class="mc-top"><span class="mc-ic">${ic}</span><div class="mc-name">`
+    + `<b>${open ? `<button type="button" class="mc-open" data-cn="card" data-id="${id}">${esc(name)}</button>` : esc(name)}${ownTagHTML(e, "mc-tag")}</b>`
+    + `${roles ? `<span>${esc(roles)}</span>` : ""}</div>${more}</div>`;
   if (ask && ask.id === e.id) {
-    return `<div class="mc mc--ask" role="group" aria-label="${esc(name)}" data-id="${id}">${top("")}${confirmHTML({
+    return `<div class="mc mc--ask" role="group" aria-label="${esc(name)}" data-id="${id}">${top("", false)}${confirmHTML({
       title: askTitle(e, space), no: t("askCancel"), yes: t("cnDisable"),
       noAttrs: `data-cn="askno" data-id="${id}"`, yesAttrs: `data-cn="askyes" data-id="${id}"`,
     })}</div>`;
   }
-  const m = cardModel(e);
+  const failed = failedRole(e, space?.capabilities) !== "";
+  const m = cardModel(e, failed);
   const b = busy?.get?.(e.id) ?? null;
   const more = `<button type="button" class="mc-more" data-cn="menu" data-id="${id}" aria-haspopup="menu" aria-expanded="false"`
     + ` aria-label="${esc(t("mcMore", name))}" title="${esc(t("mcMore", name))}">${ico("dots")}</button>`;
   const w = cardView(e).why ? whyOf(e) : null;   // причина — лише коли її показує й `cardView` (вимкнений зі старою помилкою — без неї)
-  const line = w ? `${esc(t(w.key))}${w.detail ? ` ${esc(w.detail)}` : ""}` : esc(trustLineText(e));
+  /* Збій ролі з `capabilities.errors` (раніше — рядок «Зараз»): причина картки, коли власної (`whyOf`) нема. */
+  const line = w ? `${esc(t(w.key))}${w.detail ? ` ${esc(w.detail)}` : ""}` : esc(failed ? t("mcRoleError") : trustLineText(e));
   const why = line ? `<p class="mc-why">${line}</p>` : "";
   const bdgKey = BADGES[m.badge][0];
   const bdg = `<span class="bdg bdg--${BADGE_CLASS[m.badge]}">${m.badge === "untrusted" ? ico("lock", 13) : ""}${esc(t(bdgKey))}</span>`;
@@ -144,14 +149,15 @@ export function mcardHTML(e, busy, ask, space) {
     act = `<button type="button" class="ctl ctl--out" data-cn="${m.action}" data-id="${id}"${b ? " disabled" : ""}>${ico(icon)}${esc(label)}</button>`;
   }
   /* Дія в польоті (`busy`): картка не відповідає на клік (`connAction`), і `aria-busy` каже це читачеві й тестам. */
-  return `<div class="mc" role="button" tabindex="0" data-cn="card" data-id="${id}" aria-label="${esc(name)}"${b ? ' aria-busy="true"' : ""}>${top(more)}`
+  return `<div class="mc" data-id="${id}"${b ? ' aria-busy="true"' : ""}>${top(more, m.click !== null)}`
     + `${why}<div class="mc-foot">${bdg}${act}</div></div>`;
 }
 
-/** Пунктирна картка ролі без модуля: іконка, назва ролі, наслідок («none» ролі), «Додати» (каталог — Task 3). */
+/** Пунктирна картка ролі без модуля: іконка, назва ролі, наслідок («none» ролі) реченням — або збій ролі (`r.error`), «Додати» (каталог). */
 export function emptyCardHTML(r) {
+  const line = r.error ? t("mcRoleError") : sentence(t(r.noneKey));
   return `<div class="mc mc--empty" data-role="${esc(r.role)}"><div class="mc-top"><span class="mc-ic">${ico(r.icon, 18)}</span>`
-    + `<div class="mc-name"><b>${esc(t(r.titleKey))}</b><span>${esc(t(r.noneKey))}</span></div></div>`
+    + `<div class="mc-name"><b>${esc(t(r.titleKey))}</b><span>${esc(line)}</span></div></div>`
     + `<div class="mc-foot"><span></span><button type="button" class="ctl ctl--out" data-cn="cat" data-role="${esc(r.role)}">${ico("plus")}${esc(t("mcAddRole"))}</button></div></div>`;
 }
 
@@ -169,7 +175,7 @@ export function connMenuHTML(e) {
 /** Сітка розділу «Модулі»: картки (увімкнені, свої, «Не встановлено») + «Без модуля · N». */
 function gridHTML(v) {
   const cards = gridEntries(v.list).map((e) => mcardHTML(e, v.busy, v.ask, v.space)).join("");
-  const empty = emptyRoles(v.list);
+  const empty = emptyRoles(v.list, v.space?.capabilities);
   return `${cards ? `<div class="mg">${cards}</div>` : ""}`
     + (empty.length ? `<h2 class="sub">${esc(t("mcEmptyH", empty.length))}</h2><div class="mg">${empty.map(emptyCardHTML).join("")}</div>` : "");
 }

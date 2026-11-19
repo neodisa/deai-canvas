@@ -467,8 +467,16 @@ class Listing(World):
 
     def test_the_listing_is_alphabetical_and_has_nothing_else(self):
         st, body = self.get('/api/modules')
-        self.assertEqual((st, list(body)), (200, ['modules']))
+        self.assertEqual((st, list(body)), (200, ['modules', 'deai']))
         self.assertEqual([m['id'] for m in body['modules']], BUILTIN_IDS)
+
+    def test_the_listing_names_the_authoring_guide_of_this_install(self):
+        st, body = self.get('/api/modules')
+        path = body['deai']['authoring']
+        self.assertTrue(os.path.isabs(path), path)
+        self.assertTrue(path.endswith(os.path.join('docs', 'modules', 'authoring.md')), path)
+        self.assertTrue(os.path.isfile(path), path)
+        self.assertEqual(os.path.realpath(path), os.path.realpath(os.path.join(ROOT, 'docs', 'modules', 'authoring.md')))
 
     def test_a_secret_is_never_listed_only_whether_it_is_set(self):
         st, body = self.post('/api/module-enable', {'space': 'on', 'id': 'static-publish',

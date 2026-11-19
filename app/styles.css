@@ -1917,26 +1917,31 @@ body:not(.home-open) .cn-drawer{display:none}
 .nav-i .set-dotb{margin-left:auto;width:7px;height:7px;border-radius:50%;background:var(--open)}
 .set-main{min-width:0}
 .set-in{padding:22px 28px 60px}
-/* Розділ «Модулі» (етап Е): сітка карток із однією дією. Картка — `role=button` (клік — шухляда чи діалог довіри); «⋯» — меню `.cv-ctx`
+/* Розділ «Модулі» (етап Е): сітка карток із однією дією. Клік по картці — це кнопка-назва `.mc-open`, розтягнута на картку (`::after`, шухляда
+   чи діалог довіри); «⋯» і кнопка дії стоять над нею (`z-index`) і лишаються клікабельними; «⋯» — меню `.cv-ctx`
    (`#th-menu`, як у картки задачі); питання «Вимкнути?» стоїть у самій картці (`.mc--ask` + `.cfm`). Пунктирна картка — роль без модуля.
    Червоний — лише крапка стану й причина помилки (текст `--bad` дає AA лише на `--s1`, тож причину на `--s2` не фарбуємо). */
 .mg{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(250px,100%),1fr));gap:12px}
 h2.sub{margin:26px 0 10px;font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--dim)}
 .mc{position:relative;display:flex;flex-direction:column;gap:12px;min-width:0;padding:12px;border:1px solid var(--line);
-  border-radius:var(--r-lg);background:var(--s2);cursor:pointer}
+  border-radius:var(--r-lg);background:var(--s2)}
 .mc:hover{border-color:var(--line2)}
-.mc:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+.mc-open{margin:0;padding:0;border:0;background:none;font:inherit;font-weight:inherit;color:inherit;text-align:left;cursor:pointer;overflow-wrap:anywhere}
+.mc-open::after{content:"";position:absolute;inset:0;border-radius:var(--r-lg)}
+.mc-open:focus-visible{outline:none}
+.mc-open:focus-visible::after{outline:2px solid var(--sel);outline-offset:2px}
 .mc-top{display:flex;align-items:flex-start;gap:10px;min-width:0}
 .mc-ic{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:var(--r);background:var(--s3);color:var(--hi)}
 .mc-name{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
 .mc-name b{font-weight:600;color:var(--hi);overflow-wrap:anywhere}
 .mc-name span{font-size:12px;color:var(--dim);overflow-wrap:anywhere}
 .mc-name b .mc-tag{margin-left:6px;padding:0 5px;border-radius:4px;font-size:11px;font-weight:500;color:var(--mid);background:var(--s4)}
-.mc-more{display:grid;place-items:center;flex:none;width:var(--h-sm);height:var(--h-sm);margin:-2px -4px 0 0;border:0;
+.mc-more{position:relative;z-index:1;display:grid;place-items:center;flex:none;width:var(--h-sm);height:var(--h-sm);margin:-2px -4px 0 0;border:0;
   border-radius:var(--r-sm);background:none;color:var(--mid);cursor:pointer}
 .mc-more:hover,.mc-more[aria-expanded="true"]{background:var(--s3);color:var(--hi)}
 .mc-more:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
 .mc-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:var(--h-sm);margin-top:auto}
+.mc-foot .ctl{position:relative;z-index:1}
 .mc-why{margin:-4px 0 0 44px;font-size:12px;line-height:1.4;color:var(--mid);overflow-wrap:anywhere}
 .bdg{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--mid);white-space:nowrap}
 .bdg::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--lo)}
@@ -1949,12 +1954,37 @@ h2.sub{margin:26px 0 10px;font-size:12px;font-weight:600;letter-spacing:.05em;te
 .bdg--trust::before{display:none}
 .bdg--trust .ico{color:var(--open)}
 .bdg--off::before{background:none;border:1.5px solid var(--lo)}
-.mc--empty{border-style:dashed;border-color:var(--line2);background:none;cursor:default}
+.mc--empty{border-style:dashed;border-color:var(--line2);background:none}
 .mc--empty:hover{border-color:var(--line2)}
 .mc--empty .mc-ic{background:none;border:1px dashed var(--line2);color:var(--dim)}
 .mc--empty .mc-name b{color:var(--mid);font-weight:500}
 .mc--ask{cursor:default;border-color:color-mix(in srgb,var(--bad) 55%,var(--line))}
 .mc--ask .cfm{margin-top:auto}
+/* Діалог «Додати модуль» (`askForm`, `catalog-view.js`): групи за ролями, рядок `.cat` — іконка, назва з описом, кнопка. Друга сторінка
+   «Свій модуль» — кроки, поле, запит у блоці коду. Підсвічена група (`.cat--hl`) — роль, з чиєї пунктирної картки відкрито. */
+.cv-ask--form:has(.cat-d){width:600px}
+.cat-d{gap:0}
+.cat-pg{display:flex;flex-direction:column;min-width:0}
+.cat-h{display:flex;align-items:center;gap:8px;margin:-4px -6px 8px 0}
+.cat-h h2{flex:1;min-width:0}
+.cat-h [hidden]{display:none}
+.cat-b{display:flex;flex-direction:column;gap:2px;max-height:58vh;overflow-y:auto;margin:0 -8px;padding:0 8px}
+.cat-b--pad{gap:14px;margin:0;padding:0}
+.cat-f{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.cat-g{margin:10px 0 4px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.cat-g:first-child{margin-top:2px}
+.cat{display:flex;align-items:center;gap:12px;padding:8px;border-radius:var(--r);min-width:0}
+.cat:hover{background:var(--s3)}
+.cat .mc-name span{font-size:12px}
+.cat--hl{background:color-mix(in srgb,var(--sel) 10%,transparent)}
+.cat--own{margin-top:8px;border:1px dashed var(--line2)}
+.cat--own .mc-ic{background:none;border:1px dashed var(--line2);color:var(--mid)}
+.cat .ctl{flex:none}
+.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;color:var(--mid)}
+.steps b{color:var(--hi);font-weight:500}
+.ta{min-height:64px;padding:8px 10px;border:1px solid var(--line2);border-radius:var(--r-sm);background:var(--s1);color:var(--hi);font:inherit;outline:0;resize:vertical;width:100%;box-sizing:border-box}
+.ta:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.prompt{margin:0;padding:10px 12px;border-radius:var(--r-sm);background:var(--s1);border:1px solid var(--line);font:12px/1.55 var(--mono);color:var(--mid);white-space:pre-wrap;overflow-wrap:anywhere}
 @media (max-width:759px){
   .set{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
   .set-nav{z-index:1;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px;gap:4px;background:var(--s1)}

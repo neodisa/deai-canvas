@@ -5467,8 +5467,9 @@ def module_list(space):
 
 def modules_payload(space):
     """Тіло `GET /api/modules`: `{modules}` і — ЛИШЕ коли є — `notes` своїх модулів простору (`[{folder, code}]`: теку
-    пропущено чи не прочитано; відповідь простору без своїх модулів побайтно та сама, що до 3c)."""
-    out = {'modules': module_list(space)}
+    пропущено чи не прочитано) і `deai.authoring` — АБСОЛЮТНИЙ шлях до `docs/modules/authoring.md` цієї установки (від кореня
+    репо, як `bin/`): діалог «Свій модуль» кладе його в запит агенту."""
+    out = {'modules': module_list(space), 'deai': {'authoring': os.path.join(ROOT, 'docs', 'modules', 'authoring.md')}}
     notes = deai_modules.own_notes(space)
     if notes:
         out['notes'] = notes

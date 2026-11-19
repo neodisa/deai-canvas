@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BADGE_CLASS, cardModel, emptyRoles, gridEntries } from "../app/modules-grid.js";
+import { BADGE_CLASS, cardModel, emptyRoles, failedRole, gridEntries, sentence } from "../app/modules-grid.js";
 
 const bi = (over = {}) => ({ id: "static-publish", name: "Static", roles: ["publish"], builtin: true, enabled: true, implicit: false,
   status: "ok", settings: [{ key: "folder", type: "path" }], ...over });
@@ -99,7 +99,7 @@ test("gridEntries: не масив і сміття — порожньо", () => 
 test("emptyRoles: роль із вимкненим вбудованим — порожня; решта ролей — у порядку ROLE_ORDER", () => {
   const r = emptyRoles([bi({ enabled: false })]);
   assert.deepEqual(r.map((x) => x.role), ["publish", "comments", "vcs", "dashboard", "tracker", "notify", "tokens"]);
-  assert.deepEqual(r[0], { role: "publish", icon: "up", titleKey: "cnRolePublish", noneKey: "cnNonePublish" });
+  assert.deepEqual(r[0], { role: "publish", icon: "up", titleKey: "cnRolePublish", noneKey: "cnNonePublish", error: "" });
 });
 test("emptyRoles: роль із модулем у сітці не порожня; свій вимкнений теж покриває", () => {
   const r = emptyRoles([bi(), own({ roles: ["vcs"] })]);
@@ -114,4 +114,44 @@ test("emptyRoles: «Інше» й чужі ролі ніколи", () => {
 test("emptyRoles: порожній список — усі сім", () => {
   assert.equal(emptyRoles([]).length, 7);
   assert.equal(emptyRoles(undefined).length, 7);
+});
+
+test("emptyRoles: збій ролі з capabilities.errors — у `error` (код); без збою й без capabilities — порожньо", () => {
+  const r = emptyRoles([], { errors: { vcs: "module-error" } });
+  assert.equal(r.find((x) => x.role === "vcs").error, "module-error");
+  assert.equal(r.find((x) => x.role === "publish").error, "");
+  assert.ok(emptyRoles([], null).every((x) => x.error === ""));
+});
+
+test("failedRole: роль, яку ТРИМАЄ увімкнений модуль і чий збій записано; вимкнений, missing, чужа роль — порожньо", () => {
+  const caps = { errors: { publish: "module-error" } };
+  assert.equal(failedRole(bi(), caps), "publish");
+  assert.equal(failedRole(bi({ enabled: false }), caps), "");
+  assert.equal(failedRole(bi({ status: "missing" }), caps), "");
+  assert.equal(failedRole(bi({ roles: ["vcs"] }), caps), "");
+  assert.equal(failedRole(bi(), { errors: {} }), "");
+  assert.equal(failedRole(bi(), undefined), "");
+  assert.equal(failedRole(null, caps), "");
+});
+
+test("cardModel: збій ролі (roleFailed) — «Помилка» з дією «Налаштувати» замість ok/unchecked; на вимкнений і зламаний не діє", () => {
+  const m = cardModel(bi({ status: "unchecked" }), true);
+  assert.deepEqual([m.badge, m.action, m.click], ["error", "configure", "configure"]);
+  assert.ok(!acts(m).includes("configure"), "дія вже на картці — у «⋯» її нема");
+  assert.ok(acts(m).includes("check") && acts(m).includes("disable"), "решта — у «⋯»");
+  assert.equal(cardModel(bi({ enabled: false, status: "unchecked" }), true).badge, "off");
+  assert.equal(cardModel(bi(), false).badge, "ok", "без прапорця — як було");
+  assert.equal(cardModel(bi({ status: "missing" }), true).badge, "missing");
+});
+
+test("sentence: перша літера велика, у кінці крапка; готове речення не чіпає; порожнє — порожньо", () => {
+  assert.equal(sentence("коментарі лише локальні — для вас і агента"), "Коментарі лише локальні — для вас і агента.");
+  assert.equal(sentence("comments are local only — for you and the agent"), "Comments are local only — for you and the agent.");
+  assert.equal(sentence("Без трекера — статусів задач нема."), "Без трекера — статусів задач нема.");
+  assert.equal(sentence("інспектор звіряє без токенів простору"), "Інспектор звіряє без токенів простору.");
+  assert.equal(sentence("без дашборда — вкладки «Команда» нема"), "Без дашборда — вкладки «Команда» нема.");
+  assert.equal(sentence("ready!"), "Ready!");
+  assert.equal(sentence("  "), "");
+  assert.equal(sentence(undefined), "");
+  assert.equal(sentence("їжак"), "Їжак.", "кирилична «ї» — з великої, не розбита на сурогати");
 });

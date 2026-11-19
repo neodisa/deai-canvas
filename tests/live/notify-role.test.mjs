@@ -26,7 +26,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { askNo, clickEnable, guardRealDeai, goTasks, menuDisable, postJson, stop, waitBadge } from "./_spaces-kit.mjs";
+import { askNo, pickFromCatalog, guardRealDeai, goTasks, menuDisable, postJson, stop, waitBadge } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 import { hermeticLiga } from "./_liga-supabase.mjs";
 
@@ -224,7 +224,7 @@ test("4: «Підключення» — роль «Сповіщення Teams» 
   assert.match(await page.locator('.mc--empty[data-role="notify"]').textContent(), /Сповіщення Teams/);
   assert.equal(await page.locator('.mc[data-id="fake-notify"], .mc[data-id="supabase-teams"]').count(), 0, "вимкнені модулі ролі — не в сітці (лише в каталозі)");
 
-  await clickEnable(page, "fake-notify");
+  await pickFromCatalog(page, "fake-notify");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="state_file"]');
   await page.fill('#cn-drawer [data-cn-field="state_file"]', w.stateFile);
   await page.click('#cn-drawer [data-cn-dr="submit"]');
