@@ -22,9 +22,9 @@ const noComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<![:'"`]
 const fnc = (name) => noComments(fn(name));
 
 test("дії смуги: conn веде на сторінку, логотип — завжди на «Задачі»", () => {
-  assert.match(src, /\n  conn: \(\) => enterConnections\(\),/);
+  assert.match(src, /\n  conn: \(\) => \{ setConnSec\('mods'\); enterConnections\(\); \},/);
   assert.match(src, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
-  assert.match(fn("wireHome"), /case 'conn': enterConnections\(\); break;/);
+  assert.match(fn("wireHome"), /case 'conn': setConnSec\('mods'\); enterConnections\(\); break;/);
 });
 
 test("логотип і «назад до задачі» не гублять брудну панель мовчки: через dismissCnDrawer, а без панелі — синхронно, як було", () => {
@@ -470,4 +470,14 @@ test("3c (ревʼю Task 6): коментарі про види зайнято�
   assert.deepEqual(declared.sort(), ["check", "disable", "save"], "коментар біля connState");
   assert.deepEqual(kinds(viewSrc, /busy {3}— Map id → ((?:'\w+'\|?)+):/).sort(), declared.sort(), "коментар у connections-view.js — той самий перелік");
   for (const k of declared) assert.match(src, new RegExp(`connState\\.busy\\.set\\([^)]*'${k}'\\)`), `код ніде не ставить busy '${k}'`);
+});
+
+test("етап Е: розділ «Налаштувань» — памʼятається; ⌘K, фішка, кнопка «Задач» і вхід із роллю ведуть у «Модулі», шестерня — ні", () => {
+  assert.match(src, /let connSec = \(\(\) => \{ try \{ return readSec\(localStorage\.getItem\(SEC_KEY\)\); \}/);
+  assert.match(fnc("setConnSec"), /connSec = readSec\(sec\);\s*try \{ localStorage\.setItem\(SEC_KEY, connSec\); \} catch/);
+  assert.match(fnc("enterHome"), /if \(connFocusRole\) setConnSec\('mods'\);\s*paintHome\(\);\s*loadConn/, "вхід із роллю → «Модулі»");
+  assert.match(fnc("wireHome"), /case 'csec': if \(readSec\(v\) !== connSec\) \{ setConnSec\(v\); paintHome\(\); \} break;/);
+  const settings = /\n  settings: async \(\) => \{[\s\S]*?\n  \},/.exec(src)[0];
+  assert.doesNotMatch(settings, /setConnSec/, "шестерня веде в ОСТАННІЙ розділ, не скидає його");
+  assert.match(src, /sec: connSec \}\);/, "connView несе розділ у розмітку");
 });

@@ -486,7 +486,7 @@ test("7: простір перемкнули з відкритою панелл�
   const atelierBefore = readFileSync(path.join(atelier.path, "space.json"), "utf8");
 
   await openConnections(page, 2);
-  assert.match(await page.locator("#cn-title").textContent(), /Налаштування · Studio/);
+  assert.match(await page.locator(".set-nav h6").first().textContent(), /Простір · Studio/);
   assert.match(await badge(page, "memo-publish"), /cn-badge--off/, "у Studio memo-publish вимкнено");
   await page.click('[data-cn="enable"][data-id="memo-publish"]');
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
@@ -494,12 +494,11 @@ test("7: простір перемкнули з відкритою панелл�
 
   await openSpaceDd(page, 2);
   await page.click('.dd--spaces .dd-item[data-val="atelier"]');
-  await page.waitForFunction(() => /Atelier/.test(document.querySelector("#cn-title")?.textContent ?? ""), null, { timeout: 15000 });
+  await page.waitForFunction(() => /Atelier/.test(document.querySelector(".set-nav h6")?.textContent ?? ""), null, { timeout: 15000 });
   await page.waitForSelector('.cn-card[data-id="memo-publish"] [data-cn="configure"]', { timeout: 15000 });
   assert.equal(await page.locator("#cn-drawer").isHidden(), true, "панель з чужого простору не лишилась");
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "перехід свідомий — питання «Відкинути?» нема");
-  assert.match(await page.locator("#cn-title").textContent(), /Налаштування · Atelier/);
-  assert.ok((await page.locator(".cn-lead").textContent()).includes(atelier.path), "теки в заголовку — нового простору");
+  assert.match(await page.locator(".set-nav h6").first().textContent(), /Простір · Atelier/, "навігація — нового простору");
   assert.match(await badge(page, "memo-publish"), /cn-badge--unchecked/, "картки — нового простору (memo-publish там увімкнено)");
   assert.match(await page.locator(".cn-sec").first().textContent(), /Зараз: Memo publish \(test\)/);
   assert.equal(readFileSync(path.join(atelier.path, "space.json"), "utf8"), atelierBefore, "у новий простір нічого не записано");

@@ -1834,6 +1834,7 @@ test("кнопка «Підключення» на «Задачах», що ще
     homeOpen: true, homePage: "tasks", homeData: { loading: true, space: PLAIN },
     wiz: { click: () => { throw new Error("майстер не мав би бути"); } },
     homeEdit: { ren: null }, document: { getElementById: () => null }, homeEatUntil: 0, homeDownInRen: false,
+    setConnSec: () => {},   // етап Е: кнопка «Налаштування» на «Задачах» ставить розділ «Модулі»
   });
   load(env, { funcs: ["enterConnections", "loadSpaces", "wireHome"] }).wireHome({ addEventListener: (type, fn) => { handlers[type] = fn; } });
   const btn = { dataset: { th: "conn" } };

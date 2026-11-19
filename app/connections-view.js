@@ -31,6 +31,8 @@
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
+import { navItems, readSec, trustWaitingOf } from "./settings-model.js";
+import { spaceColorToken } from "./spaces-model.js";
 import {
   DETAIL_MAX, builtinText, canErase, cardView, groupModules, isOwn, noteView, providerLine, roleIcon, roleKeys, spaceJsonBad, trustLine, whyOf,
 } from "./connections-model.js";
@@ -161,13 +163,32 @@ function notesHTML(notes) {
     + `<span>${esc(t(n.key, n.folder))}</span></li>`).join("")}</ul>`;
 }
 
-/** Сторінка «Підключення». Простору нема — порожньо (входів тоді нема, `app.js` сюди не пускає). */
+/** Ліва навігація «Налаштувань»: групи «Простір · {імʼя}» і «Застосунок»; поточний розділ — `aria-current`. */
+function setNavHTML(sp, sec, list) {
+  const items = navItems({ trustWaiting: trustWaitingOf(list) });
+  const dot = `<span class="space-dot" style="background:var(--${spaceColorToken(sp.color)})"></span>`;
+  const head = { space: `<h6>${dot}${esc(t("setNavSpace", sp.name))}</h6>`, app: `<h6>${esc(t("setNavApp"))}</h6>` };
+  let out = "";
+  let group = "";
+  for (const it of items) {
+    if (it.group !== group) { group = it.group; out += head[group]; }
+    const cur = it.id === sec ? ' aria-current="page"' : "";
+    const bdg = !it.badge ? ""
+      : it.badge.kind === "count" ? `<span class="set-cnt" title="${esc(t("setTrustWaiting"))}">${it.badge.n}</span>`
+      : `<span class="set-dotb" title="${esc(t("setAgentsOutdated"))}"></span>`;
+    out += `<button class="nav-i" data-th="csec" data-v="${it.id}"${cur}>${ico(it.icon)}<span>${esc(t(it.labelKey))}</span>${bdg}</button>`;
+  }
+  return `<nav class="set-nav" aria-label="${esc(t("settings"))}">${out}</nav>`;
+}
+
+/** Сторінка «Налаштування»: ліва навігація + вміст розділу `v.sec`. Простору нема — порожньо (входів тоді нема, `app.js` сюди не пускає). */
 export function connPageHTML(v) {
   const sp = v?.space;
   if (!sp) return "";
-  const head = `<h1 class="th-h" id="cn-title">${esc(t("cnTitleIn", sp.name))}</h1>
-    <p class="cn-lead">${esc(t("cnLead"))} ${esc(t("cnLeadWhere", sp.path || ""))}</p>`;
-  const wrap = (inner) => `<div class="th-in cn-in">${head}${inner}</div>`;
+  const sec = readSec(v.sec);
+  const head = `<h1 class="th-h" id="cn-title">${esc(t(navItems().find((x) => x.id === sec).labelKey))}</h1>`;
+  const wrap = (inner) => `<div class="set">${setNavHTML(sp, sec, v.list)}<div class="set-main"><div class="set-in cn-in">${head}${inner}</div></div></div>`;
+  if (sec !== "mods") return wrap("");
   /* space.json не читається — двома шляхами: сервер сказав `capabilities.error === "space-json-unreadable"` або відмовив
      списку модулів (`409 space-json-unreadable`). В обох випадках решта `capabilities` нічого не варта, картки не малюємо.
      Збій МОДУЛЯ ролі (інший код `error`) сюди не потрапляє: він іде в рядок «Зараз» своєї ролі, решта карток живі (r15-1). */

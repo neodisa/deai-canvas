@@ -1900,3 +1900,27 @@ body:not(.home-open) .cn-drawer{display:none}
 .cmt-aud--project{color:var(--open)}
 .cmt-badge{font-size:10px;padding:0 6px;border-radius:999px;border:1px solid var(--line2);color:var(--dim)}
 .cmt-h--new{color:var(--open)}
+/* «Налаштування» (етап Е): ліва навігація 224px + вміст. Скрол лишається на `#tasks-home` (його перемальовка зберігає `scrollTop`), тому
+   навігація липка, а не окремий скрол-контейнер. */
+.set{display:grid;grid-template-columns:224px minmax(0,1fr);min-height:100%}
+.set-nav{position:sticky;top:0;align-self:start;display:flex;flex-direction:column;gap:2px;padding:18px 10px;border-right:1px solid var(--line)}
+.set-nav h6{display:flex;align-items:center;gap:6px;margin:14px 10px 6px;font-size:11px;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim)}
+.set-nav h6:first-child{margin-top:0}
+.set-nav h6 .space-dot{width:7px;height:7px}
+.nav-i{display:flex;align-items:center;gap:9px;height:var(--h-ctl);padding:0 10px;border:0;border-radius:var(--r-sm);background:none;
+  color:var(--mid);font:inherit;cursor:pointer;text-align:left}
+.nav-i:hover{background:var(--s2);color:var(--hi)}
+.nav-i:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
+.nav-i[aria-current="page"]{background:var(--s3);color:var(--hi);font-weight:500}
+.nav-i .set-cnt{margin-left:auto;font-size:11px;font-weight:600;color:var(--open)}
+.nav-i .set-dotb{margin-left:auto;width:7px;height:7px;border-radius:50%;background:var(--open)}
+.set-main{min-width:0}
+.set-in{padding:22px 28px 60px}
+@media (max-width:759px){
+  .set{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+  .set-nav{z-index:1;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px;gap:4px;background:var(--s1)}
+  .set-nav h6{display:none}
+  .nav-i{flex:none}
+  .set-in{padding:18px 16px 60px}
+}

@@ -43,8 +43,8 @@ const btnText = (h, act) => {
 
 test("сторінка: заголовок, тека, секції в порядку ролей, рядок «Зараз», агент з id простору", () => {
   const h = connPageHTML(view());
-  assert.match(h, /Налаштування · Studio/);
-  assert.match(h, /\/u\/work\/studio\/space\.json/);
+  assert.match(h, /<h6>[^]*?Простір · Studio<\/h6>/, "назва простору — у групі лівої навігації");
+  assert.match(h, /<h1 class="th-h" id="cn-title">Модулі<\/h1>/);
   const order = ["Публікація", "Командні коментарі", "Токени дизайн-системи"].map((s) => h.indexOf(`>${s}<`));
   assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], String(order));
   assert.match(h, /Зараз: Публікація в теку/);
@@ -361,14 +361,14 @@ test("сторінка: ворожі назва, тека й id простору
   for (const h of pages) {
     assert.doesNotMatch(h, /<q>/);
     assert.ok(!h.includes('"N') && !h.includes('"P'), "лапка з даних не виходить з атрибута чи тексту");
-    assert.match(h, /&lt;q&gt;&quot;N/, "назва простору в заголовку");
-    assert.match(h, /&lt;q&gt;&quot;P/, "тека в тексті");
+    assert.match(h, /&lt;q&gt;&quot;N/, "назва простору в навігації");
   }
   const page = pages[0];
   /* Блок агента: у запиті — `encodeURIComponent` (він і є екрануванням), у прикладі тіла — `esc`. */
   assert.match(page, /GET \/api\/modules\?space=%3Cq%3E%22I</);
   assert.match(page, /\{space: "&lt;q&gt;&quot;I", id, settings, secrets, replace\}/);
-  assert.match(pages[2], /&lt;q&gt;&quot;P[^<]*space\.json/, "у помилці space.json теж");
+  /* Лід зі шляхом теки прибрано зі сторінки (етап Е): шлях лишається лише в помилці нечитабельного space.json (обидва шляхи до неї). */
+  for (const i of [2, 3]) assert.match(pages[i], /space\.json[^<]*&lt;q&gt;&quot;P/, `у помилці space.json (сторінка ${i}) тека — текстом`);
 });
 
 test("панель: ворожі ключ, підпис, значення варіанта й тип — лише текстом, у всіх місцях виводу", () => {
@@ -659,4 +659,48 @@ test("вердикт «isolated» (4d-3b): перевірку спільного
   assert.deepEqual(verdictText({ ok: false, error: "isolated", detail: "x" }), { key: "cnErrIsolated", detail: "x" });
   assert.equal(refusalView({ code: "isolated" }).key, "cnErrIsolated");
   for (const lang of ["uk", "en"]) assert.ok(typeof DICT[lang].cnErrIsolated === "string" && DICT[lang].cnErrIsolated, lang);
+});
+
+/* ── «Налаштування»: каркас з лівою навігацією (етап Е, Task 1) ── */
+const navBtn = (h, id) => new RegExp(`<button class="nav-i" data-th="csec" data-v="${id}"[^>]*>([\\s\\S]*?)</button>`).exec(h);
+
+test("каркас: шість кнопок навігації, дві групи, aria-current лише на поточному розділі", () => {
+  const h = connPageHTML(view({ sec: "mods" }));
+  assert.equal((h.match(/class="nav-i"/g) || []).length, 6);
+  assert.equal((h.match(/aria-current="page"/g) || []).length, 1);
+  assert.match(h, /data-v="mods" aria-current="page"/);
+  assert.match(h, /<h6><span class="space-dot" style="background:var\(--space-1\)"><\/span>Простір · Studio<\/h6>/);
+  assert.match(h, /<h6>Застосунок<\/h6>/);
+  assert.ok(h.indexOf("Простір · Studio") < h.indexOf('data-v="space"') && h.indexOf('data-v="agents"') < h.indexOf("Застосунок</h6>")
+    && h.indexOf("Застосунок</h6>") < h.indexOf('data-v="app"'), "порядок груп і кнопок");
+  assert.match(connPageHTML(view({ sec: "keys" })), /data-v="keys" aria-current="page"/);
+  assert.match(connPageHTML(view({ sec: "garbage" })), /data-v="mods" aria-current="page"/, "невідомий розділ — «Модулі»");
+  assert.match(connPageHTML(view()), /data-v="mods" aria-current="page"/, "без sec — «Модулі»");
+});
+
+test("каркас: інші розділи малюють лише h1; «Модулі» — наявний вміст", () => {
+  const keys = connPageHTML(view({ sec: "keys" }));
+  assert.match(keys, /<h1 class="th-h" id="cn-title">Гарячі клавіші<\/h1><\/div><\/div><\/div>$/);
+  assert.doesNotMatch(keys, /cn-card/);
+  assert.match(connPageHTML(view({ sec: "agents" })), /id="cn-title">AGENTS\.md</);
+  assert.match(connPageHTML(view({ sec: "mods" })), /data-cn="configure" data-id="static-publish"/);
+  setLang("en");
+  assert.match(connPageHTML(view({ sec: "upd" })), /id="cn-title">Updates</);
+  assert.match(connPageHTML(view({ sec: "upd" })), /Space · Studio/);
+});
+
+test("каркас: лічильник довіри на «Модулі» — лише для своїх модулів, що чекають", () => {
+  const own = { id: "own-x", name: "X", roles: ["publish"], enabled: false, status: "unchecked", settings: [],
+    custom: true, runs: false, trust: "untrusted" };
+  const bdg = (list) => navBtn(connPageHTML(view({ sec: "space", list })), "mods")[1];
+  assert.doesNotMatch(bdg(LIST), /set-cnt/);
+  assert.match(bdg([...LIST, own]), /<span class="set-cnt" title="Чекає довіри">1<\/span>/);
+  assert.match(bdg([...LIST, own, { ...own, id: "own-y" }]), />2<\/span>/);
+  assert.doesNotMatch(navBtn(connPageHTML(view({ sec: "space" })), "agents")[1], /set-dotb/, "крапки AGENTS.md поки нема");
+});
+
+test("каркас: назва простору в навігації екранується; ворожий колір не виходить з токена", () => {
+  const h = connPageHTML(view({ space: { ...SP, name: '<i>"x', color: '"><b>' }, sec: "space" }));
+  assert.doesNotMatch(h, /<i>|<b>/);
+  assert.match(h, /&lt;i&gt;&quot;x/);
 });

@@ -33,6 +33,7 @@ import { ISLAND_SHELL, applyBadge, badgeFor, islandParts } from './claude-status
 import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.js';
 import { barHTML } from './shell-bar.js';
 import { cleanTitle, readHomeUi, relTime, retitle, taskKey } from './tasks-model.js';
+import { SEC_KEY, readSec } from './settings-model.js';
 import { taskMenuHTML } from './task-menu.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, thumbBrokenHTML } from './tasks-home.js';
 import {
@@ -211,6 +212,13 @@ let homePage = 'tasks';
 const connState = { spaceId: null, list: null, notes: [], failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
 let connFocusPending = false;
+/* Розділ сторінки «Налаштування» (`settings-model.js`): памʼятається в localStorage, як `homeUi`; типово `mods`. Шестерня веде в останній,
+   ⌘K, фішка простору й кнопка «Задач» (`BAR_ACTIONS.conn`) і вхід із роллю — у `mods`. */
+let connSec = (() => { try { return readSec(localStorage.getItem(SEC_KEY)); } catch (e) { return 'mods'; } })();
+function setConnSec(sec) {
+  connSec = readSec(sec);
+  try { localStorage.setItem(SEC_KEY, connSec); } catch (e) {}
+}
 /* Роль, до картки якої веде вхід («Налаштувати…» синку → `vcs`): після першого списку фокус іде на картку її модуля, а не першу.
    Порожньо — як завжди. Знімається разом із `connFocusPending` (`loadConn`) і чиститься кожним входом без ролі (`enterConnections`). */
 let connFocusRole = '';
@@ -2226,7 +2234,7 @@ const BAR_ACTIONS = {
   spacenew: () => openWizard(),
   spaceedit: () => openSpaceEdit(),
   /* «Підключення» поточного простору (етап 3a): пункт дропдауна фішки, ⌘K і кнопка в голові «Задач». */
-  conn: () => enterConnections(),
+  conn: () => { setConnSec('mods'); enterConnections(); },
 
   mode: async (val) => {
     const wantCanvas = val === 'overview';
@@ -3832,6 +3840,8 @@ function enterHome({ spaces = true, page } = {}) {
     /* Свіжий вхід забуває й ПРОСТІР попереднього візиту: «вантаження» малює заголовок поточного простору (`connSpace`
        без `spaceId` бере `currentSpace`), а `loadConn` побачить зміну й почистить решту (зайнятість, панель). */
     if (fresh) { connState.spaceId = null; connState.list = null; connState.failed = null; connFocusPending = true; }
+    /* Вхід із роллю (`enterConnections('vcs')`) веде до картки модуля — тобто в «Модулі», хоч би який розділ був останнім. */
+    if (connFocusRole) setConnSec('mods');
     paintHome();
     loadConn({ spaces });
     return;
@@ -4016,7 +4026,9 @@ function wireHome(el) {
       case 'newtask': openNewTaskCard(); break;
       /* «Мітки…» — пункт меню картки; фокус після діалогу вертається на «⋯» (`editTaskTags.focusBack`). */
       case 'tags': editTaskTags(b.dataset.id); break;
-      case 'conn': enterConnections(); break;
+      case 'conn': setConnSec('mods'); enterConnections(); break;
+      /* Розділ «Налаштувань» (ліва навігація): перемальовка без перезапиту модулів. */
+      case 'csec': if (readSec(v) !== connSec) { setConnSec(v); paintHome(); } break;
       case 'spacenew': openWizard(); break;
       case 'spaceopen': openWizard({ folderFirst: true }); break;
       case 'status': homeEdit = { ...homeEdit, trash: false }; homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
@@ -4092,7 +4104,7 @@ const connOpen = () => homeOpen && homePage === 'conn';
 const connSpace = () => (connState.spaceId == null
   ? currentSpace(spacesResp)
   : (Array.isArray(spacesResp?.spaces) ? spacesResp.spaces : []).find((x) => x.id === connState.spaceId) ?? null);
-const connView = () => ({ space: connSpace(), list: connState.list, notes: connState.notes, failed: connState.failed, busy: connState.busy });
+const connView = () => ({ space: connSpace(), list: connState.list, notes: connState.notes, failed: connState.failed, busy: connState.busy, sec: connSec });
 
 /**
  * Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). `role` — вести до картки модуля
