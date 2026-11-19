@@ -135,7 +135,7 @@ test("3: файл із новішого Deai — плашка «оновіть D
   assert.deepEqual(errors, []);
 });
 
-test("4: «Скопіювати» кладе показаний текст (блок + «Ваше») в буфер і каже тостом; копіювання шляху — окремий тост", async (t) => {
+test("4: «Скопіювати» кладе файл як на диску в буфер і каже тостом; копіювання шляху — окремий тост", async (t) => {
   const server = await boot(t, PORT_BASE + 30, `${BEFORE}${OLD_BLOCK}${AFTER}`);
   const { page, errors, target } = server;
   await gear(page);
@@ -144,7 +144,8 @@ test("4: «Скопіювати» кладе показаний текст (бл
   await page.click('.th-head [data-v="copy"]');
   assert.equal((await toastText(page)).trim(), "AGENTS.md скопійовано");
   const live = await api(server);
-  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), live.block + live.own, "буфер = те, що показано: блок, потім «Ваше»");
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), readFileSync(target, "utf8"), "буфер = файл на диску дослівно (текст зверху, блок, текст знизу), а не «блок + Ваше»");
+  assert.notEqual(live.block + live.own, live.text, "фікстура справді має текст над блоком: старе склеювання дало б інший порядок");
   await page.waitForFunction(() => !document.querySelector("#cv-toast.show"), null, { timeout: 15000 });
   await page.click('.ag-bar [data-v="copypath"]');
   assert.equal((await toastText(page)).trim(), "Шлях скопійовано");

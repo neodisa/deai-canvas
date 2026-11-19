@@ -71,11 +71,11 @@ def _read(space_dir):
 def status(space_dir, *, version):
     text = _read(space_dir)
     out = {'path': _path(space_dir), 'exists': text is not None, 'hasBlock': False, 'outdated': False,
-           'newer': False, 'version': version, 'fileVersion': None, 'block': None, 'own': ''}
+           'newer': False, 'version': version, 'fileVersion': None, 'block': None, 'own': '', 'text': ''}
     if text is None:
         return out
     block, own, fv = split(text)
-    out.update(hasBlock=block is not None, fileVersion=fv, block=block, own=own)
+    out.update(hasBlock=block is not None, fileVersion=fv, block=block, own=own, text=text)
     cur, ft = version_tuple(version), version_tuple(fv)
     if block is not None and cur is not None and ft is not None:
         if ft > cur:

@@ -21,6 +21,7 @@ import { DICT, LANG_KEY } from "../app/i18n.js";
 import { ICON_FILES, layoutOf, PALETTE } from "../app/pwa/icon-spec.mjs";
 import { offlineHTML } from "../app/pwa-offline.js";
 import { initPwa } from "../app/pwa.js";
+import { tokenRgb } from "./_oklch.mjs";
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "app");
 const read = (rel) => readFileSync(path.join(APP, rel), "utf8");
@@ -53,10 +54,12 @@ test("маніфест: поля рівно за спекою (id/start_url/scop
 });
 
 test("маніфест: колір теми — токен --s1 оболонки, а не вигаданий літерал", () => {
-  const css = read("styles.css");
-  const s1 = css.match(/--s1:\s*(#[0-9A-Fa-f]{6})/);
+  /* Після етапу Е `--s1` — oklch від відтінку простору: для типового (зеленого) рахуємо sRGB, допуск ±2 на канал. */
+  const css = read("styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const s1 = tokenRgb(css, "s1");
   assert.ok(s1, "у styles.css не знайдено --s1");
-  assert.equal(PALETTE.bg.toUpperCase(), s1[1].toUpperCase());
+  const want = [1, 3, 5].map((i) => parseInt(PALETTE.bg.slice(i, i + 2), 16));
+  s1.forEach((c, i) => assert.ok(Math.abs(c - want[i]) <= 2, `${PALETTE.bg} не збігається з --s1 (${s1}) на каналі ${i}`));
 });
 
 /* ── значки ──────────────────────────────────────────────────────────────── */

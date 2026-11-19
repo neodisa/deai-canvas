@@ -34,13 +34,14 @@ import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.j
 import { barHTML } from './shell-bar.js';
 import { cleanTitle, readHomeUi, relTime, retitle, taskKey } from './tasks-model.js';
 import { SEC_KEY, readSec } from './settings-model.js';
+import { spaceReadOnly } from './space-view.js';
 import { taskMenuHTML } from './task-menu.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, hasNotify, hasTeamComments, healTarget,
   cleanupWarning, commentsUnavailableCode, copyLinkRefused, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwUnreadable, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
-  spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
+  colorStep, spaceColorToken, spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
 } from './spaces-model.js';
 import {
   parseTags, spaceDialogHTML, tagsFormHTML, taskFormHTML, taskNameFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
@@ -1224,6 +1225,7 @@ function paintBar() {
   const spFresh = openDd === 'space' && !spaceDdWasOpen;
   spaceDdWasOpen = openDd === 'space';
   const st = barState();
+  paintSpaceColor();
   bar.innerHTML = barHTML(barModel(st), st);
   paintTabs();
   paintIsland();
@@ -1658,6 +1660,28 @@ function applySpaceMeta(id, { name, color }) {
   if (homeData?.space) homeData = { ...homeData, space: patch(homeData.space) };
   paintBar();
   if (homeOpen) paintHome();
+}
+
+/**
+ * Колір поточного простору фарбує вікно: `data-space-color` на `<html>` (правила в `styles.css`), а `<meta name="theme-color">`
+ * бере обчислений `--s0` (смуга вкладок). Невідомий колір — `space-1`. Кличе `paintBar`, тож усі шляхи зміни простору
+ * (перемикання, діалог, розділ «Простір», перечитування реєстру) проходять тут; метa пишемо лише коли колір справді змінився.
+ */
+let spaceTint = null;
+function paintSpaceColor() {
+  const color = spaceColorToken(spaceNow()?.color);
+  if (color === spaceTint) return;
+  spaceTint = color;
+  const root = document.documentElement;
+  root.dataset.spaceColor = color;
+  try {
+    const px = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+    px.fillStyle = getComputedStyle(root).getPropertyValue('--s0').trim();
+    px.fillRect(0, 0, 1, 1);
+    const [r, g, b] = px.getImageData(0, 0, 1, 1).data;
+    const hex = `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', hex);
+  } catch (e) { /* без canvas — лишається попередній колір смуги заголовка */ }
 }
 
 /** Нові вимикачі інструментів — у всі місця, що їх читають (смуга, ⌘K), без перезавантаження макета. */
@@ -4060,6 +4084,8 @@ function wireHome(el) {
       /* Розділ «Налаштувань» (ліва навігація): перемальовка без перезапиту модулів. */
       case 'csec': if (readSec(v) !== connSec) { setConnSec(v); paintHome(); if (connSec === 'agents') loadAgents(); } break;
       case 'ag': agentsAction(v); break;
+      case 'spc': pickSpaceColor(v); break;
+      case 'spcopy': { const p = connSpace()?.path; if (p) agentsCopy(p, 'spPathCopied', '.sp-path span'); break; }
       case 'spacenew': openWizard(); break;
       case 'spaceopen': openWizard({ folderFirst: true }); break;
       case 'status': homeEdit = { ...homeEdit, trash: false }; homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
@@ -4080,6 +4106,20 @@ function wireHome(el) {
   /* Втрата фокуса полем назви (Tab, клік поза вікном) зберігає назву; клік повз збережено вище, на `pointerdown`. */
   el.addEventListener('focusout', (ev) => {
     if (ev.target.id === 'th-ren' && homeEdit.ren && !homeRepainting) setTimeout(() => commitRenameCard(true));
+    if (ev.target.id === 'set-sp-name' && !homeRepainting) commitSpaceName(ev.target);
+  });
+  /* «Простір»: Enter у назві зберігає; стрілки в радіогрупі кольору ходять по колу й одразу вибирають (як у діалозі). */
+  el.addEventListener('keydown', (ev) => {
+    if (homePage !== 'conn') return;
+    if (ev.target.id === 'set-sp-name' && ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); commitSpaceName(ev.target); return; }
+    const group = ev.target.closest?.('.sw-grid');
+    if (!group) return;
+    const cur = group.querySelector('.sw[aria-checked="true"]')?.dataset.val;
+    const to = colorStep(cur, ev.key);
+    if (!to || ev.target.disabled) return;
+    ev.preventDefault();
+    pickSpaceColor(to);
+    group.querySelector(`.sw[data-val="${to}"]`)?.focus({ preventScroll: true });
   });
   /* Правий клік по картці — меню в точці кліку (не по картці «+» і не по питанню «Видалити?»; поле назви лишає рідне меню). */
   el.addEventListener('contextmenu', (ev) => {
@@ -4285,10 +4325,44 @@ async function agentsWrite() {
 /** Кнопки розділу «AGENTS.md» (`data-th="ag"`, `data-v`). */
 function agentsAction(v) {
   const a = agentsSt.data;
-  if (v === 'copy' && a?.exists) agentsCopy((a.block ?? '') + (a.own ?? ''), 'agCopied', '.ag-body');
+  if (v === 'copy' && a?.exists) agentsCopy(a.text ?? '', 'agCopied', '.ag-body');
   else if (v === 'copypath' && a?.path) agentsCopy(a.path, 'agPathCopied', '.ag-bar span');
   else if (v === 'update' || v === 'create') agentsWrite();
   else if (v === 'retry') { agentsSt.data = null; paintHome(); loadAgents(); }
+}
+
+/* Розділ «Простір»: запис `space-update` іде ЧЕРГОЮ — назва й колір летять двома запитами, а сервер пише обидва поля разом;
+   тіло кожного береться вже ПІСЛЯ попереднього запису (з оновленого `spaceNow()`), щоб пізніший запит не повернув старе. */
+let spaceSaveChain = Promise.resolve();
+function spaceSave(id, patch) {
+  spaceSaveChain = spaceSaveChain.then(async () => {
+    const cur = (Array.isArray(spacesResp?.spaces) ? spacesResp.spaces : []).find((x) => x.id === id) ?? spaceNow();
+    if (!cur || cur.id !== id) return;
+    const name = patch.name ?? cur.name;
+    const color = patch.color ?? spaceColorToken(cur.color);
+    if (name === cur.name && color === spaceColorToken(cur.color)) { if (homeOpen) paintHome(); return; }
+    try { applySpaceMeta(id, await postForm('/api/space-update', { id, name, color })); }
+    catch (e) { toast(t(spaceErrKey(e.code))); if (homeOpen) paintHome(); }
+  });
+  return spaceSaveChain;
+}
+/** Плитка кольору: позначка й tabindex міняються одразу (стрілки рахують від них), запис — чергою. */
+function pickSpaceColor(color) {
+  const sp = connSpace();
+  if (!sp || spaceReadOnly(sp) || !homeNode()) return;
+  const group = homeNode().querySelector('.sw-grid');
+  if (!group) return;
+  const to = spaceColorToken(color);
+  for (const b of group.querySelectorAll('.sw')) { b.setAttribute('aria-checked', String(b.dataset.val === to)); b.tabIndex = b.dataset.val === to ? 0 : -1; }
+  spaceSave(sp.id, { color: to });
+}
+/** Назва з поля: Enter/втрата фокуса. Порожня — не зберігаємо, повертаємо збережену й кажемо. */
+function commitSpaceName(input) {
+  const sp = connSpace();
+  if (!sp || spaceReadOnly(sp)) return;
+  const name = input.value.trim();
+  if (!name) { toast(t('spaceErrName')); input.value = sp.name; return; }
+  if (name !== sp.name) spaceSave(sp.id, { name });
 }
 
 /**

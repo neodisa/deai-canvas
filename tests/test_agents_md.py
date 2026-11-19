@@ -137,6 +137,16 @@ class Status(Tmp):
         st = agents_md.status(self.dir, version=V)
         self.assertEqual((st['hasBlock'], st['own']), (True, 'mine\r\n'))
 
+    def test_text_is_the_file_byte_for_byte_with_user_text_above_the_block(self):
+        raw = 'зверху\r\n'.encode() + b'<!-- deai:begin v0.1.0 - old -->\r\nold\r\n<!-- deai:end -->\r\n' + 'знизу'.encode()
+        _put(self.file, raw)
+        st = agents_md.status(self.dir, version=V)
+        self.assertEqual(st['text'].encode('utf-8', 'surrogateescape'), raw)   # власне порядок на диску, CRLF цілий
+        self.assertNotEqual(st['block'] + st['own'], st['text'])             # старе склеювання давало інший порядок
+
+    def test_text_is_empty_without_a_file(self):
+        self.assertEqual(agents_md.status(self.dir, version=V)['text'], '')
+
     def test_begin_without_end_is_no_block(self):
         _put(self.file, b'<!-- deai:begin v0.1.0 - x -->\nhalf\n')
         self.assertFalse(agents_md.status(self.dir, version=V)['hasBlock'])

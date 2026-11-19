@@ -35,6 +35,7 @@ import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { navItems, readSec, trustWaitingOf } from "./settings-model.js";
 import { agentsActsHTML, agentsBodyHTML } from "./agents-view.js";
+import { spaceBodyHTML } from "./space-view.js";
 import { confirmHTML } from "./inline-confirm.js";
 import { BADGE_CLASS, cardModel, emptyRoles, failedRole, gridEntries, sentence, toolCardModel, toolCards } from "./modules-grid.js";
 import { spaceColorToken } from "./spaces-model.js";
@@ -251,6 +252,7 @@ export function connPageHTML(v) {
   /* Розділ «Модулі»: у голові праворуч «Додати модуль» (лише коли список прочитано — є що додавати). */
   const addBtn = `<button type="button" class="ctl ctl--out" data-cn="cat">${ico("plus")}${esc(t("mcAdd"))}</button>`;
   const wrap = (inner, head = "") => `<div class="set">${setNavHTML(sp, sec, v.list, v.agents?.outdated === true)}<div class="set-main"><div class="set-in cn-in">${head ? `<div class="th-head">${h1}${head}</div>` : h1}${inner}</div></div></div>`;
+  if (sec === "space") return wrap(spaceBodyHTML(sp));
   if (sec === "agents") return wrap(agentsBodyHTML(v.agents, v.agentsBusy === true), agentsActsHTML(v.agents, v.agentsBusy === true));
   if (sec !== "mods") return wrap("");
   /* space.json не читається — двома шляхами: сервер сказав `capabilities.error === "space-json-unreadable"` або відмовив

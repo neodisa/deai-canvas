@@ -469,6 +469,8 @@ test("0. смуга помилки видима, а не позаду смуги
          не прочитати; наявність елемента й `isVisible()` цього не бачать. */
       bgAlpha: (() => {
         const c = getComputedStyle(e).backgroundColor;
+        /* Після етапу Е тло смуги — `oklch(L C H)` (колір простору): альфа — частина після «/», нема її — 1. */
+        if (/^(oklch|color)\(/.test(c)) { const a = /\/\s*([\d.]+)/.exec(c); return a ? parseFloat(a[1]) : 1; }
         const m = /^rgba?\(([^)]+)\)$/.exec(c);
         if (!m) return null;
         const parts = m[1].split(",").map((x) => parseFloat(x));

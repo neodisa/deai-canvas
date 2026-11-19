@@ -10,25 +10,10 @@
   /* Світлий контент (сцена, картки «Огляду», діалоги) — на сходинках шкали. */
   --bg:var(--g100);--card:#fff;--border:var(--g200);--text:var(--g900);
   --muted:var(--g600);--accent:var(--sel-ink);
-  /* «Приподнята» глибина: поверхні оболонки на середньо-темних ступенях, де
-     тон логотипа читається (на найтемніших смуга була б колишньою синьо-сірою). */
-  --s0:#1A231E;--s1:#29332E;--s2:#323C36;--s3:#3C4741;--s4:#4B5550;
-  --line:#3C4741;--line2:#545E58;
-  --hi:#F3F8F5;--mid:#CBD3CF;--ok:#6AD09D;--open:#FBBC55;--onwhite:var(--g900);
-  /* --lo лишається для меж і декору; для ТЕКСТУ він не годиться (2.83:1 на
-     --s1). Дрібний текст бере --dim: 5.81:1 на --s1, 5.09:1 на --s2. */
-  --lo:#6E7772;--dim:#A6AFAA;
-  --on-hi:#1A231E;
+  --ok:#6AD09D;--open:#FBBC55;--onwhite:var(--g900);
   /* Логотип у смузі. Токени, а не літерали в SVG. */
   --logo:var(--g400);--logo-in:#fff;
-  /* МОНО-АКЦЕНТ: кнопки й активні стани — світла шавлія з темним текстом (як
-     білий прямокутник всередині логотипа), без синього. Насичена шавлія
-     відкинута: тон 162° збігається з --ok (зелений «Done»). `--sel` — заливка
-     на ТЕМНІЙ поверхні оболонки, `--on-sel` — текст на ній, `--sel-text` — акцент-
-     ТЕКСТ на темному (бейдж статусу, «відкрита зараз»), `--sel-tint*` — тінти. */
-  --sel:#E2EAE6;--sel-hover:#F2F6F4;--on-sel:#1A231E;
-  --sel-tint:rgba(226,234,230,.12);--sel-tint-2:rgba(226,234,230,.26);
-  --sel-text:#D4E2DA;
+  /* Поверхні, тексти й акцент оболонки (`--s0…--s4`, `--hi…--lo`, `--sel*`) — нижче, окремим блоком: вони залежать від кольору простору. */
   /* Виділення, намальоване ПОВЕРХ СВІТЛОГО контенту (сцена, кадри й картки
      «Огляду» на --bg): світла шавлія там не видна, потрібна глибока. Той самий
      токен — `--accent` (діалоги на білому). */
@@ -73,6 +58,40 @@
   --z-dd:200; --z-overlay:300; --z-toast:400;
   --dur:170ms; --ease:cubic-bezier(.2,.8,.2,1);
 }
+:root,.sw-pv{
+  /* «Приподнята» глибина: поверхні оболонки на середньо-темних ступенях, де
+     тон логотипа читається (на найтемніших смуга була б колишньою синьо-сірою). */
+  /* Колір простору фарбує вікно (етап Е): поверхні й тексти оболонки — `oklch` від відтінку `--sp-h` і множника хроми
+     `--sp-k`, які задає `:root[data-space-color]` (нижче). Типовий (зелений) дає колишні hex з допуском ±2 на канал
+     (охоронець у `css-guards.test.mjs`). Той самий блок стоїть і на `.sw-pv`: мініатюра в «Налаштуваннях» перераховує
+     його у відтінку СВОГО кольору. `--ok/--bad/--open`, `--sel-ink` і світлий контент від простору не залежать. */
+  --s0:oklch(.2455 calc(.016*var(--sp-k)) var(--sp-h));--s1:oklch(.3099 calc(.0163*var(--sp-k)) var(--sp-h));
+  --s2:oklch(.3449 calc(.0169*var(--sp-k)) var(--sp-h));--s3:oklch(.386 calc(.0175*var(--sp-k)) var(--sp-h));
+  --s4:oklch(.439 calc(.015*var(--sp-k)) var(--sp-h));--line:var(--s3);--line2:oklch(.4713 calc(.0157*var(--sp-k)) var(--sp-h));
+  --hi:oklch(.9745 calc(.0066*var(--sp-k)) var(--sp-h));--mid:oklch(.8595 calc(.0103*var(--sp-k)) var(--sp-h));
+  /* --lo лишається для меж і декору; для ТЕКСТУ він не годиться (2.83:1 на
+     --s1). Дрібний текст бере --dim: 5.81:1 на --s1, 5.09:1 на --s2. */
+  --lo:oklch(.5601 calc(.0132*var(--sp-k)) var(--sp-h));--dim:oklch(.7454 calc(.0123*var(--sp-k)) var(--sp-h));
+  --on-hi:var(--s0);
+  /* МОНО-АКЦЕНТ: кнопки й активні стани — світла шавлія з темним текстом (як
+     білий прямокутник всередині логотипа), без синього. Насичена шавлія
+     відкинута: тон 162° збігається з --ok (зелений «Done»). `--sel` — заливка
+     на ТЕМНІЙ поверхні оболонки, `--on-sel` — текст на ній, `--sel-text` — акцент-
+     ТЕКСТ на темному (бейдж статусу, «відкрита зараз»), `--sel-tint*` — тінти. */
+  --sel:oklch(.9299 calc(.0101*var(--sp-k)) var(--sp-h));--sel-hover:oklch(.9696 calc(.005*var(--sp-k)) var(--sp-h));--on-sel:var(--s0);
+  --sel-tint:color-mix(in oklch,var(--sel) 12%,transparent);--sel-tint-2:color-mix(in oklch,var(--sel) 26%,transparent);
+  --sel-text:oklch(.9 calc(.0184*var(--sp-k)) var(--sp-h));
+}
+/* Відтінок і множник хроми простору. Типовий (зелений) — в `:root`; `data-space-color` ставить `app.js` на `<html>` при кожній
+   зміні простору. Селектор `.sw[data-val]` — той самий відтінок для мініатюри кольору в «Налаштуваннях». Відтінки — як у
+   `--space-1…6` (охоронець звіряє). */
+:root{--sp-h:162;--sp-k:1}
+:root[data-space-color="space-1"],.sw[data-val="space-1"]{--sp-h:162;--sp-k:1}
+:root[data-space-color="space-2"],.sw[data-val="space-2"]{--sp-h:240;--sp-k:1.35}
+:root[data-space-color="space-3"],.sw[data-val="space-3"]{--sp-h:80;--sp-k:1.35}
+:root[data-space-color="space-4"],.sw[data-val="space-4"]{--sp-h:30;--sp-k:1.3}
+:root[data-space-color="space-5"],.sw[data-val="space-5"]{--sp-h:300;--sp-k:1.35}
+:root[data-space-color="space-6"],.sw[data-val="space-6"]{--sp-h:200;--sp-k:1.35}
 /* Публічне превʼю (`PAGES_PREVIEW_PAGE`) рядка вкладок не має — смуга й усе під нею піднімаються на його висоту
    (з 0.25.0 до 0.28.2 зверху лишалась порожня смуга 36 px). `--h-top` перевизначаємо теж: на `:root` він уже
    порахований з 36 px, і спадкоємці отримують готове число, а не формулу. */
@@ -1924,7 +1943,8 @@ body:not(.home-open) .cn-drawer{display:none}
 .ag-empty p{margin:0}
 .note{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px;padding:10px 12px;border-radius:var(--r);
   background:color-mix(in srgb,var(--open) 12%,transparent);border:1px solid color-mix(in srgb,var(--open) 35%,transparent)}
-.note .ico{flex:none;color:var(--open)}
+/* Лише власна іконка плашки: кнопка «Оновити з шаблону» всередині теж несе `.ico` і лишається кольору кнопки. */
+.note>.ico{flex:none;color:var(--open)}
 .note p{flex:1;min-width:200px;margin:0;color:var(--hi)}
 .ag{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--s0);overflow:hidden}
 .ag-bar{display:flex;align-items:center;gap:8px;min-width:0;padding:6px 6px 6px 12px;border-bottom:1px solid var(--line);
@@ -1937,6 +1957,29 @@ body:not(.home-open) .cn-drawer{display:none}
 .ag-own .ag-g{color:var(--mid)}
 .ag pre{margin:0;padding:12px 14px;font:12px/1.6 var(--mono);color:var(--mid);white-space:pre-wrap;overflow-wrap:anywhere}
 .ag-own pre{color:var(--hi)}
+/* Розділ «Простір» (етап Е): назва, шість плиток кольору з мініатюрою у ВІДТІНКУ свого кольору (`.sw[data-val]` задає `--sp-h`,
+   `:root,.sw-pv` перераховує поверхні), тека. Вибрана плитка — рамка `--sel`; радіогрупа ходить стрілками (`app.js`). */
+.sp-fld{display:flex;flex-direction:column;gap:6px;max-width:560px;margin:0 0 8px}
+.sp-lbl{font-size:12px;color:var(--dim)}
+.sp-fld~.sp-fld{margin-top:22px}
+.sw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;max-width:880px}
+.sw{display:flex;flex-direction:column;gap:7px;padding:6px 6px 8px;border:1px solid var(--line);border-radius:var(--r-lg);
+  background:none;font:inherit;cursor:pointer;text-align:left}
+.sw:hover{border-color:var(--line2)}
+.sw:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+.sw[aria-checked="true"]{border-color:var(--sel);box-shadow:0 0 0 1px var(--sel)}
+.sw:disabled{cursor:default;opacity:.5}
+.sw-pv{height:64px;border-radius:6px;overflow:hidden;display:grid;grid-template-rows:12px 1fr;background:var(--s1)}
+.sw-bar{display:block;position:relative;background:var(--s0)}
+.sw-bar::after{content:"";position:absolute;left:6px;top:4px;width:5px;height:5px;border-radius:1.5px;background:var(--sel)}
+.sw-body{display:grid;grid-template-columns:28% 1fr;gap:5px;padding:5px}
+.sw-body::before,.sw-body::after{content:"";border-radius:3px;background:var(--s3)}
+.sw-n{display:flex;align-items:center;gap:6px;padding:0 3px;font-size:12px;color:var(--mid)}
+.sw[aria-checked="true"] .sw-n{color:var(--hi);font-weight:500}
+.sw-n .ico{margin-left:auto;color:var(--hi)}
+.sp-path{display:flex;align-items:center;gap:8px;height:var(--h-ctl);padding:0 4px 0 10px;border:1px solid var(--line);border-radius:var(--r-sm);
+  background:var(--s2);font-family:var(--mono);font-size:12px;color:var(--mid);min-width:0}
+.sp-path span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Розділ «Модулі» (етап Е): сітка карток із однією дією. Клік по картці — це кнопка-назва `.mc-open`, розтягнута на картку (`::after`, шухляда
    чи діалог довіри); «⋯» і кнопка дії стоять над нею (`z-index`) і лишаються клікабельними; «⋯» — меню `.cv-ctx`
    (`#th-menu`, як у картки задачі); питання «Вимкнути?» стоїть у самій картці (`.mc--ask` + `.cfm`). Пунктирна картка — роль без модуля.

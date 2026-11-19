@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { tokenRgb } from "./_oklch.mjs";
 
 const read = (f) => readFileSync(new URL(`../app/${f}`, import.meta.url), "utf8");
 const css = read("styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
@@ -83,13 +84,7 @@ test("кнопки привітання не злиплі: `.th-welcome-act` м�
 });
 
 /* ── контраст: токени з `:root`, формула WCAG — як у `css-guards.test.mjs` ───────────────────────────────────────────── */
-const tok = (name, depth = 0) => {
-  const m = css.match(new RegExp(`--${name}\\s*:\\s*(#[0-9a-fA-F]{6}|var\\(--([a-z0-9-]+)\\))`));
-  if (!m) return null;
-  if (m[2]) return depth < 5 ? tok(m[2], depth + 1) : null;
-  const n = parseInt(m[1].slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-};
+const tok = (name) => tokenRgb(css, name);
 const lum = ([r, g, b]) => [r, g, b].map((c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
   .reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0);
 const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };

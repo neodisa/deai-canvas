@@ -3,6 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { tokenRgb, tokenText, toHex, oklchToRgb } from "./_oklch.mjs";
 
 /* Рендерери звіту — СПРАВЖНІ, не копія їхньої розмітки: розділ E питає, що
    документ малює НАСПРАВДІ, і другий опис тієї самої розмітки тут розійшовся б
@@ -48,13 +49,11 @@ function contrastRatio(hexA, hexB) {
   const [hi, lo] = la > lb ? [la, lb] : [lb, la];
   return (hi + 0.05) / (lo + 0.05);
 }
-function rootVar(css, name, depth = 0) {
-  /* Токени палітри бувають аліасами (`--bg:var(--g100)`): без слідування за
-     `var()` охоронець контрасту мовчки отримав би null і пропустив би пару. */
-  const m = css.match(new RegExp(`--${name}\\s*:\\s*(#[0-9a-fA-F]{3,8}|var\\(--([a-z0-9-]+)\\))`));
-  if (!m) return null;
-  if (m[2]) return depth < 5 ? rootVar(css, m[2], depth + 1) : null;
-  return m[1];
+function rootVar(css, name) {
+  /* Токени палітри бувають аліасами (`--bg:var(--g100)`) і, після етапу Е, `oklch` від відтінку простору: `tokenRgb` іде за
+     `var()` і рахує oklch для типового (зеленого) простору. Без цього охоронець контрасту мовчки отримав би null. */
+  const rgb = tokenRgb(stripComments(css), name);
+  return rgb ? toHex(rgb) : null;
 }
 
 /* ===================================================================
@@ -926,4 +925,72 @@ test("Д: правило `.cv-ctx button` покриває й `.cv-ctx a` (пу�
   const base = rule(/([^{}]*\.cv-ctx button[^{}]*)\{[^{}]*border:0/);
   assert.match(base, /\.cv-ctx a\b/, "базове правило пункту меню не стилізує посилання");
   assert.match(rule(/([^{}]*\.cv-ctx button:hover[^{}]*)\{/), /\.cv-ctx a:hover/);
+});
+
+/* ===================================================================
+   Е. Колір простору фарбує вікно (0.31.0)
+   -------------------------------------------------------------------
+   Поверхні й тексти оболонки — `oklch(L C var(--sp-h))`. Для `space-1` (зелений, типовий) результат має збігатися зі
+   старими hex у межах ±2 на канал; кожен `space-N` має правило з відтінком, рівним відтінку свого `--space-N`.
+   =================================================================== */
+
+const OLD_SURFACES = {
+  s0: "#1A231E", s1: "#29332E", s2: "#323C36", s3: "#3C4741", s4: "#4B5550", line2: "#545E58",
+  hi: "#F3F8F5", mid: "#CBD3CF", dim: "#A6AFAA", lo: "#6E7772", sel: "#E2EAE6",
+};
+
+test("Е: поверхні оболонки визначені через `var(--sp-h)` (колір простору їх справді міняє)", () => {
+  const css = stripComments(readCss());
+  for (const name of [...Object.keys(OLD_SURFACES), "sel-hover", "sel-text"]) {
+    const v = tokenText(css, name);
+    assert.ok(v && /^oklch\(/.test(v) && v.includes("var(--sp-h)"), `--${name}: «${v}» — не oklch від --sp-h`);
+  }
+  assert.equal(tokenText(css, "line"), "var(--s3)");
+});
+
+test("Е: для space-1 перерахунок oklch→sRGB дає колишні hex у межах ±2 на канал", () => {
+  const css = stripComments(readCss());
+  for (const [name, hex] of Object.entries(OLD_SURFACES)) {
+    const got = tokenRgb(css, name);
+    const want = hexToRgb(hex);
+    assert.ok(got, `--${name}: не вдалося порахувати`);
+    got.forEach((c, i) => assert.ok(Math.abs(c - want[i]) <= 2, `--${name} ${toHex(got)} ≠ ${hex} (канал ${i}: ${c} проти ${want[i]})`));
+  }
+});
+
+test("Е: кожен space-N має правило відтінку, рівного відтінку його --space-N, і в `:root`, і для мініатюри `.sw`", () => {
+  const css = stripComments(readCss());
+  for (let n = 1; n <= 6; n++) {
+    const tok = css.match(new RegExp(`--space-${n}\\s*:\\s*oklch\\(\\s*[\\d.]+\\s+[\\d.]+\\s+([\\d.]+)\\s*\\)`));
+    assert.ok(tok, `нема --space-${n}`);
+    for (const sel of [`:root[data-space-color="space-${n}"]`, `.sw[data-val="space-${n}"]`]) {
+      const i = css.indexOf(sel);
+      assert.ok(i >= 0, `нема правила ${sel}`);
+      const body = css.slice(css.indexOf("{", i) + 1, css.indexOf("}", i));
+      assert.equal(body.match(/--sp-h:\s*([\d.]+)/)?.[1], tok[1], `${sel}: відтінок не збігається з --space-${n} (${tok[1]})`);
+      assert.match(body, /--sp-k:\s*[\d.]+/, `${sel}: нема множника хроми`);
+    }
+  }
+});
+
+test("Е: перерахунок oklch→sRGB — справжній (білий/чорний; відтінок міняє колір)", () => {
+  assert.deepEqual(oklchToRgb(1, 0, 0), [255, 255, 255]);
+  assert.deepEqual(oklchToRgb(0, 0, 0), [0, 0, 0]);
+  const blue = oklchToRgb(0.5, 0.1, 260);
+  const red = oklchToRgb(0.5, 0.1, 30);
+  assert.ok(blue[2] > blue[0] && red[0] > red[2], `відтінки не розрізняються: ${blue} / ${red}`);
+});
+
+test("Е: нові правила не мають кольорових літералів (токени або oklch з var)", () => {
+  const css = stripComments(readCss());
+  const a = css.indexOf(".sp-fld{");
+  const body = css.slice(a, css.indexOf(".sp-path span{", a));
+  assert.ok(a > 0 && body.length > 200, "блок «Простір» не знайдено");
+  assert.doesNotMatch(body, /#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/, "літерал кольору в правилах розділу «Простір»");
+});
+
+test("F1: іконка в плашці червоніє лише своя (`.note>.ico`); кнопка всередині лишається кольору кнопки", () => {
+  const css = stripComments(readCss());
+  assert.match(css, /\.note>\.ico\{[^}]*color:var\(--open\)/);
+  assert.doesNotMatch(css, /\.note \.ico\s*\{/, "`.note .ico` фарбує й іконку кнопки «Оновити з шаблону»");
 });
