@@ -42,7 +42,7 @@ import { startServer, taskFixture } from "./fixture.mjs";
 /* Своя смуга (`tests/live-ports.test.mjs` стереже, що бази не збігаються). */
 const PORT_BASE = 13600;
 const MOCKUP = () => "<!doctype html><html><body><h1>Макет</h1></body></html>";
-const CARD = '.cn-card[data-id="memo-own"]';
+const CARD = '.mc[data-id="memo-own"]';
 
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
@@ -125,8 +125,8 @@ test("1: недовірений не виконується → діалог →
   const s = await boot(t);
   const { page } = s;
   await openConnections(page);
-  await page.waitForSelector(`${CARD} .cn-badge--untrusted`);
-  assert.match(await page.locator(`${CARD} .cn-tag--own`).textContent(), /свій/);
+  await page.waitForSelector(`${CARD} .bdg--trust`);
+  assert.match(await page.locator(`${CARD} .mc-tag`).textContent(), /свій/);
   assert.equal(await page.locator(`${CARD} [data-cn="enable"]`).count(), 0, "«Підключити» нема до довіри");
   assert.deepEqual(s.ran(), [], "код недовіреного модуля виконано");
 
@@ -150,12 +150,14 @@ test("1: недовірений не виконується → діалог →
   await page.click('#cn-drawer [data-cn-dr="submit"]');
   await page.waitForSelector(".cv-ask-scrim");                  // «Замінити?» — роль тримає неявна «Публікація в теку»
   await page.click('.cv-ask-scrim [data-a="ok"]');
-  await page.waitForSelector(`${CARD} .cn-badge--ok`, { timeout: 15000 });
+  await page.waitForSelector(`${CARD} .bdg--ok`, { timeout: 15000 });
   assert.equal((await check(s.url)).check.detail, "own v1");
 
   writeFileSync(path.join(s.ownDir, "server.py"), SERVER_PY("v2"));
-  await page.click(`${CARD} [data-cn="check"]`);
-  await page.waitForFunction((sel) => /У теці є зміни/.test(document.querySelector(`${sel} .cn-trust`)?.textContent ?? ""), CARD);
+  /* Перевірено, ок → на картці дії нема: «Перевірити» — у меню «⋯». */
+  await page.click(`${CARD} .mc-more`);
+  await page.click(`#th-menu [data-cn="check"][data-id="memo-own"]`);
+  await page.waitForFunction((sel) => /У теці є зміни/.test(document.querySelector(`${sel} .mc-why`)?.textContent ?? ""), CARD);
   assert.equal((await check(s.url)).check.detail, "own v1", "працює довірена версія, а не правка на диску");
 
   await page.click(`${CARD} [data-cn="trust"]`);
@@ -170,18 +172,18 @@ test("1: недовірений не виконується → діалог →
   assert.equal((await check(s.url)).check.detail, "own v2");
 
   const before = sjText(s);
-  await page.click(`${CARD} [data-cn="configure"]`);
+  await page.click(`${CARD} .mc-name b`);                       // клік по увімкненій картці — шухляда
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-dr="untrust"]');
   await page.click('#cn-drawer [data-cn-dr="untrust"]');
   await page.waitForSelector(".cv-ask-scrim");
   assert.match(await page.locator(".cv-ask-scrim").textContent(), /Забрати довіру до «Memo own \(test\)»/);
   await page.click('.cv-ask-scrim [data-a="ok"]');
-  await page.waitForSelector(`${CARD} .cn-badge--untrusted`, { timeout: 15000 });
+  await page.waitForSelector(`${CARD} .bdg--trust`, { timeout: 15000 });
   assert.equal(sjText(s), before, "space.json не змінено");
   const caps = await capsOf(s.url);
   assert.equal(caps.publish, null, "роль «на папері» за недовіреним — без постачальника, не «Публікація в теку»");
   assert.equal(caps.error, undefined, "і це не «space.json не читається»");
-  assert.match(await page.locator(`.cn-sec:has(${CARD}) .cn-now`).textContent(), /чекає довіри/);
+  assert.match(await page.locator(`${CARD} .bdg--trust`).textContent(), /Чекає довіри/, "роль «на папері» — картка чекає довіри");
   assert.deepEqual(s.errors, []);
 });
 
@@ -196,20 +198,22 @@ test("2: системне вікно відмовило — текст у діа
   assert.equal(await page.locator("form.tr").count(), 1, "діалог лишився");
   await page.click('form.tr [data-a="cancel"]');
   await page.waitForSelector("form.tr", { state: "detached" });
-  await page.waitForSelector(`${CARD} .cn-badge--untrusted`);
+  await page.waitForSelector(`${CARD} .bdg--trust`);
   assert.deepEqual(s.ran(), []);
   assert.deepEqual(s.errors, []);
 });
 
-test("3: колега закомітив — «Увімкнено, але не довірено», «Зараз: … чекає довіри», картки на місці (не «space.json не читається»)", async (t) => {
+test("3: колега закомітив — «Увімкнено, але не довірено», картка «Чекає довіри», картки на місці (не «space.json не читається»)", async (t) => {
   const s = await boot(t, { committed: true });
   const { page } = s;
   await openConnections(page);
-  await page.waitForSelector(`${CARD} .cn-badge--untrusted`);
-  assert.match(await page.locator(`${CARD} .cn-why`).textContent(), /увімкнено в просторі, але на цьому компʼютері йому не довірено/);
-  assert.equal(await page.locator(`${CARD} [data-cn="disable"]`).count(), 1);
+  await page.waitForSelector(`${CARD} .bdg--trust`);
+  assert.match(await page.locator(`${CARD} .mc-why`).textContent(), /увімкнено в просторі, але на цьому компʼютері йому не довірено/);
+  await page.click(`${CARD} .mc-more`);
+  assert.equal(await page.locator(`#th-menu [data-cn="disable"][data-id="memo-own"]`).count(), 1, "«Вимкнути» — у меню «⋯»");
+  await page.keyboard.press("Escape");
   assert.equal(await page.locator(".cn-err").count(), 0, "сторінка не вважає це нечитабельним space.json");
-  assert.match(await page.locator(`.cn-sec:has(${CARD}) .cn-now`).textContent(), /Memo own \(test\).*чекає довіри/);
+  assert.match(await page.locator(`${CARD} .bdg--trust`).textContent(), /Чекає довіри/);
   assert.deepEqual(s.ran(), []);
   assert.deepEqual(s.errors, []);
 });
@@ -317,18 +321,18 @@ test("7: «Забрати довіру» з діалогу нової версі
   assert.match(await page.locator(".cv-ask-scrim").textContent(), /Забрати довіру до «Memo own \(test\)»/);
   assert.equal(await page.evaluate(() => document.activeElement?.dataset?.a), "cancel", "фокус — на «Скасувати»");
   await page.click('.cv-ask-scrim [data-a="ok"]');
-  await page.waitForSelector(`${CARD} .cn-badge--untrusted`, { timeout: 15000 });
+  await page.waitForSelector(`${CARD} .bdg--trust`, { timeout: 15000 });
   assert.equal(sjText(s), before, "space.json не змінено");
   assert.deepEqual(s.errors, []);
 });
 
-test("8: тека з символьним посиланням — діалог без «Довіряю», заголовок не питає, Esc закриває, фокус повертається на картку", async (t) => {
+test("8: тека з символьним посиланням — діалог без «Довірити», заголовок не питає, Esc закриває, фокус повертається на картку", async (t) => {
   const s = await boot(t);
   symlinkSync("server.py", path.join(s.ownDir, "alias.py"));
   const { page } = s;
   await openConnections(page);
   /* Назва на картці — теж id (маніфест не прочитано), тож картка й діалог узгоджені; перевірка ТОЧНА за елементом назви. */
-  assert.equal((await page.locator(`${CARD} .cn-card-name b`).textContent()).trim(), "memo-own", "на картці — id, а не назва з маніфесту");
+  assert.match((await page.locator(`${CARD} .mc-name b`).textContent()).trim(), /^memo-own/, "на картці — id, а не назва з маніфесту");
   await page.click(`${CARD} [data-cn="trustinfo"]`);
   await page.waitForSelector("form.tr");
   const d = await dialogText(page);
@@ -336,7 +340,7 @@ test("8: тека з символьним посиланням — діалог 
   assert.match(d, /Модулю «memo-own» не можна довіритись/);
   assert.match(d, /символьне посилання/);
   assert.doesNotMatch(d, /Довіритись модулю/);
-  assert.equal(await page.locator('form.tr [data-a="ok"]').count(), 0, "«Довіряю» нема");
+  assert.equal(await page.locator('form.tr [data-a="ok"]').count(), 0, "«Довірити» нема");
   await page.keyboard.press("Escape");
   await page.waitForSelector("form.tr", { state: "detached" });
   assert.equal(await page.evaluate(() => document.activeElement?.dataset?.cn), "trustinfo", "фокус — на кнопці картки");

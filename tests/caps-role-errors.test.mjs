@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { DICT, setLang } from "../app/i18n.js";
-import { connPageHTML, nowHTML } from "../app/connections-view.js";
+import { setLang } from "../app/i18n.js";
+import { connPageHTML } from "../app/connections-view.js";
 import { providerLine, roleError, spaceJsonBad } from "../app/connections-model.js";
 
 /* r15-1: `capabilities.error` читався як «space.json не читається» для БУДЬ-ЯКОГО коду, тож збій одного модуля (напр. git-sync)
@@ -43,18 +43,10 @@ test("providerLine: просторовий збій — error для всіх; �
 
 test("сторінка: збій модуля ролі НЕ ховає картки; нечитабельний space.json — ховає", () => {
   const ok = connPageHTML(view(LOST_VCS));
-  assert.match(ok, /cn-card/, "картки лишились");
+  assert.match(ok, /class="mc"/, "картки лишились");
   assert.doesNotMatch(ok, /space\.json цього простору не читається/);
-  assert.match(ok, /Зараз: не працює — модуль цієї ролі не завантажився/, "роль vcs названа в секції");
-  assert.doesNotMatch(connPageHTML(view({ ...LOST_VCS, error: "space-json-unreadable", errors: undefined })), /cn-card/);
-});
-
-test("nowHTML: текст збою ролі є в обох мовах і не плутається зі space.json", () => {
-  assert.match(nowHTML("vcs", view(LOST_VCS)), /не працює — модуль цієї ролі не завантажився/);
-  assert.doesNotMatch(nowHTML("vcs", view(LOST_VCS)), /space\.json/);
-  setLang("en");
-  assert.match(nowHTML("vcs", view(LOST_VCS)), /Now: not working — this role's module failed to load/);
-  assert.ok(DICT.uk.cnNowRoleError && DICT.en.cnNowRoleError);
+  assert.doesNotMatch(ok, /cn-now|Зараз:/, "рядків «Зараз» на сторінці більше нема (етап Е)");
+  assert.doesNotMatch(connPageHTML(view({ ...LOST_VCS, error: "space-json-unreadable", errors: undefined })), /class="mc"/);
 });
 
 test("майстер і сторінка читають просторовий збій через spaceJsonBad, а не сире capabilities.error", () => {

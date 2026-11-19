@@ -57,7 +57,8 @@ import {
   filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from './shell-palette.js';
 import { initPwa } from './pwa.js';
-import { connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
+import { connMenuHTML, connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
+import { cardModel } from './modules-grid.js';
 import { TRUST_POST_TIMEOUT_MS, trustDialogHTML } from './trust-view.js';
 import {
   RESTART_POLL_MS, UPDATE_POLL_MS, blockedHelp, bootBefore, codeOfBody, nextUpdateInfo, pillModel, waitRestart,
@@ -73,7 +74,7 @@ import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
 import {
-  disableConsequences, formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
+  formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
   verdictText, writePayload,
 } from './connections-model.js';
 
@@ -212,10 +213,13 @@ let homePage = 'tasks';
 const connState = { spaceId: null, list: null, notes: [], failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
 let connFocusPending = false;
+/* Питання «Вимкнути?» в картці модуля (етап Е): `{id}` або `null`. Не зберігається; скидається зміною розділу, виходом зі сторінки й зміною простору. */
+let connAsk = null;
 /* Розділ сторінки «Налаштування» (`settings-model.js`): памʼятається в localStorage, як `homeUi`; типово `mods`. Шестерня веде в останній,
    ⌘K, фішка простору й кнопка «Задач» (`BAR_ACTIONS.conn`) і вхід із роллю — у `mods`. */
 let connSec = (() => { try { return readSec(localStorage.getItem(SEC_KEY)); } catch (e) { return 'mods'; } })();
 function setConnSec(sec) {
+  connAsk = null;
   connSec = readSec(sec);
   try { localStorage.setItem(SEC_KEY, connSec); } catch (e) {}
 }
@@ -3392,7 +3396,9 @@ function homePointerDown(ev) {
   if (homeEdit.ren && !homeDownInRen) { homeEatUntil = performance.now() + 500; commitRenameCard(true); }
   /* Питання «Видалити?»: клік повз його картку знімає питання (фокус не крадемо — він іде туди, куди клікнули), клік ковтаємо. */
   if (homeEdit.ask && !ev.target.closest('.th-card--ask')) { homeEatUntil = performance.now() + 500; cancelAsk(false); }
-  if (document.getElementById('th-menu') && !ev.target.closest('#th-menu') && !ev.target.closest('.th-more')) {
+  /* Так само питання «Вимкнути?» в картці модуля («Налаштування → Модулі»). */
+  if (homePage === 'conn' && connAsk && !ev.target.closest('.mc--ask')) { homeEatUntil = performance.now() + 500; cancelConnAsk(false); }
+  if (document.getElementById('th-menu') && !ev.target.closest('#th-menu') && !ev.target.closest('.th-more, .mc-more')) {
     closeTaskMenu(false);
     if (homeNode()?.contains(ev.target)) homeEatUntil = performance.now() + 500;
   }
@@ -3425,7 +3431,7 @@ function closeTaskMenu(refocus = true) {
   if (!m) return;
   const id = m.dataset.for;
   m.remove();
-  const btn = homeNode()?.querySelector(`.th-more[data-id="${CSS.escape(id)}"]`);
+  const btn = homeNode()?.querySelector(moreSel(id));
   btn?.setAttribute('aria-expanded', 'false');
   if (refocus) btn?.focus({ preventScroll: true });
 }
@@ -3451,7 +3457,8 @@ function restoreRen(h) {
   i.value = h.v;
   try { i.setSelectionRange(h.a, h.b); } catch (e) {}
 }
-const refocusMore = (id) => { if (id) homeNode()?.querySelector(`.th-more[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }); };
+const moreSel = (id) => `.th-more[data-id="${CSS.escape(id)}"], .mc-more[data-id="${CSS.escape(id)}"]`;
+const refocusMore = (id) => { if (id) homeNode()?.querySelector(moreSel(id))?.focus({ preventScroll: true }); };
 
 /* Перейменування назви задачі на картці (етап Д). */
 function startRenameCard(id) {
@@ -3839,7 +3846,7 @@ function enterHome({ spaces = true, page } = {}) {
     homeSeq += 1;
     /* Свіжий вхід забуває й ПРОСТІР попереднього візиту: «вантаження» малює заголовок поточного простору (`connSpace`
        без `spaceId` бере `currentSpace`), а `loadConn` побачить зміну й почистить решту (зайнятість, панель). */
-    if (fresh) { connState.spaceId = null; connState.list = null; connState.failed = null; connFocusPending = true; }
+    if (fresh) { connState.spaceId = null; connState.list = null; connState.failed = null; connFocusPending = true; connAsk = null; }
     /* Вхід із роллю (`enterConnections('vcs')`) веде до картки модуля — тобто в «Модулі», хоч би який розділ був останнім. */
     if (connFocusRole) setConnSec('mods');
     paintHome();
@@ -3859,6 +3866,7 @@ function enterHome({ spaces = true, page } = {}) {
 
 async function leaveHome() {
   closeCnDrawer({ focus: false });
+  connAsk = null;
   connEntrySeq += 1;                                         // вхід на «Підключення», що ще чекає перелік, відступає
   /* Майстер (3b): стан скинуто, а розмітку прибрано з DOM — оверлей лише ховається, і поля кроку 3 (секрети живуть у
      їхніх `.value`) лишились би в документі. ДО `await render()` нижче. */
@@ -3969,8 +3977,9 @@ function wireHome(el) {
     if (homeEdit.ren && !ev.target.closest('#th-ren')) { commitRenameCard(true); return; }
     /* Клік повз картку з питанням «Видалити?» знімає питання без інших дій (синтетичний клік без `pointerdown`; справжній уже ковтнуто). */
     if (homeEdit.ask && !ev.target.closest('.th-card--ask')) { cancelAsk(false); return; }
+    if (homePage === 'conn' && connAsk && !ev.target.closest('.mc--ask')) { cancelConnAsk(false); return; }
     /* Клік повз відкрите меню (і повз «⋯») закриває його без наслідків. */
-    if (document.getElementById('th-menu') && !ev.target.closest('#th-menu') && !ev.target.closest('.th-more')) { closeTaskMenu(false); return; }
+    if (document.getElementById('th-menu') && !ev.target.closest('#th-menu') && !ev.target.closest('.th-more, .mc-more')) { closeTaskMenu(false); return; }
     /* Посилання «Превʼю ↗» — своя навігація в новій вкладці: без цього рядка клік
        по ньому долітав би до картки й ще й відкривав би задачу. */
     if (ev.target.closest('a')) {
@@ -3982,7 +3991,12 @@ function wireHome(el) {
     if (homePage === 'wiz') { wiz.click(ev); return; }
     /* Кнопки карток і помилки сторінки «Підключення» (`data-cn` + `data-id`). */
     const c = ev.target.closest('[data-cn]');
-    if (c) { connAction(c.dataset.cn, c.dataset.id); return; }
+    if (c) {
+      /* Пункт меню «⋯» модуля: спершу меню геть, потім дія (як у меню картки задачі). */
+      if (ev.target.closest('#th-menu')) closeTaskMenu(false);
+      connAction(c.dataset.cn, c.dataset.id, c.dataset.role);
+      return;
+    }
     const b = ev.target.closest('[data-th]');
     if (!b) return;
     const v = b.dataset.v;
@@ -4104,7 +4118,7 @@ const connOpen = () => homeOpen && homePage === 'conn';
 const connSpace = () => (connState.spaceId == null
   ? currentSpace(spacesResp)
   : (Array.isArray(spacesResp?.spaces) ? spacesResp.spaces : []).find((x) => x.id === connState.spaceId) ?? null);
-const connView = () => ({ space: connSpace(), list: connState.list, notes: connState.notes, failed: connState.failed, busy: connState.busy, sec: connSec });
+const connView = () => ({ space: connSpace(), list: connState.list, notes: connState.notes, failed: connState.failed, busy: connState.busy, sec: connSec, ask: connAsk });
 
 /**
  * Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). `role` — вести до картки модуля
@@ -4143,16 +4157,19 @@ async function enterConnections(role = '') {
 }
 
 /**
- * Куди сідає перший фокус сторінки «Підключення»: кнопка картки модуля ролі `role` (постачальник, інакше перша картка секції —
- * `roleCardId`; фокус із прокруткою до неї), а без ролі чи без такої картки — перша кнопка першої картки або «Спробувати ще»
- * (без прокрутки, як було до 4a).
+ * Куди сідає перший фокус розділу «Модулі»: картка модуля ролі `role` (постачальник, інакше перша картка ролі —
+ * `roleCardId`; фокус із прокруткою до неї), інакше пунктирна картка цієї ролі (її «Додати»); без ролі — перша картка
+ * (чи «Спробувати ще», чи «Додати модуль»; без прокрутки).
  */
 function focusConnLanding(role) {
   const home = homeNode();
   const id = role ? roleCardId(role, connSpace()?.capabilities, connState.list) : null;
-  const card = id ? home?.querySelector(`.cn-card[data-id="${CSS.escape(id)}"]`) : null;
-  const inCard = card?.querySelector('[data-cn]:not([disabled])') ?? null;
-  (inCard ?? home?.querySelector('.cn-card [data-cn], [data-cn="retry"]'))?.focus({ preventScroll: !inCard });
+  const card = id ? home?.querySelector(`.mc[data-id="${CSS.escape(id)}"]`) : null;
+  const empty = role && !card ? home?.querySelector(`.mc--empty[data-role="${CSS.escape(role)}"]`) : null;
+  /* Пунктирна картка не фокусна сама: фокус — на її «Додати». */
+  if (card) { card.focus(); return; }
+  if (empty) { empty.querySelector('[data-cn="cat"]')?.focus(); return; }
+  (home?.querySelector('.mc[data-cn="card"], [data-cn="retry"], [data-cn="cat"]'))?.focus({ preventScroll: true });
 }
 
 /**
@@ -4173,7 +4190,7 @@ async function loadConn({ spaces = true } = {}) {
     /* Панель, відкрита для іншого простору, не лишається: людина свідомо перейшла (питання не треба), а запис із неї
        пішов би в простір, якого вона вже не бачить. */
     closeCnDrawer({ focus: false });
-    connState.spaceId = sp.id; connState.list = null; connState.notes = []; connState.failed = null; connState.busy.clear();
+    connState.spaceId = sp.id; connState.list = null; connState.notes = []; connState.failed = null; connState.busy.clear(); connAsk = null;
     paintHome();
   }
   try {
@@ -4206,11 +4223,19 @@ async function loadConn({ spaces = true } = {}) {
  * «Вимкнути» ІНШОГО модуля — теж (його панелі нема). Після питання світ міг змінитись (простір, список, зайнятість) —
  * картка перечитується зі свіжого списку, і дія йде далі лише в тому ж просторі.
  */
-async function connAction(act, id) {
+async function connAction(act, id, role) {
   if (act === 'retry') { loadConn(); return; }
+  /* «Додати модуль» / «Додати» ролі: каталог — Task 3. Поки без дії (обробник уже на місці, `role` — підсвітити роль). */
+  if (act === 'cat') { connCatalog(role); return; }
   let e = (connState.list || []).find((x) => x.id === id);
   if (!e || connState.busy.has(id)) return;
+  if (act === 'menu') { toggleConnMenu(id); return; }
+  /* Клік по картці: потрібна довіра → діалог довіри; увімкнений → шухляда; решта — дія самої картки (`modules-grid.js`). */
+  if (act === 'card') { act = cardModel(e).click; if (!act) return; }
+  if (act === 'askno') { cancelConnAsk(); return; }
+  if (act === 'askyes') { if (connAsk?.id === id) connDisable(e); return; }
   if (act === 'check') { connCheck(e); return; }
+  if (act === 'untrust') { connUntrust(e); return; }
   if (cnDrawer && (act !== 'disable' || cnDrawer.id === id)) {
     const spaceId = connState.spaceId;
     if (!(await dismissCnDrawer())) return;
@@ -4220,8 +4245,53 @@ async function connAction(act, id) {
   }
   if (act === 'enable') openCnDrawer(e, 'enable');
   else if (act === 'configure') openCnDrawer(e, 'edit');
-  else if (act === 'disable') connDisable(e);
-  else if (act === 'trust' || act === 'trustinfo') connTrust(e);
+  else if (act === 'disable') askConnDisable(e);
+  else if (act === 'trust' || act === 'trustinfo') connTrust(e, act);
+}
+
+/** Каталог «Додати модуль» — Task 3 етапу Е; до нього кнопки «Додати» стоять, але нічого не відкривають. */
+function connCatalog(role) {}
+
+/** «⋯» картки модуля: меню `.cv-ctx` (`#th-menu`) під кнопкою; повторний клік закриває. Позиція й клавіші — як у меню картки задачі. */
+function toggleConnMenu(id) {
+  const m = document.getElementById('th-menu');
+  if (m && m.dataset.for === id) { closeTaskMenu(); return; }
+  closeTaskMenu(false);
+  const home = homeNode();
+  const e = (connState.list || []).find((x) => x.id === id);
+  const btn = home?.querySelector(`.mc-more[data-id="${CSS.escape(id)}"]`);
+  if (!home || !e || !btn) return;
+  const tpl = document.createElement('template');
+  tpl.innerHTML = connMenuHTML(e).trim();
+  const menu = tpl.content.firstChild;
+  menu.style.position = 'fixed';
+  home.appendChild(menu);
+  const r = btn.getBoundingClientRect();
+  positionCtxMenu(menu, { x: r.right - menu.offsetWidth, y: r.bottom + 4 });
+  btn.setAttribute('aria-expanded', 'true');
+  menu.dataset.for = id;
+  menu.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
+}
+
+/** «Вимкнути» з меню: питання в самій картці (`.mc--ask`); фокус — на «Скасувати», Enter навмання нічого не вимкне. */
+function askConnDisable(e) {
+  connAsk = { id: e.id };
+  paintHome();
+  homeNode()?.querySelector(`.mc--ask[data-id="${CSS.escape(e.id)}"] .cfm-no`)?.focus({ preventScroll: true });
+}
+/** Питання знято (кнопка, Esc, клік повз). `refocus` — фокус на «⋯» цієї картки (клік повз віддає його тому, куди клікнули). */
+function cancelConnAsk(refocus = true) {
+  const id = connAsk?.id;
+  if (!id) return;
+  connAsk = null;
+  paintHome();
+  if (refocus) refocusMore(id);
+}
+/** «Забрати довіру» з меню картки: те саме питання й запит, що з панелі чи діалогу довіри; фокус — на картку. */
+async function connUntrust(e) {
+  const spaceId = connState.spaceId;
+  await untrustFlow(e, spaceId);
+  if (connOpen() && connState.spaceId === spaceId) refocusCard(e.id, 'card');
 }
 
 /** «Перевірити» на картці: вердикт міняє лише `status` модуля — перечитуємо сторінку. */
@@ -4236,21 +4306,13 @@ async function connCheck(e) {
 }
 
 /**
- * «Вимкнути»: питання з наслідками для ролей, які модуль зараз виконує; далі — як після будь-якої зміни модулів.
- *
- * ⛔ Простір береться ДО питання. Поки людина читає діалог, вікно може отримати фокус (`refreshHomeOnReturn` →
- * `loadConn`) і перевести сторінку в інший простір (агент перемкнув активний) — і `connState.spaceId` після відповіді
- * вказував би вже на ТОЙ простір: «Так» вимкнуло б у ньому вбудований модуль, якого людина не бачила. Тому знімок
- * `spaceId` (і запис простору для наслідків) — до `askYesNo`, а після нього сторінка мусить показувати той самий простір,
- * інакше не пишемо нічого (ні туди, ні сюди).
+ * «Вимкнути» після відповіді «Вимкнути» на питанні в картці (`askConnDisable`, `.mc--ask`); далі — як після будь-якої зміни
+ * модулів. Простір — `connState.spaceId`, той самий, що малює сторінку: перехід сторінки в інший простір (`loadConn`) знімає
+ * питання (`connAsk = null`), тож «Так» чужого простору не пише ніколи.
  */
 async function connDisable(e) {
   const spaceId = connState.spaceId;
-  const sp = connSpace();
-  const lines = disableConsequences(e, sp).map((c) =>
-    (c.consKey ? t(c.consKey) : t('cnDisableNone', roleTitle(c.role), c.noneKey ? t(c.noneKey) : '')));
-  if (!(await askYesNo([t('cnDisableAsk', modName(e)), ...lines].join('\n\n'), { yes: t('cnDisable'), danger: true }))) return;
-  if (!connOpen() || connState.spaceId !== spaceId) return;
+  connAsk = null;
   connState.busy.set(e.id, 'disable'); paintHome();
   try { await postForm('/api/module-disable', { space: spaceId, id: e.id }); }
   catch (err) {
@@ -4407,7 +4469,9 @@ async function openTrust(entry, spaceId) {
         })();
         return flight;
       },
-      focusBack: () => homeNode()?.querySelector(`[data-cn][data-id="${CSS.escape(entry.id)}"]:not([disabled])`) ?? null,
+      /* Кнопка дії картки (`.mc-foot`: «Довірити»/«Чому не можна…»), інакше будь-який гачок цього модуля (сама картка). */
+      focusBack: () => homeNode()?.querySelector(`.mc[data-id="${CSS.escape(entry.id)}"] .mc-foot [data-cn]:not([disabled])`)
+        ?? homeNode()?.querySelector(`[data-cn][data-id="${CSS.escape(entry.id)}"]:not([disabled])`) ?? null,
     });
     const interrupted = flight !== null && !landed;
     if (flight) await flight;
@@ -4439,10 +4503,10 @@ async function untrustFlow(entry, spaceId) {
 }
 
 /** «Довіритись…» / «Чому не можна…» на картці: діалог для простору сторінки (знімок до відкриття), потім фокус на картку. */
-async function connTrust(e) {
+async function connTrust(e, act = 'trust') {
   const spaceId = connState.spaceId;
   await openTrust(e, spaceId);
-  if (connOpen() && connState.spaceId === spaceId) refocusCard(e.id, 'trust');
+  if (connOpen() && connState.spaceId === spaceId) refocusCard(e.id, act);
 }
 
 /* ── бічна панель «Підключення» (`#cn-drawer`) ───────────────────────────────────────────────────────────
@@ -4811,6 +4875,38 @@ document.addEventListener('keydown', (ev) => {
   }
 });
 
+/** Клавіші відкритого меню картки (`#th-menu`; і задачі, і модуля): ↑/↓/Home/End по колу, Esc закриває (фокус на «⋯»), Tab
+ *  закриває й іде далі. `true` — меню відкрите (інших дій екрана під ним нема). */
+function menuKeys(ev, a) {
+  const menu = document.getElementById('th-menu');
+  if (!menu) return false;
+  const items = [...menu.querySelectorAll('[role="menuitem"]')];
+  const at = items.indexOf(a);
+  if (ev.key === 'Escape') { ev.preventDefault(); closeTaskMenu(); }
+  else if (ev.key === 'Tab') closeTaskMenu();
+  else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key) && items.length) {
+    ev.preventDefault();
+    const n = ev.key === 'Home' ? 0 : ev.key === 'End' ? items.length - 1
+      : (at + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[n].focus({ preventScroll: true });
+  }
+  return true;
+}
+
+/** Клавіатура розділу «Модулі»: меню «⋯» (як у картки задачі), Esc знімає питання «Вимкнути?» (фокус — на «⋯»), Enter/Пробіл
+ *  на самій картці роблять те, що клік по ній. Палітра, діалог питання й IME-композиція клавіш не віддають. */
+document.addEventListener('keydown', (ev) => {
+  if (!homeOpen || homePage !== 'conn' || ev.isComposing || paletteOverlay || askUp()) return;
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  const a = document.activeElement;
+  if (menuKeys(ev, a)) return;
+  if (ev.key === 'Escape' && connAsk) { ev.preventDefault(); cancelConnAsk(); return; }
+  if ((ev.key === 'Enter' || ev.key === ' ') && a && a.classList?.contains('mc') && a.dataset.cn === 'card') {
+    ev.preventDefault();
+    connAction('card', a.dataset.id);
+  }
+});
+
 /** Клавіатура екрана. `/` — у пошук; в пошуку: Esc чистить, потім знімає фокус,
  *  ↓ — до першої картки, Enter — відкрити першу; на картці: стрілки ходять по
  *  сітці (стовпців стільки, скільки дає розкладка зараз), Enter/Пробіл
@@ -4826,20 +4922,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
   /* Меню картки: ↑/↓/Home/End ходять по пунктах по колу, Esc закриває (фокус на «⋯»), Tab закриває й іде далі. Інших дій екрана
      (Esc, `/`, стрілки сітки) під відкритим меню нема. */
-  const menu = document.getElementById('th-menu');
-  if (menu) {
-    const items = [...menu.querySelectorAll('[role="menuitem"]')];
-    const at = items.indexOf(a);
-    if (ev.key === 'Escape') { ev.preventDefault(); closeTaskMenu(); }
-    else if (ev.key === 'Tab') closeTaskMenu();
-    else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key) && items.length) {
-      ev.preventDefault();
-      const n = ev.key === 'Home' ? 0 : ev.key === 'End' ? items.length - 1
-        : (at + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-      items[n].focus({ preventScroll: true });
-    }
-    return;
-  }
+  if (menuKeys(ev, a)) return;
   /* Поле назви на картці: Enter зберігає, Esc відкидає — до гілки `typing`. */
   if (a && a.id === 'th-ren' && homeEdit.ren) {
     if (ev.key === 'Enter') { ev.preventDefault(); commitRenameCard(true); }

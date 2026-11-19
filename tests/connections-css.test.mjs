@@ -112,3 +112,35 @@ test("3c (ревʼю Task 6): рамка «Забрати довіру» в па
   assert.match(hover, /border-color:var\(--bad\)/, "без власного :hover рамку забирав `.ctl--out:hover`");
   assert.match(hover, /color:var\(--hi\)/);
 });
+
+/* ── «Налаштування → Модулі» (етап Е): сітка карток `.mg` / `.mc` ── */
+
+test("етап Е: кожен клас сітки модулів із розмітки (`mcardHTML`, `emptyCardHTML`, `gridHTML`) має правило як суб'єкт", () => {
+  const src = read("connections-view.js").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/[^\n]*/g, "");
+  const want = ["mg", "mc", "mc-top", "mc-ic", "mc-name", "mc-tag", "mc-more", "mc-why", "mc-foot", "bdg", "mc--empty", "mc--ask", "sub"];
+  for (const c of want) {
+    assert.ok(new RegExp(`class="[^"]*\\b${c}\\b`).test(src) || src.includes(`"${c}"`), `розмітка не вживає клас ${c} — список застарів`);
+    assert.ok(isSubjectOfSomeRule(c), `клас ${c} без власного правила`);
+  }
+  for (const k of ["ok", "err", "off", "trust", "missing"]) assert.ok(isSubjectOfSomeRule(`bdg--${k}`), `bdg--${k}`);
+});
+
+test("етап Е: картка — flex-колонка з фокус-кільцем, «⋯» має фокус-кільце, сітка — auto-fill від 250px, питання не клікабельне", () => {
+  assert.match(rule(".mg") ?? "", /grid-template-columns:repeat\(auto-fill,minmax\(min\(250px,100%\),1fr\)\)/);
+  assert.match(rule(".mc") ?? "", /display:flex[\s\S]*flex-direction:column/);
+  assert.match(rule(".mc:focus-visible") ?? "", /outline:2px solid var\(--sel\)/);
+  assert.match(rule(".mc-more:focus-visible") ?? "", /outline:2px solid var\(--sel\)/);
+  assert.match(rule(".mc--empty") ?? "", /border-style:dashed/);
+  assert.match(rule(".mc--ask") ?? "", /cursor:default/);
+  assert.match(rule("h2.sub") ?? "", /text-transform:uppercase/);
+});
+
+test("етап Е: бейдж стану — крапка лише токенами; помилка й «Не встановлено» — червона крапка, а текст світлий (контраст на --s2)", () => {
+  assert.match(rule(".bdg--ok::before") ?? "", /background:var\(--ok\)/);
+  assert.match(rule(".bdg--err::before") ?? "", /background:var\(--bad\)/);
+  assert.match(rule(".bdg--err") ?? "", /color:var\(--hi\)/, "червоний текст на --s2 дає лише ≈4.1:1 (див. шапку розділу)");
+  assert.match(rule(".bdg--trust .ico") ?? "", /color:var\(--open\)/);
+  for (const sel of [".mg", ".mc", ".mc-why", ".bdg", ".mc--ask", ".mc--empty"]) {
+    assert.doesNotMatch(rule(sel) ?? "", /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i, `${sel}: літерал кольору замість токена`);
+  }
+});

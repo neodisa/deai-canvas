@@ -51,6 +51,46 @@ export async function goTasks(page, timeout = 15000) {
   await page.waitForSelector("#bar .space-chip", { timeout });
 }
 
+/**
+ * Розділ «Модулі» (етап Е): картка в сітці — `.mc[data-id]` з бейджем `.bdg--{ok|err|off|unchecked|trust|missing}`. Вимкнений ВБУДОВАНИЙ
+ * модуль у сітці не показується (він лише в каталозі, Task 3), тож його «картка» — це відсутність `.mc` (`waitGone`).
+ */
+export const BDG = { ok: "ok", error: "err", off: "off", unchecked: "unchecked", untrusted: "trust", missing: "missing" };
+export const waitBadge = (page, id, kind, timeout = 15000) => page.waitForSelector(`.mc[data-id="${id}"] .bdg--${BDG[kind]}`, { timeout });
+export const waitGone = (page, id, timeout = 15000) => page.waitForSelector(`.mc[data-id="${id}"]`, { state: "detached", timeout });
+/** Клас бейджа картки (`bdg bdg--ok`). */
+export const badgeClass = (page, id) => page.locator(`.mc[data-id="${id}"] .bdg`).getAttribute("class");
+/**
+ * «Підключити» вимкненого вбудованого модуля: у сітці його нема, а каталог («Додати модуль») — Task 3. Дія `enable` у `connAction` уже
+ * є (шухляда в режимі «Підключити»), і саме її викличе рядок каталогу, тож тут її викликає кнопка-свідок, вставлена в сторінку.
+ */
+export async function clickEnable(page, id) {
+  await page.evaluate((mod) => {
+    document.querySelector("[data-test-enable]")?.remove();
+    const b = document.createElement("button");
+    b.dataset.testEnable = "1"; b.dataset.cn = "enable"; b.dataset.id = mod; b.textContent = "enable";
+    document.querySelector("#tasks-home .set-in").appendChild(b);
+  }, id);
+  await page.click("[data-test-enable]");
+}
+/** Клік по картці (назва): увімкнений модуль → шухляда налаштувань. */
+export async function openCard(page, id) {
+  /* Картка з дією в польоті (`aria-busy`) на клік не відповідає — чекаємо, поки список перечитано. */
+  await page.waitForSelector(`.mc[data-id="${id}"]:not([aria-busy="true"])`, { timeout: 15000 });
+  await page.click(`.mc[data-id="${id}"] .mc-name b`);
+}
+/** «⋯» картки → пункт меню `act` (Налаштувати, Перевірити, Вимкнути…). */
+export async function menuAct(page, id, act) {
+  await page.click(`.mc-more[data-id="${id}"]`);
+  await page.click(`#th-menu [data-cn="${act}"][data-id="${id}"]`);
+}
+/** «⋯» → «Вимкнути» → питання в картці (`.mc--ask`). */
+export async function menuDisable(page, id) {
+  await menuAct(page, id, "disable");
+  await page.waitForSelector(`.mc--ask[data-id="${id}"]`);
+}
+export const askYes = (page, id) => page.click(`.mc--ask[data-id="${id}"] .cfm-yes`);
+export const askNo = (page, id) => page.click(`.mc--ask[data-id="${id}"] .cfm-no`);
 export const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 /** Текст першого збігу, обрізаний; `null`, коли вузла нема. */

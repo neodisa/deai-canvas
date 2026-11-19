@@ -49,7 +49,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
-import { VIEW, guardRealDeai, postJson, sleep, stop, waitBarReady, goTasks } from "./_spaces-kit.mjs";
+import { VIEW, clickEnable, guardRealDeai, goTasks, openCard, postJson, sleep, stop, waitBadge, waitBarReady } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга. ⚠️ Не 13600: ту займає `own-modules.test.mjs`, а `tests/live-ports.test.mjs` забороняє дві бази на одну смугу
@@ -200,7 +200,8 @@ async function openConnections(page) {
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length >= 1, null, { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
-  await page.waitForSelector('.cn-card[data-id="git-sync"]', { timeout: 15000 });
+  /* Етап Е: git-sync вимкнено → картки нема (лише пунктирна роль `vcs`); готовність сторінки — «Додати модуль» у голові. */
+  await page.waitForSelector('.th-head [data-cn="cat"]', { timeout: 15000 });
 }
 
 /** Дропдаун простору відкрито й закрито: список просторів (`spacesResp`) завантажено — на старті сторінка його не питає. */
@@ -263,12 +264,12 @@ test("2: «Підключення» — секція «Синхронізаці�
   const s = await boot(t, { enable: null });
   const { page } = s;
   await openConnections(page);
-  const sec = page.locator(".cn-sec", { has: page.locator('.cn-card[data-id="git-sync"]') });
-  assert.equal((await sec.locator(".cn-sec-h").textContent()).trim(), "Синхронізація з git");
-  assert.match(await sec.locator(".cn-now").textContent(), /Зараз: нікого — макети лише на цьому компʼютері/);
-  assert.match(await page.locator('.cn-card[data-id="git-sync"] .cn-badge').getAttribute("class"), /cn-badge--off/);
+  assert.equal(await page.locator('.mc[data-id="git-sync"]').count(), 0, "вимкнений git-sync — не в сітці");
+  const empty = page.locator('.mc--empty[data-role="vcs"]');
+  assert.equal((await empty.locator(".mc-name b").textContent()).trim(), "Синхронізація з git");
+  assert.match(await empty.locator(".mc-name span").textContent(), /макети лише на цьому компʼютері/, "наслідок «без модуля» — у пунктирній картці ролі");
 
-  await page.click('[data-cn="enable"][data-id="git-sync"]');
+  await clickEnable(page, "git-sync");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="repo"]');
   for (const key of ["branch", "path", "ssh_key", "host_ip", "autosync"]) {
     assert.equal(await page.locator(`#cn-drawer [data-cn-field="${key}"]`).count(), 1, `поле «${key}» у панелі`);
@@ -277,8 +278,9 @@ test("2: «Підключення» — секція «Синхронізаці�
   assert.equal(await page.inputValue('#cn-drawer [data-cn-field="path"]'), "mockup/{task}");
   await page.fill('#cn-drawer [data-cn-field="repo"]', s.originUrl);
   await page.click('#cn-drawer [data-cn-dr="submit"]');
-  await page.waitForSelector('.cn-card[data-id="git-sync"] .cn-badge--ok', { timeout: 15000 });
+  await waitBadge(page, "git-sync", "ok");
   assert.equal(await page.locator("#cn-drawer").isHidden(), true, "перевірка гаразд — панель закрилась");
+  assert.equal(await page.locator('.mc--empty[data-role="vcs"]').count(), 0, "роль із модулем — вже не пунктирна");
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "роль vcs вільна — питання «Замінити?» не було");
   const mod = readJson(path.join(s.spacePath, "space.json")).modules["git-sync"];
   assert.equal(mod.enabled, true);
@@ -286,12 +288,11 @@ test("2: «Підключення» — секція «Синхронізаці�
 
   /* Вердикт у панелі: «Працює.» і БІЛЬШЕ нічого (сирий англійський `detail` модуля — «branch main is not on the remote yet…» —
      в зелений рядок не потрапляє). */
-  await page.click('[data-cn="configure"][data-id="git-sync"]');
+  await openCard(page, "git-sync");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-dr="check"]');
   await page.click('#cn-drawer [data-cn-dr="check"]');
   await page.waitForSelector("#cn-drawer .cn-res--ok", { timeout: 15000 });
   assert.equal((await page.locator("#cn-drawer .cn-res--ok").textContent()).trim(), "Працює.");
-  assert.match(await sec.locator(".cn-now").textContent(), /Зараз: Git/);
   await page.keyboard.press("Escape");
   await page.waitForSelector("#cn-drawer", { state: "hidden" });
 
@@ -385,7 +386,7 @@ test("5: автосинк — autosync-off за замовчуванням (orig
   assert.equal(s.originRefs(), "", "вимкнений автосинк нічого не відправив");
 
   await openConnections(page);
-  await page.click('[data-cn="configure"][data-id="git-sync"]');
+  await openCard(page, "git-sync");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="autosync"]');
   assert.equal(await page.locator('#cn-drawer [data-cn-field="autosync"]').isChecked(), false);
   await page.locator('#cn-drawer [data-cn-field="autosync"]').check();
@@ -498,7 +499,7 @@ test("7: ЛІГА без змін — підпис «GitLab», «Налашту�
   const msg = await page.locator(".cv-ask-scrim").textContent();
   assert.match(msg, /GitLab налаштовується в tasks\.json/);
   assert.match(msg, /gitlab\.repo/);
-  assert.equal(await page.locator(".cn-card").count(), 0, "сторінка «Підключення» не відкрилась");
+  assert.equal(await page.locator(".mc").count(), 0, "сторінка «Підключення» не відкрилась");
   assert.equal(await page.locator("#bar .crumb--page").count(), 0, "крихти «Підключення» нема");
   await page.click('.cv-ask [data-a="ok"]');
   await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
@@ -532,9 +533,9 @@ test("8: «Налаштувати…» поза ЛІГОЮ (модуль без 
   const menu = await glMenu(page);
   assert.deepEqual(menu.map((m) => m.act), ["glsetup"]);
   await page.click('#bar [data-act="glsetup"]');
-  await page.waitForSelector('.cn-card[data-id="git-sync"]', { timeout: 15000 });
+  await page.waitForSelector('.mc[data-id="git-sync"]', { timeout: 15000 });
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "повідомлення про tasks.json не показано");
-  await page.waitForFunction(() => document.activeElement?.closest?.(".cn-card")?.dataset?.id === "git-sync", null, { timeout: 15000 });
+  await page.waitForFunction(() => document.activeElement?.closest?.(".mc")?.dataset?.id === "git-sync", null, { timeout: 15000 });
   assert.match(await page.locator("#bar .crumb--flat").textContent(), /Налаштування/);
   assert.deepEqual(s.outside, []);
   assert.deepEqual(s.errors, []);
@@ -552,9 +553,9 @@ test("8b: «Налаштувати…» на свіжозавантаженій 
   const menu = await glMenu(page);
   assert.deepEqual(menu.map((m) => m.act), ["glsetup"]);
   await page.click('#bar [data-act="glsetup"]');
-  await page.waitForSelector('.cn-card[data-id="git-sync"]', { timeout: 15000 });
+  await page.waitForSelector('.mc[data-id="git-sync"]', { timeout: 15000 });
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "повідомлення про tasks.json не показано");
-  await page.waitForFunction(() => document.activeElement?.closest?.(".cn-card")?.dataset?.id === "git-sync", null, { timeout: 15000 });
+  await page.waitForFunction(() => document.activeElement?.closest?.(".mc")?.dataset?.id === "git-sync", null, { timeout: 15000 });
   assert.match(await page.locator("#bar .crumb--flat").textContent(), /Налаштування/);
   assert.ok(s.requests.some((u) => new URL(u).pathname === "/api/spaces"), "вхід сам прочитав перелік просторів");
   assert.deepEqual(s.outside, []);

@@ -297,7 +297,7 @@ test("openTrust (ревʼю Task 7): оверлей скасував діало�
   assert.deepEqual(env.log, []);
 });
 
-test("openTrust (ревʼю Task 7): повторне «Довіряю» в тому самому діалозі після відмови — новий POST із тим самим відбитком, і знову рівно cnRefDeclined", async () => {
+test("openTrust (ревʼю Task 7): повторне «Довірити» в тому самому діалозі після відмови — новий POST із тим самим відбитком, і знову рівно cnRefDeclined", async () => {
   /* Мутація `flight ||= (async …)()` лишала старий політ: другий клік не слав запиту й показував застарілий результат. */
   const env = trustEnv({
     post: async () => { throw refusal("trust-declined", "system confirmation: no"); },
@@ -376,7 +376,7 @@ test("openTrust: збій читання свіжих даних — повід�
   assert.equal(empty.dialogs.length, 0);
 });
 
-test("openTrust, refused: діалог без «Довіряю» (лише причина й «Закрити») — розмітка з сервера доходить до askForm як є", async () => {
+test("openTrust, refused: діалог без «Довірити» (лише причина й «Закрити») — розмітка з сервера доходить до askForm як є", async () => {
   const env = trustEnv({
     get: async () => ({ trust: { id: "acme", name: "Acme", version: "1", roles: ["publish"], path: "~/w/acme", state: "refused", record: false,
       refused: { code: "symlink", detail: "alias.py: symbolic link" } } }),
@@ -397,8 +397,23 @@ test("openTrust: запасний відкривач фокуса — кнопк
     afterModulesChange: async () => {}, untrustFlow: async () => true,
   };
   await build(["openTrust"], deps).openTrust(ENTRY, "alpha");
-  assert.deepEqual(queries[0], '[data-cn][data-id="<acme>"]:not([disabled])');
-  assert.deepEqual(queries[1], { sel: '[data-cn][data-id="<acme>"]:not([disabled])' });
+  /* Етап Е: спершу кнопка дії картки модуля (`.mc-foot`: «Довірити»/«Чому не можна…»); сама картка — запасна (див. наступний тест). */
+  const first = '.mc[data-id="<acme>"] .mc-foot [data-cn]:not([disabled])';
+  assert.deepEqual(queries[0], first);
+  assert.deepEqual(queries[1], { sel: first });
+});
+
+test("openTrust: кнопки дії нема (модуль без неї) — фокус на будь-якому гачку цього модуля (картка)", async () => {
+  const queries = [];
+  const deps = {
+    t, refusalView, modName, getLang: () => "uk", CSS: { escape: (s) => `<${s}>` }, trustDialogHTML,
+    homeNode: () => ({ querySelector: (sel) => { queries.push(sel); return sel.includes("mc-foot") ? null : { sel }; } }),
+    askForm: async (b, opts) => { opts.focusBack(); return null; },
+    formApi: async () => ({ trust: trustData() }), trustPost: async () => ({}), tell() {}, toast() {},
+    afterModulesChange: async () => {}, untrustFlow: async () => true,
+  };
+  await build(["openTrust"], deps).openTrust(ENTRY, "alpha");
+  assert.ok(queries.includes('[data-cn][data-id="<acme>"]:not([disabled])'), "запасний селектор — будь-який гачок модуля");
 });
 
 /* ── trustPost ── */

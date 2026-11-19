@@ -10,7 +10,7 @@ import { DICT } from "../app/i18n.js";
 import {
   cardView, isOwn, noteView, ownRuns, providerLine, refusalView, roleHolders, trustLine, trustWhyKey, whyOf,
 } from "../app/connections-model.js";
-import { cardHTML, connPageHTML, drawerHTML, nowHTML, ownTagHTML, trustLineHTML } from "../app/connections-view.js";
+import { connMenuHTML, connPageHTML, drawerHTML, mcardHTML, ownTagHTML, trustLineHTML } from "../app/connections-view.js";
 import { publishErr } from "../app/spaces-model.js";
 
 const own = (over = {}) => ({
@@ -119,7 +119,6 @@ test("providerLine: роль «на папері» за увімкненим н�
   assert.equal(providerLine("comments", caps, list).kind, "none", "чужа роль");
   assert.equal(providerLine("publish", caps, [builtin({ enabled: true })]).kind, "none", "вбудований без `runs` — не «свій, що чекає довіри»");
   assert.equal(providerLine("publish", { ...caps, error: "space-json-unreadable" }, list).kind, "error", "стан простору — першим");
-  assert.match(nowHTML("publish", { space: { capabilities: caps }, list }), /Зараз: «Acme» — чекає довіри на цьому компʼютері/);
 });
 
 test("roleHolders: увімкнений недовірений свій модуль — власник ролі (сервер так само тримає роль «на папері»)", () => {
@@ -127,27 +126,28 @@ test("roleHolders: увімкнений недовірений свій моду
   assert.deepEqual(roleHolders(list[1], list).map((x) => x.id), ["acme"]);
 });
 
-test("cardHTML: пігулка «свій» з текою в title, бейдж «Потрібна довіра» з замком, кнопка «Довіритись…»", () => {
-  const h = cardHTML(own({ name: '<img src=x onerror="alert(1)">', source: '~/a"b<c' }), new Map());
-  assert.match(h, /<span class="cn-tag cn-tag--own" title="~\/a&quot;b&lt;c">свій<\/span>/);
-  assert.match(h, /cn-badge cn-badge--untrusted"><svg[^>]*>.*?<\/svg>Потрібна довіра/s);
+test("mcardHTML: пігулка «свій» з текою в title, бейдж «Чекає довіри» з замком, кнопка «Довірити»", () => {
+  const h = mcardHTML(own({ name: '<img src=x onerror="alert(1)">', source: '~/a"b<c' }), new Map());
+  assert.match(h, /<span class="mc-tag" title="~\/a&quot;b&lt;c">свій<\/span>/);
+  assert.match(h, /bdg bdg--trust"><svg[^>]*>.*?<\/svg>Чекає довіри/s);
   assert.match(h, /data-cn="trust" data-id="acme">/);
   assert.doesNotMatch(h, /<img/, "назва з маніфесту — текст");
-  assert.doesNotMatch(cardHTML(builtin(), new Map()), /cn-tag--own|data-cn="trust/);
+  assert.doesNotMatch(mcardHTML(builtin(), new Map()), /mc-tag|data-cn="trust/);
 });
 
-test("cardHTML: рядок довіри під описом; «Чому не можна…» для refused", () => {
-  const h = cardHTML(own({ trust: "changed", runs: true, status: "unchecked" }), new Map());
-  assert.match(h, /<p class="cn-trust">.*У теці є зміни/s);
-  const r = cardHTML(own({ trust: "refused", status: "error", trust_error: "symlink", error: "symlink: a" }), new Map());
+test("mcardHTML: рядок довіри в картці; «Чому не можна…» для refused", () => {
+  const h = mcardHTML(own({ trust: "changed", runs: true, status: "unchecked" }), new Map());
+  assert.match(h, /<p class="mc-why">У теці є зміни/);
+  const r = mcardHTML(own({ trust: "refused", status: "error", trust_error: "symlink", error: "symlink: a" }), new Map());
   assert.match(r, /data-cn="trustinfo"/);
-  assert.match(r, /class="cn-why".*У теці є символьне посилання/s);
-  /* refused ЗІ знімком: причина вставлена в речення (а не «undefined»), працює попередня. */
-  const k = cardHTML(own({ trust: "refused", runs: true, status: "ok", enabled: true, trust_error: "too-big" }), new Map());
-  assert.match(k, /<p class="cn-trust">.*Нову версію теки не можна довірити\. Тека завелика \(понад 5 МіБ\)\. Працює попередня\./s);
+  assert.match(r, /class="mc-why">У теці є символьне посилання/);
+  /* refused ЗІ знімком: причина вставлена в речення (а не «undefined»), працює попередня; «Чому не можна…» — у меню «⋯». */
+  const e = own({ trust: "refused", runs: true, status: "ok", enabled: true, trust_error: "too-big" });
+  const k = mcardHTML(e, new Map());
+  assert.match(k, /<p class="mc-why">Нову версію теки не можна довірити\. Тека завелика \(понад 5 МіБ\)\. Працює попередня\./);
   assert.doesNotMatch(k, /undefined/);
-  assert.match(k, /data-cn="trustinfo"/);
-  assert.doesNotMatch(k, /class="cn-why"/, "знімок працює — картка без червоної причини");
+  assert.doesNotMatch(k, /data-cn="trustinfo"/, "на картці — не друга дія");
+  assert.match(connMenuHTML(e), /data-cn="trustinfo" data-id="acme"/);
 });
 
 test("ownTagHTML і trustLineHTML екранують навіть текст словника (захист на глибину: текст у розмітку лише через esc)", () => {
@@ -163,11 +163,11 @@ test("ownTagHTML і trustLineHTML екранують навіть текст с�
   assert.equal(trustLineHTML(own()), "");
 });
 
-test("cardHTML: «Довіритись…» несе замок, «Чому не можна…» — знак питання", () => {
-  assert.match(cardHTML(own(), new Map()), /data-cn="trust" data-id="acme"><svg[^>]*><use href="#i-lock"\/><\/svg>Довіритись…/);
-  const r = cardHTML(own({ trust: "refused", status: "error", trust_error: "symlink", error: "symlink: a" }), new Map());
+test("mcardHTML: «Довірити» несе замок, «Чому не можна…» — знак питання", () => {
+  assert.match(mcardHTML(own(), new Map()), /data-cn="trust" data-id="acme"><svg[^>]*><use href="#i-lock"\/><\/svg>Довірити/);
+  const r = mcardHTML(own({ trust: "refused", status: "error", trust_error: "symlink", error: "symlink: a" }), new Map());
   assert.match(r, /data-cn="trustinfo" data-id="acme"><svg[^>]*><use href="#i-help"\/><\/svg>Чому не можна…/);
-  assert.match(cardHTML(own(), new Map([["acme", "trust"]])), /data-cn="trust" data-id="acme" disabled>/, "дія в польоті — кнопка вимкнена");
+  assert.match(mcardHTML(own(), new Map([["acme", "trust"]])), /data-cn="trust" data-id="acme" disabled>/, "дія в польоті — кнопка вимкнена");
 });
 
 test("connPageHTML: примітки під головою — лише коли є", () => {
@@ -178,15 +178,15 @@ test("connPageHTML: примітки під головою — лише коли
   const h = connPageHTML({ ...base, notes: [{ folder: "modules/<b>", code: "id-taken" }] });
   assert.match(h, /<ul class="cn-notes"><li class="cn-note">/);
   assert.match(h, /modules\/&lt;b&gt;/);
-  assert.match(h, /Агент може написати свій модуль/, "речення для агента");
-  assert.ok(h.indexOf("cn-notes") < h.indexOf("cn-sec"), "примітки — над секціями, а не під ними");
+  assert.doesNotMatch(h, /cn-agent|Агент може написати свій модуль/, "блок «Через агента» переїхав в AGENTS.md (етап Е)");
+  assert.ok(h.indexOf("cn-notes") < h.indexOf('class="mg"'), "примітки — над сіткою, а не під нею");
 });
 
-test("connPageHTML: роль «на папері» (capabilities.publish = null БЕЗ error) і ввімкнений недовірений свій модуль — картка з «Довіритись…», не помилка сторінки", () => {
+test("connPageHTML: роль «на папері» (capabilities.publish = null БЕЗ error) і ввімкнений недовірений свій модуль — картка з «Довірити», не помилка сторінки", () => {
   const sp = { id: "alpha", name: "Alpha", path: "~/work/alpha", capabilities: { publish: null } };
   const h = connPageHTML({ space: sp, list: [own({ enabled: true })], notes: [], failed: null, busy: new Map() });
   assert.match(h, /data-cn="trust" data-id="acme"/);
-  assert.match(h, /чекає довіри/);
+  assert.match(h, /Чекає довіри/);
   assert.doesNotMatch(h, /cn-err/, "поправка 11: без error сторінка не ховає картки");
 });
 
@@ -214,8 +214,8 @@ test("publishErr: module-untrusted має людський текст без т�
 });
 
 test("словник: кожен ключ, який віддає модель для своїх модулів, є в обох мовах", () => {
-  const keys = new Set(["cnCustom", "cnBadgeUntrusted", "cnTrust", "cnTrustInfo", "cnUntrust", "cnUntrustAsk", "cnUntrustRole", "cnNowWaiting",
-    "cnUntrustKeeps", "cnToastTrusted", "cnToastUntrusted", "cnAgentOwn", "trWhyOther"]);
+  const keys = new Set(["cnCustom", "cnBadgeUntrusted", "cnTrust", "cnTrustInfo", "cnUntrust", "cnUntrustAsk", "cnUntrustRole",
+    "cnUntrustKeeps", "cnToastTrusted", "cnToastUntrusted", "trWhyOther"]);
   for (const c of ["symlink", "hardlink", "special-file", "too-many-files", "too-big", "too-deep", "bad-name", "unreadable",
     "unstable", "bad-manifest", "snapshot-damaged", "trust-unreadable"]) keys.add(trustWhyKey(c));
   for (const e of [own({ enabled: true }), own({ trust: "changed", runs: true }), own({ trust: "refused", runs: true, trust_error: "x" }),

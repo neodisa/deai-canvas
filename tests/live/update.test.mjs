@@ -89,7 +89,7 @@ test("пігулка й діалог оновлення: без файла — �
     await page.click('#bar [data-dd="space"]');
     await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
     await page.click('.dd--spaces [data-act="conn"]');
-    await page.waitForSelector('.cn-card[data-id="static-publish"]', { timeout: 15000 });
+    await page.waitForSelector('.mc[data-id="static-publish"]', { timeout: 15000 });
     assert.equal(await pill(page).count(), 1, "екран «Підключення»");
     assert.match(await pill(page).textContent(), /99\.0\.0/);
   });

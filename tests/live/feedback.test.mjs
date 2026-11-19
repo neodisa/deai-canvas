@@ -108,7 +108,7 @@ test("діалог відгуку: екрани, валідація, черга 
     await page.click('#bar [data-dd="space"]');
     await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
     await page.click('.dd--spaces [data-act="conn"]');
-    await page.waitForSelector('.cn-card[data-id="static-publish"]', { timeout: 15000 });
+    await page.waitForSelector('.mc[data-id="static-publish"]', { timeout: 15000 });
     await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     await closeForm(page);

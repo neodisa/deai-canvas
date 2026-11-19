@@ -29,7 +29,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { guardRealDeai, postJson, sleep, stop, goTasks } from "./_spaces-kit.mjs";
+import { askNo, clickEnable, guardRealDeai, goTasks, menuDisable, postJson, sleep, stop, waitBadge } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 import { hermeticLiga } from "./_liga-supabase.mjs";
 
@@ -224,34 +224,28 @@ test("2: модуль відмовив — банер із ЙОГО тексто
   assert.equal(await page.locator("#tasks-home .th-banner").count(), 0, "банер збою команди на «Моїх»");
 });
 
-test("3: «Підключення» — секція «Командний дашборд» з картками supabase-dashboard і фейкового модуля; підключення з екрана дає роль", async (t) => {
+test("3: «Підключення» — роль «Командний дашборд» без модуля (пунктирна картка між git і трекером); підключення з екрана дає роль і картку", async (t) => {
   const w = workDir();
   const { page, url } = await bootPlain(t, { portOffset: 200 });
   await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
-  await page.waitForSelector('.cn-card[data-id="static-publish"]', { timeout: 15000 });
+  await page.waitForSelector('.mc[data-id="static-publish"]', { timeout: 15000 });
 
-  const titles = await page.locator(".cn-sec-h").allTextContents();
-  assert.ok(titles.includes("Командний дашборд"), `секції: ${JSON.stringify(titles)}`);
-  /* Порядок ролей (`ROLE_ORDER`): дашборд між синхронізацією з git і трекером (4c-2: «Трекер задач» стоїть перед токенами). */
-  assert.deepEqual(titles.slice(titles.indexOf("Командний дашборд") - 1, titles.indexOf("Командний дашборд") + 2),
-    ["Синхронізація з git", "Командний дашборд", "Трекер задач"]);
-  const sec = page.locator(".cn-sec", { has: page.locator(".cn-sec-h", { hasText: "Командний дашборд" }) });
-  assert.deepEqual((await sec.locator(".cn-card").evaluateAll((els) => els.map((e) => e.dataset.id))).sort(),
-    ["fake-dashboard", "supabase-dashboard"], "у секції мусять стояти обидва модулі ролі");
-  for (const id of ["fake-dashboard", "supabase-dashboard"]) {
-    assert.match(await sec.locator(`.cn-card[data-id="${id}"] .cn-badge`).getAttribute("class"), /cn-badge--off/, `${id}: не підключений`);
-  }
-  /* Вбудований модуль має свої тексти з словника: назва — не сирий id. */
-  assert.match(await sec.locator('.cn-card[data-id="supabase-dashboard"]').textContent(), /Supabase/);
+  /* Етап Е: вимкнені вбудовані модулі (supabase-dashboard) — лише в каталозі; роль без модуля — пунктирна картка за ROLE_ORDER. */
+  const roles = await page.locator(".mc--empty").evaluateAll((els) => els.map((e) => e.dataset.role));
+  assert.deepEqual(roles.slice(roles.indexOf("dashboard") - 1, roles.indexOf("dashboard") + 2), ["vcs", "dashboard", "tracker"],
+    `порожні ролі: ${JSON.stringify(roles)}`);
+  assert.match(await page.locator('.mc--empty[data-role="dashboard"]').textContent(), /Командний дашборд/);
+  assert.equal(await page.locator('.mc[data-id="fake-dashboard"], .mc[data-id="supabase-dashboard"]').count(), 0, "вимкнені модулі ролі — не в сітці");
 
-  await page.click('[data-cn="enable"][data-id="fake-dashboard"]');
+  await clickEnable(page, "fake-dashboard");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="rows_file"]');
   await page.fill('#cn-drawer [data-cn-field="rows_file"]', w.rowsFile);
   await page.click('#cn-drawer [data-cn-dr="submit"]');
-  await page.waitForSelector('.cn-card[data-id="fake-dashboard"] .cn-badge--ok', { timeout: 15000 });
+  await waitBadge(page, "fake-dashboard", "ok");
+  assert.equal(await page.locator('.mc--empty[data-role="dashboard"]').count(), 0, "роль із модулем — вже не пунктирна");
   const caps = (await (await fetch(`${url}/api/spaces`)).json()).spaces.find((s) => s.id === "alpha").capabilities;
   assert.equal(caps.dashboard, "fake-dashboard", "після підключення з екрана роль мусить мати власника");
   assert.deepEqual(page.errors, []);

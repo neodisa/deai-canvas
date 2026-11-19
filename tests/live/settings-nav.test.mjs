@@ -82,7 +82,7 @@ test("1–6: шестерня → «Модулі»; клік по розділу
   await page.waitForFunction(() => document.querySelector('.set-nav .nav-i[aria-current="page"]')?.dataset.v === "mods", null, { timeout: 15000 });
   assert.equal(await h1(page), "Модулі", "⌘K веде в «Модулі»");
 
-  await page.waitForSelector(".cn-card", { timeout: 15000 });   // перемальовка після списку модулів відбулась
+  await page.waitForSelector(".mc", { timeout: 15000 });   // перемальовка після списку модулів відбулась
   assert.equal(await page.locator(".set-nav").evaluate((n) => getComputedStyle(n).flexDirection), "column", "широко — колонка");
   await page.setViewportSize({ width: 700, height: 900 });
   assert.equal(await page.locator(".set-nav").evaluate((n) => getComputedStyle(n).flexDirection), "row", "вузько — рядок");

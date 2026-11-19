@@ -25,7 +25,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { guardRealDeai, postJson, stop, goTasks } from "./_spaces-kit.mjs";
+import { askNo, clickEnable, guardRealDeai, goTasks, menuDisable, postJson, stop, waitBadge } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 import { hermeticLiga } from "./_liga-supabase.mjs";
 
@@ -217,46 +217,39 @@ test("3: трекер у режимі «збій» після успіху — �
   assert.deepEqual(page.errors, []);
 });
 
-test("4: «Підключення» — секція «Трекер задач» з jira-tracker і фейковим модулем; вимкнення називає наслідок (діалог, не нативний), «Скасувати» нічого не міняє", async (t) => {
+test("4: «Підключення» — роль «Трекер задач» без модуля; вимкнення називає наслідок (питання в картці), «Скасувати» нічого не міняє", async (t) => {
   const w = workDir(t);
   const { page, url } = await bootPlain(t, { portOffset: 300 });
   await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
-  await page.waitForSelector('.cn-card[data-id="static-publish"]', { timeout: 15000 });
+  await page.waitForSelector('.mc[data-id="static-publish"]', { timeout: 15000 });
 
-  const titles = await page.locator(".cn-sec-h").allTextContents();
-  const at = titles.indexOf("Трекер задач");
-  assert.ok(at >= 0, `секції: ${JSON.stringify(titles)}`);
-  assert.deepEqual(titles.slice(at - 1, at + 2), ["Командний дашборд", "Трекер задач", "Сповіщення Teams"], "4c-3: після трекера — «Сповіщення Teams», токени далі");
-  const sec = page.locator(".cn-sec", { has: page.locator(".cn-sec-h", { hasText: "Трекер задач" }) });
-  assert.deepEqual((await sec.locator(".cn-card").evaluateAll((els) => els.map((e) => e.dataset.id))).sort(),
-    ["fake-tracker", "jira-tracker"], "у секції мусять стояти обидва модулі ролі");
-  for (const id of ["fake-tracker", "jira-tracker"]) {
-    assert.match(await sec.locator(`.cn-card[data-id="${id}"] .cn-badge`).getAttribute("class"), /cn-badge--off/, `${id}: не підключений`);
-  }
-  /* Вбудований модуль має свої тексти зі словника: назва — не сирий id. */
-  assert.match(await sec.locator('.cn-card[data-id="jira-tracker"]').textContent(), /Jira/);
+  const roles = await page.locator(".mc--empty").evaluateAll((els) => els.map((e) => e.dataset.role));
+  const at = roles.indexOf("tracker");
+  assert.ok(at >= 0, `порожні ролі: ${JSON.stringify(roles)}`);
+  assert.deepEqual(roles.slice(at - 1, at + 2), ["dashboard", "tracker", "notify"], "4c-3: після трекера — «Сповіщення Teams», токени далі");
+  assert.equal(await page.locator('.mc[data-id="fake-tracker"], .mc[data-id="jira-tracker"]').count(), 0, "вимкнені модулі ролі — не в сітці (лише в каталозі)");
 
-  await page.click('[data-cn="enable"][data-id="fake-tracker"]');
+  await clickEnable(page, "fake-tracker");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="statuses_file"]');
   await page.fill('#cn-drawer [data-cn-field="statuses_file"]', w.statusesFile);
   await page.click('#cn-drawer [data-cn-dr="submit"]');
-  await page.waitForSelector('.cn-card[data-id="fake-tracker"] .cn-badge--ok', { timeout: 15000 });
+  await waitBadge(page, "fake-tracker", "ok");
   const capsOf = async () => (await (await fetch(`${url}/api/spaces`)).json()).spaces.find((s) => s.id === "alpha").capabilities;
   assert.equal((await capsOf()).tracker, "fake-tracker", "після підключення з екрана роль мусить мати власника");
 
-  /* Вимкнення: діалог (внутрішній `.cv-ask-scrim`) каже, що зникнуть статуси; «Скасувати» лишає все як було. */
-  await page.click('[data-cn="disable"][data-id="fake-tracker"]');
-  await page.waitForSelector(".cv-ask-scrim", { timeout: 15000 });
-  const ask = await page.locator(".cv-ask-scrim").textContent();
+  /* Вимкнення: питання в картці каже, що зникнуть статуси; «Скасувати» лишає все як було. */
+  await menuDisable(page, "fake-tracker");
+  const ask = await page.locator(".mc--ask .cfm-t").textContent();
   assert.match(ask, /Статуси задач зникнуть з екрана «Задачі» й перестануть оновлюватись у дашборді/,
-    `діалог вимкнення мусить назвати наслідок для трекера: ${ask}`);
+    `питання вимкнення мусить назвати наслідок для трекера: ${ask}`);
   assert.doesNotMatch(ask, /лишиться без модуля/, "загальний текст «без модуля» не мусить підміняти текст трекера");
-  await page.click('.cv-ask-scrim button[data-a="cancel"]');
-  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
-  assert.match(await page.locator('.cn-card[data-id="fake-tracker"] .cn-badge').getAttribute("class"), /cn-badge--ok/, "скасування не вимикає");
+  assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "діалогу нема — питання в картці");
+  await askNo(page, "fake-tracker");
+  await page.waitForSelector(".mc--ask", { state: "detached" });
+  await waitBadge(page, "fake-tracker", "ok");               // скасування не вимикає
   assert.equal((await capsOf()).tracker, "fake-tracker", "скасування не міняє постачальника");
   assert.deepEqual(page.errors, []);
 });

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DICT, setLang } from "../app/i18n.js";
-import { cardHTML, connPageHTML, drawerHTML, fieldHTML, modName, nowHTML, roleTitle } from "../app/connections-view.js";
+import { connMenuHTML, connPageHTML, drawerHTML, emptyCardHTML, fieldHTML, mcardHTML, modName, roleTitle } from "../app/connections-view.js";
 import {
   builtinText, formFields, initialForm, refusalView, roleKeys, verdictText,
 } from "../app/connections-model.js";
@@ -41,44 +41,48 @@ const btnText = (h, act) => {
   return m ? m[1].replace(/<[^>]*>/g, "").trim() : null;
 };
 
-test("сторінка: заголовок, тека, секції в порядку ролей, рядок «Зараз», агент з id простору", () => {
+test("сторінка: заголовок з «Додати модуль», сітка карток, «Без модуля · N»; ні «Зараз», ні «Через агента»", () => {
   const h = connPageHTML(view());
   assert.match(h, /<h6>[^]*?Простір · Studio<\/h6>/, "назва простору — у групі лівої навігації");
-  assert.match(h, /<h1 class="th-h" id="cn-title">Модулі<\/h1>/);
-  const order = ["Публікація", "Командні коментарі", "Токени дизайн-системи"].map((s) => h.indexOf(`>${s}<`));
-  assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], String(order));
-  assert.match(h, /Зараз: Публікація в теку/);
-  assert.match(h, /Зараз: нікого — коментарі лише локальні/);
-  assert.match(h, /\/api\/modules\?space=studio/);
-  assert.doesNotMatch(h, /Не встановлені/, "секції missing нема, коли таких модулів нема");
+  assert.match(h, /<div class="th-head"><h1 class="th-h" id="cn-title">Модулі<\/h1><button type="button" class="ctl ctl--out" data-cn="cat">[^]*?Додати модуль<\/button><\/div>/);
+  assert.equal((h.match(/class="mc"/g) || []).length, 1, "у сітці лише увімкнений static-publish (вимкнені вбудовані — лише в каталозі)");
+  assert.match(h, /data-cn="card" data-id="static-publish"/);
+  assert.match(h, /<h2 class="sub">Без модуля · 6<\/h2>/, "шість ролей без модуля");
+  const order = ["Командні коментарі", "Синхронізація з git", "Токени дизайн-системи"].map((r) => h.indexOf(`<b>${r}</b>`));
+  assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], `порядок пунктирних карток: ${order}`);
+  assert.doesNotMatch(h, /Зараз|cn-now|cn-sec|cn-agent|\/api\/modules\?space=/, "рядків «Зараз», секцій ролей і блоку «Через агента» нема");
+  assert.doesNotMatch(h, /Не встановлені/, "окремої секції missing нема");
 });
 
-test("сторінка: ЛІГА-модулі, missing-секція, завантаження, помилка списку й нечитабельний space.json", () => {
+test("сторінка: ЛІГА-модулі, missing-картка, завантаження, помилка списку й нечитабельний space.json", () => {
   const liga = { ...SP, capabilities: { publish: "vercel-publish", comments: "supabase-comments", tokens: null }, compat: { publish: "design-canvas" } };
   const missing = { id: "gone", name: "gone", roles: [], enabled: true, status: "missing", settings: [] };
   const h = connPageHTML(view({ space: liga, list: [...LIST, missing] }));
-  assert.doesNotMatch(h, /вбудована інтеграція ЛІГА/, "4d-4c: вбудованої інтеграції нема — рядок «Зараз» показує модуль");
-  assert.match(h, /Не встановлені на цьому компʼютері/);
-  assert.match(h, /data-cn="disable" data-id="gone"/);
+  assert.doesNotMatch(h, /вбудована інтеграція ЛІГА/, "4d-4c: вбудованої інтеграції нема");
+  assert.doesNotMatch(h, /Не встановлені на цьому компʼютері/, "окремої секції нема: «Не встановлено» — бейдж картки");
+  assert.match(h, /<div class="mc" role="button" tabindex="0" data-cn="card" data-id="gone"[^>]*>[^]*?bdg bdg--missing">[^]*?Не встановлено<\/span>/);
+  assert.match(h, /data-cn="menu" data-id="gone"/, "«Вимкнути» для missing — у меню «⋯», а не кнопкою картки");
+  assert.doesNotMatch(h, /data-cn="disable"/, "у розмітці сторінки «Вимкнути» нема — лише в меню (воно відкривається за кліком)");
   assert.match(connPageHTML(view({ list: null })), /class="cn-loading" role="status">Завантажую модулі…</,
     "завантаження оголошується читачу екрана (role=status)");
+  assert.doesNotMatch(connPageHTML(view({ list: null })), /data-cn="cat"/, "поки список не прочитано, «Додати модуль» нема");
   const failed = connPageHTML(view({ list: null, failed: { code: null, message: "<b>boom</b>" } }));
   assert.match(failed, /Не вдалося прочитати модулі простору/);
   assert.match(failed, /data-cn="retry"/);
   assert.doesNotMatch(failed, /<b>boom/);
   const sj = connPageHTML(view({ list: null, failed: { code: "space-json-unreadable", message: "x" } }));
   assert.match(sj, /space\.json цього простору не читається/);
-  assert.doesNotMatch(connPageHTML(view({ space: { ...SP, capabilities: { error: "space-json-unreadable" } } })), /cn-card/,
+  assert.doesNotMatch(connPageHTML(view({ space: { ...SP, capabilities: { error: "space-json-unreadable" } } })), /class="mc"/,
     "capabilities.error — картки не малюються");
 });
 
-test("сторінка: простору нема — порожньо; неоцінений space.json не малює рядків «Зараз»", () => {
+test("сторінка: простору нема — порожньо; неоцінений space.json не малює карток", () => {
   assert.equal(connPageHTML(view({ space: null })), "");
   assert.equal(connPageHTML(null), "");
   const bad = connPageHTML(view({ space: { ...SP, capabilities: { error: "space-json-unreadable" } } }));
   assert.match(bad, /role="alert"/);
   assert.match(bad, /data-cn="retry"/);
-  assert.doesNotMatch(bad, /cn-now|Зараз:/, "стара capabilities нічого не варта — «Зараз» не показуємо");
+  assert.doesNotMatch(bad, /class="mc|Без модуля/, "стара capabilities нічого не варта — карток і ролей без модуля не показуємо");
 });
 
 test("тексти ролі tracker (4c-2): усі ключі є в UK і EN, а підписи полів Jira — з BUILTIN_TEXT", () => {
@@ -106,48 +110,36 @@ test("тексти ролі notify (4c-3): усі ключі є в UK і EN, а 
   for (const k of [b.name, b.desc, ...Object.values(b.fields)]) assert.ok(DICT.uk[k] && DICT.en[k], k);
 });
 
-test("рядок «Зараз»: модуль, модуль без запису, нікого, space.json не читається, невідома роль", () => {
-  const v = (caps) => ({ space: { ...SP, capabilities: caps }, list: LIST });
-  assert.match(nowHTML("publish", v({ publish: "static-publish" })), /Зараз: Публікація в теку/);
-  assert.doesNotMatch(nowHTML("publish", v({ publish: "legacy" })), /вбудована інтеграція ЛІГА/, "4d-4c: «legacy» — звичайний id, не особливий рядок");
-  assert.match(nowHTML("publish", v({ publish: "ghost-id" })), /Зараз: ghost-id/, "нема в списку — показуємо id, а не падаємо");
-  assert.match(nowHTML("comments", v({ comments: null })), /Зараз: нікого — коментарі лише локальні/);
-  assert.match(nowHTML("alpha", v({ alpha: null })), /Зараз: нікого$|Зараз: нікого</, "роль без власного тексту — просто «нікого» (4c-3: приклад alpha — tracker і notify мають тексти)");
-  assert.match(nowHTML("notify", v({ notify: null })), /Зараз: нікого — Без сповіщень — Teams мовчить\./, "4c-3: роль notify має власний текст «нікого»");
-  assert.match(nowHTML("tracker", v({ tracker: null })), /Зараз: нікого — Без трекера — статусів задач нема\./, "4c-2: роль tracker має власний текст «нікого»");
-  assert.match(nowHTML("vcs", v({ vcs: null })), /Зараз: нікого — макети лише на цьому компʼютері/, "роль vcs має власний текст «нікого»");
-  assert.match(nowHTML("dashboard", v({ dashboard: null })), /Зараз: нікого — без дашборда — вкладки «Команда» нема/, "4c-1: роль dashboard має власний текст «нікого»");
-  assert.match(nowHTML("vcs", { space: { ...SP, capabilities: { vcs: "git-sync" } }, list: [{ id: "git-sync", name: "Синхронізація з git", roles: ["vcs"] }] }),
-    /Зараз: Git</, "постачальник — назва вбудованого модуля зі словника, а не сирий id чи назва з маніфесту");
-  assert.match(nowHTML("publish", v({ error: "space-json-unreadable" })), /Зараз: невідомо — space\.json не читається/);
-  assert.equal(nowHTML("alpha", v({ publish: "static-publish" })), "", "роль, якої capabilities не знає, — без рядка (4c-3: приклад alpha)");
-  setLang("en");
-  assert.match(nowHTML("publish", v({ error: "space-json-unreadable" })), /Now: unknown — space\.json cannot be read/);
-});
-
-test("картка: бейдж, «типово», дії з data-cn і data-id, опис вбудованого, причина помилки", () => {
-  const sp = cardHTML(LIST[1], new Map());
+test("картка: бейдж, одна дія, опис не показуємо, причина помилки", () => {
+  const sp = mcardHTML(LIST[1], new Map());
   assert.match(sp, /Публікація в теку/);
-  assert.match(sp, /cn-badge--unchecked/);
-  assert.match(sp, />типово</);
-  for (const a of ["configure", "check", "disable"]) assert.match(sp, new RegExp(`data-cn="${a}" data-id="static-publish"`));
-  assert.match(sp, /Збирає превʼю в теку/);
-  const err = cardHTML({ ...LIST[3], enabled: true, status: "error", error: "no-token",
+  assert.match(sp, /bdg bdg--unchecked/);
+  assert.doesNotMatch(sp, />типово</, "тег «типово» на картці більше нема");
+  assert.match(sp, /data-cn="check" data-id="static-publish"/, "не перевірено → одна дія «Перевірити»");
+  assert.doesNotMatch(sp, /data-cn="(configure|disable)"/, "решта дій — у меню «⋯»");
+  assert.match(sp, /data-cn="menu" data-id="static-publish" aria-haspopup="menu" aria-expanded="false" aria-label="Дії модуля Публікація в теку"/);
+  const menu = connMenuHTML(LIST[1]);
+  for (const a of ["configure", "disable"]) assert.match(menu, new RegExp(`data-cn="${a}" data-id="static-publish"`), a);
+  assert.doesNotMatch(menu, /data-cn="check"/, "«Перевірити» — уже дія картки, у меню без дубля");
+  assert.match(menu, /<hr role="separator"><button type="button" role="menuitem" tabindex="-1" class="danger" data-cn="disable"/, "«Вимкнути» — після розділювача, червоним");
+  assert.match(menu, /^<div id="th-menu" class="cv-ctx th-menu" role="menu" aria-label="Дії модуля Публікація в теку">/);
+  const err = mcardHTML({ ...LIST[3], enabled: true, status: "error", error: "no-token",
     last_check: { ok: false, error: "no-token", detail: "Токен Vercel не задано" } }, new Map());
-  assert.match(err, /cn-badge--error/);
-  assert.match(err, /Токен Vercel не задано\./);
-  const busy = cardHTML({ ...LIST[1] }, new Map([["static-publish", "check"]]));
+  assert.match(err, /bdg bdg--err/);
+  assert.match(err, /<p class="mc-why">[^<]*Токен Vercel не задано/, "причина помилки — рядком у картці");
+  assert.match(err, /data-cn="configure" data-id="vercel-publish"/, "помилка → одна дія «Налаштувати»");
+  assert.equal((err.match(/data-cn="(?:configure|check|trust|enable)"/g) || []).length, 1);
+  const busy = mcardHTML({ ...LIST[1] }, new Map([["static-publish", "check"]]));
   assert.match(busy, /Перевіряю…/);
   assert.match(busy, /disabled/);
 });
 
-test("картка: вимкнений — лише «Підключити» без причини; код vercel-busy має свій текст", () => {
-  const off = cardHTML(LIST[3], new Map());
-  assert.match(off, /cn-badge--off/);
+test("картка: вимкнений (свій) — лише «Підключити» без причини; код vercel-busy має свій текст", () => {
+  const off = mcardHTML({ ...LIST[3], custom: true, trust: "trusted", runs: true }, new Map());
+  assert.match(off, /bdg bdg--off/);
   assert.match(off, /data-cn="enable" data-id="vercel-publish"/);
-  assert.doesNotMatch(off, /data-cn="(configure|check|disable)"|cn-why/);
-  assert.doesNotMatch(off, />типово</);
-  const busy = cardHTML({ ...LIST[3], enabled: true, status: "error", error: "vercel-busy",
+  assert.doesNotMatch(off, /data-cn="(configure|check|disable)"|mc-why/);
+  const busy = mcardHTML({ ...LIST[3], enabled: true, status: "error", error: "vercel-busy",
     last_check: { ok: false, error: "vercel-busy" } }, new Map());
   assert.match(busy, /Vercel тимчасово відмовляє \(ліміт запитів\)/);
 });
@@ -155,7 +147,7 @@ test("картка: вимкнений — лише «Підключити» б�
 test("картка: ворожі назва, id і деталь — лише текстом", () => {
   const evil = { id: 'x"><img src=x onerror=1>', name: "<b>n</b>", roles: ["<script>"], enabled: true, status: "error",
     error: "<i>e</i>", last_check: { ok: false, error: "<i>e</i>", detail: "<svg onload=1>" }, settings: [] };
-  const h = cardHTML(evil, new Map());
+  const h = mcardHTML(evil, new Map()) + connMenuHTML(evil);
   /* `<svg` без продовження не годиться: це початок розмітки справжньої `ico()` (`<svg class="ico" …>`). */
   assert.doesNotMatch(h, /<img|<b>n|<script>|<i>e|<svg onload/);
   assert.match(h, /&lt;b&gt;n&lt;\/b&gt;/);
@@ -350,7 +342,7 @@ test("панель: ключі constructor / toString / __proto__ не лама�
   assert.doesNotMatch(fieldTag(empty, "valueOf"), /value="[^"]/);
 });
 
-test("сторінка: ворожі назва, тека й id простору — лише текстом, у заголовку, помилці й блоці агента", () => {
+test("сторінка: ворожі назва, тека й id простору — лише текстом, у навігації й помилці", () => {
   const sp = { id: '<q>"I', name: '<q>"N', path: '<q>"P', capabilities: { publish: null, comments: null, tokens: null } };
   const pages = [
     connPageHTML(view({ space: sp })),
@@ -363,10 +355,8 @@ test("сторінка: ворожі назва, тека й id простору
     assert.ok(!h.includes('"N') && !h.includes('"P'), "лапка з даних не виходить з атрибута чи тексту");
     assert.match(h, /&lt;q&gt;&quot;N/, "назва простору в навігації");
   }
-  const page = pages[0];
-  /* Блок агента: у запиті — `encodeURIComponent` (він і є екрануванням), у прикладі тіла — `esc`. */
-  assert.match(page, /GET \/api\/modules\?space=%3Cq%3E%22I</);
-  assert.match(page, /\{space: "&lt;q&gt;&quot;I", id, settings, secrets, replace\}/);
+  /* Блоку «Через агента» (із id простору) на сторінці нема: він переїхав в AGENTS.md. */
+  assert.doesNotMatch(pages[0], /\/api\/modules|cn-agent/);
   /* Лід зі шляхом теки прибрано зі сторінки (етап Е): шлях лишається лише в помилці нечитабельного space.json (обидва шляхи до неї). */
   for (const i of [2, 3]) assert.match(pages[i], /space\.json[^<]*&lt;q&gt;&quot;P/, `у помилці space.json (сторінка ${i}) тека — текстом`);
 });
@@ -510,20 +500,21 @@ test("панель: результат — role=status для успіху і ro
   assert.doesNotMatch(res(null), /cn-res/);
 });
 
-test("картка: у спокої «Перевірити» без блокування, в польоті — «Перевіряю…», інша дія підпису не міняє", () => {
-  const idle = cardHTML(LIST[1], new Map());
+test("картка: у спокої дія без блокування, в польоті — «Перевіряю…», інша дія підпису не міняє", () => {
+  const unchecked = LIST[1];
+  const idle = mcardHTML(unchecked, new Map());
   assert.equal(btnText(idle, "check"), "Перевірити");
-  assert.equal(btnText(idle, "configure"), "Налаштувати");
-  assert.equal(btnText(idle, "disable"), "Вимкнути");
   assert.doesNotMatch(idle, /disabled/);
-  const checking = cardHTML(LIST[1], new Map([["static-publish", "check"]]));
+  const checking = mcardHTML(unchecked, new Map([["static-publish", "check"]]));
   assert.equal(btnText(checking, "check"), "Перевіряю…");
-  assert.equal((checking.match(/<button[^>]*disabled/g) || []).length, 3, "усі три кнопки вимкнені");
-  const disabling = cardHTML(LIST[1], new Map([["static-publish", "disable"]]));
+  assert.equal((checking.match(/<button[^>]*disabled/g) || []).length, 1, "кнопка дії вимкнена");
+  const disabling = mcardHTML(unchecked, new Map([["static-publish", "disable"]]));
   assert.equal(btnText(disabling, "check"), "Перевірити", "підпис «Перевіряю…» — лише для перевірки");
-  assert.equal((disabling.match(/<button[^>]*disabled/g) || []).length, 3);
+  assert.equal((disabling.match(/<button[^>]*disabled/g) || []).length, 1);
   /* Дія в польоті в ІНШОЇ картки цю не чіпає. */
-  assert.doesNotMatch(cardHTML(LIST[1], new Map([["vercel-publish", "check"]])), /disabled/);
+  assert.doesNotMatch(mcardHTML(unchecked, new Map([["vercel-publish", "check"]])), /disabled/);
+  const menu = connMenuHTML(unchecked);
+  assert.equal(["Налаштувати", "Вимкнути"].filter((x) => menu.includes(`<span>${x}</span>`)).length, 2, "решта дій — у меню");
 });
 
 test("панель: busy — 'save' чи 'check': усе вимкнено; «Зберігаю й перевіряю…» лише для 'save', «Перевіряю…» лише для 'check'", () => {
@@ -558,12 +549,33 @@ test("панель: busy — 'save' чи 'check': усе вимкнено; «З�
   assert.equal(txt(drawer(e, { busy: "check" }), "check"), "Checking…");
 });
 
-test("картка: вимкнений модуль зі status: error причини не показує", () => {
-  const h = cardHTML({ ...LIST[3], enabled: false, status: "error", error: "no-token",
+test("картка: вимкнений (свій) модуль зі status: error причини не показує", () => {
+  const h = mcardHTML({ ...LIST[3], custom: true, trust: "trusted", runs: true, enabled: false, status: "error", error: "no-token",
     last_check: { ok: false, error: "no-token", detail: "Токен Vercel не задано" } }, new Map());
-  assert.doesNotMatch(h, /cn-why|Токен Vercel не задано/);
-  assert.match(h, /cn-badge--off/);
+  assert.doesNotMatch(h, /mc-why|Токен Vercel не задано/);
+  assert.match(h, /bdg bdg--off/);
   assert.match(h, /data-cn="enable"/);
+});
+
+test("питання «Вимкнути?» в картці: .mc--ask, .cfm з «Скасувати» першою; наслідки для ролі, яку тримає модуль", () => {
+  const e = LIST[1];
+  const h = mcardHTML(e, new Map(), { id: "static-publish" }, SP);
+  assert.match(h, /^<div class="mc mc--ask" role="group" aria-label="Публікація в теку" data-id="static-publish">/);
+  assert.match(h, /<div class="cfm" role="group"[^>]*><p class="cfm-t">Вимкнути «Публікація в теку»\? Налаштування й секрети лишаться[^<]*Після цього роль «Публікація» лишиться без модуля: кнопки публікації в смузі нема\.<\/p>/);
+  assert.match(h, /<button type="button" class="cfm-no" data-cn="askno" data-id="static-publish">Скасувати<\/button><button type="button" class="cfm-yes" data-cn="askyes" data-id="static-publish">Вимкнути<\/button>/);
+  assert.doesNotMatch(h, /mc-more|data-cn="card"|role="button"/, "під питанням ні «⋯», ні кліку по картці");
+  assert.doesNotMatch(mcardHTML(e, new Map(), { id: "other" }, SP), /mc--ask/, "питання лише в своєї картки");
+  assert.doesNotMatch(mcardHTML(e, new Map(), { id: "static-publish" }, { ...SP, capabilities: { publish: "x" } }), /Після цього роль/, "роль тримає інший — наслідку нема");
+  const page = connPageHTML(view({ ask: { id: "static-publish" } }));
+  assert.equal((page.match(/mc--ask/g) || []).length, 1, "сторінка малює питання з view.ask");
+});
+
+test("пунктирна картка ролі без модуля: іконка, назва ролі, наслідок «none», «Додати» з data-role", () => {
+  const h = emptyCardHTML({ role: "comments", icon: "comment", titleKey: "cnRoleComments", noneKey: "cnNoneComments" });
+  assert.match(h, /^<div class="mc mc--empty" data-role="comments">/);
+  assert.match(h, /<b>Командні коментарі<\/b><span>коментарі лише локальні — для вас і агента<\/span>/);
+  assert.match(h, /<button type="button" class="ctl ctl--out" data-cn="cat" data-role="comments">[^]*?Додати<\/button>/);
+  assert.doesNotMatch(h, /role="button"|tabindex/, "пунктирна картка сама не фокусна й не клікається");
 });
 
 test("сторінка: текст помилки списку обрізається до 300 символів ДО екранування", () => {
@@ -576,7 +588,7 @@ test("сторінка: текст помилки списку обрізаєт�
   assert.equal(detail("&".repeat(500)), "&amp;".repeat(300));
 });
 
-test("англійською: вбудованої інтеграції ЛІГА в рядку «Зараз» нема (4d-4c)", () => {
+test("англійською: вбудованої інтеграції ЛІГА на сторінці нема (4d-4c)", () => {
   setLang("en");
   const liga = { ...SP, capabilities: { publish: "static-publish", comments: "supabase-comments", tokens: null }, compat: { publish: "design-canvas" } };
   const h = connPageHTML(view({ space: liga }));
@@ -589,13 +601,19 @@ test("слова: ключі стирання й нові підписи — в 
   assert.equal(DICT.en.cnEraseFor("Password"), "Erase: Password");
   assert.equal(DICT.uk.cnEraseUndo, undefined);
   assert.equal(DICT.en.cnEraseUndo, undefined);
-  assert.equal(DICT.uk.cnNowNobody, "Зараз: нікого", "живий тест спирається на цей рядок");
   assert.equal(DICT.uk.cnNonePublish, "кнопки публікації в смузі нема", "і на цей");
-  assert.equal(DICT.en.cnNowNobody, "Now: none");
-  assert.equal(DICT.en.cnNowNone("x"), "Now: none — x");
   assert.equal(DICT.en.cnDisableNone("publish", "x"), "After this, the “publish” role has no module: x.");
   assert.equal(DICT.uk.cnDisableLegacy, undefined);
   assert.equal(DICT.en.cnNowLegacy, undefined);
+  for (const k of ["cnLead", "cnLeadWhere", "cnNow", "cnNowNone", "cnNowNobody", "cnNowError", "cnNowRoleError", "cnNowWaiting",
+    "cnMissingSec", "cnAgentTitle", "cnAgentText", "cnAgentOwn"]) for (const lang of ["uk", "en"]) assert.equal(DICT[lang][k], undefined, `${lang}: ${k} прибрано (етап Е)`);
+  assert.equal(DICT.uk.mcEmptyH(3), "Без модуля · 3");
+  assert.equal(DICT.en.mcEmptyH(3), "No module · 3");
+  assert.equal(DICT.uk.mcMore("A"), "Дії модуля A");
+  assert.equal(DICT.en.mcMore("A"), "A actions");
+  assert.deepEqual([DICT.uk.mcAdd, DICT.uk.mcAddRole, DICT.uk.mcCode], ["Додати модуль", "Додати", "Код"]);
+  assert.deepEqual([DICT.en.mcAdd, DICT.en.mcAddRole, DICT.en.mcCode], ["Add module", "Add", "Code"]);
+  assert.deepEqual([DICT.uk.cnTrust, DICT.uk.cnBadgeUntrusted, DICT.uk.trTrust], ["Довірити", "Чекає довіри", "Довірити"]);
   assert.equal(DICT.en.cnReplaceAsk("R", "H", "N"),
     "R is currently handled by “H”. Connect “N” instead? “H” will be turned off; its settings stay.");
   assert.equal(DICT.uk.cnLoading, "Завантажую модулі…");
@@ -603,8 +621,6 @@ test("слова: ключі стирання й нові підписи — в 
   assert.equal(DICT.uk.cnCheckSavedFirst, "Спершу збережіть зміни — перевіряється збережене.");
   assert.equal(DICT.uk.cnRefRoleTaken, "Роль уже зайнята іншим модулем — оновіть сторінку й спробуйте ще раз.");
   assert.equal(DICT.uk.cnErrBadKey, "Ключ Supabase не підходить або не заданий.");
-  assert.equal(DICT.uk.cnLead,
-    "Модулі цього простору: куди публікувати превʼю, де зберігати коментарі команди, звідки брати токени. Без жодного модуля канвас працює.");
 });
 
 test("поле з префіксом майстра: id і похідні id (-state, -err) з префіксом; типово — cn-f", () => {
@@ -630,16 +646,13 @@ const GIT = { id: "git-sync", name: "Синхронізація з git", roles: 
     { key: "autosync", type: "bool", label: "Відправляти після кожної відповіді агента", required: false, value: false },
   ] };
 
-test("сторінка: секція «Синхронізація з git» стоїть після коментарів, з карткою git-sync і рядком «Зараз»", () => {
+test("сторінка: картка git-sync стоїть у ролі vcs (після коментарів), без дашборда-секції; vcs не порожня", () => {
   const sp = { ...SP, capabilities: { publish: "static-publish", comments: null, vcs: "git-sync", tokens: null } };
   const h = connPageHTML(view({ space: sp, list: [...LIST, GIT] }));
-  assert.match(h, /<h2 class="cn-sec-h"[^>]*>Синхронізація з git<\/h2>/);
-  assert.match(h, /Відправляти ітерації в git-репозиторій і отримувати правки колег\./);
-  assert.ok(h.indexOf("Командні коментарі") < h.indexOf("Синхронізація з git") && h.indexOf("Синхронізація з git") < h.indexOf("Токени дизайн-системи"),
-    "порядок секцій: публікація, коментарі, git, токени");
-  assert.match(h, /<div class="cn-card" data-id="git-sync">/);
-  assert.match(h, /Будь-який git-репозиторій — GitHub, GitLab чи свій сервер\./);
-  assert.match(h, /Зараз: Git/);
+  assert.match(h, /<div class="mc" role="button" tabindex="0" data-cn="card" data-id="git-sync" aria-label="Git">/);
+  assert.match(h, /<h2 class="sub">Без модуля · 5<\/h2>/, "vcs тепер із модулем — порожніх ролей п'ять");
+  assert.doesNotMatch(h, /<b>Синхронізація з git<\/b>/, "vcs не порожня");
+  assert.doesNotMatch(h, /Відправляти ітерації в git-репозиторій|Будь-який git-репозиторій/, "ні ліду ролі, ні опису модуля на картці");
 });
 
 test("панель git-sync: підписи шести полів — зі словника (обома мовами), а не сирий label маніфесту", () => {
@@ -681,9 +694,9 @@ test("каркас: шість кнопок навігації, дві груп�
 test("каркас: інші розділи малюють лише h1; «Модулі» — наявний вміст", () => {
   const keys = connPageHTML(view({ sec: "keys" }));
   assert.match(keys, /<h1 class="th-h" id="cn-title">Гарячі клавіші<\/h1><\/div><\/div><\/div>$/);
-  assert.doesNotMatch(keys, /cn-card/);
+  assert.doesNotMatch(keys, /class="mc/);
   assert.match(connPageHTML(view({ sec: "agents" })), /id="cn-title">AGENTS\.md</);
-  assert.match(connPageHTML(view({ sec: "mods" })), /data-cn="configure" data-id="static-publish"/);
+  assert.match(connPageHTML(view({ sec: "mods" })), /data-cn="check" data-id="static-publish"/);
   setLang("en");
   assert.match(connPageHTML(view({ sec: "upd" })), /id="cn-title">Updates</);
   assert.match(connPageHTML(view({ sec: "upd" })), /Space · Studio/);

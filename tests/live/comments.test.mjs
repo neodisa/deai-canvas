@@ -55,7 +55,7 @@ import { chromium } from "playwright";
 import { LIGA_SB_HOST, hermeticLiga } from "./_liga-supabase.mjs";
 import { startMemo } from "./_memo.mjs";
 import { ANCHOR, shootAll, t45Task } from "./_t45-fixture.mjs";
-import { REAL_DEAI, VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, goTasks } from "./_spaces-kit.mjs";
+import { REAL_DEAI, VIEW, guardRealDeai, openCard, postJson, sleep, spacesApi, stop, goTasks } from "./_spaces-kit.mjs";
 import { startServer } from "./fixture.mjs";
 
 /* Своя смуга: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що жодна база не
@@ -645,15 +645,15 @@ test("e2: адресу сервісу коментарів змінили на �
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]');
   await page.click('#bar [data-act="conn"]');
-  await page.waitForSelector(`.cn-card[data-id="${MODULE}"]`);
-  await page.click(`[data-cn="configure"][data-id="${MODULE}"]`);
+  await page.waitForSelector(`.mc[data-id="${MODULE}"]`);
+  await openCard(page, MODULE);
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="endpoint"]');
   await page.fill('#cn-drawer [data-cn-field="endpoint"]', B.url);
   await page.click('#cn-drawer [data-cn-dr="submit"]');
   /* Перевірка пройшла (B живий) → панель закрилась; картка зайнята до кінця `afterModulesChange`, тож «Налаштувати» знову
      доступне лише коли перечитування модулів (а з ним `ovc.invalidate()`) уже позаду. */
   await page.waitForSelector("#cn-drawer", { state: "hidden" });
-  await page.waitForSelector(`[data-cn="configure"][data-id="${MODULE}"]:not([disabled])`);
+  await page.waitForSelector(`.mc[data-id="${MODULE}"]:not([aria-busy="true"])`);
   const cfg = await (await fetch(`${url}/api/comment-config?ch=project&it=it1`)).json();
   assert.equal(cfg.config.endpoint, B.url, "свідок: сервер уже віддає адресу B");
   const cutA = shell.A.length;

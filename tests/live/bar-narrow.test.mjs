@@ -82,7 +82,7 @@ for (const width of [320, 375, 520]) {
     await goHome(page);
     seen.tasks = await measure(page);
     await page.click('#tabs [data-act="settings"]');
-    await page.waitForSelector(".cn-card", { timeout: 15000 });
+    await page.waitForSelector(".mc", { timeout: 15000 });
     seen.conn = await measure(page);
     await openSpaceDd(page);
     await page.click('.dd--spaces [data-act="spacenew"]');
@@ -120,7 +120,7 @@ for (const width of [320, 375]) {
     await page.waitForSelector('#tabs [data-act="tab"]');
     seen.tasks = { ...(await measure(page)), tab: await tabBox(page) };
     await page.click('#tabs [data-act="settings"]');
-    await page.waitForSelector(".cn-card", { timeout: 15000 });
+    await page.waitForSelector(".mc", { timeout: 15000 });
     seen.conn = { ...(await measure(page)), tab: await tabBox(page) };
 
     for (const [name, m] of Object.entries(seen)) {

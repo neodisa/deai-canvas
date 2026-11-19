@@ -62,7 +62,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { guardRealDeai, sleep, stop, goTasks } from "./_spaces-kit.mjs";
+import { guardRealDeai, goTasks, menuAct, sleep, stop } from "./_spaces-kit.mjs";
 import { LIGA_SUPABASE_ORIGINALS, startServer, taskFixture } from "./fixture.mjs";
 import { hermeticLiga } from "./_liga-supabase.mjs";
 
@@ -305,11 +305,13 @@ test("2: «Підключення» ЛІГИ — шість модулів вв�
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
-  await page.waitForSelector('.cn-card[data-id="static-publish"]', { timeout: 15000 });
+  /* ЛІГА: `static-publish` вимкнено (публікує `vercel-publish`) → у сітці його нема, чекаємо справжнього постачальника. */
+  await page.waitForSelector('.mc[data-id="vercel-publish"]', { timeout: 15000 });
+  assert.equal(await page.locator('.mc[data-id="static-publish"]').count(), 0, "вимкнений вбудований — не в сітці, дубля «вбудованої» нема");
   for (const id of Object.values(ALL_MODULES)) {
-    assert.equal(await page.locator(`.cn-card[data-id="${id}"]`).count(), 1, `${id}: рівно одна картка (без дубля «вбудованої»)`);
-    const cls = await page.locator(`.cn-card[data-id="${id}"] .cn-badge`).getAttribute("class");
-    assert.ok(!/cn-badge--off\b/.test(cls), `${id}: картка мусить бути ввімкненою, а клас бейджа ${cls}`);
+    assert.equal(await page.locator(`.mc[data-id="${id}"]`).count(), 1, `${id}: рівно одна картка (без дубля «вбудованої»)`);
+    const cls = await page.locator(`.mc[data-id="${id}"] .bdg`).getAttribute("class");
+    assert.ok(!/bdg--off\b/.test(cls), `${id}: картка мусить бути ввімкненою, а клас бейджа ${cls}`);
   }
   assert.deepEqual(page.errors, []);
   assert.deepEqual(page.outside, [], "запити назовні");
@@ -558,9 +560,11 @@ test("6: «Перевірити» на картці vercel-publish — верд�
   await page.click('#bar [data-dd="space"]');                   // «Підключення» живуть у випадайці простору (як у тесті 2)
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
-  await page.waitForSelector('.cn-card[data-id="vercel-publish"]', { timeout: 15000 });
+  await page.waitForSelector('.mc[data-id="vercel-publish"]', { timeout: 15000 });
   const respP = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/module-check" && r.request().method() === "POST");
-  await page.click('.cn-card[data-id="vercel-publish"] [data-cn="check"]');
+  /* «Перевірити» — дія картки, поки модуль не перевірено, і пункт меню «⋯», коли вже перевірено. */
+  const cardCheck = page.locator('.mc[data-id="vercel-publish"] .mc-foot [data-cn="check"]');
+  if (await cardCheck.count()) await cardCheck.click(); else await menuAct(page, "vercel-publish", "check");
   const answer = await (await respP).json();
   assert.equal(answer.check?.ok, false, JSON.stringify(answer));
   assert.equal(answer.check?.error, "isolated", `вердикт мусить бути isolated: ${JSON.stringify(answer.check)}`);

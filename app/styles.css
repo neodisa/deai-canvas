@@ -1917,6 +1917,44 @@ body:not(.home-open) .cn-drawer{display:none}
 .nav-i .set-dotb{margin-left:auto;width:7px;height:7px;border-radius:50%;background:var(--open)}
 .set-main{min-width:0}
 .set-in{padding:22px 28px 60px}
+/* Розділ «Модулі» (етап Е): сітка карток із однією дією. Картка — `role=button` (клік — шухляда чи діалог довіри); «⋯» — меню `.cv-ctx`
+   (`#th-menu`, як у картки задачі); питання «Вимкнути?» стоїть у самій картці (`.mc--ask` + `.cfm`). Пунктирна картка — роль без модуля.
+   Червоний — лише крапка стану й причина помилки (текст `--bad` дає AA лише на `--s1`, тож причину на `--s2` не фарбуємо). */
+.mg{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(250px,100%),1fr));gap:12px}
+h2.sub{margin:26px 0 10px;font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--dim)}
+.mc{position:relative;display:flex;flex-direction:column;gap:12px;min-width:0;padding:12px;border:1px solid var(--line);
+  border-radius:var(--r-lg);background:var(--s2);cursor:pointer}
+.mc:hover{border-color:var(--line2)}
+.mc:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+.mc-top{display:flex;align-items:flex-start;gap:10px;min-width:0}
+.mc-ic{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:var(--r);background:var(--s3);color:var(--hi)}
+.mc-name{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+.mc-name b{font-weight:600;color:var(--hi);overflow-wrap:anywhere}
+.mc-name span{font-size:12px;color:var(--dim);overflow-wrap:anywhere}
+.mc-name b .mc-tag{margin-left:6px;padding:0 5px;border-radius:4px;font-size:11px;font-weight:500;color:var(--mid);background:var(--s4)}
+.mc-more{display:grid;place-items:center;flex:none;width:var(--h-sm);height:var(--h-sm);margin:-2px -4px 0 0;border:0;
+  border-radius:var(--r-sm);background:none;color:var(--mid);cursor:pointer}
+.mc-more:hover,.mc-more[aria-expanded="true"]{background:var(--s3);color:var(--hi)}
+.mc-more:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.mc-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:var(--h-sm);margin-top:auto}
+.mc-why{margin:-4px 0 0 44px;font-size:12px;line-height:1.4;color:var(--mid);overflow-wrap:anywhere}
+.bdg{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--mid);white-space:nowrap}
+.bdg::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--lo)}
+.bdg--ok::before{background:var(--ok)}
+.bdg--err{color:var(--hi)}
+.bdg--err::before{background:var(--bad)}
+.bdg--missing{color:var(--hi)}
+.bdg--missing::before{background:var(--bad)}
+.bdg--trust{color:var(--hi)}
+.bdg--trust::before{display:none}
+.bdg--trust .ico{color:var(--open)}
+.bdg--off::before{background:none;border:1.5px solid var(--lo)}
+.mc--empty{border-style:dashed;border-color:var(--line2);background:none;cursor:default}
+.mc--empty:hover{border-color:var(--line2)}
+.mc--empty .mc-ic{background:none;border:1px dashed var(--line2);color:var(--dim)}
+.mc--empty .mc-name b{color:var(--mid);font-weight:500}
+.mc--ask{cursor:default;border-color:color-mix(in srgb,var(--bad) 55%,var(--line))}
+.mc--ask .cfm{margin-top:auto}
 @media (max-width:759px){
   .set{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
   .set-nav{z-index:1;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px;gap:4px;background:var(--s1)}

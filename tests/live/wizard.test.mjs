@@ -411,8 +411,8 @@ test("W1: перший запуск — «Особисте», заміна по�
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces [data-act="conn"]');
   await page.click('.dd--spaces [data-act="conn"]');
-  await page.waitForSelector(`.cn-card[data-id="memo-publish"]`);
-  assert.match(await page.locator(".cn-sec").first().textContent(), /Зараз: Memo publish \(test\)/);
+  await page.waitForSelector(`.mc[data-id="memo-publish"]`);
+  assert.match(await page.locator(`.mc[data-id="memo-publish"] .bdg`).getAttribute("class"), /bdg--(ok|unchecked)/, "картка нового постачальника — в сітці, увімкнена");
   await assertSecretNowhere(m, { sent: "once" });
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);

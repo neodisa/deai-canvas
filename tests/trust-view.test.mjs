@@ -18,12 +18,12 @@ const base = (over = {}) => ({
   removed: [], total: { files: 2, bytes: 12154 }, ...over,
 });
 
-test("контракт askForm: один form-діалог, «Довіряю» — submit data-a=ok, «Скасувати» — data-a=cancel з ЄДИНИМ data-autofocus", () => {
+test("контракт askForm: один form-діалог, «Довірити» — submit data-a=ok, «Скасувати» — data-a=cancel з ЄДИНИМ data-autofocus", () => {
   const h = trustDialogHTML(base());
   assert.equal((h.match(/<form/g) || []).length, 1);
   assert.match(h, /<form class="cv-form tr" novalidate role="dialog" aria-modal="true" aria-labelledby="tr-h">/);
   assert.match(h, /<h2 class="cv-form-h" id="tr-h">Довіритись модулю «Acme»\?<\/h2>/);
-  assert.match(h, /<button type="submit" data-a="ok">Довіряю<\/button>/);
+  assert.match(h, /<button type="submit" data-a="ok">Довірити<\/button>/);
   assert.match(h, /<button type="button" data-a="cancel" data-autofocus>Скасувати<\/button>/);
   assert.equal((h.match(/data-autofocus/g) || []).length, 1, "Enter, натиснутий не дивлячись, не довіряє");
   assert.match(h, /<p class="cv-form-err" id="cv-form-err" role="alert" data-form-error hidden><\/p>/);
@@ -39,7 +39,7 @@ test("зміст: версія й ролі, шлях, відбиток 12 зна
   ] }));
   assert.match(h, /<p class="tr-meta">v1\.2 · Публікація<\/p>/);
   assert.match(h, /<code>~\/work\/alpha\/modules\/acme<\/code> · Відбиток abababababab</);
-  assert.match(h, /class="tr-warn".*з вашими правами.*Після «Довіряю» система попросить/s);
+  assert.match(h, /class="tr-warn".*з вашими правами.*Після «Довірити» система попросить/s);
   assert.doesNotMatch(h, /сторінках канваса/, "попередження про JavaScript — лише для ролі comments");
   assert.match(h, /<li>Token <span class="tr-mark">секрет<\/span><\/li>/);
   assert.match(h, /<li>Anon key <span class="tr-mark">публічний \(потрапляє в сторінки\)<\/span><\/li>/);
@@ -66,7 +66,7 @@ test("нова версія: свій заголовок, лічильник з�
   assert.match(h, /<button type="button" class="tr-untrust" data-tr="untrust">Забрати довіру<\/button>/);
 });
 
-test("refused: без «Довіряю» й попередження, причина і деталь, «Закрити» з фокусом; «Забрати довіру» — якщо запис є", () => {
+test("refused: без «Довірити» й попередження, причина і деталь, «Закрити» з фокусом; «Забрати довіру» — якщо запис є", () => {
   const h = trustDialogHTML({ id: "acme", name: "Acme", version: "1", roles: ["publish"], path: "~/m/acme", state: "refused",
     record: true, refused: { code: "symlink", detail: "alias.py: symbolic link" } });
   assert.doesNotMatch(h, /data-a="ok"|tr-warn|Відбиток|tr-files/);

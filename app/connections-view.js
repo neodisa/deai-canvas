@@ -8,13 +8,15 @@
  *                     notes  — примітки своїх модулів (`GET /api/modules`, `[{folder, code}]`), може не бути;
  *                     failed — `{code, message}`, коли список не прочитався;
  *                     busy   — Map id → 'check'|'disable'|'save': дія в польоті (`'save'` — запис із панелі).
- *   cardHTML(e, busy)  одна картка модуля; nowHTML(role, v)  рядок «Зараз» секції.
+ *                     sec    — розділ «Налаштувань»; ask — `{id}` картки з питанням «Вимкнути?» (етап Е).
+ *   mcardHTML(e, busy, ask, space)  картка модуля в сітці розділу «Модулі» (`modules-grid.js`: одна дія + «⋯»; питання в картці);
+ *   emptyCardHTML(r) пунктирна картка ролі без модуля; connMenuHTML(e)  меню «⋯» картки (`#th-menu`, як у картки задачі).
  *   drawerHTML(d)    d = {entry, mode: 'enable'|'edit', fields, form, busy: 'save'|'check'|false, result, errors, spaceName};
  *                     busy   — `'save'` (запис: «Зберігаю й перевіряю…»), `'check'` («Перевірити» каже «Перевіряю…»)
  *                              або `false`; будь-яке справжнє значення вимикає всі поля й кнопки (крім хрестика).
  *                     errors — обʼєкт «ключ поля → ключ словника»; читається лише ВЛАСНА властивість (див. `own`).
  *
- * Гачки для `app.js`: `data-cn="<дія>" data-id="<модуль>"` на картках і в помилці сторінки, `data-cn-dr="<дія>"` у
+ * Гачки для `app.js`: `data-cn="<дія>" data-id="<модуль>"` на картках (`card`, `menu`, дія стану, `askno`/`askyes`), `data-cn="cat" [data-role]` у «Додати» і в помилці сторінки, `data-cn-dr="<дія>"` у
  * панелі, `data-cn-field="<ключ>" data-type="<тип>"` на полях.
  *
  * Спільне з майстром 3b (`wizard-view.js`): `fieldHTML` (з префіксом id), `resultHTML`, `badgeHTML`, `rolesLine`, `whyHTML` —
@@ -32,9 +34,11 @@ import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { navItems, readSec, trustWaitingOf } from "./settings-model.js";
+import { confirmHTML } from "./inline-confirm.js";
+import { BADGE_CLASS, cardModel, emptyRoles, gridEntries } from "./modules-grid.js";
 import { spaceColorToken } from "./spaces-model.js";
 import {
-  DETAIL_MAX, builtinText, canErase, cardView, groupModules, isOwn, noteView, providerLine, roleIcon, roleKeys, spaceJsonBad, trustLine, whyOf,
+  DETAIL_MAX, builtinText, canErase, cardView, disableConsequences, isOwn, noteView, roleIcon, roleKeys, spaceJsonBad, trustLine, whyOf,
 } from "./connections-model.js";
 
 /** Назва модуля: вбудований — мовою інтерфейсу, інший — `name` маніфесту як є. */
@@ -70,16 +74,6 @@ export const badgeHTML = (kind) => {
   return `<span class="cn-badge cn-badge--${kind}">${icon ? ico(icon, 13) : ""}${esc(t(key))}</span>`;
 };
 
-/* Дія → [ключ підпису, іконка, класи кнопки]. Імена дій — гачки `data-cn` для `app.js`. */
-const ACTIONS = {
-  enable: ["cnEnable", "plus", "ctl ctl--out"],
-  configure: ["cnConfigure", "pencil", "ctl ctl--out"],
-  check: ["cnCheck", "refresh", "ctl"],
-  disable: ["cnDisable", null, "ctl"],
-  trust: ["cnTrust", "lock", "ctl ctl--out"],
-  trustinfo: ["cnTrustInfo", "help", "ctl"],
-};
-
 const detailHTML = (d) => (d ? `<span class="cn-why-detail">${esc(d)}</span>` : "");
 
 export function whyHTML(e) {
@@ -89,8 +83,8 @@ export function whyHTML(e) {
 }
 
 /** Пігулка «свій» (свій модуль простору; підказка — його тека в просторі). */
-export const ownTagHTML = (e) => (isOwn(e)
-  ? `<span class="cn-tag cn-tag--own" title="${esc(String(e.source || ""))}">${esc(t("cnCustom"))}</span>` : "");
+export const ownTagHTML = (e, cls = "cn-tag cn-tag--own") => (isOwn(e)
+  ? `<span class="${cls}" title="${esc(String(e.source || ""))}">${esc(t("cnCustom"))}</span>` : "");
 
 /** Текст рядка довіри (`trustLine` моделі) мовою інтерфейсу або `""`. Спільний з кроком 2 майстра. */
 export function trustLineText(e) {
@@ -104,56 +98,81 @@ export function trustLineHTML(e) {
   return s ? `<p class="cn-trust">${ico("lock", 13)}<span>${esc(s)}</span></p>` : "";
 }
 
-/** Картка модуля. `busy` — Map id → дія в польоті: її кнопки вимкнені, «Перевірити» каже «Перевіряю…». */
-export function cardHTML(e, busy) {
-  const v = cardView(e);
-  const b = busy?.get?.(e.id) ?? null;
-  const desc = builtinText(e.id)?.desc;
-  const roles = rolesLine(e);
-  const acts = v.actions.map((a) => {
-    const [key, icon, cls] = ACTIONS[a];
-    const label = a === "check" && b === "check" ? t("cnChecking") : t(key);
-    return `<button class="${cls}" data-cn="${a}" data-id="${esc(e.id)}"${b ? " disabled" : ""}>`
-      + `${icon ? ico(icon) : ""}${esc(label)}</button>`;
-  }).join("");
-  return `<div class="cn-card" data-id="${esc(e.id)}">
-    <div class="cn-card-top"><span class="cn-ic">${ico(roleIcon(e.roles?.[0]))}</span>
-      <div class="cn-card-name"><b>${esc(modName(e))}</b>${roles ? `<span class="cn-card-role">${esc(roles)}</span>` : ""}</div>
-      ${v.implicit ? `<span class="cn-tag">${esc(t("cnImplicit"))}</span>` : ""}${ownTagHTML(e)}${badgeHTML(v.badge)}</div>
-    ${desc ? `<p class="cn-card-desc">${esc(t(desc))}</p>` : ""}${trustLineHTML(e)}
-    ${v.why ? whyHTML(e) : ""}
-    <div class="cn-card-acts">${acts}</div></div>`;
+/* Дія картки → [ключ підпису, іконка]. Імена дій — гачки `data-cn` для `app.js`; на картці модуля стоїть рівно одна. */
+const MC_ACTIONS = {
+  enable: ["cnEnable", "plus"], configure: ["cnConfigure", "pencil"], check: ["cnCheck", "refresh"],
+  trust: ["cnTrust", "lock"], trustinfo: ["cnTrustInfo", "help"],
+};
+
+/** Питання «Вимкнути?» у картці: назва + наслідки для ролей, які модуль зараз виконує (`disableConsequences`). */
+function askTitle(e, space) {
+  const lines = disableConsequences(e, space).map((c) =>
+    (c.consKey ? t(c.consKey) : t("cnDisableNone", roleTitle(c.role), c.noneKey ? t(c.noneKey) : "")));
+  return [t("cnDisableAsk", modName(e)), ...lines].join(" ");
 }
 
 /**
- * Рядок «Зараз» секції ролі (`''`, коли `capabilities` ролі не знають). Експортований, бо гілка `kind: 'error'`
- * (space.json не читається) через `connPageHTML` недосяжна: сторінка тоді віддає лише помилку без секцій — а
- * охоронному рядку все одно потрібен прямий тест, інакше він загнив би непоміченим.
+ * Картка модуля в сітці. `busy` — Map id → дія в польоті (кнопка вимкнена, «Перевірити» каже «Перевіряю…»); `ask` — `{id}`
+ * картки, що питає «Вимкнути?» (питання на місці бейджа й дії; «⋯» і клік по картці тоді нема). `space` — для наслідків питання.
  */
-export function nowHTML(role, v) {
-  const p = providerLine(role, v.space?.capabilities, v.list);
-  if (!p) return "";
-  const txt = p.kind === "error" ? t("cnNowError")
-    : p.kind === "roleError" ? t("cnNowRoleError")
-      : p.kind === "waiting" ? t("cnNowWaiting", modName(p.entry))
-        : p.kind === "none" ? (p.noneKey ? t("cnNowNone", t(p.noneKey)) : t("cnNowNobody"))
-          : t("cnNow", p.entry ? modName(p.entry) : p.id);
-  return `<span class="cn-now">${esc(txt)}</span>`;
+export function mcardHTML(e, busy, ask, space) {
+  const id = esc(e.id);
+  const name = modName(e);
+  const ic = ico(isOwn(e) ? "puzzle" : roleIcon(e.roles?.[0]), 18);
+  const roles = rolesLine(e);
+  const top = (more) => `<div class="mc-top"><span class="mc-ic">${ic}</span><div class="mc-name">`
+    + `<b>${esc(name)}${ownTagHTML(e, "mc-tag")}</b>${roles ? `<span>${esc(roles)}</span>` : ""}</div>${more}</div>`;
+  if (ask && ask.id === e.id) {
+    return `<div class="mc mc--ask" role="group" aria-label="${esc(name)}" data-id="${id}">${top("")}${confirmHTML({
+      title: askTitle(e, space), no: t("askCancel"), yes: t("cnDisable"),
+      noAttrs: `data-cn="askno" data-id="${id}"`, yesAttrs: `data-cn="askyes" data-id="${id}"`,
+    })}</div>`;
+  }
+  const m = cardModel(e);
+  const b = busy?.get?.(e.id) ?? null;
+  const more = `<button type="button" class="mc-more" data-cn="menu" data-id="${id}" aria-haspopup="menu" aria-expanded="false"`
+    + ` aria-label="${esc(t("mcMore", name))}" title="${esc(t("mcMore", name))}">${ico("dots")}</button>`;
+  const w = cardView(e).why ? whyOf(e) : null;   // причина — лише коли її показує й `cardView` (вимкнений зі старою помилкою — без неї)
+  const line = w ? `${esc(t(w.key))}${w.detail ? ` ${esc(w.detail)}` : ""}` : esc(trustLineText(e));
+  const why = line ? `<p class="mc-why">${line}</p>` : "";
+  const bdgKey = BADGES[m.badge][0];
+  const bdg = `<span class="bdg bdg--${BADGE_CLASS[m.badge]}">${m.badge === "untrusted" ? ico("lock", 13) : ""}${esc(t(bdgKey))}</span>`;
+  let act = "";
+  if (m.action) {
+    const [key, icon] = MC_ACTIONS[m.action];
+    const label = m.action === "check" && b === "check" ? t("cnChecking") : t(key);
+    act = `<button type="button" class="ctl ctl--out" data-cn="${m.action}" data-id="${id}"${b ? " disabled" : ""}>${ico(icon)}${esc(label)}</button>`;
+  }
+  /* Дія в польоті (`busy`): картка не відповідає на клік (`connAction`), і `aria-busy` каже це читачеві й тестам. */
+  return `<div class="mc" role="button" tabindex="0" data-cn="card" data-id="${id}" aria-label="${esc(name)}"${b ? ' aria-busy="true"' : ""}>${top(more)}`
+    + `${why}<div class="mc-foot">${bdg}${act}</div></div>`;
 }
 
-function sectionHTML(s, i, v) {
-  const keys = roleKeys(s.role);
-  return `<section class="cn-sec" aria-labelledby="cn-sec-${i}">
-    <div class="cn-sec-head"><h2 class="cn-sec-h" id="cn-sec-${i}">${esc(roleTitle(s.role))}</h2>${nowHTML(s.role, v)}</div>
-    ${keys ? `<p class="cn-sec-lead">${esc(t(keys.lead))}</p>` : ""}
-    <div class="cn-grid">${s.modules.map((e) => cardHTML(e, v.busy)).join("")}</div></section>`;
+/** Пунктирна картка ролі без модуля: іконка, назва ролі, наслідок («none» ролі), «Додати» (каталог — Task 3). */
+export function emptyCardHTML(r) {
+  return `<div class="mc mc--empty" data-role="${esc(r.role)}"><div class="mc-top"><span class="mc-ic">${ico(r.icon, 18)}</span>`
+    + `<div class="mc-name"><b>${esc(t(r.titleKey))}</b><span>${esc(t(r.noneKey))}</span></div></div>`
+    + `<div class="mc-foot"><span></span><button type="button" class="ctl ctl--out" data-cn="cat" data-role="${esc(r.role)}">${ico("plus")}${esc(t("mcAddRole"))}</button></div></div>`;
 }
 
-const agentHTML = (sp) => `<div class="cn-agent">${ico("task")}<div><b>${esc(t("cnAgentTitle"))}</b> ${esc(t("cnAgentText"))}
-    <code class="cn-code">GET /api/modules?space=${esc(encodeURIComponent(sp.id))}</code>
-    <code class="cn-code">POST /api/module-enable {space: "${esc(sp.id)}", id, settings, secrets, replace}</code>
-    <code class="cn-code">POST /api/module-settings · /api/module-check · /api/module-disable</code>
-    <span class="cn-agent-own">${esc(t("cnAgentOwn"))}</span></div></div>`;
+/** Меню «⋯» картки: той самий `.cv-ctx`, що й меню картки задачі; пункти — `data-cn` + `data-id` (ловить `wireHome`). */
+export function connMenuHTML(e) {
+  const id = esc(e.id);
+  const items = cardModel(e).menu.map((i) => {
+    if (i === "sep") return '<hr role="separator">';
+    return `<button type="button" role="menuitem" tabindex="-1"${i.danger ? ' class="danger"' : ""} data-cn="${i.act}" data-id="${id}">`
+      + `<span>${esc(t(i.key))}</span></button>`;
+  }).join("");
+  return `<div id="th-menu" class="cv-ctx th-menu" role="menu" aria-label="${esc(t("mcMore", modName(e)))}">${items}</div>`;
+}
+
+/** Сітка розділу «Модулі»: картки (увімкнені, свої, «Не встановлено») + «Без модуля · N». */
+function gridHTML(v) {
+  const cards = gridEntries(v.list).map((e) => mcardHTML(e, v.busy, v.ask, v.space)).join("");
+  const empty = emptyRoles(v.list);
+  return `${cards ? `<div class="mg">${cards}</div>` : ""}`
+    + (empty.length ? `<h2 class="sub">${esc(t("mcEmptyH", empty.length))}</h2><div class="mg">${empty.map(emptyCardHTML).join("")}</div>` : "");
+}
 
 /** Примітки своїх модулів (`notes` відповіді) рядками під головою; нема — `""`. */
 function notesHTML(notes) {
@@ -186,8 +205,10 @@ export function connPageHTML(v) {
   const sp = v?.space;
   if (!sp) return "";
   const sec = readSec(v.sec);
-  const head = `<h1 class="th-h" id="cn-title">${esc(t(navItems().find((x) => x.id === sec).labelKey))}</h1>`;
-  const wrap = (inner) => `<div class="set">${setNavHTML(sp, sec, v.list)}<div class="set-main"><div class="set-in cn-in">${head}${inner}</div></div></div>`;
+  const h1 = `<h1 class="th-h" id="cn-title">${esc(t(navItems().find((x) => x.id === sec).labelKey))}</h1>`;
+  /* Розділ «Модулі»: у голові праворуч «Додати модуль» (лише коли список прочитано — є що додавати). */
+  const addBtn = `<button type="button" class="ctl ctl--out" data-cn="cat">${ico("plus")}${esc(t("mcAdd"))}</button>`;
+  const wrap = (inner, withAdd = false) => `<div class="set">${setNavHTML(sp, sec, v.list)}<div class="set-main"><div class="set-in cn-in">${withAdd ? `<div class="th-head">${h1}${addBtn}</div>` : h1}${inner}</div></div></div>`;
   if (sec !== "mods") return wrap("");
   /* space.json не читається — двома шляхами: сервер сказав `capabilities.error === "space-json-unreadable"` або відмовив
      списку модулів (`409 space-json-unreadable`). В обох випадках решта `capabilities` нічого не варта, картки не малюємо.
@@ -200,12 +221,7 @@ export function connPageHTML(v) {
       + `<button class="ctl ctl--out" data-cn="retry">${ico("refresh")}${esc(t("retry"))}</button></div>`);
   }
   if (!Array.isArray(v.list)) return wrap(`<p class="cn-loading" role="status">${esc(t("cnLoading"))}</p>`);
-  const { sections, missing } = groupModules(v.list);
-  const miss = missing.length
-    ? `<section class="cn-sec" aria-labelledby="cn-sec-miss"><div class="cn-sec-head"><h2 class="cn-sec-h" id="cn-sec-miss">`
-      + `${esc(t("cnMissingSec"))}</h2></div><div class="cn-grid">${missing.map((e) => cardHTML(e, v.busy)).join("")}</div></section>`
-    : "";
-  return wrap(`${notesHTML(v.notes)}${sections.map((s, i) => sectionHTML(s, i, v)).join("")}${miss}${agentHTML(sp)}`);
+  return wrap(`${notesHTML(v.notes)}${gridHTML(v)}`, true);
 }
 
 /* Стан секрету за `set` (`true|false|null`) → ключ словника. Не таблицею з ключами «true»/«null»: `set` — поле даних. */

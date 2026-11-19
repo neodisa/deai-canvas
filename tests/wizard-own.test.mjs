@@ -54,18 +54,18 @@ const V2 = (list, pick, over = {}) => ({
   s4: { title: "", id: "", source: "empty", from: "", spaceName: "S", tasks: 0 }, ...over,
 });
 
-test("крок 2: недовірений — радіо вимкнене, пігулка «свій», «Довіритись…» ПОЗА label; увімкнений — ще й причина", () => {
+test("крок 2: недовірений — радіо вимкнене, пігулка «свій», «Довірити» ПОЗА label; увімкнений — ще й причина", () => {
   const h = wizardHTML(V2([OWN("acme", ["publish"], { enabled: true })], new Set(["acme"])));
   assert.match(h, /<div class="wz-opt-row"><label class="wz-opt" for="wz-o-0-0"><input type="radio" id="wz-o-0-0" name="wz-r-0" value="acme" data-wz-pick data-role="publish" checked disabled>/);
   assert.match(h, /<span class="cn-tag cn-tag--own" title="~\/w\/modules\/acme">свій<\/span>/);
-  assert.match(h, /<\/label><button type="button" class="ctl ctl--out" data-wz="trust" data-id="acme" aria-describedby="wz-on-0-0">.*Довіритись…<\/button><\/div>/s);
+  assert.match(h, /<\/label><button type="button" class="ctl ctl--out" data-wz="trust" data-id="acme" aria-describedby="wz-on-0-0">.*Довірити<\/button><\/div>/s);
   assert.match(h, /class="wz-opt-why".*йому не довірено/s);
   const off = wizardHTML(V2([OWN("acme", ["publish"])], new Set()));
   assert.match(off, /value="acme" data-wz-pick data-role="publish" disabled>/);
   assert.doesNotMatch(off, /wz-opt-why/, "невключений недовірений — без причини: просто чекає довіри");
 });
 
-test("крок 2: «Довіритись…» не всередині label — клік по кнопці в label клікнув би й радіо", () => {
+test("крок 2: «Довірити» не всередині label — клік по кнопці в label клікнув би й радіо", () => {
   const h = wizardHTML(V2([OWN("acme", ["publish"])], new Set()));
   const label = /<label class="wz-opt"[\s\S]*?<\/label>/.exec(h)?.[0] ?? "";
   assert.ok(label.length > 0);
@@ -117,13 +117,13 @@ test("крок 2: «Замість» — лише модулю, який мож�
   assert.match(trusted, /value="acme"[^>]*>[\s\S]*?wz-opt-instead/, "довірений, що замінить тримача, — «Замість»");
 });
 
-test("крок 2: id модуля в `data-id` кнопки «Довіритись…» екранується — не виходить з атрибута", () => {
+test("крок 2: id модуля в `data-id` кнопки «Довірити» екранується — не виходить з атрибута", () => {
   const h = wizardHTML(V2([OWN('a"><b', ["publish"])], new Set()));
   assert.ok(h.includes('data-wz="trust" data-id="a&quot;&gt;&lt;b"'), "id екрановано");
   assert.ok(!h.includes('data-id="a"><b'), "розмітку не прорвано");
 });
 
-test("крок 2: «Довіритись…» привʼязана до НАЗВИ свого модуля (`aria-describedby`) — дві кнопки читач екрана озвучує по-різному", () => {
+test("крок 2: «Довірити» привʼязана до НАЗВИ свого модуля (`aria-describedby`) — дві кнопки читач екрана озвучує по-різному", () => {
   const list = [OWN("acme", ["publish"], { name: "Acme Deploy" }), OWN("beta", ["comments"], { name: "Beta Notes" })];
   const h = wizardHTML(V2(list, new Set()));
   const buttons = [...h.matchAll(/<button [^>]*data-wz="trust" data-id="([^"]+)"[^>]*>/g)];
@@ -146,7 +146,7 @@ test("крок 2: id назви є лише там, де є кнопка — в�
   assert.doesNotMatch(h, /wz-on-/);
 });
 
-test("крок 2 зайнятий: «Довіритись…» теж вимкнена", () => {
+test("крок 2 зайнятий: «Довірити» теж вимкнена", () => {
   assert.match(wizardHTML(V2([OWN("acme", ["publish"])], new Set(), { busy: "save" })), /data-wz="trust" data-id="acme" aria-describedby="wz-on-0-0" disabled>/);
 });
 
@@ -311,7 +311,7 @@ test("trustFrom: подвійний клік — діалог відкриває
   assert.equal(env.log.filter((x) => x[0] === "openTrust").length, 2, "прапорець знято: людина може відкрити діалог знову");
 });
 
-test("trustFrom: прапорець «зайнято» знімається на КОЖНОМУ виході, ранньому теж — «Довіритись…» не мертвіє", async () => {
+test("trustFrom: прапорець «зайнято» знімається на КОЖНОМУ виході, ранньому теж — «Довірити» не мертвіє", async () => {
   const again = async (what, env, wz) => {
     await env.trustFrom("acme");
     wz.step = 2;

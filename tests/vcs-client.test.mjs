@@ -1868,24 +1868,21 @@ test("glsetup на холодному старті: клік веде на «П�
   assert.deepEqual(env.told, [], "повідомлення про tasks.json — лише в ЛІГА");
 });
 
-/** Вузол-картка для `focusConnLanding`: кнопки `[data-cn]` (перша не вимкнена), `focus` пише в журнал. */
-function mkHome(cards, log) {
-  const btn = (id, name, disabled = false) => ({ id, name, disabled, focus: (o) => log.push([`${id}/${name}`, o]) });
-  const q = new Map(cards.map(([id, ...names]) => [id, names.map((n, i) => btn(id, n, i === 0 && id.startsWith("off:")))]));
+/** Вузол сторінки для `focusConnLanding` (етап Е): картки `.mc[data-id]`, пунктирні `.mc--empty[data-role]` (з «Додати»); `focus` пише в журнал. */
+function mkHome(cards, empties, log) {
+  const card = (id) => ({ focus: (o) => log.push([`card:${id}`, o]) });
   return {
     querySelector: (sel) => {
-      const card = /^\.cn-card\[data-id="(.+)"\]$/.exec(sel);
-      if (card) {
-        const list = q.get(card[1]);
-        if (!list) return null;
-        return { querySelector: (s) => (s.includes(":not([disabled])") ? list.find((b) => !b.disabled) ?? null : list[0]) };
-      }
-      if (sel === '.cn-card [data-cn], [data-cn="retry"]') return [...q.values()][0]?.[0] ?? null;
+      const c = /^\.mc\[data-id="(.+)"\]$/.exec(sel);
+      if (c) return cards.includes(c[1]) ? card(c[1]) : null;
+      const e = /^\.mc--empty\[data-role="(.+)"\]$/.exec(sel);
+      if (e) return empties.includes(e[1]) ? { querySelector: (s) => (s === '[data-cn="cat"]' ? { focus: (o) => log.push([`cat:${e[1]}`, o]) } : null) } : null;
+      if (sel === '.mc[data-cn="card"], [data-cn="retry"], [data-cn="cat"]') return cards.length ? card(cards[0]) : null;
       return null;
     },
   };
 }
-test("focusConnLanding: роль vcs → кнопка картки її модуля (і прокрутка — preventScroll не ставимо); без ролі чи картки — перша кнопка, як було", () => {
+test("focusConnLanding: роль vcs → картка її модуля, інакше «Додати» пунктирної картки ролі; без ролі — перша картка", () => {
   const log = [];
   const state = { list: [{ id: "static-publish", roles: ["publish"], enabled: true }, { id: "git-sync", roles: ["vcs"], enabled: true }],
     spaceId: "plain" };
@@ -1894,17 +1891,21 @@ test("focusConnLanding: роль vcs → кнопка картки її моду
     connSpace: () => ({ id: "plain", capabilities: { vcs: "git-sync" } }), ...over,
   });
   const land = (e, role) => new Function("env", `with (env) { ${declSource("focusConnLanding")}\nreturn focusConnLanding; }`)(e)(role);
-  const home = mkHome([["static-publish", "configure"], ["git-sync", "configure", "check"]], log);
+  const home = mkHome(["static-publish", "git-sync"], ["comments"], log);
   land(env(home), "vcs");
-  assert.deepEqual(log.splice(0), [["git-sync/configure", { preventScroll: false }]], "картка ролі, з прокруткою");
+  assert.deepEqual(log.splice(0), [["card:git-sync", undefined]], "картка ролі, з прокруткою (без preventScroll)");
   land(env(home), "");
-  assert.deepEqual(log.splice(0), [["static-publish/configure", { preventScroll: true }]], "без ролі — перша кнопка першої картки, без прокрутки (як було)");
-  land(env(home, { connSpace: () => ({ id: "plain", capabilities: { vcs: null } }), connState: { ...state, list: [] } }), "vcs");
-  assert.deepEqual(log.splice(0), [["static-publish/configure", { preventScroll: true }]], "картки ролі нема — запасний шлях");
-  const off = mkHome([["off:git-sync", "enable", "x"]], log);
-  land(env(off, { connSpace: () => ({ id: "plain", capabilities: { vcs: null } }),
-    connState: { ...state, list: [{ id: "off:git-sync", roles: ["vcs"], enabled: false }] } }), "vcs");
-  assert.deepEqual(log.splice(0), [["off:git-sync/x", { preventScroll: false }]], "перша НЕвимкнена кнопка картки");
+  assert.deepEqual(log.splice(0), [["card:static-publish", { preventScroll: true }]], "без ролі — перша картка, без прокрутки");
+  /* Картки ролі в сітці нема (вимкнений вбудований — лише в каталозі), пунктирна є → її «Додати». */
+  const noMod = { connSpace: () => ({ id: "plain", capabilities: { vcs: null } }), connState: { ...state, list: [] } };
+  land(env(mkHome(["static-publish"], ["vcs"], log), noMod), "vcs");
+  assert.deepEqual(log.splice(0), [["cat:vcs", undefined]], "пунктирна картка ролі — її «Додати»");
+  land(env(home, noMod), "vcs");
+  assert.deepEqual(log.splice(0), [["card:static-publish", { preventScroll: true }]], "ні картки, ні пунктирної — запасний шлях");
+  const offList = { connSpace: () => ({ id: "plain", capabilities: { vcs: null } }),
+    connState: { ...state, list: [{ id: "off-git", roles: ["vcs"], enabled: false }] } };
+  land(env(mkHome(["static-publish"], ["vcs"], log), offList), "vcs");
+  assert.deepEqual(log.splice(0), [["cat:vcs", undefined]], "модуль ролі є в списку, але не в сітці — пунктирна");
   assert.doesNotThrow(() => land(env(null), "vcs"), "вузла нема — тихо");
 });
 

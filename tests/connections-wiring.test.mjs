@@ -239,27 +239,27 @@ test("фокус: кнопка картки зникла після перема
 
 /* ── знімок простору перед питанням (ревʼю Task 6, критичне) ──────────────────────────────────────────── */
 
-test("connDisable: простір береться ДО питання, після відповіді сторінка мусить показувати той самий — інакше нічого не пишемо", () => {
+test("«Вимкнути»: питання стоїть у картці (етап Е); запит іде у connState.spaceId; перехід в інший простір питання знімає", () => {
+  /* Діалог `askYesNo` для картки більше не потрібен: питання — `.mc--ask` (`askConnDisable`), відповідь — `askyes`. */
   const b = fnc("connDisable");
-  const iAsk = b.indexOf("askYesNo(");
-  assert.ok(iAsk > 0);
-  assert.match(b, /const spaceId = connState\.spaceId;/);
-  assert.ok(b.indexOf("const spaceId = connState.spaceId;") < iAsk, "знімок id — ДО питання");
-  assert.match(b, /const sp = connSpace\(\);/);
-  assert.ok(b.indexOf("const sp = connSpace();") < iAsk, "запис простору для наслідків — теж ДО питання");
-  assert.doesNotMatch(b, /currentSpace\(/, "наслідки лічимо за простором сторінки, а не за «поточним зараз»");
-  assert.match(b, /if \(!\(await askYesNo\(\[t\('cnDisableAsk', modName\(e\)\), \.\.\.lines\]\.join\('\\n\\n'\), \{ yes: t\('cnDisable'\), danger: true \}\)\)\) return;\s*if \(!connOpen\(\) \|\| connState\.spaceId !== spaceId\) return;\s*connState\.busy\.set\(e\.id, 'disable'\);/);
-  /* Після питання `connState.spaceId` читається ЛИШЕ для звірки зі знімком (`!== spaceId` перед записом, `=== spaceId`
-     перед поверненням фокуса); у запит іде знімок. */
-  assert.equal([...b.slice(iAsk).matchAll(/connState\.spaceId(?! [!=]== spaceId)/g)].length, 0);
-  assert.equal([...b.slice(iAsk).matchAll(/connState\.spaceId !== spaceId/g)].length, 1);
+  assert.doesNotMatch(b, /askYesNo\(/, "діалогу нема — питання вже було в картці");
+  assert.match(b, /^\{\s*const spaceId = connState\.spaceId;\s*connAsk = null;\s*connState\.busy\.set\(e\.id, 'disable'\);/);
+  assert.doesNotMatch(b, /currentSpace\(/, "простір запису — той, що малює сторінка, а не «поточний зараз»");
+  assert.match(b, /postForm\('\/api\/module-disable', \{ space: spaceId, id: e\.id \}\)/);
+  assert.equal([...b.matchAll(/connState\.spaceId(?! [!=]== spaceId)/g)].length, 1, "connState.spaceId читається лише для знімка на вході");
+  /* Питання, відкрите в одному просторі, не переживає перехід в інший: `askyes` без питання (`connAsk.id`) нічого не робить. */
+  assert.match(fnc("connAction"), /if \(act === 'askyes'\) \{ if \(connAsk\?\.id === id\) connDisable\(e\); return; \}/);
+  assert.match(fnc("loadConn"), /connState\.busy\.clear\(\); connAsk = null;/);
+  assert.match(fnc("askConnDisable"), /connAsk = \{ id: e\.id \};\s*paintHome\(\);\s*homeNode\(\)\?\.querySelector\(`\.mc--ask\[data-id="\$\{CSS\.escape\(e\.id\)\}"\] \.cfm-no`\)\?\.focus\(\{ preventScroll: true \}\);/,
+    "фокус — на «Скасувати»");
+  assert.match(fnc("cancelConnAsk"), /connAsk = null;\s*paintHome\(\);\s*if \(refocus\) refocusMore\(id\);/, "після скасування фокус — на «⋯» картки");
 });
 
 test("сторінка малює простір connState.spaceId, а не «поточний зараз» (spacesResp міг змінитись від дропдауна чи ⌘K)", () => {
   assert.match(src, /const connSpace = \(\) => \(connState\.spaceId == null\s*\? currentSpace\(spacesResp\)\s*: \(Array\.isArray\(spacesResp\?\.spaces\) \? spacesResp\.spaces : \[\]\)\.find\(\(x\) => x\.id === connState\.spaceId\) \?\? null\);/);
   assert.match(src, /const connView = \(\) => \(\{ space: connSpace\(\), list: connState\.list,/);
   /* Свіжий вхід забуває простір попереднього візиту: «вантаження» малює заголовок поточного, а не давнього. */
-  assert.match(fnc("enterHome"), /if \(fresh\) \{ connState\.spaceId = null; connState\.list = null; connState\.failed = null; connFocusPending = true; \}/);
+  assert.match(fnc("enterHome"), /if \(fresh\) \{ connState\.spaceId = null; connState\.list = null; connState\.failed = null; connFocusPending = true; connAsk = null; \}/);
 });
 
 test("cnSubmit: запис іде у mine.spaceId; після питання панель мусить бути та сама (інакше нічого не пишемо)", () => {
@@ -298,7 +298,7 @@ test("loadConn: `spaces` вирішує, чи перечитувати прос�
   const b = fnc("loadConn");
   assert.match(b, /if \(spaces\) \{\s*await loadSpaces\(\);/);
   assert.match(b, /const sp = currentSpace\(spacesResp\);\s*if \(!sp\) \{ enterHome\(\{ page: 'tasks' \}\); return; \}/);
-  assert.match(b, /if \(sp\.id !== connState\.spaceId\) \{[\s\S]*?closeCnDrawer\(\{ focus: false \}\);\s*connState\.spaceId = sp\.id; connState\.list = null; connState\.notes = \[\]; connState\.failed = null; connState\.busy\.clear\(\);\s*paintHome\(\);\s*\}/);
+  assert.match(b, /if \(sp\.id !== connState\.spaceId\) \{[\s\S]*?closeCnDrawer\(\{ focus: false \}\);\s*connState\.spaceId = sp\.id; connState\.list = null; connState\.notes = \[\]; connState\.failed = null; connState\.busy\.clear\(\); connAsk = null;\s*paintHome\(\);\s*\}/);
 });
 
 test("3c: примітки своїх модулів — зі списку модулів у стан сторінки; зміна простору їх чистить", () => {
@@ -311,22 +311,28 @@ test("3c: примітки своїх модулів — зі списку мо�
 
 test("connAction: дія над модулем, що вже в польоті, ігнорується; кожна дія веде у свою функцію", () => {
   const b = fnc("connAction");
-  assert.match(b, /^\{\s*if \(act === 'retry'\) \{ loadConn\(\); return; \}/);
+  assert.match(b, /^\{\s*if \(act === 'retry'\) \{ loadConn\(\); return; \}\s*if \(act === 'cat'\) \{ connCatalog\(role\); return; \}/);
   assert.match(b, /let e = \(connState\.list \|\| \[\]\)\.find\(\(x\) => x\.id === id\);\s*if \(!e \|\| connState\.busy\.has\(id\)\) return;/);
   assert.match(b, /if \(act === 'check'\) \{ connCheck\(e\); return; \}/, "«Перевірити» панелі не заважає");
-  assert.match(b, /if \(act === 'enable'\) openCnDrawer\(e, 'enable'\);\s*else if \(act === 'configure'\) openCnDrawer\(e, 'edit'\);\s*else if \(act === 'disable'\) connDisable\(e\);/);
+  assert.match(b, /if \(act === 'enable'\) openCnDrawer\(e, 'enable'\);\s*else if \(act === 'configure'\) openCnDrawer\(e, 'edit'\);\s*else if \(act === 'disable'\) askConnDisable\(e\);/,
+    "«Вимкнути» з меню відкриває питання в картці, а не пише");
+  /* Нові дії картки (етап Е): «⋯», клік по картці (за `cardModel(e).click`), відповіді питання, «Забрати довіру». */
+  assert.match(b, /if \(act === 'menu'\) \{ toggleConnMenu\(id\); return; \}/);
+  assert.match(b, /if \(act === 'card'\) \{ act = cardModel\(e\)\.click; if \(!act\) return; \}/);
+  assert.match(b, /if \(act === 'askno'\) \{ cancelConnAsk\(\); return; \}/);
+  assert.match(b, /if \(act === 'untrust'\) \{ connUntrust\(e\); return; \}/);
 });
 
 test("connAction: відкрита панель — інша панель і «Вимкнути» її модуля спершу закривають її (з питанням); чужий модуль — без закриття", () => {
   const b = fnc("connAction");
-  assert.match(src, /async function connAction\(act, id\) \{/);
+  assert.match(src, /async function connAction\(act, id, role\) \{/);
   /* Умова: панель відкрита І (це не «Вимкнути», АБО «Вимкнути» саме її модуля). */
   assert.match(b, /if \(cnDrawer && \(act !== 'disable' \|\| cnDrawer\.id === id\)\) \{\s*const spaceId = connState\.spaceId;\s*if \(!\(await dismissCnDrawer\(\)\)\) return;/,
     "відмова людини (панель лишилась) чи запит у польоті — дія не йде далі");
   /* Після питання: той самий простір і свіжа картка, а не знімок до діалогу. */
   assert.match(b, /if \(!connOpen\(\) \|\| connState\.spaceId !== spaceId\) return;\s*e = \(connState\.list \|\| \[\]\)\.find\(\(x\) => x\.id === id\);\s*if \(!e \|\| connState\.busy\.has\(id\)\) return;/);
   assert.ok(b.indexOf("dismissCnDrawer()") < b.indexOf("openCnDrawer(e, 'enable')"), "закриття — ДО відкриття іншої панелі");
-  assert.ok(b.indexOf("dismissCnDrawer()") < b.indexOf("connDisable(e)"), "закриття — ДО вимкнення");
+  assert.ok(b.indexOf("dismissCnDrawer()") < b.indexOf("askConnDisable(e)"), "закриття — ДО питання про вимкнення");
 });
 
 test("панель: фокус вертається після перемальовки на той самий контрол (запасний — перший доступний; під запитом — памʼять focusWant)", () => {
@@ -389,7 +395,8 @@ test("wireHome: клік по [data-cn] (картка, помилка сторі
   const b = fnc("wireHome");
   const iC = b.indexOf("const c = ev.target.closest('[data-cn]');");
   assert.ok(iC > 0);
-  assert.match(b, /const c = ev\.target\.closest\('\[data-cn\]'\);\s*if \(c\) \{ connAction\(c\.dataset\.cn, c\.dataset\.id\); return; \}/);
+  assert.match(b, /const c = ev\.target\.closest\('\[data-cn\]'\);\s*if \(c\) \{[\s\S]*?if \(ev\.target\.closest\('#th-menu'\)\) closeTaskMenu\(false\);\s*connAction\(c\.dataset\.cn, c\.dataset\.id, c\.dataset\.role\);\s*return;\s*\}/,
+    "пункт меню «⋯» закриває меню ДО дії; `data-role` — для «Додати» ролі");
   assert.ok(iC < b.indexOf("const b = ev.target.closest('[data-th]');"), "делегація data-cn — раніше за data-th");
 });
 
@@ -398,7 +405,12 @@ test("перший фокус після списку не краде фокус
     /if \(connFocusPending\) \{\s*connFocusPending = false;\s*const role = connFocusRole;\s*connFocusRole = '';\s*if \(!paletteOverlay && !askUp\(\)\) focusConnLanding\(role\);\s*\}/);
   /* Те, що раніше стояло в loadConn рядком, тепер — у focusConnLanding: без ролі й без картки ролі поведінка та сама (перша кнопка першої
      картки або «Спробувати ще», без прокрутки). */
-  assert.match(fnc("focusConnLanding"), /home\?\.querySelector\('\.cn-card \[data-cn\], \[data-cn="retry"\]'\)/);
+  /* Етап Е: картка модуля ролі, інакше «Додати» її пунктирної картки; без ролі — перша картка (чи «Спробувати ще»/«Додати модуль»). */
+  const f = fnc("focusConnLanding");
+  assert.match(f, /home\?\.querySelector\(`\.mc\[data-id="\$\{CSS\.escape\(id\)\}"\]`\)/);
+  assert.match(f, /home\?\.querySelector\(`\.mc--empty\[data-role="\$\{CSS\.escape\(role\)\}"\]`\)/);
+  assert.match(f, /if \(card\) \{ card\.focus\(\); return; \}\s*if \(empty\) \{ empty\.querySelector\('\[data-cn="cat"\]'\)\?\.focus\(\); return; \}/);
+  assert.match(f, /home\?\.querySelector\('\.mc\[data-cn="card"\], \[data-cn="retry"\], \[data-cn="cat"\]'\)/);
 });
 
 test("cnSubmit: при невдалій перевірці обовʼязкових введені секрети повертаються в поля ВЛАСТИВІСТЮ `.value` (не розміткою, не станом)", () => {
@@ -427,8 +439,9 @@ test("рамка: render({ keepFrame }) не переприсвоює frame.src 
 });
 
 test("3c: «Довіритись…» і «Чому не можна…» картки ведуть у connTrust; простір фіксується ДО діалогу", () => {
-  assert.match(fnc("connAction"), /else if \(act === 'trust' \|\| act === 'trustinfo'\) connTrust\(e\);/);
+  assert.match(fnc("connAction"), /else if \(act === 'trust' \|\| act === 'trustinfo'\) connTrust\(e, act\);/);
   const b = fnc("connTrust");
+  assert.match(b, /refocusCard\(e\.id, act\)/, "фокус вертається на ту саму дію (trust чи trustinfo)");
   assert.ok(b.indexOf("const spaceId = connState.spaceId;") < b.indexOf("openTrust(e, spaceId)"));
 });
 
@@ -474,10 +487,49 @@ test("3c (ревʼю Task 6): коментарі про види зайнято�
 
 test("етап Е: розділ «Налаштувань» — памʼятається; ⌘K, фішка, кнопка «Задач» і вхід із роллю ведуть у «Модулі», шестерня — ні", () => {
   assert.match(src, /let connSec = \(\(\) => \{ try \{ return readSec\(localStorage\.getItem\(SEC_KEY\)\); \}/);
-  assert.match(fnc("setConnSec"), /connSec = readSec\(sec\);\s*try \{ localStorage\.setItem\(SEC_KEY, connSec\); \} catch/);
+  assert.match(fnc("setConnSec"), /connAsk = null;\s*connSec = readSec\(sec\);\s*try \{ localStorage\.setItem\(SEC_KEY, connSec\); \} catch/);
   assert.match(fnc("enterHome"), /if \(connFocusRole\) setConnSec\('mods'\);\s*paintHome\(\);\s*loadConn/, "вхід із роллю → «Модулі»");
   assert.match(fnc("wireHome"), /case 'csec': if \(readSec\(v\) !== connSec\) \{ setConnSec\(v\); paintHome\(\); \} break;/);
   const settings = /\n  settings: async \(\) => \{[\s\S]*?\n  \},/.exec(src)[0];
   assert.doesNotMatch(settings, /setConnSec/, "шестерня веде в ОСТАННІЙ розділ, не скидає його");
-  assert.match(src, /sec: connSec \}\);/, "connView несе розділ у розмітку");
+  assert.match(src, /sec: connSec, ask: connAsk \}\);/, "connView несе розділ і питання «Вимкнути?» у розмітку");
+});
+
+/* ── «Налаштування → Модулі» (етап Е, Task 2): меню «⋯», клавіатура картки, питання «Вимкнути?» ── */
+
+test("етап Е: меню «⋯» модуля — той самий `#th-menu`; «⋯» картки (`.mc-more`) — теж «якір»: фокус назад, клік повз закриває", () => {
+  assert.match(src, /const moreSel = \(id\) => `\.th-more\[data-id="\$\{CSS\.escape\(id\)\}"\], \.mc-more\[data-id="\$\{CSS\.escape\(id\)\}"\]`;/);
+  assert.match(fnc("closeTaskMenu"), /homeNode\(\)\?\.querySelector\(moreSel\(id\)\)/, "закриття повертає фокус на «⋯» і задачі, і модуля");
+  assert.match(src, /const refocusMore = \(id\) => \{ if \(id\) homeNode\(\)\?\.querySelector\(moreSel\(id\)\)\?\.focus/);
+  assert.equal([...src.matchAll(/!ev\.target\.closest\('\.th-more, \.mc-more'\)/g)].length, 2, "обидва закривачі меню (pointerdown і click) знають про `.mc-more`");
+  const b = fnc("toggleConnMenu");
+  assert.match(b, /if \(m && m\.dataset\.for === id\) \{ closeTaskMenu\(\); return; \}/, "повторний клік по «⋯» закриває");
+  assert.match(b, /connMenuHTML\(e\)/);
+  assert.match(b, /btn\.setAttribute\('aria-expanded', 'true'\);\s*menu\.dataset\.for = id;\s*menu\.querySelector\('\[role="menuitem"\]'\)\?\.focus/, "фокус — на перший пункт");
+});
+
+test("етап Е: клавіші меню — один спільний `menuKeys` для задач і модулів; розділ «Модулі» має свій keydown (Esc знімає питання, Enter/Пробіл — клік по картці)", () => {
+  const m = fnc("menuKeys");
+  assert.match(m, /if \(ev\.key === 'Escape'\) \{ ev\.preventDefault\(\); closeTaskMenu\(\); \}/, "Esc — закрити з фокусом на «⋯»");
+  assert.match(m, /else if \(ev\.key === 'Tab'\) closeTaskMenu\(\);/);
+  assert.match(m, /\(at \+ \(ev\.key === 'ArrowDown' \? 1 : -1\) \+ items\.length\) % items\.length/, "стрілки по колу");
+  assert.ok(src.includes("  if (menuKeys(ev, a)) return;\n  /* Поле назви на картці"), "екран «Задачі» бере меню з того самого `menuKeys`");
+  const i = src.indexOf("/** Клавіатура розділу «Модулі»");
+  assert.ok(i > 0);
+  const k = noComments(src.slice(i, src.indexOf("/** Клавіатура екрана. `/`")));
+  assert.match(k, /if \(!homeOpen \|\| homePage !== 'conn' \|\| ev\.isComposing \|\| paletteOverlay \|\| askUp\(\)\) return;/, "лише на «Налаштуваннях», не з-під палітри/діалогу/IME");
+  assert.match(k, /if \(menuKeys\(ev, a\)\) return;/);
+  assert.match(k, /if \(ev\.key === 'Escape' && connAsk\) \{ ev\.preventDefault\(\); cancelConnAsk\(\); return; \}/);
+  assert.match(k, /\(ev\.key === 'Enter' \|\| ev\.key === ' '\) && a && a\.classList\?\.contains\('mc'\) && a\.dataset\.cn === 'card'/, "лише на САМІЙ картці: Enter на кнопці всередині — її власна дія");
+  assert.match(k, /connAction\('card', a\.dataset\.id\);/);
+});
+
+test("етап Е: питання «Вимкнути?» знімається кліком повз картку (pointerdown і click) — лише на «Налаштуваннях», без звернення до connAsk на «Задачах»", () => {
+  assert.match(fnc("homePointerDown"), /if \(homePage === 'conn' && connAsk && !ev\.target\.closest\('\.mc--ask'\)\) \{ homeEatUntil = performance\.now\(\) \+ 500; cancelConnAsk\(false\); \}/);
+  assert.match(fnc("wireHome"), /if \(homePage === 'conn' && connAsk && !ev\.target\.closest\('\.mc--ask'\)\) \{ cancelConnAsk\(false\); return; \}/);
+});
+
+test("етап Е: «Додати» (`cat`) — обробник уже на місці й безпечний (каталог — Task 3); «Забрати довіру» з меню картки йде в untrustFlow", () => {
+  assert.match(src, /\nfunction connCatalog\(role\) \{\}\n/);
+  assert.match(fnc("connUntrust"), /await untrustFlow\(e, spaceId\);\s*if \(connOpen\(\) && connState\.spaceId === spaceId\) refocusCard\(e\.id, 'card'\);/);
 });

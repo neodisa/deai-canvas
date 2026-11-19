@@ -26,7 +26,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { guardRealDeai, postJson, stop, goTasks } from "./_spaces-kit.mjs";
+import { askNo, clickEnable, guardRealDeai, goTasks, menuDisable, postJson, stop, waitBadge } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 import { hermeticLiga } from "./_liga-supabase.mjs";
 
@@ -210,42 +210,37 @@ test("3: модуль у режимі «збій» — пункт вимкнен
   assert.deepEqual(page.errors, []);
 });
 
-test("4: «Підключення» — секція «Сповіщення Teams» з supabase-teams і фейковим модулем; вимкнення називає наслідок (діалог, не нативний), «Скасувати» нічого не міняє", async (t) => {
+test("4: «Підключення» — роль «Сповіщення Teams» без модуля; вимкнення називає наслідок (питання в картці), «Скасувати» нічого не міняє", async (t) => {
   const w = workDir(t);
   const { page, url } = await bootPlain(t, { portOffset: 300 });
   await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
-  await page.waitForSelector('.cn-card[data-id="static-publish"]', { timeout: 15000 });
+  await page.waitForSelector('.mc[data-id="static-publish"]', { timeout: 15000 });
 
-  const titles = await page.locator(".cn-sec-h").allTextContents();
-  const at = titles.indexOf("Сповіщення Teams");
-  assert.ok(at >= 0, `секції: ${JSON.stringify(titles)}`);
-  const sec = page.locator(".cn-sec", { has: page.locator(".cn-sec-h", { hasText: "Сповіщення Teams" }) });
-  assert.deepEqual((await sec.locator(".cn-card").evaluateAll((els) => els.map((e) => e.dataset.id))).sort(),
-    ["fake-notify", "supabase-teams"], "у секції мусять стояти обидва модулі ролі");
-  for (const id of ["fake-notify", "supabase-teams"]) {
-    assert.match(await sec.locator(`.cn-card[data-id="${id}"] .cn-badge`).getAttribute("class"), /cn-badge--off/, `${id}: не підключений`);
-  }
+  const roles = await page.locator(".mc--empty").evaluateAll((els) => els.map((e) => e.dataset.role));
+  assert.ok(roles.includes("notify"), `порожні ролі: ${JSON.stringify(roles)}`);
+  assert.match(await page.locator('.mc--empty[data-role="notify"]').textContent(), /Сповіщення Teams/);
+  assert.equal(await page.locator('.mc[data-id="fake-notify"], .mc[data-id="supabase-teams"]').count(), 0, "вимкнені модулі ролі — не в сітці (лише в каталозі)");
 
-  await page.click('[data-cn="enable"][data-id="fake-notify"]');
+  await clickEnable(page, "fake-notify");
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="state_file"]');
   await page.fill('#cn-drawer [data-cn-field="state_file"]', w.stateFile);
   await page.click('#cn-drawer [data-cn-dr="submit"]');
-  await page.waitForSelector('.cn-card[data-id="fake-notify"] .cn-badge--ok', { timeout: 15000 });
+  await waitBadge(page, "fake-notify", "ok");
   assert.equal((await capsOf(url)).notify, "fake-notify", "після підключення з екрана роль мусить мати власника");
 
-  /* Вимкнення: діалог (внутрішній `.cv-ask-scrim`) каже, що картки зникнуть; «Скасувати» лишає все як було. */
-  await page.click('[data-cn="disable"][data-id="fake-notify"]');
-  await page.waitForSelector(".cv-ask-scrim", { timeout: 15000 });
-  const ask = await page.locator(".cv-ask-scrim").textContent();
+  /* Вимкнення: питання в картці каже, що картки зникнуть; «Скасувати» лишає все як було. */
+  await menuDisable(page, "fake-notify");
+  const ask = await page.locator(".mc--ask .cfm-t").textContent();
   assert.match(ask, /Нові коментарі перестануть надходити карткою в Teams, а перемикач тиші зникне/,
-    `діалог вимкнення мусить назвати наслідок для сповіщень: ${ask}`);
+    `питання вимкнення мусить назвати наслідок для сповіщень: ${ask}`);
   assert.doesNotMatch(ask, /лишиться без модуля/, "загальний текст «без модуля» не мусить підміняти текст сповіщень");
-  await page.click('.cv-ask-scrim button[data-a="cancel"]');
-  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
-  assert.match(await page.locator('.cn-card[data-id="fake-notify"] .cn-badge').getAttribute("class"), /cn-badge--ok/, "скасування не вимикає");
+  assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "діалогу нема — питання в картці");
+  await askNo(page, "fake-notify");
+  await page.waitForSelector(".mc--ask", { state: "detached" });
+  await waitBadge(page, "fake-notify", "ok");                // скасування не вимикає
   assert.equal((await capsOf(url)).notify, "fake-notify", "скасування не міняє постачальника");
   assert.deepEqual(page.errors, []);
 });
