@@ -90,13 +90,15 @@ test("«нові»: при відкритій панелі тост не пок�
   assert.match(branch, /cmtNewsN = 0; cmtNewsPages = \{\};/);
   assert.ok(body.indexOf("newsToast(came)") > open + branch.length, "тост — лише після гілки відкритої панелі");
   assert.match(body, /const came = arrived\(cmtPrevIds, fresh\);/, "лише те, що зʼявилось у знімку ПІД ЧАС сесії");
-  assert.match(body, /if \(!seen\) \{ seen = baseline\(news\);/, "перший погляд — усе наявне бачене");
+  assert.match(body, /const seen = cmtSeenSet\(news\);/, "перший погляд — усе наявне бачене (база в cmtSeenSet)");
+  assert.match(fn("cmtSeenSet"), /main = baseline\(news\);/);
 });
 
 test("відкриття панелі посуває маркер «бачив» ОДРАЗУ й складає розділ «нових»", () => {
   const body = fn("setCommentsOpen");
   assert.match(body, /fresh\.forEach\(\(c\) => cmtFresh\.add\(c\.id\)\);/);
-  assert.match(body, /saveSeen\(key, markSeen\(seen, fresh\.map\(\(c\) => c\.id\)\)\)/);
+  assert.match(body, /if \(fresh\.length\) cmtMarkSeen\(fresh\.map\(\(c\) => c\.id\)\);/);
+  assert.match(body, /const seen = cmtSnap && Array\.isArray\(cmtSnap\.comments\) \? cmtSeenSet\(news\) : new Set\(\);/, "та сама база, що в cmtNewsUpdate: без маркера старе не стає «Новим»");
   assert.match(body, /dropNotice\('cmt-news'\);/);
   assert.match(body, /if \(!on\) \{[^}]*cmtFresh\.clear\(\);/, "закриття чистить «нові» цього відкриття");
   assert.match(body, /cmtRefreshLocal\(\);/, "свіжість локальних піни на відкритті");
@@ -129,7 +131,7 @@ test("усі читання й записи localStorage у проводці к�
 
 test("ревʼю T9: маркер «бачив» не пишеться, поки командного нема (впало чи не заведене)", () => {
   const body = fn("cmtNewsUpdate");
-  assert.match(body, /if \(!seen\) \{ seen = baseline\(news\); if \(!cmtTeamDown && !noTeamComments\(\)\) saveSeen\(key, seen\); \}/,
+  assert.match(fn("cmtSeenSet"), /if \(!cmtTeamDown && !noTeamComments\(\)\) \{ main = baseline\(news\); saveSeen\(key, main\); \}/,
     "базова лінія зі знімка без команди порожня: усі колеги стали б «новими» при поверненні команди");
 });
 
@@ -316,13 +318,13 @@ test("readRepliesDown: лише непорожній РЯДОК із store.repli
 });
 
 /** repliesOff + права + смуга з підставленими залежностями. */
-function repliesKit({ team = true, down = null, supports = true, teamDown = null, me = "Я", snap }) {
+function repliesKit({ team = true, down = null, supports = true, teamDown = null, me = "Я", snap, ready = true }) {
   const L = { store: { repliesDown: down, supportsReplies: (a) => (a === "local" ? true : supports) } };
   const lines = ["parentOfReply", "repliesWritable", "isOwnReply", "canDeleteReply"].map((n) => new RegExp(`^const ${n} = .*$`, "m").exec(src)[0]).join("\n");
   const whole = (n) => { const i = src.indexOf(`function ${n}(`); return src.slice(i, src.indexOf("{", i)) + fn(n); };
-  const code = `${["readRepliesDown", "readSupportsReplies", "repliesOff", "repliesBanner"].map(whole).join("\n")}\n${lines}\nreturn { repliesOff, repliesBanner: () => repliesBanner(cmtLayer()), isOwnReply, canDeleteReply };`;
-  return new Function("t", "audOf", "cmtLayer", "noTeamComments", "cmtTeamDown", "cmtSnap", "myName", code)(
-    (k) => k, (c) => (c && c._aud === "project" ? "project" : "local"), () => L, () => !team, teamDown, snap, () => me);
+  const code = `function storeIsReady() { return ready; }\n${["readRepliesDown", "readSupportsReplies", "repliesOff", "repliesBanner"].map(whole).join("\n")}\n${lines}\nreturn { repliesOff, repliesBanner: () => repliesBanner(cmtLayer()), isOwnReply, canDeleteReply };`;
+  return new Function("t", "audOf", "cmtLayer", "noTeamComments", "cmtTeamDown", "cmtSnap", "myName", "ready", code)(
+    (k) => k, (c) => (c && c._aud === "project" ? "project" : "local"), () => L, () => !team, teamDown, snap, () => me, ready);
 }
 const cm = (id, aud, replies) => ({ id, _aud: aud, status: "open", replies });
 const R = { mine: { id: "r1", author: "Я", text: "x" }, other: { id: "r2", author: "Хтось", text: "y" }, agent: { id: "r3", author: "Я", agent: true, text: "z" } };
@@ -368,4 +370,68 @@ test("новини з відповідями: cmtNewsUpdate і setCommentsOpen �
   assert.match(fn("newsToast"), /replyNewsToast\(came\[came\.length - 1\]\)/);
   assert.match(fn("replyNewsToast"), /t\('cmtReplyToast', r\.author \|\| '—', par \? par\.n : '—'\)/);
   assert.match(fn("replyNewsToast"), /cmtThreads\.add\(r\.parent\)/);
+  assert.match(fn("replyNewsToast"), /cmtQuery = '';/, "пошук міг сховати батька (live 31)");
+  assert.match(fn("replyNewsToast"), /par && par\.scope === 'earlier'\) cmtExpanded\.earlier = true;/, "батько в «З попередніх ітерацій» (у «Нове» картка видима й так — це запас)");
+  assert.match(src, /cmtEl\.addEventListener\('focusin'[\s\S]*?classList\.add\('cmt-rbox--on'\);[\s\S]*?\}\);/, "focusin ставить клас без перемальовки");
+  assert.doesNotMatch(/cmtEl\.addEventListener\('focusin'[\s\S]*?\n\}\);/.exec(src)[0], /paintComments/, "перемальовка у focusin губить каретку");
+});
+
+test("«не підтримує відповідей» — невідомо, поки store.ready не виконано: ні смуги, ні прихованого поля (поведінка справжніх storeIsReady/readSupportsReplies)", async () => {
+  const code = `const cmtStoreReady = new WeakMap(); let paints = 0; const paintComments = () => { paints += 1; };
+    function storeIsReady${/function storeIsReady(\([^)]*\))/.exec(src)[1]} ${fn("storeIsReady")}
+    function readSupportsReplies${/function readSupportsReplies(\([^)]*\))/.exec(src)[1]} ${fn("readSupportsReplies")}
+    return { read: readSupportsReplies, paints: () => paints };`;
+  const kit = new Function(code)();
+  let done; const store = { ready: new Promise((r) => { done = r; }), supportsReplies: () => false };
+  const L = { store };
+  assert.equal(kit.read(L), null, "до готовності — невідомо, а не «false»");
+  assert.equal(kit.read(L), null);
+  done();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(kit.read(L), false, "після готовності — справжня відповідь");
+  assert.equal(kit.paints(), 1, "готовність перемальовує панель");
+  const rejected = { ready: Promise.reject(new Error("x")), supportsReplies: () => true };
+  kit.read({ store: rejected });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(kit.read({ store: rejected }), true, "відмова ready — теж «готово» (падіння команди має свою смугу)");
+  assert.equal(kit.read({ store: {} }), null, "не комбіноване сховище — невідомо");
+});
+
+test("права перевіряються й у діях, а не лише в розмітці: cmtreply, cmtredit, cmtrdel, cmtrdelyes", () => {
+  assert.match(act("cmtredit"), /if \(!isOwnReply\(replyOf\(\.\.\.splitReplyKey\(key\)\)\)\) return;/);
+  assert.match(act("cmtrdel"), /if \(!canDeleteReply\(replyOf\(\.\.\.splitReplyKey\(key\)\)\)\) return;/);
+  const m = /^  cmtreply: [\s\S]*?\n  \},$/m.exec(src)[0];
+  assert.match(m, /c\.status !== 'open' \|\| repliesOff\(c\) != null\) return;/);
+  const y = /^  cmtrdelyes: [\s\S]*?\n  \},$/m.exec(src)[0];
+  assert.match(y, /if \(!canDeleteReply\(replyOf\(cid, rid\)\)\) \{ paintComments\(\); return; \}/);
+  assert.ok(y.indexOf("canDeleteReply") < y.indexOf("removeReply"), "право — до виклику шару");
+});
+
+test("маркер відповідей без команди: окремий ключ dc-seen-r, база й запис ТІЛЬКИ відповідей, isNew бачить обʼєднання (поведінка cmtSeenSet/cmtMarkSeen)", () => {
+  const store = new Map();
+  const code = `${["loadSeen", "saveSeen", "cmtSeenSet", "cmtMarkSeen"].map((n) => `function ${n}${/function \w+(\([^)]*\))/.exec(src.slice(src.indexOf(`function ${n}(`)))[1]} ${fn(n)}`).join("\n")}
+    ${/^const cmtReplySeenKey = .*$/m.exec(src)[0]}
+    ${/^const cmtSeenKey = .*$/m.exec(src)[0]}
+    return { cmtSeenSet, cmtMarkSeen };`;
+  const mk = (team) => new Function("localStorage", "readSeen", "writeSeen", "baseline", "markSeen", "seenKey", "spaceNow", "currentTaskId", "cmtTeamDown", "noTeamComments", code)(
+    { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) },
+    (raw) => (raw ? new Set(JSON.parse(raw)) : null), (set) => JSON.stringify([...set]),
+    (items) => new Set(items.map((c) => c.id)), (seen, ids) => new Set([...(seen || []), ...ids]),
+    (sp, t) => `dc-seen:${sp || "-"}:${t}`, () => ({ id: "s" }), "T1", team ? null : "down", () => !team);
+  const old = { id: "r-old", parent: "c1" }, comm = { id: "c-col" };
+  /* без команди: головний маркер НЕ пишеться, маркер відповідей — з базою лише відповідей */
+  const k = mk(false);
+  const seen = k.cmtSeenSet([comm, old]);
+  assert.equal(store.has("dc-seen:s:T1"), false, "головний маркер записано без команди — залив би «Нове» при поверненні команди");
+  assert.deepEqual([...JSON.parse(store.get("dc-seen-r:s:T1"))], ["r-old"], "база маркера відповідей — лише відповіді");
+  assert.equal(seen.has("r-old"), true);
+  /* нова відповідь — не в обʼєднанні (тобто isNew), доки її не позначили */
+  assert.equal(k.cmtSeenSet([comm, old, { id: "r-new", parent: "c1" }]).has("r-new"), false);
+  k.cmtMarkSeen(["r-new"]);
+  assert.equal(store.has("dc-seen:s:T1"), false, "markSeen без команди не створює головного маркера");
+  assert.equal(k.cmtSeenSet([old]).has("r-new"), true, "позначена відповідь — бачена");
+  /* команда жива: як було — база всього в головному маркері */
+  store.clear();
+  mk(true).cmtSeenSet([comm, old]);
+  assert.deepEqual([...JSON.parse(store.get("dc-seen:s:T1"))].sort(), ["c-col", "r-old"]);
 });

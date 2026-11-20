@@ -786,6 +786,89 @@ test("28: закритий коментар — рядок гілки без п�
   }
 });
 
+/* ───────── 0.34: відповідь AI на ЛОКАЛЬНИЙ пін у проєкті без команди — новина ───────── */
+const seedOpenPin = (dir, pins) => writeFileSync(path.join(dir, ".dc-local-comments.json"), JSON.stringify(pins.map((p) => seedPin({
+  meta: { iteration: "1", version: "1", seq: 1, viewport: { w: 1280, h: 900 } }, ...p }))));
+/** Як `inbox.py`: дописує відповідь агента в файл задачі; вікно оболонки отримує `focus` і перечитує локальні піни. */
+async function agentWrites(page, dir, cid, reply) {
+  const file = path.join(dir, ".dc-local-comments.json");
+  const rows = JSON.parse(readFileSync(file, "utf8"));
+  const row = rows.find((c) => c.id === cid);
+  row.replies = [...(row.replies || []), { author: "Claude", agent: true, ts: "20.11.2026 12:00", ...reply }];
+  writeFileSync(file, JSON.stringify(rows, null, 1));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+}
+/* база «бачив» (у цій фікстурі головний маркер пишеться: простір без модуля тут не заведено — «без команди» перевіряє comments-team, 15) */
+const replyMarker = (page) => page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith("dc-seen")));
+const newBadge = (page) => page.evaluate(() => document.querySelector('#hud [data-act="comments"] .isl-count--new')?.textContent ?? null);
+const NEWS = '.cv-notice[data-notice="cmt-news"]';
+
+test("30: перше відкриття панелі зі старою відповіддю агента — вона НЕ нова", async (t) => {
+  const { page } = await boot(t, PORT_BASE + 100, (d) => seedOpenPin(d, [{ id: "a1", text: "Для агента",
+    replies: [{ id: "old", author: "Claude", agent: true, text: "Давня відповідь", ts: "19.11.2026 10:00" }] }]));
+  assert.equal(await newBadge(page), null);
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  assert.equal(await page.locator("#cmt-panel .cmt-sec--new").count(), 0, "стара відповідь у «Нове»");
+  assert.equal(await page.locator("#cmt-panel .cmt-rnew").count(), 0, "стара відповідь із позначкою «нова»");
+  assert.match(await page.textContent("#cmt-panel .cmt-card .cmt-rsum"), /1 відповідь/);
+});
+
+test("31: тост відповіді очищає пошук, що ховав батька: після «Показати» картка й гілка видимі, поле пошуку порожнє", async (t) => {
+  const { page, dir } = await boot(t, PORT_BASE + 110, (d) => seedOpenPin(d, [{ id: "a1", text: "Перший пін", meta: { iteration: "1", version: "1", seq: 1, viewport: { w: 1280, h: 900 } } },
+    { id: "a2", text: "Другий пін", meta: { iteration: "1", version: "1", seq: 2, viewport: { w: 1280, h: 900 } } }]));
+  await until(() => replyMarker(page));
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  await page.fill("#cmt-q", "Другий");
+  await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === 1);
+  await page.click('#hud [data-act="comments"]');   // закрити панель; пошук лишається в стані
+  await page.waitForSelector("#cmt-panel", { state: "hidden" });
+  await agentWrites(page, dir, "a1", { id: "ra1", text: "Відповідь на перший" });
+  await page.waitForSelector(NEWS, { timeout: 8000 });
+  await page.click(`${NEWS} [data-act="cmtshownew"]`);
+  await page.waitForSelector('#cmt-panel .cmt-card[data-cid="a1"] .cmt-reply');
+  assert.equal(await page.inputValue("#cmt-q"), "", "пошук не очищено");
+});
+
+test("32: тост відповіді на пін «З попередніх ітерацій» — картка з гілкою видима й вибрана", async (t) => {
+  const { page, dir } = await boot(t, TWO_IT_PORT_BASE + 20, (d) => {
+    cpSync(path.join(d, "iterations", "it1"), path.join(d, "iterations", "it2"), { recursive: true });
+    writeFileSync(path.join(d, "iterations.json"), JSON.stringify({ iterations: [
+      { id: "it1", date: "24.08.2026 12:00", note: "перша", published: true },
+      { id: "it2", date: "25.08.2026 12:00", note: "друга", published: true }] }));
+    seedOpenPin(d, [{ id: "o1", text: "Лишилось з першої", meta: { iteration: "1", version: "1", seq: 3, viewport: { w: 1280, h: 900 } } }]);
+  });
+  await until(() => replyMarker(page));
+  await agentWrites(page, dir, "o1", { id: "ra1", text: "Відповідь на старий" });
+  await page.waitForSelector(NEWS, { timeout: 8000 });
+  await page.click(`${NEWS} [data-act="cmtshownew"]`);
+  await page.waitForSelector('#cmt-panel .cmt-card[data-cid="o1"] .cmt-reply');
+  assert.equal(await page.locator('#cmt-panel .cmt-card--sel[data-cid="o1"]').count(), 1);
+});
+
+test("33: розгорнута гілка з відповідями — фокус у полі відкриває «Надіслати»/«Скасувати»; кнопка клікабельна й шле", async (t) => {
+  const { page, dir } = await boot(t, PORT_BASE + 120, (d) => seedOpenPin(d, [{ id: "a1", text: "Для агента",
+    replies: [{ id: "old", author: "Claude", agent: true, text: "Давня", ts: "19.11.2026 10:00" }] }]));
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  await page.click("#cmt-panel .cmt-rsum");   // розгорнути гілку
+  await page.waitForSelector("#cmt-panel textarea.cmt-rta");
+  const send = '#cmt-panel [data-act="cmtreplysend"]';
+  assert.equal(await page.isVisible(send), false, "кнопка видна ще до фокуса");
+  /* Чернетка вже є (набрана без фокуса); клік у КІНЕЦЬ поля: каретка від кліку мусить пережити відкриття рядка кнопок
+     (перемальовка в focusin замінила б textarea й скинула б її на початок). */
+  await page.evaluate(() => { const ta = document.querySelector("#cmt-panel textarea.cmt-rta"); ta.value = "Дякую за"; ta.dispatchEvent(new Event("input", { bubbles: true })); });
+  const box = await page.locator("#cmt-panel textarea.cmt-rta").boundingBox();
+  await page.click("#cmt-panel textarea.cmt-rta", { position: { x: box.width - 3, y: box.height - 3 } });
+  await page.waitForSelector(send, { state: "visible" });
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cmt-rta")), true, "фокус втрачено");
+  await page.keyboard.type(" все");
+  assert.equal(await page.inputValue("#cmt-panel textarea.cmt-rta"), "Дякую за все", "каретка від кліку не пережила відкриття рядка кнопок");
+  await page.click(send);
+  await until(() => { const r = JSON.parse(readFileSync(path.join(dir, ".dc-local-comments.json"), "utf8")).find((c) => c.id === "a1"); return (r.replies || []).some((x) => x.text === "Дякую за все"); });
+});
+
 /* ───────── 0.34: форма над макетом — у токенах і мові оболонки (`host.theme`, `host.labels`) ───────── */
 test("20: форма коментаря над макетом — themed, фон = --s2 оболонки, підписи мовою оболонки (uk), тег чипом", async (t) => {
   const { page, frame } = await boot(t, PORT_BASE + 50);

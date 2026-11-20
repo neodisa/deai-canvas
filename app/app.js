@@ -1942,7 +1942,7 @@ function paintComments() {
   const act = document.activeElement;
   const cfmSel = act && cmtEl.contains(act) && act.closest('.cmt-acts--cfm')
     ? `.cmt-acts--cfm .${act.classList.contains('cfm-yes') ? 'cfm-yes' : 'cfm-no'}`
-    : (act && cmtEl.contains(act) && act.closest('.cmt-reply .cfm') ? `.cmt-reply .cfm .${act.classList.contains('cfm-yes') ? 'cfm-yes' : 'cfm-no'}` : null);   // питання «Видалити відповідь?»   // фокус на кнопці питання «Видалити назавжди?»
+    : (act && cmtEl.contains(act) && act.closest('.cmt-reply .cfm') ? `.cmt-reply .cfm .${act.classList.contains('cfm-yes') ? 'cfm-yes' : 'cfm-no'}` : null);   // фокус на кнопці питання «Видалити назавжди?» / «Видалити відповідь?»
   /* Поле відповіді / правки відповіді: їх кілька на панелі — шукаємо за `data-val` (id коментаря чи `cid|rid`). */
   const rKind = act && cmtEl.contains(act) ? ['cmt-rta', 'cmt-redit'].find((k) => act.classList.contains(k)) : null;
   const keep = act && cmtEl.contains(act) && (act.id === 'cmt-q' || act.classList.contains('cmt-edit') || rKind)
@@ -1981,7 +1981,23 @@ function readTeamDown(L) { try { const v = L && L.store && L.store.teamDown; ret
 /** Причина, з якої відповіді командного каналу недоступні (`DeaiDualStore.repliesDown`; `'no-replies-schema'` — у базі нема таблиці), або `null`. */
 function readRepliesDown(L) { try { const v = L && L.store && L.store.repliesDown; return typeof v === 'string' && v ? v : null; } catch (e) { return null; } }
 /** Чи командний канал уміє відповіді: `true`/`false`; сховище без `supportsReplies` (не комбіноване) — `null` (невідомо — не блокуємо). */
-function readSupportsReplies(L) { try { const f = L && L.store && L.store.supportsReplies; return typeof f === 'function' ? !!f.call(L.store, 'project') : null; } catch (e) { return null; } }
+function readSupportsReplies(L) {
+  try {
+    const st = L && L.store, f = st && st.supportsReplies;
+    /* Поки командна частина не прочиталась (`store.ready`), «не підтримує» — ще невідомо: адаптер виставляє це по готовності. */
+    return typeof f === 'function' && storeIsReady(st) ? !!f.call(st, 'project') : null;
+  } catch (e) { return null; }
+}
+/** Чи сховище вже готове (`store.ready` виконано); перше звернення чекає на нього й перемальовує панель. */
+const cmtStoreReady = new WeakMap();
+function storeIsReady(st) {
+  const v = cmtStoreReady.get(st);
+  if (v !== undefined) return v;
+  cmtStoreReady.set(st, false);
+  const done = () => { cmtStoreReady.set(st, true); paintComments(); };
+  try { Promise.resolve(st.ready).then(done, done); } catch (e) { cmtStoreReady.set(st, true); }
+  return false;
+}
 /** Чому під цим коментарем не можна відповісти: рядок-причина чи `null`. Локальний — завжди можна. Командний при недоступних відповідях
  *  ховає поле й кнопку: адаптер без таблиці/підтримки мовчки ВІДКИДАЄ відповіді, тож це єдиний запобіжник від «відповів у порожнечу». */
 function repliesOff(c, L = cmtLayer()) {
@@ -1996,8 +2012,7 @@ function repliesBanner(L) {
   if (down) return down === 'no-replies-schema' ? t('cmtRepliesNoSchema') : down;
   return readSupportsReplies(L) === false ? t('cmtRepliesNoModule') : null;
 }
-/** Права на відповіді в Deai: змінити — лише свою (не агента), видалити — будь-яку. */
-/** Коментар-батько відповіді за її id у знімку. Поки `repliesOff(батько)` — відповіді лише читаємо: адаптер не пише (правка зависла б, видалення не дійшло б
+/** Права на відповіді в Deai: змінити — лише свою (не агента), видалити — будь-яку. Коментар-батько відповіді — за її id у знімку. Поки `repliesOff(батько)` — відповіді лише читаємо: адаптер не пише (правка зависла б, видалення не дійшло б
  *  до сервера, і відповідь зʼявилась би знову), тож кнопок немає. */
 const parentOfReply = (r) => (r && cmtSnap?.comments?.find((c) => c && Array.isArray(c.replies) && c.replies.some((x) => x && x.id === r.id))) || null;
 const repliesWritable = (r) => { const c = parentOfReply(r); return !!c && repliesOff(c) == null; };
@@ -2012,6 +2027,32 @@ function snapIds(all) {
   for (const c of all) { if (!c) continue; s.add(c.id); if (Array.isArray(c.replies)) for (const r of c.replies) if (r && typeof r.id === 'string') s.add(r.id); }
   return s;
 }
+/** Маркер «бачив» відповідей без команди: окремий від головного (`dc-seen:`), бо головний не пишемо, поки команди нема чи вона впала
+ *  (інакше колеги, що зʼявляться пізніше, залили б «Нове»), а відповідь агента на ЛОКАЛЬНИЙ пін мусить бути новиною й тоді. */
+const cmtReplySeenKey = () => `dc-seen-r:${spaceNow()?.id || '-'}:${currentTaskId}`;
+/** Усе «бачене» для `isNew`: головний маркер (з базою, коли команда жива) ∪ маркер відповідей (база — лише відповіді). */
+function cmtSeenSet(news) {
+  const key = cmtSeenKey(), rkey = cmtReplySeenKey();
+  let main = loadSeen(key);
+  let rep = loadSeen(rkey);
+  /* Командного нема (впав чи не заведений) — знімок без команди порожній: базова лінія з нього зробила б «новими» усіх колег,
+     коли команда повернеться. Головний маркер лишаємо незаданим: першим базовим стане перший справжній знімок команди. */
+  if (!main) {
+    if (!cmtTeamDown && !noTeamComments()) { main = baseline(news); saveSeen(key, main); }
+    else {
+      main = baseline(news.filter((c) => !c.parent));
+      if (!rep) { rep = baseline(news.filter((c) => c.parent)); saveSeen(rkey, rep); }
+    }
+  }
+  return rep ? new Set([...main, ...rep]) : main;
+}
+/** Посунути маркер(и) «бачив»: головний, коли він є; маркер відповідей — коли він у ходу чи головного ще нема. */
+function cmtMarkSeen(ids) {
+  const key = cmtSeenKey(), rkey = cmtReplySeenKey();
+  const main = loadSeen(key), rep = loadSeen(rkey);
+  if (main) saveSeen(key, markSeen(main, ids));
+  if (rep || !main) saveSeen(rkey, markSeen(rep || new Set(), ids));
+}
 /** Свіжість локальних (Б2.1): комбіноване сховище перечитує локальні піни з диска (їх міг дописати Claude).
  *  Під екраном «Задачі» — тиша: макет схований, а вихід (`leaveHome` → `render()`) однаково перезавантажує рамку. */
 const cmtRefreshLocal = () => { if (homeOpen) return; try { const st = cmtLayer()?.store; (st?.refreshLocal || st?.refresh)?.call(st); } catch (e) {} };
@@ -2023,17 +2064,13 @@ function cmtNewsUpdate() {
   const all = cmtSnap && Array.isArray(cmtSnap.comments) ? cmtSnap.comments : null;
   if (!all || !currentTaskId) { cmtNewsN = 0; cmtNewsPages = {}; cmtNewsTree(); return; }
   const news = newsItems(all);   // командні коментарі + відповіді на відкриті коментарі будь-якого каналу
-  const key = cmtSeenKey();
-  let seen = loadSeen(key);
-  /* Командного нема (впав чи не заведений) — знімок без команди порожній: базова лінія з нього зробила б «новими» усіх колег,
-     коли команда повернеться. Маркер лишаємо незаданим: першим базовим стане перший справжній знімок команди. */
-  if (!seen) { seen = baseline(news); if (!cmtTeamDown && !noTeamComments()) saveSeen(key, seen); }
+  const seen = cmtSeenSet(news);
   const fresh = news.filter((c) => isNew(c, seen, myName()));
   const came = arrived(cmtPrevIds, fresh);
   cmtPrevIds = snapIds(all);
   if (cmtOpen) {
     for (const c of fresh) cmtFresh.add(c.id);
-    if (fresh.length) saveSeen(key, markSeen(seen, fresh.map((c) => c.id)));
+    if (fresh.length) cmtMarkSeen(fresh.map((c) => c.id));
     cmtNewsN = 0; cmtNewsPages = {};
     cmtNewsTree();
     return;
@@ -2067,6 +2104,8 @@ function replyNewsToast(r) {
       /* Вкладка — адресата батька: відповідь на локальний пін видно на «Для AI», на командний — на «Команді». */
       const want = par && audOf(par) === 'project' ? 'project' : 'local';
       if (cmtFilter !== 'all' && cmtFilter !== want) setCmtFilter(want);
+      cmtQuery = '';   // пошук міг сховати батька; поле очищає перемальовка
+      if (par && par.scope === 'earlier') cmtExpanded.earlier = true;   // батько в згорнутому «З попередніх ітерацій»
       setCommentsOpen(true); cmtSel = r.parent; cmtThreads.add(r.parent); paintComments(); cmtLayer()?.focus(r.parent);
     },
   }]);
@@ -2089,11 +2128,11 @@ function setCommentsOpen(on) {
   if (!on) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtReplyReset(); cmtFresh.clear(); }
   else {
     /* Маркер «бачив» посуваємо ОДРАЗУ на відкритті: нові стають розділом «Нові від команди» цього відкриття (поправка 13). */
-    const key = cmtSeenKey();
-    const seen = loadSeen(key) || new Set();
-    const fresh = newsItems(cmtSnap?.comments).filter((c) => isNew(c, seen, myName()));
+    const news = newsItems(cmtSnap?.comments);
+    const seen = cmtSnap && Array.isArray(cmtSnap.comments) ? cmtSeenSet(news) : new Set();   // та сама база, що в `cmtNewsUpdate`: старі відповіді не заливають «Нове»
+    const fresh = news.filter((c) => isNew(c, seen, myName()));
     fresh.forEach((c) => cmtFresh.add(c.id));
-    if (fresh.length) saveSeen(key, markSeen(seen, fresh.map((c) => c.id)));
+    if (fresh.length) cmtMarkSeen(fresh.map((c) => c.id));
     cmtNewsN = 0; cmtNewsPages = {}; cmtNewsTree();
     dropNotice('cmt-news');
     cmtRefreshLocal();
@@ -2430,7 +2469,11 @@ const BAR_ACTIONS = {
   cmteditcancel: () => { cmtEditing = null; cmtDraft = null; paintComments(); },
   /* Відповіді (0.34): права й `repliesOff` перевіряємо ще раз тут, а не лише в розмітці; виклики шару — у try, як і решта. */
   cmtthread: (id) => { if (cmtThreads.has(id)) cmtThreads.delete(id); else cmtThreads.add(id); paintComments(); },
-  cmtreply: (id) => { cmtReplying = id; paintComments(); cmtEl.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`)?.focus(); },
+  cmtreply: (id) => {
+    const c = cmtSnap?.comments?.find((x) => x && x.id === id);
+    if (!c || c.status !== 'open' || repliesOff(c) != null) return;
+    cmtReplying = id; paintComments(); cmtEl.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`)?.focus();
+  },
   cmtreplysend: (id) => {
     const c = cmtSnap?.comments?.find((x) => x && x.id === id);
     const text = String(cmtEl.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`)?.value ?? cmtReplyDraft.get(id) ?? '').trim();
@@ -2439,7 +2482,7 @@ const BAR_ACTIONS = {
     paintComments();
   },
   cmtreplycancel: (id) => { cmtReplyDraft.delete(id); if (cmtReplying === id) cmtReplying = null; paintComments(); },
-  cmtredit: (key) => { cmtReplyEdit = key; cmtReplyEditDraft = null; cmtReplyDelAsk = null; paintComments(); cmtEl.querySelector('.cmt-redit')?.focus(); },
+  cmtredit: (key) => { if (!isOwnReply(replyOf(...splitReplyKey(key)))) return; cmtReplyEdit = key; cmtReplyEditDraft = null; cmtReplyDelAsk = null; paintComments(); cmtEl.querySelector('.cmt-redit')?.focus(); },
   cmtreditsave: (key) => {
     const [cid, rid] = splitReplyKey(key);
     if (!isOwnReply(replyOf(cid, rid))) return;
@@ -2447,11 +2490,12 @@ const BAR_ACTIONS = {
     paintComments();
   },
   cmtreditcancel: () => { cmtReplyEdit = null; cmtReplyEditDraft = null; paintComments(); },
-  cmtrdel: (key) => { cmtReplyDelAsk = key; paintComments(); cmtEl.querySelector('.cmt-reply .cfm .cfm-no')?.focus(); },
+  cmtrdel: (key) => { if (!canDeleteReply(replyOf(...splitReplyKey(key)))) return; cmtReplyDelAsk = key; paintComments(); cmtEl.querySelector('.cmt-reply .cfm .cfm-no')?.focus(); },
   cmtrdelyes: (key) => {
     if (cmtReplyDelAsk !== key) return;
     cmtReplyDelAsk = null;
     const [cid, rid] = splitReplyKey(key);
+    if (!canDeleteReply(replyOf(cid, rid))) { paintComments(); return; }
     try { if (cmtLayer()?.removeReply(cid, rid) && cmtReplyEdit === key) { cmtReplyEdit = null; cmtReplyEditDraft = null; } } catch (e) {}
     paintComments();
   },
@@ -7708,6 +7752,18 @@ cmtEl.addEventListener('input', (ev) => {
   if (ev.target.id !== 'cmt-q') return;
   cmtQuery = ev.target.value;
   paintComments();
+});
+/* Фокус у полі відповіді відкриває рядок «Надіслати / Скасувати» (у розгорнутій гілці з відповідями поле стоїть без нього): `replying` = цей
+   коментар, `cmt-rbox--on` ставимо прямо, БЕЗ перемальовки — вона замінила б textarea посеред mousedown і згубила б каретку та виділення.
+   Наступна звичайна перемальовка дає той самий стан із `cmtReplying`. */
+cmtEl.addEventListener('focusin', (ev) => {
+  const ta = ev.target.closest?.('.cmt-rta');
+  if (!ta) return;
+  const id = ta.dataset.val;
+  const c = cmtSnap?.comments?.find((x) => x && x.id === id);
+  if (!c || c.status !== 'open' || repliesOff(c) != null || cmtReplying === id) return;
+  cmtReplying = id;
+  ta.closest('.cmt-rbox')?.classList.add('cmt-rbox--on');
 });
 /* ⌘/Ctrl+Enter зберігає редагування, Esc скасовує; `stopPropagation`, щоб глобальний Esc не закрив панель. */
 cmtEl.addEventListener('keydown', (ev) => {
