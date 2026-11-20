@@ -282,6 +282,23 @@ default) needs only a token — no `vercel login`, no CLI, no Node on the machin
 - With a `comments` module enabled in the space, the preview carries the comment layer and
   talks to that module's service (see *Comments*); without one it has no comments.
 
+**The published preview (0.32).** A preview is static (no server behind it) and looks like Deai:
+- *Gate.* With a password, a dark card with the Deai mark asks for it; `#k=<password>` in the link opens it directly.
+- *Island.* At the bottom: «Comments» (with the number of open comments; only when the space has a `comments` module),
+  «Inspector» and «Hide interface». Keys: **C**, **I**, **⇧⌘\\**. Comments and the inspector are mutually exclusive.
+- *Comments.* Anyone with the link can add a comment; the name is asked once, before the first one, and kept in that
+  browser. Only comments created in the same browser can be edited or deleted there; closing and reopening happen in Deai.
+  Closed comments show «Done · It.N» and the reason. This is an interface rule, not a lock: the public key in every page
+  allows everything, so a real lock belongs to your comments service (for example Supabase row-level security).
+- *Inspector.* Read only: values, token chips, distances (Alt) and navigation (Esc / ↵ / ← →); no tuner and no edits.
+  Tokens come from a snapshot of the space's tokens taken at publish time (`shell/ds-snapshot.json`; only the file name of
+  the source, no values that contain local paths). The preview makes no request to the canvas API.
+- *Links.* Following a link inside the mockup to another published page of the same iteration moves the page tree, `#p=`
+  and «Copy link» with it.
+- *Compatibility.* A published preview is a frozen copy: previews published before 0.32 keep the old look until you publish
+  them again. The build's `manifest.json` carries `shell: 2`; `ops/reseal_gate.py` refuses a build with an older shell. The
+  local copy under `/published/` runs sandboxed and shows no comments panel.
+
 **System Vercel CLI.** Choose «System Vercel CLI» in the setting `auth` (labelled «Вхід у Vercel»; Settings → Modules → the Vercel card → «Configure», or the wizard);
 the token field is then ignored, and `team` is the `--scope` of the CLI (empty: your personal account). Run
 `npx vercel login` once in a terminal; «Check» asks `vercel whoami` and says `no Node.js` or `not logged in` in plain
@@ -445,7 +462,8 @@ with the island button (it shows the number of open comments), the **C** key or 
 open and **Esc** closes it. It lists open comments, comments from earlier iterations (with a «carry to the current one» action) and
 closed ones — with «Done · It.N» and the explanation the agent left — and searches by text or by `#N`. The «Claude / Team» channel
 switch sits in the panel header. The commenter's own handle and panel are hidden there (it only draws pins and the compose form);
-published previews and `/commented` opened without `host=1` look exactly as before.
+`/commented` opened without `host=1` looks exactly as before. Published previews have the same panel since 0.32 (see
+*The published preview*).
 
 **Building the commenter.** Its source is in [`commenter/`](commenter/README.md). After changing it:
 `cd commenter && npm ci && npm run build` — the build writes into `app/vendor/` and `commenter/build-stamp.json`, and
