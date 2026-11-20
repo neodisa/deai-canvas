@@ -33,6 +33,13 @@
  *     поле-за-полем (і ключ-за-ключем `meta`) трійкою база(`written`)/наше/їхнє; обидва змінили — наше (як до кешу).
  *     Знімок спільний для рамок вкладки: `syncSnap` пише, лише якщо `t` у сховищі — наш (інакше затер би новіше читання).
  *     Без `sessionStorage` (чи коли він кидає) адаптер поводиться як раніше. Сховище, що переживає вкладку, не використовується навмисно.
+ * Відповіді на коментарі (0.34) — окрема таблиця `comment_replies` (replies.sql), без FK. `fetchAll` читає обидві таблиці паралельно
+ * (відповіді `order created_at, id`); збій відповідей коментарів не псує: `supportsReplies=false`, `repliesDown` = 'no-replies-schema'
+ * (таблиці нема: PGRST205/42P01/404) чи текст помилки. Відповіді — у `comment.replies` лише в памʼяті адаптера (рядок коментаря
+ * не змінюється); пишуться РІЗНИЦЕЮ (`writtenReplies`/`replyOwner`) після коментарів: upsert, потім delete за id (≤100 на запит).
+ * `remove` спершу видаляє відповіді за comment_id (по 10 коментарів; при відмові — відомі id пачками ≤100), збій коментар не блокує.
+ * Realtime відповідей — ОКРЕМИМ каналом `clr-<канал>`, що відкривається лише коли таблиця є (привʼязка до неіснуючої таблиці могла б
+ * завалити приєднання каналу коментарів). Знімок сесії: `{t, rows, replies, rd}`; знімок без масиву `replies` не засіває.
  * Клієнт supabase-js створюється БЕЗ автентифікації користувача (`persistSession`, `autoRefreshToken`, `detectSessionInUrl` —
  * вимкнені): за замовчуванням кожен `create()` запускав би інтервал оновлення токена, `BroadcastChannel`, записи в
  * сховище браузера й слухачі вікна, які `close()` не знімав би (а «Огляд» створює сховище на кожен запуск).
@@ -43,6 +50,7 @@
  * Інших глобальних імен, крім `window.DeaiComments`, не створює. */
 (function () {
   var TABLE = 'comments';
+  var REPLIES = 'comment_replies';           // відповіді на коментарі — окрема таблиця (replies.sql), без FK
   var ATTEMPTS = 3;                          // спроб запису; між ними 300, 600 мс (після останньої чекати нема чого)
   var REFETCH_MS = 120;                      // згладжування подій realtime: одне перечитування на серію подій
   var CACHE_TTL_MS = 120000;                 // вік знімка каналу в sessionStorage, до якого повного читання не потрібно
@@ -70,6 +78,28 @@
       born_v: n(c.bornV), resolved_v: c.resolvedV || null,
       resolve_reason: c.resolveReason || null, ts: c.ts || null
     };
+  }
+
+  /* Відповідь коментатора {id, author, text, ts, editedTs?, agent?} ↔ рядок `comment_replies`. Окремо від коментаря: рядок
+     коментаря (11 полів) не змінюється, відповіді липнуть до нього лише в памʼяті адаптера. Збирається з відомих полів — ядро
+     дописує до обʼєктів службові (`_pending` тощо). */
+  function replyToRow(r, commentId, channel) {
+    function n(v) { return v === undefined ? null : v; }
+    return {
+      id: r.id, comment_id: commentId, project_id: channel, author: n(r.author), text: n(r.text),
+      ts: r.ts || null, edited_ts: r.editedTs || null, agent: r.agent === true
+    };
+  }
+  function rowToReply(r) {
+    var o = { id: r.id, author: r.author, text: r.text, ts: r.ts };
+    if (r.edited_ts != null) o.editedTs = r.edited_ts;
+    if (r.agent === true) o.agent = true;
+    return o;
+  }
+  /* Таблиці нема (PostgREST PGRST205 «не в кеші схеми», Postgres 42P01, чи просто HTTP 404): `replies.sql` ще не виконано. */
+  function noTable(res) {
+    var e = res && res.error;
+    return !!e && (e.code === 'PGRST205' || e.code === '42P01' || e.status === 404 || res.status === 404);
   }
 
   function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
@@ -111,11 +141,11 @@
     return keys;
   }
 
-  /* Записати знімок {t, rows}. Завеликий — не зберігаємо й прибираємо старий; квота — чистимо всі наші ключі й одна повторна
+  /* Записати знімок {t, rows, replies, rd} (рядки відповідей і причина, чому їх нема: null чи рядок). Завеликий — не зберігаємо й прибираємо старий; квота — чистимо всі наші ключі й одна повторна
      спроба; решту мовчки здаємо. Заодно вичищаємо чужі знімки старші за TTL. */
-  function writeSnap(ss, key, t, rows) {
+  function writeSnap(ss, key, t, rows, replies, rd) {
     try {
-      var val = JSON.stringify({ t: t, rows: rows });
+      var val = JSON.stringify({ t: t, rows: rows, replies: replies, rd: rd });
       if (val.length > CACHE_MAX_CHARS) { ss.removeItem(key); return; }
       var now = Date.now();
       snapKeys(ss).forEach(function (k) {
@@ -140,6 +170,11 @@
     var channel = cfg.channel;
     var cache = [];
     var written = {};                        // id → stable(рядка), який база точно має (останнє читання чи успішний запис)
+    var writtenReplies = {};                 // id відповіді → stable(її рядка), який база має; replyOwner: id відповіді → id коментаря
+    var replyOwner = {};
+    var supportsReplies = false;             // таблиця comment_replies є й читається (після першого вдалого читання/знімка)
+    var repliesDown = null;                  // null чи причина: 'no-replies-schema' (таблиці нема) або текст помилки
+    var repliesRealtime = null;              // окремий канал realtime для відповідей (лише коли таблиця є)
     var listeners = typeof cfg.onChange === 'function' ? [cfg.onChange] : [];
     var closed = false;
     var seq = 0;                             // «покоління» кешу: стара відповідь не затирає свіжішу, ні свій запис
@@ -169,7 +204,51 @@
       if (!ss || snapT === null) return;
       var o = readSnap(ss, snapKey);
       if (!o || o.t !== snapT) return;       // знімок оновив чужий екземпляр (новіше читання): не затираємо його своїми старішими рядками
-      writeSnap(ss, snapKey, o.t, cache.map(function (c) { return commentToRow(c, channel); }));
+      writeSnap(ss, snapKey, o.t, cache.map(function (c) { return commentToRow(c, channel); }), replyRowsOf(cache), repliesDown);
+    }
+    function replyRowsOf(list) {
+      var out = [];
+      list.forEach(function (c) {
+        (Array.isArray(c.replies) ? c.replies : []).forEach(function (r) { if (r && typeof r.id === 'string') out.push(replyToRow(r, c.id, channel)); });
+      });
+      return out;
+    }
+    /* Рядки відповідей → до коментарів кешу за comment_id (у порядку, як віддала база; сироти відкидаємо); перебудувати
+       знімки writtenReplies/replyOwner. `replies` ставимо лише коментарю, що їх має. */
+    function attachReplies(list, repRows) {
+      var byId = {};
+      list.forEach(function (c) { byId[c.id] = c; });
+      writtenReplies = {}; replyOwner = {};
+      (repRows || []).forEach(function (r) {
+        var c = r && typeof r.id === 'string' ? byId[r.comment_id] : null;
+        if (!c) return;
+        (c.replies = c.replies || []).push(rowToReply(r));
+        writtenReplies[r.id] = stable(replyToRow(rowToReply(r), r.comment_id, channel));
+        replyOwner[r.id] = r.comment_id;
+      });
+    }
+    /* Realtime відповідей — ОКРЕМИМ каналом (рішення контролера): привʼязка postgres_changes до таблиці, якої нема чи яку не
+       опубліковано, могла б завалити приєднання всього каналу, і коментарі в проєктах без replies.sql втратили б «живе». Відкриваємо
+       один раз, коли таблиця вперше виявилась придатною. */
+    function openRepliesChannel() {
+      if (closed || repliesRealtime !== null || !supportsReplies) return;
+      repliesRealtime = client.channel('clr-' + channel)
+        .on('postgres_changes', { event: '*', schema: 'public', table: REPLIES }, function (p) { if (relevantReply(p) && !ownEchoReply(p)) scheduleFetch(); })
+        .subscribe();
+    }
+    function relevantReply(p) {
+      var n = p && p.new, o = p && p.old;
+      if (n && n.project_id != null) return n.project_id === channel;
+      var id = o && o.id;
+      if (id == null) return true;
+      return writtenReplies[id] !== undefined;
+    }
+    function ownEchoReply(p) {
+      try {
+        var n = p && p.new;
+        if (!n || n.id == null || (p.eventType !== 'INSERT' && p.eventType !== 'UPDATE')) return false;
+        return writtenReplies[n.id] === stable(replyToRow(rowToReply(n), n.comment_id, channel));
+      } catch (e) { return false; }
     }
 
     /* Скріншот піна → Storage (`<bucket>/comment-shots/<id>.jpg`, upsert); результат — публічна адреса або null. Форма
@@ -214,7 +293,13 @@
       if (closed) return Promise.resolve();  // подія realtime після close() нічого не питає в бази
       var mine = ++seq;
       var lost = function () { if (fromCatch === true) scheduleCatch(CACHE_TTL_MS); };
-      return Promise.resolve(client.from(TABLE).select('*').eq('project_id', channel).order('id')).then(function (res) {
+      /* Обидві таблиці — паралельно; відповіді не можуть зламати читання коментарів (їхня помилка стає `repliesDown`). */
+      var cq = Promise.resolve(client.from(TABLE).select('*').eq('project_id', channel).order('id'));
+      var rq;
+      try { rq = Promise.resolve(client.from(REPLIES).select('*').eq('project_id', channel).order('created_at').order('id')).catch(function (e) { return { error: e }; }); }
+      catch (e) { rq = Promise.resolve({ error: e }); }
+      return Promise.all([cq, rq]).then(function (both) {
+        var res = both[0], rres = both[1] || {};
         if (closed || mine !== seq) { lost(); return; }
         if (res.error) { loadError = String(res.error.message || res.error); warn('fetch failed', res.error); lost(); return; }
         loadError = null;
@@ -224,7 +309,19 @@
         cache = (res.data || []).map(rowToComment);
         written = {};
         cache.forEach(function (c) { written[c.id] = stable(commentToRow(c, channel)); });
-        if (ss) { snapT = Date.now(); writeSnap(ss, snapKey, snapT, res.data || []); }
+        var repRows = [];
+        if (!rres.error) {
+          supportsReplies = true; repliesDown = null;
+          repRows = rres.data || [];
+          attachReplies(cache, repRows);
+        } else {
+          supportsReplies = false;
+          repliesDown = noTable(rres) ? 'no-replies-schema' : String(rres.error.message || rres.error);
+          writtenReplies = {}; replyOwner = {};
+          if (!noTable(rres)) warn('replies fetch failed', rres.error);
+        }
+        if (ss) { snapT = Date.now(); writeSnap(ss, snapKey, snapT, res.data || [], repRows, repliesDown); }
+        openRepliesChannel();
         emit();
       }).catch(function (e) { loadError = String((e && e.message) || e); warn('fetch failed', e); lost(); });
     }
@@ -266,9 +363,16 @@
     if (ss) {
       var snap = readSnap(ss, snapKey);
       var age = snap ? Date.now() - snap.t : -1;
-      if (snap && age >= 0 && age < CACHE_TTL_MS) {
+      /* Знімок БЕЗ масиву `replies` (старого формату) не засіває: відповідей у ньому нема, і адаптер вважав би, що їх немає в базі. */
+      var snapOk = snap && Array.isArray(snap.replies) && (snap.rd == null || typeof snap.rd === 'string') &&
+        snap.replies.every(function (r) { return r && typeof r === 'object' && r.id != null; });
+      if (snapOk && age >= 0 && age < CACHE_TTL_MS) {
         cache = snap.rows.map(rowToComment);
         cache.forEach(function (c) { written[c.id] = stable(commentToRow(c, channel)); });
+        repliesDown = snap.rd == null ? null : snap.rd;
+        supportsReplies = snap.rd == null;
+        attachReplies(cache, snap.replies);
+        openRepliesChannel();
         snapT = snap.t;
         seeded = true;
         /* Наздоганяюче читання: без нього засіяний екземпляр не побачив би зміни, що сталась, коли в вкладці ніхто не слухав
@@ -292,11 +396,11 @@
     }
     var netPending = [];                     // незавершені запити з таймером: close() здає їх помилкою, а не лишає висіти
 
-    function upsert(rows, attempt) {
-      return raced(function () { return client.from(TABLE).upsert(rows, { onConflict: 'id' }); }).then(function (res) {
+    function upsert(rows, attempt, table) {
+      return raced(function () { return client.from(table).upsert(rows, { onConflict: 'id' }); }).then(function (res) {
         if (!res.error) return null;
         if (attempt + 1 >= ATTEMPTS) return res.error;
-        return sleep(300 * (attempt + 1)).then(function () { return upsert(rows, attempt + 1); });
+        return sleep(300 * (attempt + 1)).then(function () { return upsert(rows, attempt + 1, table); });
       });
     }
 
@@ -351,27 +455,69 @@
       }).catch(function (e) { warn('merge check failed', e); return { rows: changed, gone: [] }; });
     }
 
+    /* Що з відповідей треба записати: рядки до upsert-а (відрізняються від `writtenReplies`) і id до видалення (були в базі,
+       а коментар, що ними володів і лишається в списку, їх більше не несе). Без таблиці відповідей — нічого. */
+    function planReplies(comments) {
+      var up = [], del = [];
+      if (!supportsReplies) return { up: up, del: del };
+      var kept = {}, have = {}, seen = {};
+      comments.forEach(function (c) {
+        kept[c.id] = true;
+        (Array.isArray(c.replies) ? c.replies : []).forEach(function (r) {
+          if (!r || typeof r.id !== 'string') return;       // без рядкового id у цьому сховищі відповіді не живуть
+          have[r.id] = true;
+          var row = replyToRow(r, c.id, channel);
+          if (writtenReplies[r.id] !== stable(row) && !seen[r.id]) { seen[r.id] = true; up.push(row); }
+        });
+      });
+      Object.keys(writtenReplies).forEach(function (id) { if (kept[replyOwner[id]] && !have[id]) del.push(id); });
+      return { up: up, del: del };
+    }
+
     function doSave(comments, fl) {
       var dropped = false;
       var keep = function (c) { if (gone[c.id]) { dropped = true; fl.dropped = true; return false; } return true; };
       comments = comments.filter(keep);          // видалене колегою не воскрешаємо, навіть якщо коментатор тримає його як _pending
       var rows = comments.map(function (c) { return commentToRow(c, channel); });
       /* Запис РІЗНИЦЕЮ (Deai 0.27.0): лише рядки, яких база ще не має в такому вигляді. Застарілий список одного вікна вже не
-         перетирає чужого закриття чи доручення в РЕШТІ рядків; два записи в ОДИН рядок — виграє останній. */
+         перетирає чужого закриття чи доручення в РЕШТІ рядків; два записи в ОДИН рядок — виграє останній. Відповіді (0.34) — та
+         сама різниця, окремо: нова відповідь до незмінного коментаря не чіпає `comments`. */
       var changed = rows.filter(function (r) { return written[r.id] !== stable(r); });
-      if (!changed.length) { cache = comments.slice(); seq++; syncSnap(); if (dropped) emit(); return Promise.resolve(); }
-      var pre = seeded && !freshRead ? precheck(changed) : Promise.resolve({ rows: changed, gone: [] });
+      var plan = planReplies(comments);
+      if (!changed.length && !plan.up.length && !plan.del.length) { cache = comments.slice(); seq++; syncSnap(); if (dropped) emit(); return Promise.resolve(); }
+      var pre = changed.length && seeded && !freshRead ? precheck(changed) : Promise.resolve({ rows: changed, gone: [] });
       return pre.then(function (chk) {
         if (chk.gone.length) {
           chk.gone.forEach(function (id) { gone[id] = true; delete written[id]; });
           comments = comments.filter(keep);
         }
         var out = chk.rows;
-        if (!out.length) { cache = comments.slice(); seq++; syncSnap(); if (dropped) emit(); return null; }
-        return upsert(out, 0).then(function (err) { return [out, err]; });
-      }).then(function (pair) {
-        if (!pair) return;
-        var out = pair[0], err = pair[1];
+        plan = planReplies(comments);
+        if (!out.length && !plan.up.length && !plan.del.length) { cache = comments.slice(); seq++; syncSnap(); if (dropped) emit(); return null; }
+        /* Порядок: коментарі, потім upsert відповідей, потім видалення відповідей. Відмова коментарів — далі не йдемо. */
+        var res = { out: out, err: null, plan: plan, upDone: false, delDone: [], repErr: null };
+        var step = out.length ? upsert(out, 0, TABLE) : Promise.resolve(null);
+        return step.then(function (err) {
+          res.err = err;
+          if (err || !plan.up.length) return null;
+          return upsert(plan.up, 0, REPLIES).then(function (e) { if (e) res.repErr = e; else res.upDone = true; return null; });
+        }).then(function () {
+          if (res.err || res.repErr || !plan.del.length) return null;
+          var chunks = [];
+          for (var i = 0; i < plan.del.length; i += 100) chunks.push(plan.del.slice(i, i + 100));
+          return chunks.reduce(function (p, chunk) {
+            return p.then(function () {
+              if (res.repErr) return null;
+              return raced(function () { return client.from(REPLIES).delete().in('id', chunk).eq('project_id', channel); }).then(function (r) {
+                if (r && r.error) res.repErr = r.error; else res.delDone = res.delDone.concat(chunk);
+                return null;
+              });
+            });
+          }, Promise.resolve());
+        }).then(function () { return res; });
+      }).then(function (res) {
+        if (!res) return;
+        var out = res.out, err = res.err;
         cache = comments.slice();            // оптимістичний кеш: запис не губиться, навіть якщо база не відповіла
         seq++;                               // а відповідь, що вже летіла до запису, його не затре
         if (!err) {
@@ -381,10 +527,20 @@
             for (var k = 0; k < changed.length; k++) if (changed[k].id === r.id) mine = changed[k];
             if (mine && stable(r) !== stable(mine)) { mergedBy[r.id] = r; adopted = true; }
           });
-          if (adopted) cache = cache.map(function (c) { return mergedBy[c.id] ? rowToComment(mergedBy[c.id]) : c; });
+          if (adopted) {
+            cache = cache.map(function (c) {
+              if (!mergedBy[c.id]) return c;
+              var rc = rowToComment(mergedBy[c.id]);
+              if (c.replies) rc.replies = c.replies;     // відповіді живуть окремо від рядка коментаря: злиття їх не торкається
+              return rc;
+            });
+          }
           out.forEach(function (r) { written[r.id] = stable(r); });
+          if (res.upDone) res.plan.up.forEach(function (r) { writtenReplies[r.id] = stable(r); replyOwner[r.id] = r.comment_id; });
+          res.delDone.forEach(function (id) { delete writtenReplies[id]; delete replyOwner[id]; });
           syncSnap();
           if (adopted || dropped) emit();    // споживачі беруть злитий стан (чужа зміна не губиться, видалене зникає)
+          if (res.repErr) { warn('replies save failed', res.repErr); throw new Error('supabase replies save failed: ' + res.repErr.message); }
           return;
         }
         warn('save failed after retries', err);
@@ -395,6 +551,10 @@
     var store = {
       ready: ready,
       get loadError() { return loadError; },
+      /* Відповіді (0.34): `supportsReplies` — таблиця comment_replies є й читається; `repliesDown` — null чи причина
+         ('no-replies-schema' | текст помилки). Подвійне сховище бере їх звідси. */
+      get supportsReplies() { return supportsReplies; },
+      get repliesDown() { return repliesDown; },
       load: function () { return cache; },
       /* Перечитування (його кличе «Огляд» при поверненні на нього). У межах TTL знімка мережі не торкається: компроміс —
          зміна колеги, що потрапила рівно в проміжок між перезавантаженнями рамки, зʼявиться до 2 хв із запізненням; решту
@@ -418,10 +578,41 @@
       /* Жорстке видалення: upsert-збереження рядків не прибирає, тож видалення — окремий шлях. */
       remove: function (ids) {
         if (!ids || !ids.length) return Promise.resolve();
-        return Promise.resolve(client.from(TABLE).delete().in('id', ids).eq('project_id', channel)).then(function (res) {
+        /* Спершу відповіді (по 10 коментарів на запит — під сторожем «≤ 100 рядків на DELETE»); збій тут коментар не блокує:
+           осиротіла відповідь нешкідлива. Далі — коментарі, як і раніше. */
+        var pre = Promise.resolve();
+        if (supportsReplies) {
+          var chunks = [];
+          for (var i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10));
+          pre = chunks.reduce(function (p, chunk) {
+            return p.then(function () {
+              return raced(function () { return client.from(REPLIES).delete().in('comment_id', chunk).eq('project_id', channel); })
+                .then(function (r) { return r && r.error ? r.error : null; }, function (e) { return e || 'failed'; })
+                .then(function (err) {
+                  if (!err) return null;
+                  /* Сторож БД (≤ 100 рядків на DELETE) відхиляє весь запит, якщо в цих коментарів разом понад 100 відповідей:
+                     видаляємо відомі адаптеру id відповідей пачками по ≤100. Збій і тут коментар не блокує. */
+                  warn('replies delete failed', err);
+                  var known = Object.keys(replyOwner).filter(function (rid) { return chunk.indexOf(replyOwner[rid]) >= 0; });
+                  var parts = [];
+                  for (var j = 0; j < known.length; j += 100) parts.push(known.slice(j, j + 100));
+                  return parts.reduce(function (q, part) {
+                    return q.then(function () {
+                      return raced(function () { return client.from(REPLIES).delete().in('id', part).eq('project_id', channel); })
+                        .then(function (r2) { if (r2 && r2.error) warn('replies delete by id failed', r2.error); }, function (e) { warn('replies delete by id failed', e); });
+                    });
+                  }, Promise.resolve());
+                });
+            });
+          }, Promise.resolve());
+        }
+        return pre.then(function () {
+          return Promise.resolve(client.from(TABLE).delete().in('id', ids).eq('project_id', channel));
+        }).then(function (res) {
           if (res.error) warn('delete failed', res.error);
           cache = cache.filter(function (c) { return ids.indexOf(c.id) < 0; });
           ids.forEach(function (id) { delete written[id]; });
+          Object.keys(replyOwner).forEach(function (rid) { if (ids.indexOf(replyOwner[rid]) >= 0) { delete writtenReplies[rid]; delete replyOwner[rid]; } });
           seq++;
           if (!res.error) syncSnap();
         });
@@ -436,7 +627,10 @@
         /* removeChannel лише залишає канал; сокет realtime (з серцебиттям) закриває `disconnect`. Обидва — без відмов назовні. */
         var left;
         try { left = Promise.resolve(client.removeChannel(realtime)); } catch (e) { left = Promise.resolve(); }
+        var left2 = Promise.resolve();
+        if (repliesRealtime !== null) { try { left2 = Promise.resolve(client.removeChannel(repliesRealtime)); } catch (e) { left2 = Promise.resolve(); } }
         left.catch(function () { /* вже знято */ })
+          .then(function () { return left2.catch(function () { /* вже знято */ }); })
           .then(function () { return client.realtime.disconnect(); })
           .catch(function () { /* вже закрито */ });
       }

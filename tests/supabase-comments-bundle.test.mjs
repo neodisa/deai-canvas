@@ -36,6 +36,13 @@ function world() {
     clearTimeout: (id) => w.timers.delete(id), clearInterval: (id) => w.timers.delete(id),
     fetch: async (url, init = {}) => {
       w.fetches.push({ url: String(url), method: init.method || "GET", headers: Object.fromEntries(new Headers(init.headers)), body: init.body });
+      if (String(url).includes("/rest/v1/comment_replies") && (init.method === "GET" || !init.method)) {
+        if (w.replyRows === undefined) {                 // старий проєкт без replies.sql: PostgREST віддає 404 + PGRST205
+          return new Response(JSON.stringify({ code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public.comment_replies' in the schema cache" }),
+            { status: 404, headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify(w.replyRows), { status: 200, headers: { "content-type": "application/json" } });
+      }
       const rows = init.method === "GET" || !init.method ? w.rows : null;
       return new Response(rows === null ? null : JSON.stringify(rows), { status: rows === null ? 204 : 200, headers: { "content-type": "application/json" } });
     },
@@ -88,7 +95,7 @@ test("справжній SDK: проводом іде рівно те, що за
   await w.advance(50);
   await s.ready;
   assert.deepEqual(Array.from(s.load(), (c) => c.id), ["a"]);
-  const get = w.fetches[0];
+  const get = w.fetches.find((f) => f.url.includes("/rest/v1/comments?"));
   assert.equal(get.method, "GET");
   assert.equal(get.url, `${URL_}/rest/v1/comments?select=*&project_id=eq.${encodeURIComponent(CHANNEL)}&order=id.asc`);
   assert.equal(get.headers.apikey, KEY);
@@ -124,7 +131,7 @@ test("справжній SDK: подія realtime доходить до адап
   w.rows = [row("a"), row("b")];
   w.sockets[0].push(`realtime:cl-${CHANNEL}`, "postgres_changes", { ids: [1], data: { schema: "public", table: "comments", type: "INSERT", commit_timestamp: "t", columns: [], errors: null, record: { id: "b" } } });
   await w.advance(200);
-  assert.equal(w.fetches.filter((f) => f.method === "GET").length, 2);
+  assert.equal(w.fetches.filter((f) => f.method === "GET" && f.url.includes("/rest/v1/comments?")).length, 2);
   assert.deepEqual(seen, [0, 2]);
   s.close();
   await w.advance(2000);
@@ -145,4 +152,35 @@ test("справжній SDK без автентифікації користу�
   assert.equal(w.sockets[0].closed, true, "сокет realtime закрито");
   assert.deepEqual([...w.timers.values()].map((t) => `${t.kind}:${t.ms}`), [], "після close жодного таймера й інтервалу (серцебиття знято)");
   assert.ok(w.frames.some((f) => f.event === "phx_leave"), "канал залишено, а не обірвано");
+});
+
+test("справжній SDK: відповіді — таблиці нема (404 PGRST205) → repliesDown, без каналу clr-; таблиця є → читання за created_at,id і окремий канал", async () => {
+  const w = world();
+  w.rows = [row("a")];
+  const s = w.sandbox.DeaiComments.create({ url: URL_, key: KEY, channel: CHANNEL });
+  await w.advance(50);
+  await s.ready;
+  assert.equal(s.supportsReplies, false);
+  assert.equal(s.repliesDown, "no-replies-schema", "supabase-js віддає code PGRST205 у error");
+  assert.deepEqual(Array.from(s.load(), (c) => c.id), ["a"]);
+  assert.deepEqual(w.frames.filter((f) => f.event === "phx_join").map((f) => f.topic), [`realtime:cl-${CHANNEL}`]);
+  s.close();
+  await w.advance(2000);
+  const w2 = world();
+  w2.rows = [row("a")];
+  w2.replyRows = [{ id: "r1", comment_id: "a", project_id: CHANNEL, author: "B", text: "t", ts: "x", edited_ts: null, agent: false }];
+  const s2 = w2.sandbox.DeaiComments.create({ url: URL_, key: KEY, channel: CHANNEL });
+  await w2.advance(50);
+  await s2.ready;
+  assert.equal(s2.supportsReplies, true);
+  assert.equal(s2.repliesDown, null);
+  assert.equal(s2.load()[0].replies[0].id, "r1");
+  const rq = w2.fetches.find((f) => f.url.includes("/rest/v1/comment_replies"));
+  assert.equal(new w2.sandbox.URL(rq.url).searchParams.get("order"), "created_at.asc,id.asc");
+  assert.equal(new w2.sandbox.URL(rq.url).searchParams.get("project_id"), `eq.${CHANNEL}`);
+  const joins = w2.frames.filter((f) => f.event === "phx_join");
+  assert.deepEqual(joins.map((f) => f.topic), [`realtime:cl-${CHANNEL}`, `realtime:clr-${CHANNEL}`]);
+  assert.deepEqual(JSON.parse(JSON.stringify(joins[1].payload.config.postgres_changes)), [{ event: "*", schema: "public", table: "comment_replies" }]);
+  s2.close();
+  await w2.advance(2000);
 });

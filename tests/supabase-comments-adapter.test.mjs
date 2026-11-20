@@ -62,7 +62,7 @@ function fakeStorage({ quota = 0 } = {}) {
 /**
  * Світ. Параметри: `rows` — що віддає SELECT (масив або функція від номера запиту); `failSelect` (відповідь із помилкою),
  * `rejectSelect` (запит ВІДХИЛЯЄТЬСЯ), `manualSelect` (SELECT-и чекають: `w.pendingSelects[i]({data, error})`), `failTargeted`/`targeted` (цільовий select `in('id', …)` перед злиттям), `failUpserts`
- * (перші N upsert-ів падають), `failDelete`, `removeChannel` (`"ok"` | `"reject"` | `"throw"`), `disconnect` (`"ok"` | `"throw"`),
+ * (перші N upsert-ів падають; для відповідей — `failRepliesUpserts`, `failRepliesDelete`, `failReplies`; таблиця відповідей є лише з `replies`), `failDelete`, `removeChannel` (`"ok"` | `"reject"` | `"throw"`), `disconnect` (`"ok"` | `"throw"`),
  * `storage` (підставний sessionStorage), `upload` (відповідь підставного `fetch` на завантаження скріншота: `"ok"` | `"fail"` | `"reject"`).
  * Результат: `sandbox`, `calls`, `channels`, `removedChannels`, `disconnects`, `created`, `delays` (затримки всіх таймерів),
  * `timers`, `warnings`, `logs`.
@@ -73,7 +73,7 @@ function world(opts = {}) {
     timers: [], nextTimer: 1, pendingSelects: [], pendingTargeted: [],
   };
   w.opts = { rows: [], failSelect: false, rejectSelect: false, manualSelect: false, failUpserts: 0, failDelete: false,
-    removeChannel: "ok", disconnect: "ok", upload: "ok", ...opts };
+    removeChannel: "ok", disconnect: "ok", upload: "ok", failReplies: false, failRepliesUpserts: 0, failRepliesDelete: false, ...opts };
   const reply = (v) => ({ then: (res, rej) => Promise.resolve(v).then(res, rej) });   // thenable, як у PostgREST-білдера
 
   const client = {
@@ -82,6 +82,23 @@ function world(opts = {}) {
         select(cols) {
           const q = { op: "select", table, cols, filters: [], order: null };
           w.calls.push(q);
+          if (table === "comment_replies") {
+            /* Таблиця відповідей: `opts.replies` (масив чи функція) — вона є; без нього її нема (PGRST205, як віддає PostgREST), тож
+               усі давні тести працюють у «старому проєкті без replies.sql». `failReplies` — інша помилка (повідомлення). */
+            const rb = {
+              eq(col, val) { q.filters.push(["eq", col, val]); return rb; },
+              in(col, vals) { q.filters.push(["in", col, vals]); return rb; },
+              order(col) { q.order = q.order ? [].concat(q.order, col) : col; return rb; },
+              then(res, rej) {
+                let out;
+                if (w.opts.failReplies) out = { data: null, ...(typeof w.opts.failReplies === "object" ? w.opts.failReplies.top : {}), error: typeof w.opts.failReplies === "object" ? w.opts.failReplies.error : { message: w.opts.failReplies === true ? "replies boom" : w.opts.failReplies } };
+                else if (w.opts.replies === undefined) out = { data: null, status: 404, error: { code: "PGRST205", message: "Could not find the table 'public.comment_replies' in the schema cache" } };
+                else out = { data: typeof w.opts.replies === "function" ? w.opts.replies() : w.opts.replies, error: null };
+                return Promise.resolve(out).then(res, rej);
+              },
+            };
+            return rb;
+          }
           const n = w.selects++;
           const b = {
             eq(col, val) { q.filters.push(["eq", col, val]); return b; },
@@ -109,6 +126,11 @@ function world(opts = {}) {
         },
         upsert(rows, o) {
           w.calls.push({ op: "upsert", table, rows, opts: o });
+          if (table === "comment_replies") {
+            const f = w.opts.failRepliesUpserts > 0;
+            if (f) w.opts.failRepliesUpserts -= 1;
+            return reply({ data: null, error: f ? { message: "replies upsert boom" } : null });
+          }
           if (w.opts.hangUpserts > 0) { w.opts.hangUpserts -= 1; return new Promise(() => {}); }   // завислий запит
           const fail = w.opts.failUpserts > 0;
           if (fail) w.opts.failUpserts -= 1;
@@ -121,7 +143,9 @@ function world(opts = {}) {
             in(col, vals) { q.filters.push(["in", col, vals]); return b; },
             eq(col, val) { q.filters.push(["eq", col, val]); return b; },
             then(res, rej) {
-              return Promise.resolve({ error: w.opts.failDelete ? { message: "delete boom" } : null }).then(res, rej);
+              const byOwner = q.filters.some((f) => f[1] === "comment_id");
+              const bad = table === "comment_replies" ? (w.opts.failRepliesDelete || (byOwner && w.opts.failRepliesByOwner)) : w.opts.failDelete;
+              return Promise.resolve({ error: bad ? { message: "delete boom" } : null }).then(res, rej);
             },
           };
           return b;
@@ -177,8 +201,9 @@ function world(opts = {}) {
   vm.runInContext(SRC, sandbox, { filename: FILE });
   w.sandbox = sandbox;
   w.create = (cfg = {}) => sandbox.DeaiComments.create({ url: URL, key: KEY, channel: CHANNEL, ...cfg });
-  w.selectCalls = () => w.calls.filter((c) => c.op === "select" && !c.filters.some((f) => f[0] === "in"));
-  w.targetedCalls = () => w.calls.filter((c) => c.op === "select" && c.filters.some((f) => f[0] === "in"));
+  w.selectCalls = () => w.calls.filter((c) => c.op === "select" && c.table === "comments" && !c.filters.some((f) => f[0] === "in"));
+  w.targetedCalls = () => w.calls.filter((c) => c.op === "select" && c.table === "comments" && c.filters.some((f) => f[0] === "in"));
+  w.repliesSelects = () => w.calls.filter((c) => c.op === "select" && c.table === "comment_replies");
   w.pending = () => w.timers.filter((t) => t.live);
   /** Виконати таймери, що чекають ЗАРАЗ (за зростанням затримки); нові, додані ними, — вже наступного разу. */
   w.runTimers = () => {
@@ -236,7 +261,7 @@ test("create: createClient(url, key, без автентифікації кор�
   assert.equal(sel.length, 1);
   assert.deepEqual(plain(sel[0]), { op: "select", table: "comments", cols: "*", filters: [["eq", "project_id", CHANNEL]], order: "id" });
   assert.deepEqual(s.load().map((c) => c.id), ["b", "a"], "порядок — як віддав сервер (order=id робить він)");
-  assert.deepEqual(Object.keys(s).sort(), ["close", "load", "loadError", "ready", "refresh", "remove", "save", "subscribe"]);
+  assert.deepEqual(Object.keys(s).sort(), ["close", "load", "loadError", "ready", "refresh", "remove", "repliesDown", "save", "subscribe", "supportsReplies"]);
 });
 
 test("rowToComment: рівно 11 полів CommentLayer; project_id і created_at лишаються в базі; null → null", async () => {
@@ -565,7 +590,7 @@ test("без shotsBucket у cfg uploadShot у сховища нема (і з п�
     const s = w.create(cfg);
     await s.ready;
     assert.equal(typeof s.uploadShot, "undefined", JSON.stringify(cfg));
-    assert.deepEqual(Object.keys(s).sort(), ["close", "load", "loadError", "ready", "refresh", "remove", "save", "subscribe"]);
+    assert.deepEqual(Object.keys(s).sort(), ["close", "load", "loadError", "ready", "refresh", "remove", "repliesDown", "save", "subscribe", "supportsReplies"]);
   }
 });
 
@@ -1298,4 +1323,367 @@ test("повторне сповіщення: після save, що відкин�
   const ok = await seededWorld();
   await ok.s2.save([pin("a", { text: "x" })]);
   assert.ok(!ok.w.pending().some((t) => t.ms === 0), "без видаленого — другого сповіщення нема");
+});
+
+/* ------------------------------------------------------------------------------------------ відповіді (comment_replies, 0.34) */
+
+/** Рядок `comment_replies` так, як його віддає PostgREST. */
+const rrow = (id, cid, over = {}) => ({
+  id, comment_id: cid, project_id: CHANNEL, author: "Іра", text: `відповідь ${id}`, ts: "20.11.2026 10:00",
+  edited_ts: null, agent: false, created_at: "2026-11-20T10:00:00Z", ...over,
+});
+/** Відповідь у формі коментатора. */
+const rep = (id, over = {}) => ({ id, author: "Іра", text: `відповідь ${id}`, ts: "20.11.2026 10:00", ...over });
+const repUps = (w) => w.calls.filter((c) => c.op === "upsert" && c.table === "comment_replies");
+const comUps = (w) => w.calls.filter((c) => c.op === "upsert" && c.table === "comments");
+const deletes = (w) => w.calls.filter((c) => c.op === "delete");
+
+test("відповіді: читаються обидві таблиці; відповіді — за created_at, липнуть до коментаря за comment_id, сироти зникають", async () => {
+  const w = world({ rows: [row("a"), row("b"), row("c")], replies: [rrow("r1", "a"), rrow("r2", "b"), rrow("r3", "a"), rrow("ox", "ghost")] });
+  const s = w.create();
+  await s.ready;
+  assert.deepEqual(plain(w.repliesSelects()), [{ op: "select", table: "comment_replies", cols: "*", filters: [["eq", "project_id", CHANNEL]], order: ["created_at", "id"] }]);
+  assert.equal(w.selectCalls().length, 1);
+  const [a, b, c] = plain(s.load());
+  assert.deepEqual(a.replies.map((r) => r.id), ["r1", "r3"], "порядок — як віддала база");
+  assert.deepEqual(b.replies.map((r) => r.id), ["r2"]);
+  assert.ok(!("replies" in c), "коментар без відповідей не отримує поля replies");
+  assert.deepEqual(a.replies[0], { id: "r1", author: "Іра", text: "відповідь r1", ts: "20.11.2026 10:00" }, "без editedTs/agent, коли їх нема");
+  assert.ok(!JSON.stringify(s.load()).includes("ox"), "сирота не показується");
+  assert.equal(s.supportsReplies, true);
+  assert.equal(s.repliesDown, null);
+  assert.equal(Object.keys(a).filter((k) => k !== "replies").length, 11, "рядок коментаря лишився 11 полів");
+});
+
+test("відповіді: таблиці нема (PGRST205 / 42P01 / HTTP 404) — коментарі на місці, supportsReplies=false, repliesDown='no-replies-schema', save не чіпає comment_replies, каналу clr- нема", async () => {
+  for (const f of [undefined, { error: { code: "42P01", message: "relation does not exist" } }, { top: { status: 404 }, error: { message: "Not Found" } }]) {
+    const w = world({ rows: [row("a")], ...(f ? { failReplies: f } : {}) });
+    const s = w.create();
+    await s.ready;
+    assert.deepEqual(s.load().map((c) => c.id), ["a"]);
+    assert.equal(s.loadError, null, "відповіді не псують loadError коментарів");
+    assert.equal(s.supportsReplies, false);
+    assert.equal(s.repliesDown, "no-replies-schema");
+    assert.deepEqual(w.channels.map((ch) => ch.name), ["cl-" + CHANNEL]);
+    await s.save([pin("a", { replies: [rep("r1")] }), pin("b")]);
+    assert.equal(w.calls.filter((c) => c.table === "comment_replies" && c.op !== "select").length, 0);
+    assert.equal(comUps(w).length, 1, "лише новий коментар b");
+    await s.remove(["a"]);
+    assert.equal(deletes(w).length, 1);
+    assert.equal(deletes(w)[0].table, "comments");
+  }
+});
+
+test("відповіді: інша помилка читання — repliesDown = її повідомлення, коментарі цілі, каналу clr- нема", async () => {
+  const w = world({ rows: [row("a")], failReplies: "квота вичерпана" });
+  const s = w.create();
+  await s.ready;
+  assert.equal(s.repliesDown, "квота вичерпана");
+  assert.equal(s.supportsReplies, false);
+  assert.deepEqual(s.load().map((c) => c.id), ["a"]);
+  assert.equal(s.loadError, null);
+  assert.equal(w.channels.length, 1);
+});
+
+test("відповіді: помилка читання КОМЕНТАРІВ — як раніше (loadError), результат відповідей ігнорується", async () => {
+  const w = world({ rows: [row("a")], failSelect: true, replies: [rrow("r1", "a")] });
+  const s = w.create();
+  await s.ready;
+  assert.equal(s.loadError, "select boom");
+  assert.deepEqual(plain(s.load()), []);
+  assert.equal(s.supportsReplies, false);
+  assert.equal(w.channels.length, 1);
+});
+
+test("відповіді, запис різницею: нова відповідь до незмінного коментаря — рівно один upsert у comment_replies і жодного в comments", async () => {
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a")] });
+  const s = w.create();
+  await s.ready;
+  const list = plain(s.load());
+  await s.save(list);
+  assert.equal(w.calls.filter((c) => c.op !== "select").length, 0, "без змін — без запитів");
+  list[0].replies.push(rep("r2", { _pending: true, junk: 1 }));
+  await s.save(list);
+  assert.equal(comUps(w).length, 0);
+  assert.equal(repUps(w).length, 1);
+  assert.deepEqual(plain(repUps(w)[0].rows), [{ id: "r2", comment_id: "a", project_id: CHANNEL, author: "Іра", text: "відповідь r2", ts: "20.11.2026 10:00", edited_ts: null, agent: false }],
+    "лише відомі поля: службові _pending/junk не доходять до бази");
+  assert.deepEqual(plain(repUps(w)[0].opts), { onConflict: "id" });
+  await s.save(list);
+  assert.equal(repUps(w).length, 1, "записане вдруге не йде");
+});
+
+test("відповіді, запис різницею: правка тексту (editedTs) — один upsert лише цього рядка; видалення — delete in('id') у межах каналу", async () => {
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a"), rrow("r2", "a")] });
+  const s = w.create();
+  await s.ready;
+  const list = plain(s.load());
+  list[0].replies[0].text = "виправлено";
+  list[0].replies[0].editedTs = "20.11.2026 11:00";
+  await s.save(list);
+  assert.equal(repUps(w).length, 1);
+  assert.deepEqual(plain(repUps(w)[0].rows.map((r) => [r.id, r.text, r.edited_ts])), [["r1", "виправлено", "20.11.2026 11:00"]]);
+  list[0].replies = list[0].replies.filter((r) => r.id !== "r2");
+  await s.save(list);
+  assert.equal(repUps(w).length, 1);
+  assert.deepEqual(plain(deletes(w)), [{ op: "delete", table: "comment_replies", filters: [["in", "id", ["r2"]], ["eq", "project_id", CHANNEL]] }]);
+  await s.save(list);
+  assert.equal(deletes(w).length, 1, "видалене вдруге не йде");
+  list[0].replies = [];
+  await s.save(list);
+  assert.deepEqual(plain(deletes(w).at(-1).filters[0]), ["in", "id", ["r1"]]);
+});
+
+test("відповіді: видалення пачками по ≤100 id; відповіді коментаря, якого нема в списку save, не чіпаються", async () => {
+  const many = Array.from({ length: 150 }, (_, i) => rrow(`r${i}`, "a"));
+  const w = world({ rows: [row("a"), row("b")], replies: [...many, rrow("rb", "b")] });
+  const s = w.create();
+  await s.ready;
+  const a = plain(s.load())[0];
+  a.replies = [];
+  await s.save([a]);                                   // b у списку нема — його відповідь лишається
+  const d = deletes(w);
+  assert.deepEqual(d.map((q) => q.filters[0][2].length), [100, 50]);
+  assert.ok(d.every((q) => q.table === "comment_replies" && !q.filters[0][2].includes("rb")));
+});
+
+test("відповіді агента: agent:true доходить туди й назад; незмінена відповідь агента не переписується", async () => {
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a", { agent: true }), rrow("r2", "a")] });
+  const s = w.create();
+  await s.ready;
+  const list = plain(s.load());
+  assert.equal(list[0].replies[0].agent, true);
+  assert.ok(!("agent" in list[0].replies[1]), "agent лише коли true");
+  await s.save(list);
+  assert.equal(repUps(w).length, 0, "agent:true не робить рядок «зміненим»");
+  list[0].replies.push(rep("r3", { agent: true }));
+  await s.save(list);
+  assert.equal(repUps(w)[0].rows[0].agent, true);
+  assert.equal(s.load()[0].replies[2].agent, true);
+});
+
+test("відповіді: відповідь без рядкового id у сховище не потрапляє", async () => {
+  const w = world({ rows: [row("a")], replies: [] });
+  const s = w.create();
+  await s.ready;
+  await s.save([pin("a", { replies: [{ author: "x", text: "без id" }, { id: 5, text: "число" }, rep("ok")] })]);
+  assert.deepEqual(plain(repUps(w)[0].rows.map((r) => r.id)), ["ok"]);
+});
+
+test("відповіді: збій upsert відповідей (3 спроби) — save відхиляється, наступний save шле знову; коментарі, що вже пішли, вважаються записаними", async () => {
+  const w = world({ rows: [row("a")], replies: [], failRepliesUpserts: 3 });
+  const s = w.create();
+  await s.ready;
+  const list = [pin("a", { text: "нове", replies: [rep("r1")] })];
+  await assert.rejects(drive(w, s.save(list)), /replies save failed/);
+  assert.equal(comUps(w).length, 1);
+  assert.equal(repUps(w).length, 3);
+  await s.save(list);
+  assert.equal(comUps(w).length, 1, "коментар уже записано — вдруге не йде");
+  assert.equal(repUps(w).length, 4);
+});
+
+test("відповіді: збій видалення відповіді — warn і відхилений save; наступний save повторює видалення", async () => {
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a")], failRepliesDelete: true });
+  const s = w.create();
+  await s.ready;
+  const list = plain(s.load());
+  list[0].replies = [];
+  await assert.rejects(s.save(list), /replies save failed/);
+  assert.ok(w.warnings.some((m) => m.includes("delete boom")));
+  w.opts.failRepliesDelete = false;
+  await s.save(list);
+  assert.equal(deletes(w).length, 2);
+});
+
+test("відповіді: remove([id]) спершу видаляє відповіді (comment_id, у межах каналу), потім коментар", async () => {
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a")] });
+  const s = w.create();
+  await s.ready;
+  await s.remove(["a"]);
+  assert.deepEqual(plain(deletes(w)), [
+    { op: "delete", table: "comment_replies", filters: [["in", "comment_id", ["a"]], ["eq", "project_id", CHANNEL]] },
+    { op: "delete", table: "comments", filters: [["in", "id", ["a"]], ["eq", "project_id", CHANNEL]] },
+  ]);
+  assert.deepEqual(s.load(), []);
+  await s.save([pin("a", { replies: [rep("r1")] })]);
+  assert.equal(repUps(w).length, 1, "знімок відповідей скинуто: повторне створення пишеться знову");
+});
+
+test("відповіді: remove багатьох коментарів — відповіді пачками по ≤10 id, усі ДО видалення коментарів", async () => {
+  const w = world({ rows: [row("a")], replies: [] });
+  const s = w.create();
+  await s.ready;
+  const ids = Array.from({ length: 25 }, (_, i) => `c${i}`);
+  await s.remove(ids);
+  const d = deletes(w);
+  assert.deepEqual(d.map((q) => [q.table, q.filters[0][2].length]), [["comment_replies", 10], ["comment_replies", 10], ["comment_replies", 5], ["comments", 25]]);
+});
+
+test("відповіді: збій видалення відповідей НЕ блокує видалення коментаря (осиротіла відповідь нешкідлива)", async () => {
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a")], failRepliesDelete: true });
+  const s = w.create();
+  await s.ready;
+  await s.remove(["a"]);
+  assert.deepEqual(deletes(w).map((q) => q.table), ["comment_replies", "comment_replies", "comments"], "за comment_id, запасний за id, коментар");
+  assert.deepEqual(plain(s.load()), []);
+  assert.ok(w.warnings.some((m) => m.includes("replies delete failed")));
+});
+
+test("відповіді, realtime: окремий канал clr-<канал> лише після вдалого читання; канал коментарів — рівно одна привʼязка на comments", async () => {
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a")] });
+  const s = w.create();
+  assert.deepEqual(w.channels.map((c) => c.name), ["cl-" + CHANNEL], "до читання відповідей каналу відповідей нема");
+  await s.ready;
+  assert.deepEqual(w.channels.map((c) => c.name), ["cl-" + CHANNEL, "clr-" + CHANNEL]);
+  assert.equal(w.channels[0].handlers.length, 1, "на каналі коментарів — рівно одна привʼязка");
+  assert.deepEqual(plain(w.channels[0].handlers[0].filter), { event: "*", schema: "public", table: "comments" });
+  assert.equal(w.channels[1].handlers.length, 1);
+  assert.equal(w.channels[1].handlers[0].type, "postgres_changes");
+  assert.deepEqual(plain(w.channels[1].handlers[0].filter), { event: "*", schema: "public", table: "comment_replies" });
+  assert.equal(w.channels[1].subscribed, 1);
+  await drive(w, s.refresh());
+  w.clock += TTL;
+  await drive(w, s.refresh());
+  assert.equal(w.channels.length, 2, "повторні читання канал не множать");
+});
+
+test("відповіді, realtime: подія чужого каналу ігнорується; свого — одне перечитування після згладжування; DELETE за id відповіді; невідома форма — перечитує", async () => {
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a")] });
+  const s = w.create();
+  await s.ready;
+  const cb = w.channels[1].handlers[0].cb;
+  const fireR = async (p) => {
+    const before = w.selectCalls().length;
+    cb(p);
+    const waited = w.pending().some((t) => t.ms === 120);
+    w.runTimers();
+    await settle();
+    return [w.selectCalls().length - before, waited];
+  };
+  assert.deepEqual(await fireR({ eventType: "INSERT", new: rrow("rx", "a", { project_id: "інший" }) }), [0, false], "чужий канал");
+  assert.deepEqual(await fireR({ eventType: "INSERT", new: rrow("r9", "a") }), [1, true], "свій INSERT — після debounce");
+  assert.deepEqual(await fireR({ eventType: "DELETE", old: { id: "r1" } }), [1, true], "DELETE відомої відповіді");
+  assert.deepEqual(await fireR({ eventType: "DELETE", old: { id: "чужа" } }), [0, false]);
+  assert.deepEqual(await fireR({}), [1, true], "невідома форма");
+  assert.equal(w.repliesSelects().length, 4, "кожне перечитування читає й відповіді");
+});
+
+test("відповіді, realtime: луна власного запису (INSERT/UPDATE, що збігається з written) перечитування не планує; чужа правка — планує", async () => {
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a")] });
+  const s = w.create();
+  await s.ready;
+  const list = plain(s.load());
+  list[0].replies.push(rep("r2", { agent: true }));
+  await s.save(list);
+  const cb = w.channels[1].handlers[0].cb;
+  cb({ eventType: "INSERT", new: rrow("r2", "a", { agent: true }) });
+  assert.equal(w.pending().filter((t) => t.ms === 120).length, 0, "власна луна");
+  cb({ eventType: "UPDATE", new: rrow("r2", "a", { agent: true, text: "чуже" }) });
+  assert.equal(w.pending().filter((t) => t.ms === 120).length, 1, "чужа правка");
+});
+
+test("відповіді, realtime: close() знімає обидва канали й закриває сокет; подія після close нічого не питає", async () => {
+  const w = world({ rows: [row("a")], replies: [] });
+  const s = w.create();
+  await s.ready;
+  s.close();
+  await settle();
+  assert.deepEqual(w.removedChannels, [w.channels[0], w.channels[1]]);
+  assert.equal(w.disconnects, 1);
+  w.channels[1].handlers[0].cb({ eventType: "INSERT", new: rrow("r9", "a") });
+  assert.equal(w.pending().length, 0);
+  const w2 = world({ rows: [row("a")] });
+  const s2 = w2.create();
+  await s2.ready;
+  s2.close();
+  await settle();
+  assert.deepEqual(w2.removedChannels, [w2.channels[0]], "без таблиці відповідей — один канал");
+});
+
+test("відповіді, знімок: старий формат (без масиву replies) не засіває — повне читання", async () => {
+  const st = fakeStorage();
+  st.m.set(SNAP_KEY, JSON.stringify({ t: 1_000_000, rows: [row("old")] }));
+  const w = world({ rows: [row("new")], replies: [], storage: st });
+  const s = w.create();
+  await s.ready;
+  assert.equal(w.selectCalls().length, 1);
+  assert.deepEqual(s.load().map((c) => c.id), ["new"]);
+  assert.ok(Array.isArray(snapOf(st).replies), "після читання знімок — уже нового формату");
+});
+
+test("відповіді, знімок: новий формат засіває коментарі й відповіді без читання; відкриває clr-; written відповідей засіяно", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a")], replies: [rrow("r1", "a", { agent: true }), rrow("ox", "ghost")], storage: st });
+  await w.create().ready;
+  assert.equal(snapOf(st).replies.length, 2);
+  assert.equal(snapOf(st).rd, null);
+  w.clock += 30000;
+  const s2 = w.create();
+  await s2.ready;
+  assert.equal(w.selectCalls().length, 1);
+  assert.equal(w.repliesSelects().length, 1, "знімок свіжий — відповіді теж не читаються");
+  assert.equal(s2.supportsReplies, true);
+  assert.equal(s2.repliesDown, null);
+  assert.deepEqual(plain(s2.load())[0].replies.map((r) => [r.id, r.agent]), [["r1", true]]);
+  assert.deepEqual(w.channels.map((c) => c.name), ["cl-" + CHANNEL, "clr-" + CHANNEL, "cl-" + CHANNEL, "clr-" + CHANNEL]);
+  await s2.save(plain(s2.load()));
+  assert.equal(w.calls.filter((c) => c.op !== "select").length, 0, "written відповідей засіяно: без змін — без запитів");
+  const list = plain(s2.load());
+  list[0].replies.push(rep("r2"));
+  await s2.save(list);
+  assert.equal(repUps(w).length, 1);
+  assert.deepEqual(snapOf(st).replies.map((r) => r.id), ["r1", "ox", "r2"].filter((x) => x !== "ox"), "власний запис оновлює відповіді знімка (t не чіпаємо)");
+});
+
+test("відповіді, знімок: rd='no-replies-schema' — supportsReplies=false, repliesDown, каналу clr- нема, save відповідей не пише", async () => {
+  const st = fakeStorage();
+  const w = world({ rows: [row("a")], storage: st });
+  await w.create().ready;
+  assert.equal(snapOf(st).rd, "no-replies-schema");
+  assert.deepEqual(snapOf(st).replies, []);
+  w.clock += 30000;
+  const s2 = w.create();
+  await s2.ready;
+  assert.equal(s2.supportsReplies, false);
+  assert.equal(s2.repliesDown, "no-replies-schema");
+  assert.deepEqual(w.channels.map((c) => c.name), ["cl-" + CHANNEL, "cl-" + CHANNEL]);
+  await s2.save([pin("a", { replies: [rep("r1")] })]);
+  assert.equal(repUps(w).length, 0);
+  const st2 = fakeStorage();
+  st2.m.set(SNAP_KEY, JSON.stringify({ t: 1_000_000, rows: [row("a")], replies: [rrow("r1", "a")], rd: null }));
+  const w3 = world({ rows: [], storage: st2 });
+  const s3 = w3.create();
+  await s3.ready;
+  assert.equal(w3.calls.filter((c) => c.op === "select").length, 0, "рукотворний знімок нового формату засіває");
+  assert.equal(s3.load()[0].replies[0].id, "r1");
+});
+
+test("відповіді: злиття (adopted) зберігає replies коментаря й пише нові відповіді", async () => {
+  const { w, s2 } = await seededWorld({ replies: [rrow("r1", "a")], targeted: () => [row("a", { status: "resolved", resolved_v: 3 })] });
+  const list = plain(s2.load());
+  list[0].text = "мій";
+  list[0].replies.push(rep("r2"));
+  await s2.save(list);
+  const c = s2.load()[0];
+  assert.deepEqual([c.text, c.status], ["мій", "resolved"], "злиття відбулось");
+  assert.deepEqual(plain(c.replies.map((r) => r.id)), ["r1", "r2"], "відповіді пережили злиття");
+  assert.equal(repUps(w).length, 1);
+  assert.equal(repUps(w)[0].rows[0].id, "r2");
+});
+
+test("відповіді: remove — коли DELETE за comment_id відхилено (сторож 100 рядків), відповіді, відомі адаптеру, видаляються за id пачками ≤100, а коментар усе одно видаляється", async () => {
+  const many = Array.from({ length: 250 }, (_, i) => rrow(`r${i}`, "a"));
+  const w = world({ rows: [row("a"), row("b")], replies: [...many, rrow("rb", "b")], failRepliesByOwner: true });
+  const s = w.create();
+  await s.ready;
+  await s.remove(["a"]);
+  const d = deletes(w);
+  assert.deepEqual(d.map((q) => [q.table, q.filters[0][1], q.filters[0][2].length]),
+    [["comment_replies", "comment_id", 1], ["comment_replies", "id", 100], ["comment_replies", "id", 100], ["comment_replies", "id", 50], ["comments", "id", 1]]);
+  assert.ok(d.every((q) => q.filters.some((f) => f[0] === "eq" && f[1] === "project_id" && f[2] === CHANNEL)), "кожне видалення — у межах каналу");
+  const ids = d.filter((q) => q.filters[0][1] === "id" && q.table === "comment_replies").flatMap((q) => q.filters[0][2]);
+  assert.equal(new Set(ids).size, 250);
+  assert.ok(!ids.includes("rb"), "відповідь іншого коментаря не зачеплено");
+  assert.deepEqual(plain(s.load().map((c) => c.id)), ["b"]);
 });
