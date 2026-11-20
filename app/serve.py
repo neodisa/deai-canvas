@@ -364,6 +364,45 @@ def shoot_failure(err, report):
     return None
 
 
+#: Демо-задача «Tally» (0.33.0): шаблон у репо, згенерований `node ops/demo-task.mjs`.
+DEMO_DIR = os.path.join(ROOT, 'app', 'templates', 'demo')
+DEMO_PINS = os.path.join(ROOT, 'app', 'templates', 'demo-pins.json')
+DEMO_ID = 'tally-demo'
+_HOST_RE = re.compile(r'^[A-Za-z0-9.\-\[\]:]{1,100}$')
+
+
+def demo_task_id():
+    """Вільний id демо-задачі на машині: `tally-demo`, далі `tally-demo-2`, `-3`… (`find_task` дивиться в усі простори)."""
+    n = 1
+    while True:
+        tid = DEMO_ID if n == 1 else f'{DEMO_ID}-{n}'
+        try:
+            if spaces.find_task(tid) is None:
+                return tid
+        except spaces.AmbiguousTask:
+            pass
+        n += 1
+
+
+def demo_comments(origin, pins_file=DEMO_PINS):
+    """Піни шаблону → записи локального каналу задачі (та сама форма, що пише `/api/local-comments`), з адресою `origin`."""
+    with open(pins_file, encoding='utf-8') as f:
+        data = json.load(f)
+    ts = time.strftime('%d.%m.%Y %H:%M')
+    out = []
+    for seq, p in enumerate(data.get('pins', []), 1):
+        page = p['page']
+        c = {'id': f'demo-{seq}', 'author': p.get('who') or 'Designer', 'text': p['text'], 'status': p['status'],
+             'fp': p['fp'], 'htmlSnapshot': None, 'bornV': 1, 'ts': ts,
+             'meta': {'url': f'{origin}/commented?it=it1&page={page}&ch=local', 'route': '/commented',
+                      'version': f'1/{page}', 'iteration': '1', 'viewport': {'w': 1440, 'h': 900}, 'seq': seq,
+                      'sel': p['sel']}}
+        if p['status'] == 'resolved':
+            c.update(resolvedV=1, resolveReason=p.get('reason') or '')
+        out.append(c)
+    return out
+
+
 def _file_hash(path):
     import hashlib
     try:
@@ -6279,7 +6318,7 @@ class Handler(SimpleHTTPRequestHandler):
                         '/api/space-switch',
                         '/api/modules', '/api/module-enable', '/api/module-disable',
                         '/api/module-settings', '/api/module-check', '/api/ds-tokens',
-                        '/api/module-trust', '/api/module-untrust', '/api/agents-md')
+                        '/api/module-trust', '/api/module-untrust', '/api/agents-md', '/api/demo-task')
 
     #: Маршрути МАШИНИ (оновлення, відгук): потрібні саме тоді, коли щось зламано (порожня машина, битий реєстр, нечитабельний
     #: `tasks.json`). `_take_task` для них НЕ фіксує простір і не читає задач; префіксна форма `/t/<id>/api/…` відхиляється 400.
@@ -7637,6 +7676,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._task_purge(payload)
         elif self.path == '/api/task-new':
             self._task_new(payload)
+        elif self.path == '/api/demo-task':
+            self._demo_task(payload)
         elif self.path == '/api/space-new':
             self._space_new(payload)
         elif self.path == '/api/space-update':
@@ -8642,7 +8683,7 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         return AdoptPlan(real, files, total, links)
 
-    def _task_new(self, payload):
+    def _task_new(self, payload, after=None):
         """Нова задача. Простір: `space` з тіла (є, але такого нема — 400, НЕ відкат у простір ЛІГА:
         мовчки завести «особисту» задачу в реєстр ЛІГА гірше за відмову); без `space` — простір
         із `legacy: true`, якщо він є, інакше поточний (4d-4c: ознак потоку ЛІГА більше нема —
@@ -8677,7 +8718,9 @@ class Handler(SimpleHTTPRequestHandler):
         ІГНОРУЄТЬСЯ (задача — у напрямок за замовчуванням), а `track` суворий; поля нема — `default_track`.
 
         ⚠️ Порядок: простір запиту фіксується ПЕРЕД `load_tasks()` — конфіг ЦІЛЬОВОГО простору, а не
-        поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі."""
+        поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі.
+
+        `after(out)` (0.33.0, демо-задача) перетворює відповідь успіху перед відправкою."""
         profile = payload.get('profile')
         if profile is not None and not isinstance(profile, str):
             self._space_error(400, 'bad-profile', 'profile must be a string')
@@ -8823,7 +8866,38 @@ class Handler(SimpleHTTPRequestHandler):
             # Що скопійовано НАСПРАВДІ (`adopt_copy`), а не що бачив обхід: підмінене між ними — теж у пропущених.
             out['copied'] = {'files': done['files'], 'bytes': done['bytes'],
                              'skipped_links': adopt.links + done['skipped']}
-        self._send_json(out)
+        self._send_json(after(out) if after else out)
+
+    def _demo_task(self, payload):
+        """`POST /api/demo-task {space, title?, reuse?}` → `{ok, id, space[, existed]}` (0.33.0): демо-задача «Tally» у просторі
+        `space` — той самий `_task_new` з `from` = шаблон (`DEMO_DIR`), далі два піни (`DEMO_PINS`) у локальний канал задачі з
+        адресою цього сервера. `reuse: true` (⌘K «Відкрити демо»): `tally-demo` уже в цьому просторі — віддати її, нічого не
+        створюючи. Відмови — ті самі, що в `task-new` з `from`; `space` не рядок чи порожній — 400 `bad-request`."""
+        want = payload.get('space')
+        if not isinstance(want, str) or not want:
+            self._space_error(400, 'bad-request', 'space must be a non-empty string')
+            return
+        if payload.get('reuse') is True:
+            try:
+                home = spaces.find_task(DEMO_ID)
+            except spaces.AmbiguousTask:
+                home = None
+            if home is not None and home.get('id') == want:
+                self._send_json({'ok': True, 'id': DEMO_ID, 'space': want, 'existed': True})
+                return
+        title = payload.get('title')
+        title = title.strip()[:200] if isinstance(title, str) and title.strip() else 'Tally — demo'
+        host = self.headers.get('Host') or ''
+        origin = f'http://{host}' if _HOST_RE.fullmatch(host) else f'http://127.0.0.1:{self.server.server_address[1]}'
+
+        def seed(out):
+            try:
+                atomic_write_json(os.path.join(out['dir'], '.dc-local-comments.json'), demo_comments(origin), indent=1)
+            except (OSError, ValueError, KeyError) as e:      # піни — додаток до задачі, не її умова
+                print(f'demo-task: pins not written: {type(e).__name__}', file=sys.stderr)
+            return {'ok': True, 'id': out['id'], 'space': out['space']}
+
+        self._task_new({'id': demo_task_id(), 'title': title, 'space': want, 'from': DEMO_DIR}, after=seed)
 
     # ---------- Простори (реєстр машини: `spaces.py`) ----------
 
