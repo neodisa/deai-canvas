@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -298,6 +299,60 @@ def _node_bin(name='npx'):
 # 4b-1: модулі (режим `cli` у `vercel-publish`) шукають `npx` так само, як ядро (див. докстрінг вище). Лише реєстрація:
 # `_node_bin` не кличеться при імпорті (login-shell повільний) — тільки коли модуль сам попросить `ctx['find_tool']`.
 deai_modules.set_tool_finder(_node_bin)
+
+
+#: «Перший запуск» (0.33.0, `GET /api/setup`): чи знімає «Огляд» на цій машині. Один `node -e` у корені установки друкує
+#: `{v: версія node, pw: чи є пакет playwright, browser: чи є файл chromium.executablePath()}`.
+_SHOTS_PROBE = ("const o={v:process.versions.node,pw:false,browser:false};"
+                "try{const p=require('playwright');o.pw=true;"
+                "try{o.browser=require('fs').existsSync(p.chromium.executablePath())}catch(e){}}catch(e){}"
+                "process.stdout.write(JSON.stringify(o))")
+_SETUP_TTL = 30
+_SETUP_TIMEOUT = 10
+_SETUP_CACHE = {}           # шлях node → (monotonic, shots)
+_SETUP_LOCK = threading.Lock()
+
+
+def _shots_node():
+    """Node для перевірки знімків: `DEAI_SHOTS_NODE` (абсолютний шлях до виконуваного; тести й нестандартні машини),
+    інакше `_node_bin('node')`. Не той шлях — `None` (стан `no-node`)."""
+    forced = os.environ.get('DEAI_SHOTS_NODE')
+    if forced:
+        return forced if os.path.isabs(forced) and os.access(forced, os.X_OK) else None
+    return _node_bin('node')
+
+
+def shots_command():
+    """Команда, що ставить знімки «Огляду» в цій установці (копіюється людиною в термінал)."""
+    return f'cd {shlex.quote(ROOT)} && npm install && npx playwright install chromium'
+
+
+def shots_setup(fresh=False):
+    """`{state, node, command}`: `ok | no-node | no-playwright | no-browser | unknown`. Кеш 30 с на шлях node; `fresh` — без
+    кешу. Збій чи тайм-аут перевірки — `unknown` (UI тоді нічого не блокує)."""
+    node = _shots_node()
+    if node is None:
+        return {'state': 'no-node', 'node': None, 'command': None}
+    now = time.monotonic()
+    with _SETUP_LOCK:
+        hit = _SETUP_CACHE.get(node)
+        if hit and not fresh and now - hit[0] < _SETUP_TTL:
+            return dict(hit[1])
+    try:
+        r = subprocess.run([node, '-e', _SHOTS_PROBE], cwd=ROOT, capture_output=True, text=True, timeout=_SETUP_TIMEOUT)
+        o = json.loads(r.stdout or '')
+        if r.returncode != 0 or not isinstance(o, dict):
+            raise ValueError('bad probe')
+    except (OSError, subprocess.SubprocessError, ValueError):
+        out = {'state': 'unknown', 'node': None, 'command': None}
+    else:
+        pw, browser = o.get('pw') is True, o.get('browser') is True
+        state = 'ok' if pw and browser else ('no-browser' if pw else 'no-playwright')
+        out = {'state': state, 'node': o['v'] if isinstance(o.get('v'), str) else None,
+               'command': None if state == 'ok' else shots_command()}
+    with _SETUP_LOCK:
+        _SETUP_CACHE[node] = (now, out)
+    return dict(out)
 
 
 def _file_hash(path):
@@ -6199,7 +6254,7 @@ class Handler(SimpleHTTPRequestHandler):
     #: `tasks.json`). `_take_task` для них НЕ фіксує простір і не читає задач; префіксна форма `/t/<id>/api/…` відхиляється 400.
     #: Обробники самі й тотально збирають контекст (простір, задача). Точна відповідність (шлях без query), кожен маршрут окремо.
     _MACHINE_ROUTES = ('/api/update', '/api/update-check', '/api/update-apply', '/api/update-notes',
-                       '/api/feedback', '/api/feedback-preview', '/api/claude-statuses')
+                       '/api/feedback', '/api/feedback-preview', '/api/claude-statuses', '/api/setup')
 
     def _pin_current_space(self):
         """Не названа задача: простір запиту — поточний простір машини НА ВХОДІ. Запит дочитує
@@ -6332,6 +6387,18 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.split('?')[0] == '/api/update':
             self._send_json(_updater().status())
+            return
+        if self.path.split('?')[0] == '/api/setup':
+            # Запускає `node` (перевірка знімків): чужа сторінка (`<img src=…>`) не сміє його смикати — та сама варта, що в
+            # `update-notes`. Абсолютні шляхи — лише цієї машини й лише у відповіді (як `/api/agents-md`).
+            if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin')):
+                self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+                return
+            fresh = parse_qs(urlparse(self.path).query).get('fresh', ['0'])[0] == '1'
+            self._send_json({'ok': True, 'version': updater.current_version(UPDATER_ROOT),
+                             'python': '.'.join(str(x) for x in sys.version_info[:3]), 'platform': sys.platform,
+                             'paths': {'deai': ROOT, 'setup': os.path.join(ROOT, 'SETUP.md')},
+                             'shots': shots_setup(fresh)})
             return
         if self.path.split('?')[0] == '/api/update-notes':
             # ⛔ GET, що може піти в мережу (`fetch` тега): чужа сторінка (`<img src=…>`) не сміє його смикати. `Sec-Fetch-Site` cross-/same-site
