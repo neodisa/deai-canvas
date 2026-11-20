@@ -1,0 +1,47 @@
+{
+ "version": 2,
+ "pins": [
+  {
+   "page": "dashboard",
+   "sel": "#cta-add",
+   "text": "Make this the only filled button on the screen. Secondary actions should be outlined.",
+   "who": "Designer",
+   "status": "open",
+   "fp": {
+    "tag": "button",
+    "stableId": "id:cta-add",
+    "text": "add transaction",
+    "textHash": "zupi38",
+    "structHash": "ztntfp",
+    "styleHash": "prdkgn",
+    "path": [
+     "main[0]",
+     "header[0]",
+     "button[0]"
+    ]
+   }
+  },
+  {
+   "page": "dashboard",
+   "sel": "#balance .v",
+   "text": "Show cents in a lighter weight.",
+   "who": "Designer",
+   "status": "resolved",
+   "reason": "Cents are now 60% opacity, weight 500.",
+   "fp": {
+    "tag": "div",
+    "stableId": null,
+    "text": "$4,820.40",
+    "textHash": "85xwnf",
+    "structHash": "ztntfp",
+    "styleHash": "1vfqjm1",
+    "path": [
+     "main[0]",
+     "div[0]",
+     "div[0]",
+     "div[1]"
+    ]
+   }
+  }
+ ]
+}
