@@ -6,7 +6,7 @@ tokens, team comments, syncing mockups with git. Built-in modules live in `app/m
 trust it.
 
 **Коротко (uk).** Свій модуль — тека `<простір>/modules/<id>/` з `module.json` і `server.py`. Канвас його бачить одразу,
-але код не виконує, доки людина не довіриться: «Підключення» → «Довіритись…» → діалог із файлами → «Довіряю» → системне
+але код не виконує, доки людина не довіриться: «Налаштування» → «Модулі» → картка модуля → «Довірити» → діалог із файлами → «Довірити» → системне
 вікно ОС. Довіра — до точних байтів: канвас копіює їх у знімок `~/.deai/trusted/<відбиток>/` і виконує лише знімок. Зміна
 теки не діє до повторної довіри. Агент може написати модуль, але довіритись — ні; межа — код, що приходить крізь теку
 простору, git і сторінки макетів, а не локальний процес із вашими правами (він може сам правити `~/.deai/trust.json`).
@@ -22,7 +22,7 @@ trust it.
 
 * The folder name is the module `id`: `[a-z0-9][a-z0-9-]{0,39}`, the same as `id` in the manifest. A subfolder with any
   other name, or without a `module.json`, is not a module and is ignored.
-* An id that a built-in module already has is skipped (the Connections screen says so). At most 32 own modules per space
+* An id that a built-in module already has is skipped (Settings → Modules says so). At most 32 own modules per space
   (alphabetical order; the rest are skipped with a note).
 * Folder rules — a folder that breaks one cannot be trusted, and the trust dialog says which rule:
   at most **200 files**, **5 MiB** in total, **8** levels of folders; only regular files and folders — no symbolic or
@@ -310,7 +310,7 @@ below). Read-only: it never changes anything in the tracker.
   is new in the contract of this role; the `ctx` of other roles has none.
 * `check(ctx)` — as for every module (section 3): a verdict dict, never an exception. The built-in module answers
   `module-error` for settings that do not fit (address, e-mail, token), **`tracker-auth`** for HTTP 401/403 (a wrong e-mail or
-  token; its own code, because the Connections screen labels a `module-error` «the module crashed during the check»), `network`
+  token; its own code, because Settings → Modules labels a `module-error` «the module crashed during the check»), `network`
   when the tracker cannot be reached, and `tracker-error` or `module-error` (with the HTTP status) for any other answer. The
   codes of a verdict are free text for the screen: the table of error codes below lists only the codes you **raise**.
 
@@ -359,7 +359,7 @@ for each new pin and looks at the mute before it does. The built-in module is `a
   arguments **before** the call, so a module never sees a bad one. Anything but a bool in the answer is a `notify-error`.
 * `check(ctx)` — as for every module (section 3): a verdict dict, never an exception. The built-in module answers
   `module-error` for settings that do not fit (address, key), **`public-key`** for a public key (`sb_publishable_…` or a JWT with
-  `"role": "anon"`; its own code, because the Connections screen labels a `module-error` «the module crashed during the
+  `"role": "anon"`; its own code, because Settings → Modules labels a `module-error` «the module crashed during the
   check»; `supabase-dashboard` answers it too), **`notify-no-schema`** when the database has no notification functions (the
   shared `no-schema` is worded «no table comments», which is wrong here), **`notify-no-webhook`** when the Vault secret
   `teams_webhook_url` is missing, `bad-key` for HTTP 401/403, `network` when the service cannot be reached, and `notify-error`
@@ -422,7 +422,7 @@ Three things concern the in-house LIGA setup and what its migration (0.17.0 to 0
     Changing the value on a live space moves the publishing to the module path: new projects, other URLs, and the password is
     the module secret `password` (empty means no gate).
 
-  **The «built-in + id» rule.** A space's own module cannot take the id of a built-in one (the Connections screen shows the note
+  **The «built-in + id» rule.** A space's own module cannot take the id of a built-in one (Settings → Modules shows the note
   `id-taken` and the module is skipped), and the predicates above also test `origin == 'builtin'` and the exact id (for the
   publish predicate: `origin == 'builtin'` and `id == 'vercel-publish'`); so a module of your own called anything else cannot
   pick up the LIGA channel scheme, the LIGA texts or the LIGA publishing path by declaring `compat`.
@@ -437,7 +437,7 @@ Three things concern the in-house LIGA setup and what its migration (0.17.0 to 0
   (the key must not travel in a preview; this also refuses a module of your own with a hand-set flag). The module **«Check»**
   of a record with the flag does not read the secrets and does not call the module in an isolated run: the answer is
   `{"ok": false, "error": "isolated"}` and the last real check result is kept (all five roles).
-  `deai_modules.shared_state(space, module_id)` is the question; the Connections screen does not show or change the flag. Do not
+  `deai_modules.shared_state(space, module_id)` is the question; Settings → Modules does not show or change the flag. Do not
   set it on a module of your own unless it really talks to a state that tests must never touch.
 * **`ctx['legacy']`**: the built-in modules **do not read it any more**; they read `settings.compat`. The flag stays in the ctx
   of the implicit path only for foreign modules and goes with the implicit path in 4d-4. A module of your own that checks it will
@@ -445,9 +445,9 @@ Three things concern the in-house LIGA setup and what its migration (0.17.0 to 0
 
 ## 4. Trust
 
-1. Put the folder into `<space>/modules/`. The Connections screen shows the module with «own» and «Needs trust»; its
+1. Put the folder into `<space>/modules/`. Settings → Modules shows it as a card marked «own» and «Waiting for trust»; its
    code has not run.
-2. «Trust…» opens a dialog: what the module asks for, every file with its size, the fingerprint. «Trust» then asks the
+2. The card's main button «Trust» (and «Code» in the «⋯» menu) opens a dialog: what the module asks for, every file with its size, the fingerprint. «Trust» in it then asks the
    **operating system** to confirm in its own window (macOS dialog, Windows message box, Linux `zenity`/`kdialog`). Only
    a person at the computer can answer it: a script on a page and an agent without control of the screen cannot.
    After «No», asking again for the same version within 30 s is refused without a window.
@@ -458,14 +458,14 @@ Three things concern the in-house LIGA setup and what its migration (0.17.0 to 0
 4. Editing the folder does not change what runs: the card says «The folder has changes» and the previous version keeps
    working until you trust the new one. A new version that breaks a folder rule cannot be trusted; the old one keeps
    running.
-5. «Revoke trust» (card panel or dialog) stops the code; `space.json` and the settings stay. A module that is on in the
+5. «Revoke trust» («⋯» menu of the card, or the dialog) stops the code; `space.json` and the settings stay. A module that is on in the
    space but not trusted on this computer keeps its role «on paper»: the role reports an error instead of falling back
    to another provider.
-6. In the new-space wizard your module is marked «own». Until you trust it, its option is disabled and has a «Trust…»
+6. In the new-space wizard your module is marked «own». Until you trust it, its option is disabled and has a «Trust»
    button (the same dialog, the same system window); a folder that cannot be trusted shows the reason instead of the
    button. If a teammate already turned it on in `space.json`, it stays selected; the settings step writes nothing for it
    and says it is waiting for trust. A module whose folder has changes can be selected — the previous version runs; trust
-   the new one on the Connections screen.
+   the new one in Settings → Modules.
 
 The module's top level gets **5 s** to load; a module that hangs is shown as broken (its thread lives until the server
 restarts, and if it loops it may slow the canvas down). Browser code of a trusted `comments` module runs in canvas pages and published previews with the canvas's
@@ -485,5 +485,5 @@ not against a local process with your rights.
 
 ## 6. Trying it locally
 
-Create the folder in a test space, open «Connections», trust it, connect it and press «Check»: the verdict of your
+Create the folder in a test space, open Settings → Modules, trust it, connect it and press «Check»: the verdict of your
 `check` is shown on the card. After every edit, trust again — that is the point.

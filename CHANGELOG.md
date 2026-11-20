@@ -3,6 +3,48 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.31.0] — 20.11.2026
+
+Stage E, Settings. Settings is now a page with a left navigation: «Простір» (the space, modules, `AGENTS.md`) and «Застосунок»
+(general options, updates, hotkeys). Modules are a flat grid of cards with one action per card and a catalog for adding or
+replacing them, «В Figma» became a per-space tool switch, and every space can carry a generated English `AGENTS.md` guide for
+agents next to your own notes. The space colour now tints the whole window. The old Connections page layout and its
+«Through the agent» block are gone; the block's content moved into `AGENTS.md`.
+
+### Додано
+- Сторінка «Налаштування» з лівою навігацією у двох групах: «Простір» («Простір», «Модулі», «AGENTS.md») і «Застосунок»
+  («Загальне», «Оновлення», «Гарячі клавіші»). Останній розділ запамʼятовується (`deai.settingsSec` у localStorage).
+- «Модулі»: пласка сітка карток. Кожна картка має одну дію за станом, решта дій — у «⋯». Вимкнення питає просто в картці.
+  Ролі без модуля — пунктирні картки «Без модуля · N» із поясненням, що простір втрачає без нього. Якщо модуль ролі не
+  завантажився, картка каже «Помилка». Назва модуля — кнопка картки (а не вся картка).
+- Каталог «Додати модуль»: модулі за ролями; для зайнятої ролі кнопка «Замінити X» без другого підтвердження; відкритий із
+  пунктирної картки, підсвічує групу цієї ролі; список гасне внизу, поки є що прокручувати. «Свій модуль» — гід у три
+  кроки з полем «що робити» і запитом для агента, який можна скопіювати. `GET /api/modules` віддає `deai.authoring` —
+  абсолютний шлях до `docs/modules/authoring.md`.
+- «В Figma» — інструмент простору, а не модуль: `space.json` → `"tools": {"figma": false}` (немає ключа — увімкнено).
+  Перемикач — картка «В Figma» під роллю «Інструменти». Вимкнено — у смузі й ⌘K кнопки нема. API:
+  `POST /api/space-tool {space, tool, on}`; `tools` є у відповідях `/api/modules`, `/api/spaces` і в обʼєкті простору
+  `/api/task`.
+- `AGENTS.md` у теці простору: згенерований англійський блок між `<!-- deai:begin vX … -->` і `<!-- deai:end -->`; усе поза
+  блоком — «Ваше», його не чіпають. Блок не залежить від компʼютера (шляхи встановлення — `<deai>/…`) і є загальним
+  довідником: початок роботи, задачі й ітерації, коментарі, модулі, налаштування, список «ніколи». Стани: застарілий (версія
+  файла старіша й текст відрізняється — плашка й крапка в навігації), новіший (записаний новішим Deai: не понижується,
+  плашка просить оновити Deai), файла нема («Створити»), теки нема. Нові простори отримують файл при створенні, наявні — лише
+  кнопкою. «Скопіювати» копіює файл точно таким, як на диску. API: `GET /api/agents-md?space=<id>` і
+  `POST /api/agents-md {space}`; відмови `409 no-folder` і `409 newer`; у відповіді `paths: {deai, inbox, authoring}`.
+- Розділ «Простір»: назва зберігається по Enter чи втраті фокуса; колір — один із шести зразків (radiogroup зі стрілками);
+  шлях теки з кнопкою копіювання.
+- Група «Застосунок»: перемикач мови (Українська | English); «Окреме вікно» — встановлення як застосунку (PWA), коли
+  браузер це пропонує, «Встановлено», коли вже; «Оновлення» — поточна версія, рядок стану, «Перевірити зараз»
+  (`POST /api/update-check`) і «Оновити до X»; «Гарячі клавіші» — той самий список `KEYS`, що й у довідці `?`.
+
+### Змінено
+- Колір простору фарбує все вікно: поверхні й тексти — токени `oklch` від `--sp-h` / `--sp-k`; зелений виглядає як раніше;
+  мета `theme-color` іде за кольором.
+
+### Прибрано
+- Стара розмітка сторінки «Підключення» та блок «Через агента» з її API: його вміст тепер у `AGENTS.md`.
+
 ## [0.30.2] — 18.11.2026
 
 Patch: owner-requested UI fixes. The bottom island stays centered on the window, the status shows no seconds, the iteration

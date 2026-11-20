@@ -38,7 +38,8 @@ element and tell the agent what to change, and publishes a protected preview for
 - **Create, rename, delete**: a «+» card in the grid, rename from the card, the tab, F2 or ⌘K, and a per-space trash with restore.
 - **Publish** to a folder or to your own Vercel account, with an optional password gate.
 - **Git sync**: send an iteration to any git repository and pull a colleague's changes back as a new iteration.
-- **Spaces, wizard and Settings**: several projects on one machine; modules are connected and checked from the UI.
+- **Spaces, wizard and Settings**: several projects on one machine; the Settings page holds the space, its modules, `AGENTS.md`
+  and the app's own options (language, window, updates, hotkeys).
 - **Modules**: built-in ones for publishing, tokens, team comments, git, dashboard, tracker and Teams notifications; your
   own in `<space>/modules/`, run only after you trust them.
 - **To Figma**: copies the live mockup to the clipboard for pasting into Figma.
@@ -65,7 +66,7 @@ The screenshots show a made-up budgeting app on demo data. `node ops/readme-shot
 
 ## Status
 
-Version 0.30.2 (18.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
+Version 0.31.0 (20.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
 cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Feature reference
@@ -87,7 +88,7 @@ cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELO
 | **Space tracks** | Several lines of work in one space — each with its own folder for the tasks, default repository, design system and label — described in `space.json`; a task carries its `track`. See *Space tracks*. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters, and **tags** — give a task tags when you create it or with the «Мітки» button on its card, filter by them and find them with the search. See *Tasks and tags*. |
 | **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
-| **Settings** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, the team dashboard, the issue tracker, Teams notifications, design-system tokens) from the UI. See *Modules*. |
+| **Settings** | A page with a left navigation. «Простір»: the space (name, colour, folder), «Модулі» (a grid of module cards to connect, configure, check, replace and turn off: publishing, team comments, git sync, the team dashboard, the issue tracker, Teams notifications, design-system tokens; the «В Figma» tool) and «AGENTS.md». «Застосунок»: «Загальне» (language, separate window), «Оновлення» and «Гарячі клавіші». See *Modules* and *AGENTS.md*. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
 
 UI in English and Ukrainian.
@@ -131,7 +132,7 @@ space folder», which starts with the cursor in the folder field.
 2. **Modules** — one choice per role (publishing, team comments, git sync, design-system tokens): a
    module, or «No module» with what that means. A choice that replaces the current provider says
    «instead of …». Nothing is required, and nothing is written yet; no git module is pre-selected.
-3. **Settings** — the fields of each chosen module, the same as in the Settings side panel
+3. **Settings** — the fields of each chosen module, the same fields as on the module card in Settings
    (secrets are written, never shown). One pass writes the choices and checks each module; if
    something fails, the wizard stays on the step with the reason in the card. If an agent changed a
    role while you were choosing, that module is not written and its card says so.
@@ -155,22 +156,33 @@ it asks for) and `server.py` (functions for its role). A *role* is an interface 
 calls: `publish`, `tokens`, `comments`, `vcs`, `dashboard`, `tracker` and `notify`; no role name is
 reserved any more. One provider per role per space.
 
-**Connecting a module — the Settings screen.** Click the gear at the top right, or open the space menu
+**Connecting a module — the Settings page.** Click the gear at the top right, or open the space menu
 (the space chip on the Tasks screen) → «Settings…», or press ⌘K and pick «Settings of the space …»; in a space
-without integrations the head of the Tasks page also has a «Settings» button. The page lists
-the modules of the space by role (Publishing, Team comments, Git sync, Design-system tokens), says who
-provides each role now, shows the state of each module and, for one that fails, the reason in
-plain words. «Connect» and «Configure» open a side panel with the module's settings; secrets
-are written there but never shown again — the panel only says «set» or «not set», and
-«Erase» removes one. «Check» asks the module whether it works. If the role is already taken
-(a space without integrations publishes with `static-publish` by default), the screen asks
-«… is currently handled by “…”. Connect “…” instead?» and swaps the two in one step;
-«Turn off» keeps the settings and secrets, so the module can be connected again. No
-command line is needed.
+without integrations the head of the Tasks page also has a «Settings» button. The page has a left navigation in two
+groups: «Простір» (the space, «Модулі», «AGENTS.md») and «Застосунок» («Загальне», «Оновлення», «Гарячі клавіші»). The
+last section you opened is remembered.
+
+«Модулі» is a flat grid of module cards. A card shows the module, who provides the role and its state; a module that
+fails says «Помилка» with the reason in plain words, and a role whose module did not load says so on its card. Each
+card has one main action that depends on its state («Connect», «Configure», «Check», «Trust»); the other actions are in
+the «⋯» menu. The module name is the card's button. «Configure» opens a side panel with the module's settings; secrets
+are written there but never shown again — the panel only says «set» or «not set», and «Erase» removes one. «Check»
+asks the module whether it works. «Turn off» asks inside the card itself and keeps the settings and secrets, so the module
+can be connected again. A role that has no module is a dashed card «Без модуля · N» that says what the space loses
+without it.
+
+«Add module» opens the catalog: modules grouped by role, and «Your own module» (a three-step guide with a «what the module
+should do» field and a request to copy for an agent). If the role is already taken, the button reads «Replace X» and swaps
+the two in one step, without a second confirmation (a space without integrations publishes with `static-publish` by default).
+When the catalog is opened from a dashed card, that card's role is highlighted. No command line is needed.
+
+**«To Figma» is a tool, not a module.** It is a per-space switch stored in `space.json` as `"tools": {"figma": false}`; a
+missing key means on. The switch is a card «В Figma» under the role «Інструменти». When it is off, the bar and ⌘K have no
+«В Figma». Over the API: `POST /api/space-tool`.
 
 **Own modules.** Put a module folder into `<space>/modules/<id>/` (by hand, from git, or ask the agent to write one —
-see `docs/modules/authoring.md`). Settings shows it with «own» and «Needs trust»; nothing of it runs yet. «Trust…»
-lists its files and settings, and «Trust» asks the operating system to confirm in its own window. The canvas then runs
+see `docs/modules/authoring.md`). Settings → Modules shows it as a card marked «own» and «Waiting for trust»; nothing of it runs yet. «Trust»
+lists its files and settings, and «Trust» in the dialog asks the operating system to confirm in its own window. The canvas then runs
 a read-only snapshot of exactly those bytes (`~/.deai/trusted/`); a later edit of the folder waits for a new trust
 («The folder has changes»), and «Revoke trust» stops it without touching `space.json`. A module a colleague turned on
 in `space.json` stays «on, but not trusted» on your computer until you trust it. An agent can write and connect an own
@@ -178,9 +190,9 @@ module but cannot trust it — ask the person. Trust guards against code that ar
 folder, git and mockup pages, not against a local process with your rights: an agent that runs as you could still edit
 `~/.deai/trust.json` or drive the system window itself (see `docs/modules/authoring.md`, *The agent*).
 
-**Through the agent or a script.** Everything the screen does is the HTTP API (see *Module
-API* below), so an agent can connect modules for you, and the screen shows the routes of
-the current space at its bottom. The `curl` examples in this README are that path.
+**Through the agent or a script.** Everything the page does is the HTTP API (see *Module
+API* below), so an agent can connect modules for you. The agent's routes and paths are in `AGENTS.md` (next section).
+The `curl` examples in this README are that path.
 
 Settings and on/off live in the space's `space.json`; **secrets** go to
 `~/.deai/secrets.json` (user-only permissions), never into the space folder, so the folder
@@ -303,6 +315,9 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | `POST /api/module-settings` `{space?, id, settings?, secrets?}` | change settings or secrets (omit a key to keep it, `null` deletes) |
 | `POST /api/module-disable` `{space?, id}` | turn off; settings and secrets are kept |
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
+| `POST /api/space-tool` `{space, tool, on}` | switch a per-space tool (now only `figma`, «To Figma»); answers `{ok, space, tools}`; stored in `space.json` as `"tools": {"figma": false}` (a missing key is on); `tools` is also in `GET /api/modules`, in the rows of `GET /api/spaces` and in the space of `GET /api/task`; an unknown tool is `400`, an unknown space `404` |
+| `GET /api/agents-md?space=<id>` | the state of the space's `AGENTS.md`; answers `{ok, space, …status, paths: {deai, inbox, authoring}}` with the absolute paths of this installation (they never go into the file); `409 no-folder` for a space without a folder |
+| `POST /api/agents-md` `{space}` | create the file or rewrite its generated block (the text outside is kept); `409 no-folder`; `409 newer` when the block was written by a newer Deai (nothing is changed) |
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
 | `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists); for a space's own module `GET /api/module-client/<space>/<id>/<file>`, served from its trusted snapshot |
 | `POST /api/task-new` `{id, title?, space?, from?, vcs?, …}` | create a task. `vcs` — `{repo, path?, branch?}`, the task's own repository (needs a `vcs` module in the space: `400 vcs-needs-role`; the module checks the address, branch and folder: `400 vcs-bad-target`); if `path` of that repository already holds an `index.html`, the first iteration is taken from it, and if it cannot be fetched the task starts with a blank page. `from` — an absolute path (`~` is expanded; a relative one is `from-not-found`) to a folder with an `index.html` that the server copies into the first iteration (any space; not together with `gitlab`; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. `gitlab` (clone a repository into the task) needs a space whose `vcs` record has the LIGA scheme, otherwise `400 gitlab-needs-vcs-scheme`; `from` with `gitlab` is `400 bad-request`. Without `space` the task goes to the first space marked `legacy`, otherwise to the current one. Refusals: `400 gitlab-needs-vcs-scheme\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
@@ -336,6 +351,20 @@ Design and deviations from the spec: `docs/superpowers/specs/2026-10-14-modules-
 (modules, folder publishing, tokens) and `docs/superpowers/specs/2026-10-16-vercel-publish-design.md`
 (Vercel).
 Direction: `docs/design/spaces-and-modules.md`. Release notes: `CHANGELOG.md`.
+
+### AGENTS.md
+
+Every space can have an `AGENTS.md` in its folder: a generic guide to Deai Canvas for whatever agent works there (getting
+started, tasks and iterations, comments, modules, settings, and a list of things never to do). Deai writes it in English
+between `<!-- deai:begin vX … -->` and `<!-- deai:end -->`; everything outside the block is «Ваше» and is never touched.
+The block does not hold machine data: install paths are written as `<deai>/…`, and the real ones are in the answer of
+`GET /api/agents-md` and shown in Settings → AGENTS.md.
+
+New spaces get the file when they are created; for an existing space it is created with the «Створити» button. The
+section shows one of four states: the file is up to date; **outdated** (the file's version is older and the text differs: a
+plate and a dot on the navigation, «Оновити з шаблону» rewrites only the block); **newer** (written by a newer Deai: never
+downgraded, the plate asks you to update Deai); no file («Створити»); or the space has no folder. «Скопіювати» copies the
+file exactly as it is on disk.
 
 ## Comments
 
@@ -769,7 +798,7 @@ migrated; a partial migration is final; the copies of the credentials are in the
    - Later — team dashboard, issue tracker, notifications: modules you connect per
      project (stage 4).
 3. **Onboarding**
-   - ✅ **3a** (0.5) — the Connections screen (called Settings since 0.25): connect, configure, check, replace and turn off
+   - ✅ **3a** (0.5) — the Connections screen (called Settings since 0.25; a page with a left navigation since 0.31): connect, configure, check, replace and turn off
      modules from the UI; `replace` in `module-enable`.
    - ✅ **3b** (0.6) — the new-space wizard: space → modules → settings → first task, and a task
      from an existing mockup folder (`from` in `task-new`).
