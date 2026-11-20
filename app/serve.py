@@ -313,13 +313,25 @@ _SETUP_CACHE = {}           # шлях node → (monotonic, shots)
 _SETUP_LOCK = threading.Lock()
 
 
-def _shots_node():
+def _shots_node(fresh=False):
     """Node для перевірки знімків: `DEAI_SHOTS_NODE` (абсолютний шлях до виконуваного; тести й нестандартні машини),
-    інакше `_node_bin('node')`. Не той шлях — `None` (стан `no-node`)."""
+    інакше `_node_bin('node')`. Не той шлях — `None` (стан `no-node`). Сам пошук кешується на `_SETUP_TTL` під ключем
+    `('node', значення DEAI_SHOTS_NODE)` (без Node `_node_bin` щоразу ганяє `zsh -lic` до 15 с); `fresh` кеш обходить."""
     forced = os.environ.get('DEAI_SHOTS_NODE')
+    key = ('node', forced)
+    now = time.monotonic()
+    if not fresh:
+        with _SETUP_LOCK:
+            hit = _SETUP_CACHE.get(key)
+        if hit and now - hit[0] < _SETUP_TTL:
+            return hit[1]
     if forced:
-        return forced if os.path.isabs(forced) and os.access(forced, os.X_OK) else None
-    return _node_bin('node')
+        found = forced if os.path.isabs(forced) and os.access(forced, os.X_OK) else None
+    else:
+        found = _node_bin('node')
+    with _SETUP_LOCK:
+        _SETUP_CACHE[key] = (now, found)
+    return found
 
 
 def shots_command():
@@ -330,7 +342,7 @@ def shots_command():
 def shots_setup(fresh=False):
     """`{state, node, command}`: `ok | no-node | no-playwright | no-browser | unknown`. Кеш 30 с на шлях node; `fresh` — без
     кешу. Збій чи тайм-аут перевірки — `unknown` (UI тоді нічого не блокує)."""
-    node = _shots_node()
+    node = _shots_node(fresh)
     if node is None:
         return {'state': 'no-node', 'node': None, 'command': None}
     now = time.monotonic()

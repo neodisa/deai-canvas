@@ -96,6 +96,17 @@ class SetupApi(base.Fixture):
         self.shots(node, '/api/setup?fresh=1')
         self.assertEqual(self.calls(), 2, '`fresh=1` обходить кеш')
 
+    def test_no_node_lookup_is_cached_too(self):
+        """Без Node `_node_bin` йде в `zsh -lic` (до 15 с): пошук node кешується на той самий TTL, `fresh=1` його обходить."""
+        env = {k: v for k, v in os.environ.items() if k != 'DEAI_SHOTS_NODE'}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(serve, '_node_bin', return_value=None) as nb:
+            for _ in range(2):
+                st, body = self.jget('/api/setup')
+                self.assertEqual((st, body['shots']['state']), (200, 'no-node'))
+            self.assertEqual(nb.call_count, 1, 'другий запит у межах 30 с — без нового пошуку node')
+            self.jget('/api/setup?fresh=1')
+            self.assertEqual(nb.call_count, 2, '`fresh=1` шукає node заново')
+
     def test_timeout_gives_unknown(self):
         with mock.patch.object(serve, '_SETUP_TIMEOUT', 0.5):
             got = self.shots(self.node('sleep 5'))['shots']
