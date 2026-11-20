@@ -71,7 +71,8 @@ const NET = { outside: [], supabase: [], sockets: [], cdn: [] };
 
 test.before(async () => {
   const { dir } = t45Task();
-  server = await startServer(dir, { portBase: PORT_BASE, title: "T-45", supabase: true });
+  server = await startServer(dir, { portBase: PORT_BASE, title: "T-45", supabase: true,
+    env: { DC_IDENTITY_NAME: "Live", DC_IDENTITY_EMAIL: "live@example.invalid" } });
   browser = await chromium.launch();
   const rawNewPage = browser.newPage.bind(browser);
   browser.newPage = async (opts) => { const p = await rawNewPage(opts); await hermeticLiga(p, { seen: NET }); return p; };

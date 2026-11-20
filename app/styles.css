@@ -1967,6 +1967,7 @@ body:not(.home-open) .cn-drawer{display:none}
 .ag-own .ag-g{color:var(--mid)}
 .ag pre{margin:0;padding:12px 14px;font:12px/1.6 var(--mono);color:var(--mid);white-space:pre-wrap;overflow-wrap:anywhere}
 .ag-own pre{color:var(--hi)}
+.ag pre:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
 /* Розділ «Простір» (етап Е): назва, шість плиток кольору з мініатюрою у ВІДТІНКУ свого кольору (`.sw[data-val]` задає `--sp-h`,
    `:root,.sw-pv` перераховує поверхні), тека. Вибрана плитка — рамка `--sel`; радіогрупа ходить стрілками (`app.js`). */
 .sp-fld{display:flex;flex-direction:column;gap:6px;max-width:560px;margin:0 0 8px}

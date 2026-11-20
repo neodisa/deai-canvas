@@ -6,7 +6,7 @@ const SP = { id: "p1", name: "Студія", color: "space-5", path: "/u/work/st
 
 test("«Простір»: назва, радіогрупа з шести плиток (одна в Tab-порядку, вибрана — з галочкою), тека з копіюванням", () => {
   const html = spaceBodyHTML(SP);
-  assert.match(html, /<input class="cn-inp" id="set-sp-name" type="text" value="Студія"/);
+  assert.match(html, /<input class="cn-inp" id="set-sp-name" data-sp="p1" type="text" value="Студія"/);
   assert.match(html, /role="radiogroup" aria-labelledby="sp-color-h"/);
   assert.equal((html.match(/role="radio"/g) || []).length, 6);
   assert.equal((html.match(/tabindex="0"/g) || []).length, 1, "roving tabindex: рівно одна плитка в Tab-порядку");

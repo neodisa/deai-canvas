@@ -391,7 +391,7 @@ notes are in [the module README](app/modules/supabase-comments/README.md):
 3. Take the project URL (`https://<ref>.supabase.co`) and the **public** key (`anon` or
    `publishable`) from Project Settings → API — never the `service_role` / `secret` key (the
    module refuses it: this key goes into every page).
-4. Enable the module on the Settings screen (Settings → Modules → «Add module» → Supabase comments → «Connect»: the
+4. Enable the module on the Settings screen (Settings → Modules → «Add module» → «Team comments» → Supabase → «Connect»: the
    project URL and the public key), or over the API:
 
    ```bash

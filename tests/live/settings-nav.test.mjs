@@ -35,9 +35,10 @@ let browser;
 test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
-async function boot(t, { color = "space-2" } = {}) {
+async function boot(t, { color = "space-2", second = false } = {}) {
   const X = taskFixture({ html: MOCKUP });
   const spaces = [{ name: "Studio", id: "studio", color, tasks: { t1: { dir: X.dir, title: "Задача" } } }];
+  if (second) { const Y = taskFixture({ html: MOCKUP }); spaces.push({ name: "Other", id: "other", color, tasks: { t2: { dir: Y.dir, title: "Інша" } } }); }
   const server = await startServer(null, { portBase: PORT_BASE, spaces });
   t.after(() => stop(server.child));
   const context = await browser.newContext({ viewport: VIEW });
@@ -276,3 +277,28 @@ test("11: «Гарячі клавіші» — ті самі рядки, що а�
 });
 
 guardRealDeai();
+
+test("12b: набране в одному просторі не переходить у поле назви іншого після перемикання (ключ простору)", async (t) => {
+  const { page, errors } = await boot(t, { color: "space-1", second: true });
+  await gear(page);
+  await page.click('.set-nav [data-v="space"]');
+  await page.waitForSelector("#set-sp-name", { timeout: 15000 });
+  const inp = page.locator("#set-sp-name");
+  await inp.focus();
+  await inp.fill("Чернетка A");
+  const was = await page.locator("#set-sp-name").getAttribute("data-sp");
+  /* Перемикаємо простір на сервері й повертаємо фокус у вікно: перемальовка малює поле іншого простору. */
+  await page.evaluate(async () => {
+    const sp = (await (await fetch("/api/spaces")).json());
+    const list = sp.spaces ?? sp;
+    const other = list.find((x) => x.id !== document.getElementById("set-sp-name").dataset.sp);
+    await fetch("/api/space-switch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: other.id }) });
+    window.__oldInp = document.getElementById("set-sp-name");
+    window.dispatchEvent(new Event("focus"));
+  });
+  await page.waitForFunction(() => { const i = document.getElementById("set-sp-name"); return i && i !== window.__oldInp; }, null, { timeout: 15000 });
+  const now = await page.evaluate(() => { const i = document.getElementById("set-sp-name"); return { v: i.value, sp: i.dataset.sp }; });
+  assert.notEqual(now.sp, was, "поле перемальоване вже для іншого простору");
+  assert.notEqual(now.v, "Чернетка A", "чуже набране перейшло в поле іншого простору");
+  assert.deepEqual(errors, []);
+});

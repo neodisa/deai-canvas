@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import { setLang } from "../app/i18n.js";
 import { agentsActsHTML, agentsBodyHTML, agentsKind, canUpdate } from "../app/agents-view.js";
@@ -39,8 +40,8 @@ test("актуальний: «Скопіювати» активна, «Онов�
   assert.doesNotMatch(h, /class="note"/);
   assert.match(h, /<div class="ag-bar">[^]*?<span>\/u\/space\/AGENTS\.md<\/span>/);
   assert.ok(btn(h, "copypath"), "копіювати шлях");
-  assert.match(h, /<div class="ag-part"><div class="ag-g">З шаблону · Deai 0\.31\.0<\/div><pre tabindex="0" aria-label="З шаблону · Deai 0\.31\.0">/);
-  assert.match(h, /<div class="ag-part ag-own"><div class="ag-g">Ваше · не чіпається<\/div><pre tabindex="0" aria-label="Ваше · не чіпається">\n## Team/);
+  assert.match(h, /<div class="ag-part"><div class="ag-g">З шаблону · Deai 0\.31\.0<\/div><pre role="region" tabindex="0" aria-label="З шаблону · Deai 0\.31\.0">/);
+  assert.match(h, /<div class="ag-part ag-own"><div class="ag-g">Ваше · не чіпається<\/div><pre role="region" tabindex="0" aria-label="Ваше · не чіпається">\n## Team/);
 });
 
 test("застарілий: плашка з версіями й кнопкою, «Оновити» в голові активна", () => {
@@ -120,12 +121,20 @@ test("en: ті самі стани англійською", () => {
 
 test("a11y: прокручувані частини файла фокусовні й мають імʼя; код «unreadable» — стан помилки з «Спробувати ще»", () => {
   const h = agentsBodyHTML(FILE);
-  assert.match(h, /<pre tabindex="0" aria-label="З шаблону · Deai 0\.31\.0">/);
-  assert.match(h, /<pre tabindex="0" aria-label="Ваше · не чіпається">/);
+  assert.match(h, /<pre role="region" tabindex="0" aria-label="З шаблону · Deai 0\.31\.0">/);
+  assert.match(h, /<pre role="region" tabindex="0" aria-label="Ваше · не чіпається">/);
   setLang("en");
-  assert.match(agentsBodyHTML(FILE), /<pre tabindex="0" aria-label="From template · Deai 0\.31\.0">/);
+  assert.match(agentsBodyHTML(FILE), /<pre role="region" tabindex="0" aria-label="From template · Deai 0\.31\.0">/);
   setLang("uk");
   assert.equal(agentsKind({ failed: { code: "unreadable" } }), "error");
   assert.ok(btn(agentsBodyHTML({ failed: { code: "unreadable" } }), "retry"));
   assert.match(agentsBodyHTML({ failed: { code: "unreadable" } }), /role="alert"/);
+});
+
+test("блоки файла: role=region і видимий :focus-visible на pre (токени, без колірних літералів)", () => {
+  const css = readFileSync(new URL("../app/styles.css", import.meta.url), "utf8");
+  const m = css.match(/\.ag pre:focus-visible\{([^}]*)\}/);
+  assert.ok(m, "правило :focus-visible для .ag pre");
+  assert.match(m[1], /outline:\s*2px solid var\(--sel\)/);
+  assert.doesNotMatch(m[1], /#[0-9a-f]{3,8}\b|rgb|hsl|oklch/i);
 });

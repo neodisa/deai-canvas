@@ -3506,14 +3506,15 @@ function restoreRen(h) {
 }
 /** Поле назви простору (`#set-sp-name`, розділ «Простір»): так само, як `#th-ren` — набране, але не збережене, переживає
  *  перемальовку (дочитались підключення чи агенти, вимикач інструмента, збереження кольору). Брудне = значення відрізняється
- *  від збереженої назви, з якою поле намальовано (`defaultValue`). Не брудне — лишається свіжа назва з розмітки. */
+ *  від збереженої назви, з якою поле намальовано (`defaultValue`). Тримається за ключем простору (`data-sp`): перемикання простору
+ *  до повернення запису не переносить набране в чуже поле. Не брудне — лишається свіжа назва з розмітки. */
 function holdSpName() {
   const i = document.getElementById('set-sp-name');
-  return i && i.value !== i.defaultValue ? { v: i.value, a: i.selectionStart, b: i.selectionEnd } : null;
+  return i && i.value !== i.defaultValue ? { sp: i.dataset.sp ?? '', v: i.value, a: i.selectionStart, b: i.selectionEnd } : null;
 }
 function restoreSpName(h) {
   const i = h && document.getElementById('set-sp-name');
-  if (!i) return;
+  if (!i || (i.dataset.sp ?? '') !== h.sp) return;   // інший простір: чуже набране не переходить у це поле
   i.value = h.v;
   try { i.setSelectionRange(h.a, h.b); } catch (e) {}
 }

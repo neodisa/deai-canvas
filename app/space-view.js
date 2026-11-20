@@ -26,7 +26,7 @@ export function spaceBodyHTML(sp) {
     + `<div class="sp-path"><span>${esc(sp.path)}</span>`
     + `<button type="button" class="icob" data-th="spcopy" data-v="path" aria-label="${esc(t("spCopyPath"))}" title="${esc(t("spCopyPath"))}">${ico("copy", 15)}</button></div></div>`;
   return `<div class="sp-fld"><label class="sp-lbl" for="set-sp-name">${esc(t("spName"))}</label>`
-    + `<input class="cn-inp" id="set-sp-name" type="text" value="${esc(sp.name)}" maxlength="60" autocomplete="off" spellcheck="false"${dis}></div>`
+    + `<input class="cn-inp" id="set-sp-name" data-sp="${esc(sp.id)}" type="text" value="${esc(sp.name)}" maxlength="60" autocomplete="off" spellcheck="false"${dis}></div>`
     + `<div><h2 class="sub" id="sp-color-h">${esc(t("spColorH"))}</h2>`
     + `<div class="sw-grid" role="radiogroup" aria-labelledby="sp-color-h">${items}</div></div>`
     + path;

@@ -1132,7 +1132,7 @@ test("меню задачі не переживає сторінку: відкр
   await page.fill("#palq", "Налаштування");
   await page.waitForSelector('.pal-it:has-text("Налаштування")');
   await page.keyboard.press("Enter");
-  await page.waitForFunction(() => document.querySelector("#tasks-home")?.textContent.includes("Налаштування") && !document.querySelector("#th-grid"));
+  await page.waitForFunction(() => document.querySelector("#tasks-home .set-nav") && !document.querySelector("#th-grid"));
   assert.equal(await page.locator("#th-menu").count(), 0, "меню задачі пережило перехід на іншу сторінку");
 });
 
