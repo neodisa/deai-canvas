@@ -3007,7 +3007,7 @@ HOST_ARG = """,
 
 
 # Режим хоста для ОПУБЛІКОВАНОГО превʼю (0.32.0): оболонка превʼю (`ext-shell.js`) малює панель сама, тож сторінка шле їй ті самі
-# посилки, що в Deai, плюс `onAdd` (id створеного коментаря — оболонка запише «свій») і `userName` (імʼя з localStorage —
+# посилки, що в Deai, плюс `onAdd`/`onReply` (id створеного коментаря/відповіді — оболонка запише «свій») і `userName` (імʼя з localStorage —
 # спільного для оболонки й рамки, бо превʼю статичне, одного походження; його ставить діалог оболонки перед першим коментарем).
 # ⛔ `userName` присутній ЗАВЖДИ: він і є ознакою «prompt() не кличеться» (`getUser` у коментаторі). ⛔ Жодного `defaultUser`:
 # особа машини дизайнера в публічне превʼю не їде. Адресатів (`defaultAudience`) і `bottomInset` острівця тут нема: у превʼю
@@ -3032,6 +3032,7 @@ PREVIEW_HOST_ARG = """,
             onSelect: function (id) { send({ ev: 'select', id: id }); },
             onMode: function (on) { send({ ev: 'mode', on: !!on }); },
             onAdd: function (id) { send({ ev: 'add', id: id }); },
+            onReply: function (o) { send({ ev: 'reply', id: o && o.reply }); },
             userName: function () {
               var v = '';
               try { v = localStorage.getItem('comment-layer:user') || ''; } catch (e) { v = ''; }

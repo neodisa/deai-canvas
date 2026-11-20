@@ -5,7 +5,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CMT_ACTS, PREVIEW_ACTIONS, USER_KEY, canTouch, cleanName, ownStore, readNameFrom } from "../app/ext-comments.js";
+import { CMT_ACTS, CMT_EVENTS, PREVIEW_ACTIONS, REPLY_ACTS, USER_KEY, canTouch, canTouchReply, cleanName, createExtComments, ownStore, parentOfReply,
+  readNameFrom, storeRepliesOn } from "../app/ext-comments.js";
 import { commentsPanelHTML } from "../app/comments-view.js";
 import { setLang, t } from "../app/i18n.js";
 
@@ -65,4 +66,179 @@ test("ownStore лишається працездатним без сховища
   const s = ownStore(throwing, "k");
   s.add("a");
   assert.equal(s.has("a"), true);
+});
+
+/* ── Відповіді (0.34): права в превʼю ─────────────────────────────────────────────────────────────────────────────────── */
+
+test("CMT_EVENTS: `reply` — посилка рамки (`onReply`); усі 10 дій відповідей — у реєстрі й не серед «чужих» дій", () => {
+  assert.ok(CMT_EVENTS.has("reply"));
+  assert.ok(CMT_EVENTS.has("add"));
+  assert.equal(REPLY_ACTS.length, 10);
+  for (const a of REPLY_ACTS) assert.ok(CMT_ACTS.includes(a), a);
+  for (const a of ["cmtres", "cmtreopen", "cmtassign", "cmtunassign", "cmtcarry"]) assert.equal(CMT_ACTS.includes(a), false, a);
+});
+
+test("storeRepliesOn: булеве сховище модуля, функція комбінованого, без геттерів — ні; `repliesDown` вимикає", () => {
+  assert.equal(storeRepliesOn({ supportsReplies: true, repliesDown: null }), true, "булеве true");
+  assert.equal(storeRepliesOn({ supportsReplies: false, repliesDown: "no-replies-schema" }), false, "булеве false");
+  assert.equal(storeRepliesOn({ supportsReplies: true, repliesDown: "timeout" }), false, "збій");
+  assert.equal(storeRepliesOn({ supportsReplies: (ch) => ch === "project" }), true, "функція");
+  assert.equal(storeRepliesOn({ supportsReplies: () => false }), false);
+  assert.equal(storeRepliesOn({}), false, "старий модуль без геттерів");
+  assert.equal(storeRepliesOn({ supportsReplies: "yes" }), false, "не булеве й не функція");
+  assert.equal(storeRepliesOn(null), false);
+  assert.equal(storeRepliesOn({ get supportsReplies() { throw new Error("boom"); } }), false);
+});
+
+const snapR = () => ({ iteration: "1", comments: [
+  { id: "o", status: "open", replies: [{ id: "r-mine" }, { id: "r-other" }] },
+  { id: "x", status: "resolved", replies: [{ id: "r-closed" }] },
+  { id: "e", status: "open" },
+] });
+
+test("canTouchReply: лише СВОЯ відповідь під ВІДКРИТИМ коментарем, що її містить, за ввімкнених відповідей", () => {
+  const own = { has: (id) => ["r-mine", "r-closed", "ghost"].includes(id) };
+  const s = snapR();
+  assert.equal(canTouchReply(own, s, "o", "r-mine", true), true);
+  assert.equal(canTouchReply(own, s, "o", "r-other", true), false, "чужа");
+  assert.equal(canTouchReply(own, s, "x", "r-closed", true), false, "під закритим");
+  assert.equal(canTouchReply(own, s, "o", "r-mine", false), false, "відповіді вимкнені");
+  assert.equal(canTouchReply(own, s, "e", "r-mine", true), false, "не під своїм коментарем");
+  assert.equal(canTouchReply(own, s, "o", "ghost", true), false, "свій id, якого нема");
+  assert.equal(canTouchReply(own, null, "o", "r-mine", true), false);
+  assert.equal(parentOfReply(s, "r-closed").id, "x");
+  assert.equal(parentOfReply(s, "nope"), null);
+});
+
+/** Найменший «DOM» для `createExtComments`: лише те, до чого доходить `paint` і делегація; без браузера. */
+function harness({ store, name = "Гість", snap, replies = true } = {}) {
+  const handlers = {};
+  const calls = { reply: [], editReply: [], removeReply: [] };
+  const mount = { innerHTML: "", hidden: true, setAttribute() {}, contains: () => false, querySelector: () => null, querySelectorAll: () => [],
+    addEventListener: (k, f) => { handlers[k] = f; } };
+  const g = globalThis;
+  const saved = { document: g.document, window: g.window, location: g.location, CSS: g.CSS };
+  g.document = { activeElement: null, body: { classList: { toggle() {} } }, addEventListener() {}, querySelector: () => null };
+  g.window = { addEventListener() {}, __dcPreviewUser: "" };
+  g.location = { origin: "http://x.test", pathname: "/p" };
+  g.CSS = { escape: (v) => String(v) };
+  const layer = {
+    snapshot: () => snap, setCommentMode() {}, focus() {}, store: store ?? { supportsReplies: replies, repliesDown: null },
+    reply: (id, text) => { calls.reply.push([id, text]); return "new-r"; },
+    editReply: (...a) => { calls.editReply.push(a); return true; }, removeReply: (...a) => { calls.removeReply.push(a); return true; },
+  };
+  const frame = { contentWindow: { CommentLayer: layer, addEventListener() {} }, contentDocument: {} };
+  const ctl = createExtComments({ frame, mount, channel: "c", storage: () => ({ getItem: (k) => (k === USER_KEY ? name : null), setItem() {} }) });
+  const post = (m) => ctl.onMessage({ source: frame.contentWindow, origin: "http://x.test", data: { type: "dc-comments", ...m } });
+  const done = () => Object.assign(g, saved);
+  return { ctl, calls, mount, layer, post, done, handlers };
+}
+const rc = (id, status, replies, n = 1) => ({ id, n, text: "т", author: "А", ts: "20.11.2026 10:00", status, scope: "current", where: "here", iter: "1", meta: {}, replies });
+const rp = (id, author = "Б") => ({ id, author, text: `текст ${id}`, ts: "20.11.2026 11:00" });
+const actsIn = (html, id) => [...(new RegExp(`<li class="cmt-reply[^>]*>(?:(?!</li>)[\\s\\S])*?${id}[\\s\\S]*?</li>`).exec(html)?.[0] ?? "").matchAll(/data-act="(cmt[a-z]+)"/g)].map((m) => m[1]);
+
+/** Панель відкрито, рамка «ready», відповіді розгорнуті — повертає `html` після перемальовування. */
+function boot2(opts) {
+  const h = harness(opts);
+  h.post({ ev: "ready" });
+  h.ctl.setOpen(true);
+  h.ctl.actions.cmtthread("o");
+  return h;
+}
+
+test("paint: права відповіді — своя (і лише своя) з «змінити»/«видалити», чужа лише читається; «reply» робить відповідь своєю ДО першого change", () => {
+  setLang("uk");
+  const snap = { iteration: "1", comments: [rc("o", "open", [rp("r-mine"), rp("r-other")])] };
+  const h = boot2({ snap });
+  try {
+    assert.deepEqual(actsIn(h.mount.innerHTML, "r-mine"), [], "до події `reply` відповідь ще не своя");
+    h.post({ ev: "reply", id: "r-mine" });
+    assert.deepEqual(actsIn(h.mount.innerHTML, "r-mine"), ["cmtredit", "cmtrdel"]);
+    assert.deepEqual(actsIn(h.mount.innerHTML, "r-other"), []);
+    assert.match(h.mount.innerHTML, /data-act="cmtreply"|class="cmt-rbox/);       // поле відповіді є
+  } finally { h.done(); }
+});
+
+test("охоронець своєї відповіді: чужу змінити/видалити напряму — ніщо; свою — так; під закритим — ні", () => {
+  setLang("uk");
+  const snap = { iteration: "1", comments: [rc("o", "open", [rp("r-mine"), rp("r-other")]), rc("x", "resolved", [rp("r-closed")], 2)] };
+  const h = boot2({ snap });
+  try {
+    h.post({ ev: "reply", id: "r-mine" });
+    h.post({ ev: "reply", id: "r-closed" });
+    const a = h.ctl.actions;
+    a.cmtredit("o|r-other"); a.cmtreditsave("o|r-other");
+    a.cmtrdel("o|r-other"); a.cmtrdelyes("o|r-other");
+    a.cmtredit("x|r-closed"); a.cmtrdel("x|r-closed"); a.cmtrdelyes("x|r-closed");
+    a.cmtredit("o|r-mine-x"); a.cmtredit("x|r-mine");      // не та пара коментар|відповідь
+    assert.deepEqual([h.calls.editReply, h.calls.removeReply], [[], []], "чужа/закрита/підроблена пара дійшла до коментатора");
+    assert.equal(h.mount.innerHTML.includes("cmt-redit"), false, "чужа перейшла в редагування");
+    assert.equal(h.mount.innerHTML.includes("cfm"), false, "для чужої показано питання «Видалити»");
+    // своя
+    a.cmtredit("o|r-mine");
+    assert.match(h.mount.innerHTML, /<textarea class="cmt-redit"/);
+    a.cmtreditsave();
+    assert.equal(h.calls.editReply.length, 1);
+    assert.deepEqual(h.calls.editReply[0].slice(0, 2), ["o", "r-mine"]);
+    a.cmtrdelyes("o|r-mine");                               // без питання — нічого
+    assert.equal(h.calls.removeReply.length, 0);
+    a.cmtrdel("o|r-mine");
+    a.cmtrdelyes("o|r-mine");
+    assert.deepEqual(h.calls.removeReply, [["o", "r-mine"]]);
+  } finally { h.done(); }
+});
+
+test("відповідь на ЗАКРИТИЙ коментар неможлива: ні поля, ні дії; на відкритий — так (імʼя відоме)", async () => {
+  setLang("uk");
+  const snap = { iteration: "1", comments: [rc("o", "open", []), rc("x", "resolved", [rp("r-old")], 2)] };
+  const h = harness({ snap });
+  try {
+    h.post({ ev: "ready" });
+    h.ctl.setOpen(true);
+    h.ctl.actions.cmtthread("x");
+    h.ctl.actions.cmtreply("x");
+    await h.ctl.actions.cmtreplysend("x");
+    assert.deepEqual(h.calls.reply, [], "відповідь на закритий дійшла до коментатора");
+    assert.equal(/data-act="cmtreply(send)?" data-val="x"/.test(h.mount.innerHTML), false);
+    assert.equal(/<textarea class="cmt-rta" data-val="x"/.test(h.mount.innerHTML), false);
+    // відкритий: поле з'являється, текст беремо з чернетки (поле в тестовому DOM не живе)
+    h.ctl.actions.cmtreply("o");
+    assert.match(h.mount.innerHTML, /<textarea class="cmt-rta" data-val="o"/);
+    await h.ctl.actions.cmtreplysend("o");              // порожньо — нічого
+    assert.deepEqual(h.calls.reply, []);
+    h.handlers.input({ target: { classList: { contains: (k) => k === "cmt-rta" }, dataset: { val: "o" }, value: "  Привіт  " } });
+    await h.ctl.actions.cmtreplysend("o");
+    assert.deepEqual(h.calls.reply, [["o", "Привіт"]], "текст відповіді (з чернетки) не дійшов до коментатора");
+  } finally { h.done(); }
+});
+
+test("відповіді вимкнені (булеве false, `repliesDown`, функція false, без геттерів): ні поля, ні примітки, ні кнопок змінити/видалити; наявні — читаються", () => {
+  setLang("uk");
+  const shapes = {
+    "булеве": { supportsReplies: false, repliesDown: "no-replies-schema" },
+    "збій": { supportsReplies: true, repliesDown: "boom" },
+    "функція": { supportsReplies: () => false },
+    "без геттерів": {},
+  };
+  for (const [name, store] of Object.entries(shapes)) {
+    const snap = { iteration: "1", comments: [rc("o", "open", [rp("r-mine")]), rc("e", "open", [], 2)] };
+    const h = boot2({ snap, store });
+    try {
+      h.post({ ev: "reply", id: "r-mine" });
+      h.ctl.actions.cmtthread("e");
+      const html = h.mount.innerHTML;
+      assert.match(html, /текст r-mine/, `${name}: наявна відповідь має читатись`);
+      for (const bad of ["cmt-rta", "cmt-rbox", 'data-act="cmtreply"', 'data-act="cmtreplysend"', 'data-act="cmtredit"', 'data-act="cmtrdel"',
+        "cmt-rnote", "cmt-teamdown"]) assert.equal(html.includes(bad), false, `${name}: «${bad}» у превʼю без відповідей`);
+      assert.equal(html.includes("Відповіді команди недоступні"), false, `${name}: примітка`);
+      h.ctl.actions.cmtredit("o|r-mine"); h.ctl.actions.cmtrdel("o|r-mine"); h.ctl.actions.cmtreply("o");
+      assert.equal(/cmt-redit|class="cfm|cmt-rta/.test(h.mount.innerHTML), false, `${name}: дії обійшли розмітку`);
+    } finally { h.done(); }
+  }
+});
+
+test("відповіді ввімкнені, але відповідей ще нема: кнопка «Відповісти» є (контроль до «вимкнено»)", () => {
+  setLang("uk");
+  const h = boot2({ snap: { iteration: "1", comments: [rc("e", "open", [], 1)] } });
+  try { assert.match(h.mount.innerHTML, /data-act="cmtreply" data-val="e"/); } finally { h.done(); }
 });

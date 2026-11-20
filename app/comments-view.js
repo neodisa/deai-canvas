@@ -94,7 +94,7 @@ function threadHTML(c, st) {
       + ` placeholder="${esc(t("cmtReplyPh"))}" aria-label="${esc(t("cmtReply"))}"></textarea>`
       + `<div class="cmt-rrow"><span class="cmt-rhint">${esc(t("cmtReplyHint"))}</span>${btn("cmtreplycancel", c.id, t("cmtCancel"))}`
       + `${btn("cmtreplysend", c.id, t("cmtReplySend"), null, " cmt-act--pri")}</div></div>` : "";
-  const note = open && typeof off === "string" && off && (expanded || !n) ? `<p class="cmt-rnote">${esc(t("cmtRepliesOff"))}</p>` : "";
+  const note = open && typeof off === "string" && off && st.repliesNote !== false && (expanded || !n) ? `<p class="cmt-rnote">${esc(t("cmtRepliesOff"))}</p>` : "";
   return sum || items || box || note ? `<div class="cmt-thread">${sum}${items}${box}${note}</div>` : "";
 }
 
@@ -176,7 +176,7 @@ const FILTER_KEY = { local: "cmtFLocal", project: "cmtFTeam", all: "cmtFAll" };
 
 /** st: {snapshot, query, selectedId, editingId, delAsk (id картки з питанням «Видалити назавжди?»), expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down}
  *  Гілка відповідей (0.34; без `threads` картка як була): `threads: Set` (розгорнуті id коментарів), `replying: id`, `replyEdit: "cid|rid"`,
- *  `replyDelAsk: "cid|rid"`, `repliesDown: рядок причини` (смуга «відповіді команди недоступні», коли команда жива), `isOwnReply(r)`, `canDeleteReply(r)`, `repliesOff(c) → рядок причини|null`; `fresh` — id коментарів І відповідей.
+ *  `replyDelAsk: "cid|rid"`, `repliesDown: рядок причини` (смуга «відповіді команди недоступні», коли команда жива), `isOwnReply(r)`, `canDeleteReply(r)`, `repliesOff(c) → рядок причини|null`, `repliesNote: false` (превʼю: «відповіді вимкнені» — тихо, без рядка-примітки під карткою); `fresh` — id коментарів І відповідей.
  *  Необовʼязково (превʼю, 0.32.0; без них — Deai як було): `isOwn(c)`, `actions: {any, own, closed}` (дозволені `data-act`), `adding: boolean` (кнопка «Додати коментар»), `emptyKey` (ключ i18n порожнього списку; за замовчуванням `cmtEmpty`). */
 export function commentsPanelHTML(st) {
   const filter = FILTERS.includes(st.filter) ? st.filter : "local";
