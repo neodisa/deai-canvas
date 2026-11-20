@@ -5625,6 +5625,9 @@ def space_view(sp):
         compat = deai_modules.compat_view(sp, out['capabilities'])
         if compat:                       # ключ лише коли непорожній (Поправка 4): точні тести `describe`/`listing` не зачеплені
             out['compat'] = compat
+        pw = _publish_password(sp, out['capabilities'])
+        if pw is not _NO_PW:             # пароль превʼю (0.33.0): смуга задачі читає простір із `/api/task`, а не зі списку
+            out['publish_password'] = pw
     return out
 
 
