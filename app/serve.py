@@ -9553,6 +9553,131 @@ def open_module_client(mod, name):
         return None
 
 
+# ---------------------------------------------------------------------------------------------------
+# Роздача панелей інструментів модулів (M1, Task 3): `GET /api/module-ui/<простір>/<модуль>/<шлях>` і набір панелі
+# `GET /api/module-ui-kit/<імʼя>`. Панель — сторінка стороннього модуля в `<iframe sandbox>` оболонки: непрозорий origin, скрипти
+# без доступу до оболонки, мережа закрита (`connect-src 'none'`), а все спілкування — через `postMessage` мосту (`bridge.js`).
+# Віддаємо лише теку панелі якогось ІНСТРУМЕНТА модуля (префікс директорій його `panel`) і лише дозволені розширення — `server.py`,
+# `module.json` і решта теки недосяжні. Свій модуль — зі знімка довіри (`m.dir`), тож правка теки після довіри сторінок не
+# досягає. Маршрути стоять ДО `_take_task`, як `/api/module-client/`: заголовок задачі й реєстр на них не діють; усі відмови —
+# той самий 404 зі сталим тілом. Лише GET (HEAD, як і для module-client, окремо не обробляється).
+MODULE_UI_PREFIX = '/api/module-ui/'
+MODULE_UI_KIT_PREFIX = '/api/module-ui-kit/'
+MODULE_UI_TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
+                   '.png': 'image/png', '.json': 'application/json', '.woff2': 'font/woff2'}
+MODULE_UI_SEG_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}')
+MODULE_UI_HEADERS = (
+    ('Content-Security-Policy', "sandbox allow-scripts allow-forms; default-src 'self' 'unsafe-inline' data:; "
+                                "connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"),
+    ('X-Content-Type-Options', 'nosniff'),
+    ('Access-Control-Allow-Origin', '*'),
+    ('Referrer-Policy', 'no-referrer'),
+)
+MODULE_KIT_FILES = ('kit.css', 'bridge.js')
+MODULE_KIT_DIR = os.path.join(APP_DIR, 'module-kit')
+#: Підключення набору — одразу після `<!doctype …>` (чи на початок): панель отримує мост і стилі без жодного коду автора.
+KIT_TAGS = ('<link rel="stylesheet" href="/api/module-ui-kit/kit.css">'
+            '<script src="/api/module-ui-kit/bridge.js"></script>')
+_DOCTYPE_RE = re.compile(rb'\A(?:\xef\xbb\xbf)?\s*<!doctype[^>]*>', re.IGNORECASE)
+
+
+def module_ui_target(path):
+    """`(Module, [складові], вид)` для `path` (БЕЗ `?query`) виду `/api/module-ui/<простір>/<модуль>/<складова>/…` або `None`.
+    НІКОЛИ не кидає. Кожна складова розкодована суворо (`%ff` → відмова; `%2f`, `%5c`, `%00` усередині складової, порожня — відмова),
+    придатна за шаблонами (простір `SPACE_ID_RE` і є в реєстрі, модуль `ID_RE`, файлові складові `MODULE_UI_SEG_RE`: ні `.`/`..`,
+    ні прихованих). Файлових складових 2..6. Модуль — `deai_modules.ext_module` (справний, api 2, явно увімкнений, з
+    інструментами) у просторі з URL. Дозволено лише шлях у теці панелі якогось інструмента й розширення з `MODULE_UI_TYPES`;
+    вид — `'html'` чи `'asset'`."""
+    try:
+        if not path.startswith(MODULE_UI_PREFIX):
+            return None
+        parts = [unquote(p, errors='strict') for p in path[len(MODULE_UI_PREFIX):].split('/')]
+        if any(p == '' or '/' in p or '\\' in p or '\0' in p for p in parts) or not 4 <= len(parts) <= 8:
+            return None
+        sid, mid, segs = parts[0], parts[1], parts[2:]
+        if not spaces.SPACE_ID_RE.fullmatch(sid) or not deai_modules.ID_RE.fullmatch(mid):
+            return None
+        if not all(MODULE_UI_SEG_RE.fullmatch(p) for p in segs):
+            return None
+        ext = os.path.splitext(segs[-1])[1].lower()
+        if ext not in MODULE_UI_TYPES:
+            return None
+        sp = next((s for s in spaces.read_registry()['spaces'] if s['id'] == sid), None)
+        if sp is None:
+            return None
+        # як у `module_client_target`: маршрут до `_take_task`, а завантаження довіреного знімка виконує код модуля — у його просторі
+        with spaces.request_space(sp['id']):
+            mod = deai_modules.ext_module(sp, mid)
+        if mod is None:
+            return None
+        for t in mod.tools:
+            d = t['panel'].split('/')[:-1]
+            if len(segs) > len(d) and segs[:len(d)] == d:
+                return mod, segs, ('html' if ext == '.html' else 'asset')
+        return None
+    except Exception:  # noqa: BLE001 — статичний файл не розповідає, що саме зламалось
+        return None
+
+
+def open_module_ui(mod, segs):
+    """`(fd, fstat)` відкритого файла `segs` теки модуля `mod` або `None` (404). НЕ кидає. ОС з `dir_fd`: кожну теку шляху
+    відкрито `O_DIRECTORY|O_NOFOLLOW` відносно попередньої (тека-посилання — відмова), файл — `_published_open_file` відносно
+    останньої (звичайний файл, `nlink == 1`, `O_NOFOLLOW`); проміжні дескриптори закриваються. Без `dir_fd` (Windows) — запасний
+    `open_published_file` ПІСЛЯ перевірки, що кожна тека шляху — справжня тека, а не посилання. Власність дескриптора — викликачу."""
+    try:
+        if _PUBLISHED_DIRFD:
+            fds = []
+            try:
+                cur = _published_openat(mod.dir, _PUBLISHED_OPEN_DIR)
+                fds.append(cur)
+                for seg in segs[:-1]:
+                    if not _published_name_ok(seg):
+                        return None
+                    cur = _published_openat(seg, _PUBLISHED_OPEN_DIR, cur)
+                    fds.append(cur)
+                if not _published_name_ok(segs[-1]):
+                    return None
+                return _published_open_file(segs[-1], cur)
+            finally:
+                for fd in fds:
+                    os.close(fd)
+        walk = mod.dir
+        for seg in segs[:-1]:
+            walk = os.path.join(walk, seg)
+            if not stat.S_ISDIR(os.lstat(walk).st_mode):
+                return None
+        return open_published_file(os.path.join(mod.dir, *segs), _published_real_dir(mod.dir))
+    except OSError:
+        return None
+
+
+def open_module_kit(name):
+    """`(fd, fstat)` файла набору панелі `name` (рівно з `MODULE_KIT_FILES`) або `None`. НЕ кидає."""
+    if name not in MODULE_KIT_FILES:
+        return None
+    return open_module_ui(deai_modules.Module('kit', dir=MODULE_KIT_DIR), [name])
+
+
+def module_ui_html(opened):
+    """Тіло html-панелі з набором: читає відкритий дескриптор (≤ `MAX_PANEL_BYTES`, більше — `None`) і вставляє `KIT_TAGS`
+    після початкового `<!doctype …>` (BOM лишається першим), інакше — на початок (після BOM). Закриває дескриптор."""
+    fd, st = opened
+    try:
+        with os.fdopen(fd, 'rb') as f:
+            fd = None
+            if st.st_size > deai_modules.MAX_PANEL_BYTES:
+                return None
+            data = f.read(deai_modules.MAX_PANEL_BYTES + 1)
+    finally:
+        if fd is not None:
+            os.close(fd)
+    if len(data) > deai_modules.MAX_PANEL_BYTES:
+        return None
+    m = _DOCTYPE_RE.match(data)
+    at = m.end() if m else (3 if data.startswith(b'\xef\xbb\xbf') else 0)
+    return data[:at] + KIT_TAGS.encode('ascii') + data[at:]
+
+
 def trust_seam_warning():
     """Рядок для журналу старту, коли діє тестовий шов `DEAI_TRUST_CONFIRM` (довіра без системного вікна), інакше `None`."""
     v = module_trust.seam_value()
@@ -9565,7 +9690,7 @@ def make_server(port=0):
     handler = Handler
     # /it-assets/<it>/... — статика итераций текущей задачи
     class Routed(handler):
-        def _send_iter_file(self, target, extra_headers=(), utf8=False, opened=None):
+        def _send_iter_file(self, target, extra_headers=(), utf8=False, opened=None, ctype=None):
             # `extra_headers` — пари (імʼя, значення) на КОЖНУ відповідь цього файла, і на 304 теж (`/published`:
             # захисні заголовки сторінки в пісочниці; 304 без них лишив би кеш без захисту). `utf8` — текстовим
             # типам дописати `; charset=utf-8` (`/published`: сторінки збірка пише в UTF-8, а без `<meta charset>`
@@ -9615,12 +9740,12 @@ def make_server(port=0):
                     with open(target, 'rb') as f:
                         data = f.read()
                 self._send_iter_body(target, st, etag, data if stream is None else None, stream,
-                                     extra_headers, utf8)
+                                     extra_headers, utf8, ctype)
             finally:
                 if stream is not None:
                     stream.close()
 
-        def _send_iter_body(self, target, st, etag, data, stream, extra_headers, utf8):
+        def _send_iter_body(self, target, st, etag, data, stream, extra_headers, utf8, forced=None):
             """200 для `_send_iter_file`: заголовки й тіло — з пам'яті (`data`) або шматками зі `stream`."""
             self.send_response(200)
             if etag:
@@ -9629,10 +9754,10 @@ def make_server(port=0):
             # the browser without a JS content-type. guess_type covers
             # .js/.css/.json/.svg/.otf/.woff2 → multi-file builds (Angular)
             # render, not just single-file HTML mockups.
-            ctype = self.guess_type(target)
+            ctype = forced or self.guess_type(target)       # `forced` — точний тип від виклику (панелі модулів)
             if isinstance(ctype, tuple):  # py<3.11 returns (type, enc)
                 ctype = ctype[0]
-            if target.endswith('.js') or target.endswith('.mjs'):
+            if not forced and (target.endswith('.js') or target.endswith('.mjs')):
                 ctype = 'text/javascript'
             if utf8 and ctype and ctype.startswith('text/'):
                 ctype += '; charset=utf-8'
@@ -9692,6 +9817,72 @@ def make_server(port=0):
                     self.close_connection = True
                 else:
                     self._send_module_client_404()
+
+        def _send_module_ui_404(self):
+            """404 `/api/module-ui…`: СТАЛЕ тіло, `nosniff` і решта захисних заголовків — без шляху й причини."""
+            self.send_response(404)
+            for key, value in MODULE_UI_HEADERS:
+                self.send_header(key, value)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(MODULE_CLIENT_NOT_FOUND)))
+            self.end_headers()
+            self.wfile.write(MODULE_CLIENT_NOT_FOUND)
+
+        def _send_module_ui_file(self, opened, target, ctype):
+            """Віддати відкритий файл `target` з типом `ctype` і `MODULE_UI_HEADERS` (ETag/304 — `_send_iter_file`); обрив до початку
+            відповіді — 404, посеред — закрити зʼєднання."""
+            try:
+                self._send_iter_file(target, extra_headers=MODULE_UI_HEADERS, utf8=True, opened=opened, ctype=ctype)
+            except OSError:
+                if self._resp_started:
+                    self.close_connection = True
+                else:
+                    self._send_module_ui_404()
+
+        def _serve_module_ui(self):
+            """`GET /api/module-ui/<простір>/<модуль>/<шлях>` (`module_ui_target` → `open_module_ui`). html — з набором, без кешу;
+            решта — `_send_iter_file` з точним типом із `MODULE_UI_TYPES`."""
+            found = module_ui_target(self.path.partition('?')[0])
+            opened = open_module_ui(found[0], found[1]) if found else None
+            if opened is None:
+                self._send_module_ui_404()
+                return
+            mod, segs, kind = found
+            if kind != 'html':
+                self._send_module_ui_file(opened, os.path.join(mod.dir, *segs),
+                                          MODULE_UI_TYPES[os.path.splitext(segs[-1])[1].lower()])
+                return
+            try:
+                body = module_ui_html(opened)
+                if body is None:
+                    self._send_module_ui_404()
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(body)))
+                for key, value in MODULE_UI_HEADERS:
+                    self.send_header(key, value)
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                if self._resp_started:
+                    self.close_connection = True
+                else:
+                    self._send_module_ui_404()
+
+        def _serve_module_ui_kit(self):
+            """`GET /api/module-ui-kit/<імʼя>`: лише `MODULE_KIT_FILES` з `app/module-kit/`."""
+            try:
+                name = unquote(self.path.partition('?')[0][len(MODULE_UI_KIT_PREFIX):], errors='strict')
+            except UnicodeDecodeError:
+                name = None
+            opened = open_module_kit(name) if name else None
+            if opened is None:
+                self._send_module_ui_404()
+                return
+            self._send_module_ui_file(opened, os.path.join(MODULE_KIT_DIR, name),
+                                      'text/css' if name.endswith('.css') else 'text/javascript')
 
         def _serve_published(self):
             """`GET /published/…` (рішення — `published_target`; кожна відмова — `_send_published_404`).
@@ -9794,6 +9985,13 @@ def make_server(port=0):
             # (див. `MODULE_CLIENT_PREFIX`). Заголовок задачі й зіпсований реєстр на них не діють. Адреса — без `/t/<id>/`.
             if self.path.startswith(MODULE_CLIENT_PREFIX):
                 self._serve_module_client()
+                return
+            # І панелі інструментів модулів та їхній набір (див. `MODULE_UI_PREFIX`): теж ДО `_take_task`, простір бере URL.
+            if self.path.startswith(MODULE_UI_PREFIX):
+                self._serve_module_ui()
+                return
+            if self.path.startswith(MODULE_UI_KIT_PREFIX):
+                self._serve_module_ui_kit()
                 return
             # Задача запиту береться ТУТ, раз на запит: `super().do_GET()` нижче
             # вдруге її не бере (префікс уже знято з `self.path`).

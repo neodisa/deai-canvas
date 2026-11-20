@@ -1117,18 +1117,29 @@ def space_modules(space):
     return _normalize(_raw_modules(_load_space_json(path)))
 
 
+def _ext_modules(space):
+    """`[(id, Module)]` модулів, що дають інструменти чи дії: `status == 'ok'`, api 2, ЯВНО увімкнені (`enabled is True`). Єдине
+    джерело правди для `extensions` і `ext_module`. ⚠️ Може виконати код (завантаження каталогу)."""
+    explicit = space_modules(space)
+    return [(mid, m) for mid, m in catalog(space).items()
+            if m.status == 'ok' and m.api == 2 and explicit.get(mid, {}).get('enabled') is True]
+
+
+def ext_module(space, mid):
+    """`Module` з непорожніми `tools`, що проходить ті самі умови, що й `extensions` (справний, api 2, явно увімкнений), або `None`.
+    З нього роздаються панелі (`/api/module-ui/…`); незнайомий чи вимкнений модуль — `None`."""
+    return next((m for i, m in _ext_modules(space) if i == mid and m.tools), None)
+
+
 def extensions(space):
     """`{'tools': [...], 'actions': [...]}` для `GET /api/module-ext`: лише модулі каталогу простору зі `status == 'ok'`, api 2 і
     ЯВНО увімкнені (`enabled is True` у `space.json`). Порядок — за id модуля, далі як у маніфесті. Модуль у стані `changed`
     лишається в списку: його код і панелі — з довіреного знімка, а не з нової теки; недовірений/`refused` без знімка — `error`/
     `untrusted`, тож сюди не потрапляє. Клавіша, заявлена двома інструментами (між УСІМА переліченими модулями), — `None` в обох.
     ⚠️ Може виконати код (завантаження каталогу) — НЕ під `WRITE_LOCK`."""
-    explicit = space_modules(space)
     sid = _space_id(space)
     tools, actions = [], []
-    for mid, m in catalog(space).items():
-        if m.status != 'ok' or m.api != 2 or explicit.get(mid, {}).get('enabled') is not True:
-            continue
+    for mid, m in _ext_modules(space):
         for t in m.tools:
             tools.append({'module': mid, 'module_name': m.name, 'id': t['id'], 'label': t['label'], 'icon': t['icon'],
                           'key': t['key'],

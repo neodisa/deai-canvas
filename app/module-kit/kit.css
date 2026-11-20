@@ -1,0 +1,77 @@
+/* Panel kit for module tools (inserted into every panel page by the server).
+   Values mirror the shell rules in app/styles.css (.ctl, .fb textarea); colors come from shell tokens that the bridge
+   sends to the panel as custom properties, with a fallback for when the panel is opened on its own.
+
+   Classes for module authors:
+     .dk-btn           button (add .dk-btn--primary for the main action)
+     .dk-field         input / textarea / select
+     .dk-list          vertical list of .dk-row items
+     .dk-row           one list row (flex, hairline divider)
+     .dk-muted         secondary text
+     .dk-empty         empty-state message */
+html, body { margin: 0; }
+body {
+  padding: 12px;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--hi, #f2f8f4);
+  background: var(--s1, #2c3430);
+}
+
+.dk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--h-ctl, 32px);
+  padding: 0 9px;
+  border: 1px solid var(--line2, #4a534d);
+  border-radius: var(--r, 8px);
+  background: none;
+  color: var(--mid, #d3d9d5);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dk-btn:hover { background: var(--s3, #3c453f); color: var(--hi, #f2f8f4); }
+.dk-btn:focus-visible { outline: 2px solid var(--sel, #e6ede9); outline-offset: 1px; }
+.dk-btn:disabled { cursor: default; opacity: .55; }
+.dk-btn:disabled:hover { background: none; color: var(--mid, #d3d9d5); }
+.dk-btn--primary {
+  background: var(--sel, #e6ede9);
+  border-color: var(--sel, #e6ede9);
+  color: var(--on-sel, #1f2723);
+  font-weight: 500;
+}
+.dk-btn--primary:hover {
+  background: var(--sel-hover, #f3f8f5);
+  border-color: var(--sel-hover, #f3f8f5);
+  color: var(--on-sel, #1f2723);
+}
+
+.dk-field {
+  font: inherit;
+  font-size: 14px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line2, #4a534d);
+  border-radius: var(--r-sm, 6px);
+  background: var(--s2, #333b37);
+  color: var(--hi, #f2f8f4);
+}
+.dk-field:focus-visible { outline: 2px solid var(--sel, #e6ede9); outline-offset: 1px; }
+.dk-field[aria-invalid="true"] { border-color: var(--bad, #f37373); }
+textarea.dk-field { resize: vertical; }
+
+.dk-list { list-style: none; margin: 0; padding: 0; }
+.dk-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line, #3c453f);
+}
+.dk-row:last-child { border-bottom: 0; }
+
+.dk-muted { color: var(--dim, #a4aba7); }
+.dk-empty { padding: 24px 0; text-align: center; color: var(--dim, #a4aba7); }
