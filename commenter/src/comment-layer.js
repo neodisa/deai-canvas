@@ -48,10 +48,19 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
      обривав збереження коментаря в обох режимах, і кнопка «Comment» не робила
      нічого (живий огляд власника 29.09.2026). Канонічне пояснення про діалоги —
      `design-canvas/app/ask.js`. */
-  function getUser(preset, fallback) {
+  function getUser(preset, fallback, host) {
     if (preset && preset.name) return preset;
     let name = null;
     try { name = localStorage.getItem('comment-layer:user'); } catch (e) { name = null; }
+    /* Хост, що сам питає імʼя (`host.userName`, 0.32.0 — публічне превʼю): `prompt()` НЕ викликається НІКОЛИ — ні тут, ні
+       коли хост імені не дав. Порожнє імʼя — «Anonymous» БЕЗ запису в localStorage, щоб оболонка могла спитати ще раз. */
+    if (!name && host && typeof host.userName === 'function') {
+      try { name = String(host.userName() || '').trim(); } catch (e) { name = ''; }
+      if (!name && fallback && fallback.name) name = String(fallback.name).trim();
+      if (!name) return { name: 'Anonymous' };
+      try { localStorage.setItem('comment-layer:user', name); } catch (e) { /* приватне вікно — імʼя на сесію */ }
+      return { name };
+    }
     if (!name && fallback && fallback.name) name = String(fallback.name).trim();
     if (!name) {
       try { name = (prompt('Your name (for comments):', '') || '').trim(); } catch (e) { name = ''; }
@@ -1160,7 +1169,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       };
     },
     _addCanvasComment(t, text, aud) {
-      const user = getUser(this.user, this.opts && this.opts.defaultUser);
+      const user = getUser(this.user, this.opts && this.opts.defaultUser, this._hostOpts);
       const m = t.meta || {};
       // Та сама форма, що в DOM-режимі (`buildContextBundle`) — щоб `inbox.py` і
       // живий вид не розрізняли, звідки пін. HTML дописує `enrich`.
@@ -1175,6 +1184,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         bornV: this._version(), ts: nowStamp(), _pending: true,
         ...(aud ? { _aud: aud } : {}),
       });
+      this._emit('onAdd', id);
       this._backupNow(); this._render();
       this._finishCanvasComment(id, t);
     },
@@ -1232,7 +1242,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     },
 
     _addComment(el, text, sel, extra, aud) {
-      const user = getUser(this.user, this.opts && this.opts.defaultUser);
+      const user = getUser(this.user, this.opts && this.opts.defaultUser, this._hostOpts);
       const ctx = buildContextBundle({
         outerHTML: el.outerHTML,
         text: el.textContent,
@@ -1262,8 +1272,9 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       // Пин показуємо одразу (оптимістично) + негайний бекап; РЕАЛЬНИЙ persist
       // (=INSERT=тригер Teams) — у _finishComment, ПІСЛЯ захвату+заливки скриншота,
       // щоб картка несла meta.shotUrl. Панель не форсуємо (можна коментувати закрито).
-      this._backupNow(); this._relocate(); this._render();
       const newId = this.comments[this.comments.length - 1].id;
+      this._emit('onAdd', newId);   // ДО першого `onChange`: хост запише авторство раніше, ніж побачить картку
+      this._backupNow(); this._relocate(); this._render();
       // Захват — завжди ELEMENT-render (faithful across pages): для element/text це
       // елемент, для area — якір під областю, для multi — спільний предок (extra.shotEl).
       const shotTarget = (extra && extra.shotEl && extra.shotEl.nodeType === 1) ? extra.shotEl : el;
@@ -1689,7 +1700,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const src = this.comments.find((x) => x.id === id);
       if (!src) return;
       const copy = {
-        id: genId(), author: getUser(this.user, this.opts && this.opts.defaultUser).name, text: src.text, status: 'open',
+        id: genId(), author: getUser(this.user, this.opts && this.opts.defaultUser, this._hostOpts).name, text: src.text, status: 'open',
         fp: src.fp, htmlSnapshot: src.htmlSnapshot,
         meta: Object.assign({}, src.meta, {
           iteration: this._curIter(), version: this.appVersion,
@@ -1700,6 +1711,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         ...(src._aud ? { _aud: src._aud } : {}),
       };
       this.comments.push(copy);
+      this._emit('onAdd', copy.id);
       this._persist(); this._relocate(); this._render(); this._placePins();
     },
     // Stable display number, assigned once at creation and persisted in meta.seq
