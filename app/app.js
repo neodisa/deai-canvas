@@ -2071,9 +2071,12 @@ async function loadModExt() {
     paintIsland();
     return;
   }
+  const prev = JSON.stringify(modExtNow());
   modExt = { spaceId, tools: Array.isArray(r?.tools) ? r.tools : [], actions: Array.isArray(r?.actions) ? r.actions : [] };
   if (modOpen && !modExt.tools.some((x) => modToolKey(x) === modOpen.key)) closeModTool();
-  paintIsland();
+  /* Список змінився — перемальовуємо смугу, а не лише острівець: у дропдауні ітерації з'являються дії модулів. Циклу нема:
+     `paintBar` → `paintIsland`/`modSync` не кличуть `loadModExt` (ключ `modExtKey` виставлено вище, до запиту). */
+  if (JSON.stringify(modExtNow()) !== prev) paintBar(); else paintIsland();
 }
 
 /** Дії модулів, що зараз виконуються (за ключем «модуль/дія»): повторний виклик, поки перший летить, ігноруємо. */
@@ -2097,7 +2100,7 @@ async function runModuleAction(key, from, taskId, iterationId) {
       toast(t('modActFail', label, (typeof r?.text === 'string' && r.text) || '—'));
     }
   } catch (e) {
-    toast(t('modActFail', label, e?.message || String(e?.code ?? '')));
+    toast(t('modActFail', label, e?.message || String(e?.code ?? '') || '—'));
   } finally {
     modActBusy.delete(key);
   }

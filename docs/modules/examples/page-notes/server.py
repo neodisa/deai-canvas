@@ -1,27 +1,27 @@
-"""Приклад модуля Deai Canvas: «Нотатки сторінок».
+"""Example Deai Canvas module: «Page notes» (Нотатки сторінок).
 
-Показує все, що дає api 2: функції `tool_*` для панелі інструмента й функцію `action_*` для дії в ⌘K та меню задачі.
-Сховище — один файл `notes.json` у `ctx["cache_dir"]`: `{id задачі: {id сторінки: текст}}`.
-Лише стандартна бібліотека: модуль виконується ядром, а не імпортується.
+Shows what api 2 gives: `tool_*` functions for the panel of a tool and an `action_*` function for an action in ⌘K and the
+task menu. Storage is one file, `notes.json`, in `ctx["cache_dir"]`: `{task id: {page id: text}}`.
+Standard library only: the core executes the module, it is not imported.
 """
 import json
 import os
 import tempfile
 import threading
 
-MAX_TEXT = 20000     # символів у одній нотатці
-MAX_ID = 200         # довжина id задачі чи сторінки
-_LOCK = threading.Lock()   # `tool_save` читає й пише файл: два виклики одночасно не мають губити один одного
+MAX_TEXT = 20000     # characters in one note
+MAX_ID = 200         # length of a task or page id
+_LOCK = threading.Lock()   # `tool_save` reads and writes the file: two simultaneous calls must not lose each other
 
 
 def _file(ctx):
-    """Шлях `notes.json`. Теку ядро не створює — це робить модуль (права лише для власника)."""
+    """Path of `notes.json`. The core does not create the folder — the module does (owner-only access)."""
     os.makedirs(ctx["cache_dir"], mode=0o700, exist_ok=True)
     return os.path.join(ctx["cache_dir"], "notes.json")
 
 
 def _read(path):
-    """Усі нотатки. Нема файла чи він зіпсований — порожньо (приклад не лікує зіпсований файл)."""
+    """All notes. No file or a corrupt one means empty (the example does not repair a corrupt file)."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -31,7 +31,7 @@ def _read(path):
 
 
 def _write(path, data):
-    """Атомарно: тимчасовий файл у тій самій теці, потім `os.replace` — читач не побачить половину запису."""
+    """Atomically: a temporary file in the same folder, then `os.replace` — a reader never sees half a write."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".notes-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -46,8 +46,8 @@ def _write(path, data):
 
 
 def _ids(ctx, args):
-    """`(task, page)` з аргументів панелі. Аргументи — чужий ввід: перевіряємо типи й довжину.
-    id лишаються ключами словника й НІКОЛИ не потрапляють у шлях до файла."""
+    """`(task, page)` from the panel's arguments. Arguments are foreign input: check types and length.
+    The ids stay dictionary keys and NEVER become part of a file path."""
     if not isinstance(args, dict):
         raise ctx["ModuleError"]("bad-args", "args must be an object")
     task, page = args.get("task"), args.get("page")
@@ -58,7 +58,7 @@ def _ids(ctx, args):
 
 
 def check(ctx):
-    """Перевірка здоровʼя модуля: чи можна створити теку кешу."""
+    """Health check of the module: can the cache folder be created."""
     try:
         os.makedirs(ctx["cache_dir"], mode=0o700, exist_ok=True)
     except OSError as e:
@@ -67,7 +67,7 @@ def check(ctx):
 
 
 def tool_load(ctx, args):
-    """Панель: `deai.call("tool_load", {task, page})` → `{"text": "…"}`."""
+    """Panel: `deai.call("tool_load", {task, page})` -> `{"text": "…"}`."""
     task, page = _ids(ctx, args)
     notes = _read(_file(ctx))
     by_page = notes.get(task)
@@ -76,7 +76,7 @@ def tool_load(ctx, args):
 
 
 def tool_save(ctx, args):
-    """Панель: `deai.call("tool_save", {task, page, text})`. Порожній текст видаляє нотатку."""
+    """Panel: `deai.call("tool_save", {task, page, text})`. An empty text deletes the note."""
     task, page = _ids(ctx, args)
     text = args.get("text")
     if not isinstance(text, str) or len(text) > MAX_TEXT:
@@ -98,8 +98,8 @@ def tool_save(ctx, args):
 
 
 def action_summary(ctx, target):
-    """Дія «Нотатки задачі» (⌘K, меню задачі): тост із кількістю нотаток задачі.
-    `target = {"from", "task": {"id", "name", "dir"}, "iteration": …}`; результат — `{"ok", "text"?, "url"?}`."""
+    """Action «Нотатки задачі» (⌘K, task menu): a toast with the number of the task's notes.
+    `target = {"from", "task": {"id", "name", "dir"}, "iteration": …}`; the result is `{"ok", "text"?, "url"?}`."""
     by_page = _read(_file(ctx)).get(target["task"]["id"])
     n = sum(1 for v in by_page.values() if isinstance(v, str) and v.strip()) if isinstance(by_page, dict) else 0
     return {"ok": True, "text": f"Нотаток: {n}"}

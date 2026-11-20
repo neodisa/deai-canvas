@@ -90,7 +90,7 @@ async function trustAndEnable(url) {
   assert.equal(en.ok, true, `module-enable: ${JSON.stringify(en)}`);
 }
 
-async function boot(t, { enable = true } = {}) {
+async function boot(t, { enable = true, beforeGoto = null } = {}) {
   const X = taskFixture({ html: MOCKUP });
   const server = await startServer(null, { portBase: PORT_BASE, env: { DEAI_TRUST_CONFIRM: "yes" },
     spaces: [{ name: "Studio", id: "studio", color: "space-2", tasks: { t1: { dir: X.dir, title: "Задача" } } }] });
@@ -102,6 +102,7 @@ async function boot(t, { enable = true } = {}) {
   const host = new URL(server.url).host;
   await context.route((u) => u.host !== host && !["data:", "blob:", "about:"].includes(u.protocol), (r) => r.abort("blockedbyclient"));
   const page = await context.newPage();
+  if (beforeGoto) await beforeGoto(page);
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   await page.goto(`${server.url}/app/`);
@@ -338,5 +339,19 @@ test("D: дії модулів — ⌘K, меню картки задачі, д�
   await page.locator('#th-menu [data-th="modact"]').click();
   await waitToast(page, /pong task/);
   assert.equal(await page.evaluate(() => window.__opened.length), 1, "«Відкрити» без кліку не мало б викликатись");
+  assert.deepEqual(s.errors, []);
+});
+
+test("E: список модулів дочитався, поки дропдаун ітерації вже відкрито — дія зʼявляється в ньому сама (смуга перемальована, не лише острівець)", async (t) => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const s = await boot(t, { beforeGoto: (pg) => pg.route("**/api/module-ext*", async (r) => { await gate; await r.continue(); }) });
+  const { page } = s;
+  await page.click('[data-dd="iter"]');
+  await page.waitForSelector(".dd-item");
+  assert.equal(await page.locator('.dd-item[data-act="modact"]').count(), 0, "дія зʼявилась до відповіді /api/module-ext");
+  release();
+  await page.waitForSelector(BTN, { timeout: 15000 });
+  await page.waitForSelector('.dd-item[data-act="modact"]', { timeout: 5000 });
   assert.deepEqual(s.errors, []);
 });

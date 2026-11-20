@@ -178,3 +178,17 @@ test("actionItems: порожнє й чуже", () => {
   assert.deepEqual(actionItems({ actions: "x" }, "palette"), []);
   assert.deepEqual(actionItems({ actions: [{ module: "m", id: "i", label: "L" }] }, "palette"), []);
 });
+
+/* Проводка в app.js (функції не виносяться з модуля оболонки — перевіряємо джерело). */
+import { readFileSync } from "node:fs";
+const APP = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
+const fnSrc = (name) => { const i = APP.indexOf(`function ${name}(`); assert.ok(i > 0, name); return APP.slice(i, APP.indexOf("\n}\n", i)); };
+
+test("loadModExt: змінений список → paintBar (дропдаун ітерації); сам loadModExt не кличеться з paintBar/modSync/paintIsland", () => {
+  assert.match(fnSrc("loadModExt").replace("async ", ""), /JSON\.stringify\(modExtNow\(\)\) !== prev\) paintBar\(\); else paintIsland\(\);/);
+  for (const f of ["paintBar", "modSync", "paintIsland"]) assert.equal(/loadModExt\(/.test(fnSrc(f)), false, `${f} кличе loadModExt — цикл`);
+});
+
+test("runModuleAction: порожній текст помилки → «—», як у гілці збою", () => {
+  assert.match(fnSrc("runModuleAction"), /catch \(e\) \{\s*toast\(t\('modActFail', label, e\?\.message \|\| String\(e\?\.code \?\? ''\) \|\| '—'\)\);/);
+});

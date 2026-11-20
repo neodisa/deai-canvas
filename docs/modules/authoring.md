@@ -494,14 +494,15 @@ not against a local process with your rights.
 Create the folder in a test space, open Settings → Modules, trust it, connect it and press «Check»: the verdict of your
 `check` is shown on the card. After every edit, trust again — that is the point.
 
-## 7. Інструменти й дії (api 2)
+## 7. Tools and actions (`api: 2`)
 
-Окрім ролі, модуль із `"api": 2` може додати до Deai Canvas **інструменти** (кнопка в острівці, право панель із власним
-HTML модуля) і **дії** (пункти в ⌘K та в меню «⋯» задачі чи ітерації). Усе це видно лише в робочому канвасі, у режимі
-«Макет»; у публічному превʼю й в «Огляді» цього нема. Невеликий робочий приклад — `docs/modules/examples/page-notes/`
-(«Нотатки сторінок»): скопіюйте теку в `<простір>/modules/page-notes/`, довірте, увімкніть. Він же — фікстура живого тесту.
+Besides a role, a module with `"api": 2` can add **tools** (a button in the island that opens a right-hand panel with the
+module's own HTML) and **actions** (items in ⌘K and in the «⋯» menus of a task or an iteration). They show only in the
+working canvas, in «Layout» mode — not in a published preview and not in the Overview. A small working example is
+`docs/modules/examples/page-notes/` («Page notes»): copy the folder to `<space>/modules/page-notes/`, trust it, enable
+it. It is also the fixture of the live test of this contract.
 
-### Маніфест: `tools` і `actions`
+### The manifest: `tools` and `actions`
 
 ```json
 {"api": 2, "id": "page-notes", "name": "Нотатки сторінок", "version": "1.0.0", "roles": [],
@@ -509,127 +510,133 @@ HTML модуля) і **дії** (пункти в ⌘K та в меню «⋯» 
  "actions": [{"id": "summary", "label": "Нотатки задачі", "where": ["palette", "task"]}]}
 ```
 
-**`tools`** — список із 1 до **4** обʼєктів (порожній список чи більше 4 — відмова). Поля:
+**`tools`** — a list of 1 to **4** objects (an empty list or more than 4 is refused). Fields:
 
-| поле | правило |
+| field | rule |
 |---|---|
-| `id` | `[a-z0-9][a-z0-9-]{0,39}`, унікальний у модулі |
-| `label` | непорожній рядок, до **40** символів (текст кнопки, підказки й пункту ⌘K) |
-| `icon` | імʼя з набору іконок ядра (`app/icons.js`); невідоме — відмова. Свого SVG поки нема |
-| `panel` | відносний шлях до `.html` з **2–4 сегментів** (панель завжди в підтеці, не поряд із `server.py`); файл — звичайний, до **256 КіБ**; кожен сегмент `[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}` (без прихованих і `..`) |
-| `key` | необовʼязкова: одна ASCII-літера. Літери ядра **C, I, H, M, P** зайняті; дубль літери між двома інструментами — літери нема в обох (лишається ⌘K) |
-| `frame` | **не підтримується**: маніфест із цим ключем — відмова `tools[i].frame: not supported yet` (скрипт у макеті — див. «Межі») |
+| `id` | `[a-z0-9][a-z0-9-]{0,39}`, unique in the module |
+| `label` | a non-empty string of at most **40** characters (the text of the button, its tooltip and the ⌘K item) |
+| `icon` | a name from the core's icon set (`app/icons.js`); an unknown name is refused. Your own SVG is not supported yet |
+| `panel` | a relative path to an `.html` file of **2 to 4 segments** (the panel always lives in a subfolder, not next to `server.py`); a regular file of at most **256 KiB**; each segment `[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}` (no hidden names, no `..`) |
+| `key` | optional: one ASCII letter. The core's letters **C, I, H, M, P** are taken; if two tools claim the same letter, neither gets it (⌘K remains) |
+| `frame` | **not supported**: a manifest with this key is refused with `tools[i].frame: not supported yet` (a script inside the mockup — see section 8) |
 
-Будь-який інший ключ — відмова (`unknown key`). У острівці — вбудовані інструменти, потім до **3** інструментів модулів (за
-порядком модулів простору); решта — лише ⌘K і клавіша.
+Any other key is refused (`unknown key`). The island shows the built-in tools first, then up to **3** tools of modules (in
+the order of the space's modules); the rest are reachable through ⌘K and the key only.
 
-**`actions`** — список із 1 до **8** обʼєктів: `id` (як вище), `label` (до **60** символів), `where` — непорожній список без
-повторів зі значень `palette` (⌘K), `task` (меню «⋯» картки задачі), `iteration` (дропдаун ітерації), необовʼязковий
-`timeout_s` — ціле 1–150 (типово 15). Інший ключ чи значення — відмова.
+**`actions`** — a list of 1 to **8** objects: `id` (as above), `label` (at most **60** characters), `where` — a non-empty
+list without repeats of `palette` (⌘K), `task` (the «⋯» menu of a task card), `iteration` (the iteration dropdown), and an
+optional `timeout_s`, an integer from 1 to 150 (default 15). Any other key or value is refused.
 
-Відмови маніфесту виглядають як `tools[0].icon: unknown icon 'nope'` чи `tools: requires api 2` (для `api: 1` ключі `tools` і
-`actions` — відмова); картка модуля в «Налаштуваннях» показує причину, і нічого з модуля не працює. `roles` для модуля тільки
-з інструментами — `"roles": []`: ключа не можна опустити.
+A refusal reads like `tools[0].icon: unknown icon 'nope'` or `tools: requires api 2` (with `api: 1` the keys `tools` and
+`actions` are refused); the module's card in Settings shows the reason and nothing of the module runs. A module with only
+tools and actions has `"roles": []` — the key cannot be left out.
 
-### Панель інструмента
+### The tool panel
 
-Панель — це HTML модуля в `<iframe sandbox="allow-scripts allow-forms">` **без** `allow-same-origin`: у неї непрозоре
-походження.
+The panel is the module's HTML in an `<iframe sandbox="allow-scripts allow-forms">` **without** `allow-same-origin`: it
+has an opaque origin.
 
-* Немає cookie, `localStorage` і сховищ канваса, немає доступу до `/api/*` і до самої оболонки.
-* Мережа закрита політикою вмісту (`connect-src 'none'`, також `frame-src`, `form-action`, `object-src`): `fetch` і
-  `XMLHttpRequest` відхиляються. Усе, що потребує мережі чи секретів, робить `server.py` модуля, а панель звертається до
-  нього через `deai.call`.
-* Сервер віддає лише файли з **теки панелі** (тека з шляху `panel`: для `panel/index.html` це `panel/`) і лише з
-  розширеннями `.html`, `.js`, `.css`, `.svg`, `.png`, `.json`, `.woff2`; `server.py`, `module.json` та решта теки недосяжні.
-  Скрипти й стилі можна підʼєднувати відносними шляхами (`<script src="notes.js">`); вбудовані (`inline`) теж дозволені.
-  Файли беруться зі знімка довіри, не з живої теки.
-* Ядро саме додає до кожної сторінки панелі `kit.css` (класи `dk-*`) і `bridge.js` (`window.deai`) — підключати нічого не
-  треба. Якщо панель перейде на іншу адресу чи завантажить іншу сторінку, інструмент закривається.
-* Права панель одна: коментарі, інспектор і панель інструмента витісняють одне одного. Закриття — «×», `deai.close()`,
-  повторна клавіша чи вихід з «Макета».
+* No cookies, no `localStorage` or other storage of the canvas, no access to `/api/*` or to the shell itself.
+* The network is closed by the content policy (`connect-src 'none'`, also `frame-src`, `form-action`, `object-src`):
+  `fetch` and `XMLHttpRequest` are rejected. Anything that needs the network or secrets is done by the module's
+  `server.py`; the panel reaches it through `deai.call`.
+* The server serves only files from the **panel's folder** (the folder of the `panel` path: `panel/` for
+  `panel/index.html`) and only with the extensions `.html`, `.js`, `.css`, `.svg`, `.png`, `.json`, `.woff2`; `server.py`,
+  `module.json` and the rest of the folder are unreachable. Link scripts and styles with relative paths
+  (`<script src="notes.js">`); inline ones are allowed too. Files come from the trusted snapshot, not from the live folder.
+* The core adds `kit.css` (the `dk-*` classes) and `bridge.js` (`window.deai`) to every panel page itself — there is
+  nothing to include. If the panel navigates elsewhere or loads another page, the tool is closed.
+* There is one right-hand panel: comments, the inspector and a tool panel push each other out. A tool is closed by «×»,
+  `deai.close()`, the same key again, or leaving «Layout».
 
-**`window.deai`** (міст через `postMessage`; відповіді приймаються лише від оболонки):
+**`window.deai`** (a bridge over `postMessage`; replies are accepted only from the shell):
 
-| виклик | що дає |
+| call | what it gives |
 |---|---|
-| `await deai.ready` | перший `init`: `{context, theme, vars}` |
-| `deai.hello()` | рукостискання (`bridge.js` робить його сам) |
+| `await deai.ready` | the first `init`: `{context, theme, vars}` |
+| `deai.hello()` | the handshake (`bridge.js` does it itself) |
 | `deai.context()` | `{space: {id, name}, task: {id, name}, iteration: {id, name} \| null, page: {id, title} \| null, lang, theme}` |
-| `deai.selection()` | елемент, вибраний в інспекторі на поточній сторінці: `{selector, tag, styles}` чи `null` |
-| `deai.call(fn, args)` | функція `tool_*` модуля (нижче); повертає її результат |
-| `deai.toast(text)` | тост оболонки «Назва інструмента: текст» (до 200 символів) |
-| `deai.close()` | закрити панель |
-| `deai.on(event, fn)` | підписка; повертає функцію відписки |
+| `deai.selection()` | the element selected in the inspector on the current page: `{selector, tag, styles}` or `null` |
+| `deai.call(fn, args)` | a `tool_*` function of the module (below); resolves with its result |
+| `deai.toast(text)` | a shell toast «Tool name: text» (at most 200 characters) |
+| `deai.close()` | close the panel |
+| `deai.on(event, fn)` | subscribe; returns an unsubscribe function |
 
-Події: `init` (разом із `ready`), `context` (змінилась задача, ітерація чи сторінка — `data` як `deai.context()`), `theme`
-(`{theme, vars}`: змінилась тема чи колір простору), `close` (панель зараз закриють). Вибір в інспекторі подією не
-приходить — читайте `deai.selection()`, коли потрібно.
+Events: `init` (together with `ready`), `context` (the task, iteration or page changed — `data` as in `deai.context()`),
+`theme` (`{theme, vars}`: the theme or the space colour changed), `close` (the panel is about to be closed). A change of
+the inspector selection is not an event — read `deai.selection()` when you need it.
 
-Помилка проміса — `Error` із `code`: `too-big` (повідомлення більше **64 КіБ**), `busy` (понад **4** одночасні `call` з панелі),
-`timeout` (оболонка не відповіла за **60 с**; відкладений запит тоді знімається), `unknown-method`, `bad-message`,
-`bad-args`; для виклику `call` — ще коди сервера (`module-error`, `check-timeout`, `module-busy`, `unknown-function`,
-`unknown-module`, `body-too-large`). `call`, надісланий до закриття панелі, **виконується**, але його результат
-відкидається.
+A rejected promise is an `Error` with a `code`: `too-big` (a message over **64 KiB**), `busy` (more than **4** concurrent
+`call`s from one panel), `timeout` (the shell did not answer in **60 s**; the pending request is then dropped),
+`unknown-method`, `bad-message`, `bad-args`; for `call` also the codes of the server (`module-error`, `check-timeout`,
+`module-busy`, `unknown-function`, `unknown-module`, `body-too-large`). A `call` sent before the panel was closed **still
+runs**, but its result is dropped.
 
-**Стилі.** `kit.css` дає: `dk-btn` (+ `dk-btn--primary`), `dk-field` (поле, textarea, select), `dk-list` і `dk-row`,
-`dk-muted`, `dk-empty`. Тема й кольори оболонки приходять у `init` і `theme`: міст сам ставить `data-theme` і CSS-змінні
-(`--s1`, `--s2`, `--s3`, `--line`, `--line2`, `--hi`, `--mid`, `--dim`, `--sel`, `--sel-hover`, `--on-sel`, `--bad`, `--r`,
-`--r-sm`, `--h-ctl`) на `<html>`; свої стилі — можна, краще на цих змінних.
+**Styles.** `kit.css` gives `dk-btn` (+ `dk-btn--primary`), `dk-field` (input, textarea, select), `dk-list` and `dk-row`,
+`dk-muted`, `dk-empty`. The theme and colours of the shell arrive in `init` and `theme`: the bridge sets `data-theme` and
+the CSS variables (`--s1`, `--s2`, `--s3`, `--line`, `--line2`, `--hi`, `--mid`, `--dim`, `--sel`, `--sel-hover`,
+`--on-sel`, `--bad`, `--r`, `--r-sm`, `--h-ctl`) on `<html>`. Your own styles are fine, preferably built on these variables.
 
-### Функції `server.py` для інструментів і дій
+### The functions of `server.py` for tools and actions
 
-Модуль із `tools`/`actions` має `check(ctx)` як і будь-який; решта — нижче. `ctx` той самий, що в ролей (розділ 3), зокрема
-`ctx["cache_dir"]` для файлів модуля й `ctx["ModuleError"]`.
+A module with `tools` or `actions` has `check(ctx)` like any other; the rest is below. `ctx` is the same as for roles
+(section 3), including `ctx["cache_dir"]` for the module's files and `ctx["ModuleError"]`.
 
-* **`tool_<імʼя>(ctx, args)`** — панель кличе `deai.call("tool_<імʼя>", args)`. Ядро пропускає лише верхньорівневі функції за
-  шаблоном `tool_[a-z0-9_]{1,40}`: `check`, `action_*`, функції ролей і службові імена недосяжні з панелі. Будь-яка з
-  `tool_*` доступна з будь-якої панелі цього ж модуля; `args` — те, що передала панель (може бути `None`). Результат —
-  будь-який JSON до **256 КіБ** (інакше `module-error`: `result is not JSON` чи `result is too big`). Тайм-аут —
-  **15 с** (`check-timeout`). Одночасно на модуль — не більше **4** викликів `tool_*`/`action_*` (інакше `module-busy`, 429);
-  потік, що пережив тайм-аут, теж рахується, доки не завершиться. Код помилки, якого ядро не знає, дійде як `module-error`.
-  ⚠️ Результат інструмента **не очищується** від секретів самого модуля: не повертайте панелі секрети.
-* **`action_<id>(ctx, target)`** — обовʼязкова для кожної дії з маніфесту: немає такої функції — модуль зламаний (`server.py: no callable action_…()`). `id` дії з дефісами замінюється на підкреслення (`my-action` → `action_my_action`). `target`:
-  `{"from": "palette" | "task" | "iteration", "task": {"id", "name", "dir"}, "iteration": {"id", "name"} | None}` — `dir` —
-  абсолютний шлях теки задачі, `iteration` — лише коли дію викликано з дропдауна ітерації. Результат —
-  `{"ok": bool, "text"?: str, "url"?: str}`; `ok` лише справжній `bool`, інакше `module-error`. Ядро нормалізує: `text` — без
-  керівних і невидимих символів, до **300**; `url` — лише `http(s)://` до **2048** символів, з хостом, без пробілів, невидимих
-  символів, `\` і `user@` (непридатна адреса мовчки відкидається); решта ключів відкидається. Оболонка показує тост: текст
-  відповіді (або «Готово»), для `ok: false` — «Назва дії: текст»; за наявності `url` у тості кнопка «Відкрити». Тайм-аут —
-  `timeout_s` дії або **15 с**; повторний запуск тієї ж дії, поки перший іще йде, ігнорується.
-* Тіло запиту `POST /api/module-tool` і `/api/module-action` — не більше **64 КіБ**: більше відмовляється `413` **без читання
-  тіла**, тож великий `fetch` може постати як мережева помилка. Передавайте з панелі короткі аргументи.
+* **`tool_<name>(ctx, args)`** — the panel calls `deai.call("tool_<name>", args)`. The core lets through only top-level
+  functions matching `tool_[a-z0-9_]{1,40}`: `check`, `action_*`, the functions of roles and any other names are
+  unreachable from a panel. Any `tool_*` function is available to any panel of the same module; `args` is what the panel
+  passed (it may be `None`). The result is any JSON up to **256 KiB** (otherwise `module-error`: `result is not JSON` or
+  `result is too big`). The timeout is **15 s** (`check-timeout`). At most **4** calls of `tool_*`/`action_*` of one module
+  run at once (otherwise `module-busy`, 429); a thread that outlived its timeout still counts until it finishes. A code of
+  your own that the core does not know reaches the panel as `module-error`. ⚠️ The result of a tool is **not** scrubbed of
+  the module's own secrets: never return secrets to a panel.
+* **`action_<id>(ctx, target)`** — required for every action of the manifest: without it the module is broken
+  (`server.py: no callable action_…()`). Hyphens of the action `id` become underscores (`my-action` → `action_my_action`).
+  `target` is `{"from": "palette" | "task" | "iteration", "task": {"id", "name", "dir"}, "iteration": {"id", "name"} | None}`;
+  `dir` is the absolute path of the task folder, `iteration` is set only when the action was called from the iteration
+  dropdown. The result is `{"ok": bool, "text"?: str, "url"?: str}`; `ok` must be a real `bool`, otherwise `module-error`.
+  The core normalizes it: `text` loses control and invisible characters and is cut to **300**; `url` must be `http(s)://`,
+  at most **2048** characters, with a host, without spaces, invisible characters, `\` or `user@` (an unfit address is dropped
+  silently); other keys are dropped. The shell shows a toast: the text of the reply (or «Done»), and for `ok: false`
+  «Action name: text»; with a `url` the toast has an «Open» button. The timeout is the action's `timeout_s` or **15 s**;
+  starting the same action again while the first is still running is ignored.
+* The body of `POST /api/module-tool` and `/api/module-action` is at most **64 KiB**: a larger one is refused with `413`
+  **without being read**, so a large `fetch` body may surface as a network error. Pass short arguments from the panel.
 
-Сховище в `ctx["cache_dir"]`: створюйте теку самі (`os.makedirs(…, mode=0o700, exist_ok=True)`), пишіть атомарно (тимчасовий
-файл + `os.replace`), не будуйте шляхів із чужих рядків (id задачі, назва сторінки) — тримайте їх ключами в JSON, як
-робить `page-notes`.
+Storage in `ctx["cache_dir"]`: create the folder yourself (`os.makedirs(…, mode=0o700, exist_ok=True)`), write atomically
+(a temporary file plus `os.replace`), and never build paths from strings you do not control (a task id, a page title) —
+keep them as keys inside a JSON file, as `page-notes` does.
 
-### Довіра для інструментів
+### Trust for tools
 
-Довіряють точним байтам **усієї теки**, зокрема HTML, скриптам і стилям панелі: правка будь-якого файла — повторна довіра.
-Діалог довіри показує інструменти (назва й іконка) та дії модуля (назва) поряд зі списком файлів. Новіша
-версія, що не отримала довіри (теку змінено після довіри чи її відмовлено за правилом теки), не діє: модуль далі працює зі свого
-останнього довіреного знімка — його `server.py`, панелі й дії, тож інструменти не пропадають. Пісочниця панелі — межа
-стабільності й явного API, а не захист від самого модуля: його `server.py` після довіри працює з правами людини, тому
-межа безпеки — діалог довіри.
+What is trusted are the exact bytes of the **whole folder**, including the HTML, scripts and styles of the panel: editing
+any file means trusting again. The trust dialog lists the tools (name and icon) and the actions (name) of the module next to
+the list of files. A newer version that did not get trust (the folder changed after trust, or it breaks a folder rule) does
+not run: the module keeps running from its last trusted snapshot — its `server.py`, panels and actions — so its tools do not
+disappear. The sandbox of a panel is a boundary of stability and of an explicit API, not protection from the module itself:
+its `server.py` runs with your rights after trust, so the security boundary is the trust dialog.
 
-## 8. Межі
+## 8. Limits
 
-Що можна, а що ні — три шари.
+What a module can and cannot do — three layers.
 
-1. **Каркас — незмінне.** Змінює лише реліз Deai; модуль не може ні замінити, ні сховати, ні переставити: оболонку (рядок
-   вкладок, смугу задачі, ліву панель сторінок, праву панель як місце, острівець, ⌘K, довідку клавіш), модель даних
-   (`tasks.json`, `iterations.json`, `pages.json`, `flow.json`, `space.json`, маніфест превʼю), режими «Макет» і «Огляд»,
-   камеру, знімки, інспектор, панель коментарів, обгортку превʼю, «Налаштування», оновлення, модель довіри, генератор
-   `AGENTS.md`, клавіші ядра.
-2. **Точки розширення.** Роль (функції `server.py` за контрактом ролі), поля `settings`, **інструмент** (іконка, назва, своя
-   панель, необовʼязкова клавіша) і **дія** (назва + функція) — усе в одному маніфесті, якщо треба.
-3. **«Ні».** Своїх кнопок і розмітки поза панеллю інструмента; зміни розкладки, теми, кольорів і клавіш ядра; скриптів у
-   публічному превʼю (крім адаптера ролі `comments`); запису у формати даних ядра напряму (лише через публічне API
-   канваса, як агент); чужих секретів (`ctx["secrets"]` — лише свої); заміни вбудованих інструментів (коментарі,
-   інспектор — модуль додає поруч). Побажання, що впираються в «ні», — це запит у ядро, а не модуль.
+1. **The frame is fixed.** Only a release of Deai changes it; a module can neither replace, hide nor move: the shell (the
+   tab row, the task bar, the left page panel, the right panel as a place, the island, ⌘K, the key help), the data model
+   (`tasks.json`, `iterations.json`, `pages.json`, `flow.json`, `space.json`, the preview manifest), the «Layout» and
+   «Overview» modes, the camera, the snapshots, the inspector, the comments panel, the preview wrapper, Settings, updates,
+   the trust model, the `AGENTS.md` generator and the keys of the core.
+2. **Extension points.** A role (functions of `server.py` under the role's contract), the `settings` fields, a **tool**
+   (an icon, a name, its own panel, an optional key) and an **action** (a name and a function) — all in one manifest if
+   needed.
+3. **«No».** Your own buttons or markup outside the tool panel; changes to the layout, the theme, the colours or the keys of
+   the core; scripts in a published preview (except the adapter of the `comments` role); writing directly into the core's
+   data formats (only through the canvas's public API, like an agent); other modules' secrets (`ctx["secrets"]` holds only
+   your own); replacing built-in tools (comments, the inspector — a module adds its own beside them). A wish that runs into
+   a «no» is a request to the core, not a module.
 
-**Скрипт у макеті — поки ні.** Задум «інструмент, що працює всередині макета» (`frame`) відкладено: документ макета має
-походження самого канваса, тож такий скрипт міг би все, що канвас (публікацію, GitLab, задачі), і обмежити його на тому ж
-походженні неможливо. До рішення про окреме походження для макетів панель працює з макетом лише через ядро —
-`deai.context()` і `deai.selection()` (елемент, вибраний в інспекторі). Робочий зразок меж — `docs/modules/examples/page-notes/`.
+**A script inside the mockup — not yet.** The idea of a tool that works inside the mockup (`frame`) is postponed: the
+mockup document has the origin of the canvas itself, so such a script could do everything the canvas can (publish, GitLab,
+tasks), and it cannot be restricted on the same origin. Until a separate origin for mockups is decided, a panel works with
+the mockup only through the core — `deai.context()` and `deai.selection()` (the element selected in the inspector). A
+working illustration of these limits is `docs/modules/examples/page-notes/`.

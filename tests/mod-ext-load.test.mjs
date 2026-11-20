@@ -9,7 +9,7 @@ const start = SRC.indexOf("async function loadModExt()");
 const body = SRC.slice(start, SRC.indexOf("\n}\n", start) + 3);
 
 function mk(over = {}) {
-  const log = { closed: 0, paint: 0 };
+  const log = { closed: 0, paint: 0, bar: 0 };
   const env = {
     log, modToolKey, modExtKey: "", modExtSeq: 0,
     modExt: { spaceId: "s", tools: [{ module: "m", id: "t" }], actions: [] },
@@ -18,6 +18,8 @@ function mk(over = {}) {
     api: async () => { if (env.reply instanceof Error) throw env.reply; return env.reply; },
     closeModTool: () => { log.closed += 1; env.modOpen = null; },
     paintIsland: () => { log.paint += 1; },
+    paintBar: () => { log.bar += 1; },
+    modExtNow: () => (env.modExt.spaceId === (env.spaceNow()?.id ?? null) ? env.modExt : { tools: [], actions: [] }),
     ...over,
   };
   // eslint-disable-next-line no-new-func
@@ -47,4 +49,14 @@ test("успішна відповідь без відкритого інстру
   await f.run();
   assert.equal(f.log.closed, 0);
   assert.equal(f.modExtKey, "s");
+});
+
+test("змінений список → paintBar (смуга з дропдауном ітерації); той самий — лише острівець", async () => {
+  const act = { module: "m", id: "a", label: "A", where: ["iteration"] };
+  const e = mk({ reply: { tools: [{ module: "m", id: "t" }], actions: [act] } });
+  await e.run();
+  assert.deepEqual([e.log.bar, e.log.paint], [1, 0]);
+  const same = mk({ reply: { tools: [{ module: "m", id: "t" }], actions: [] } });
+  await same.run();
+  assert.deepEqual([same.log.bar, same.log.paint], [0, 1]);
 });
