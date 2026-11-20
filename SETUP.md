@@ -9,8 +9,8 @@ after every step. Talk to the person in their language; keep messages short.
 - Passwords and tokens come only from the person and go only into the `secrets` field of the module API. Never invent them,
   never repeat them back, never write them into files.
 - Do not edit files inside the Deai Canvas folder. Updates are installed from the canvas (Settings → Updates).
-- If `GET http://127.0.0.1:8765/api/setup` already answers, Deai Canvas is installed and running: skip steps 2–5.
-- The API lives at `http://127.0.0.1:8765`. Send JSON bodies with `Content-Type: application/json`.
+- If `GET <api>/api/setup` already answers, Deai Canvas is installed and running: skip steps 2–5.
+- `<api>` is the address named in the prompt, if the prompt names one (the welcome screen's prompt does); otherwise `http://127.0.0.1:8765`. Send JSON bodies with `Content-Type: application/json`.
 
 ## Steps
 
@@ -35,7 +35,7 @@ In `<deai>`: `npm ci && npx playwright install chromium`. No Node — tell the p
 
 ### 5. Start
 
-Run `<deai>/start.command`. Wait until `GET http://127.0.0.1:8765/api/setup` answers (up to 30 seconds).
+Run `<deai>/start.command`. Wait until `GET <api>/api/setup` answers (up to 30 seconds).
 
 ### 6. Check
 
@@ -63,20 +63,23 @@ The fields of every module: `GET /api/modules?space=<id>`.
 
 - Publishing to a folder: `POST /api/module-enable {"space": "<id>", "id": "static-publish"}`; the password —
   `POST /api/module-settings {"space": "<id>", "id": "static-publish", "secrets": {"password": "…"}}`.
-- Publishing to Vercel: `POST /api/module-enable {"space": "<id>", "id": "vercel-publish"}`; settings and the password —
-  `POST /api/module-settings`. The person can type the Vercel token in themselves: Settings → Modules → Vercel.
+- Publishing to Vercel: every new space already publishes to a folder (`static-publish` holds the `publish` role), so enable
+  Vercel with `replace: true` — one call: `POST /api/module-enable {"space": "<id>", "id": "vercel-publish", "replace": true, "secrets": {"token": "…", "password": "…"}, "settings": {"auth": "token", "team": "…"}}`.
+  Send only what the person gave: `token` is the Vercel token, `password` the preview password, `team` a Vercel team slug
+  (empty — personal account); `auth` is `token` (default) or `cli` (system Vercel CLI, needs Node). The person can type the
+  token in themselves: Settings → Modules → Vercel; then enable with `replace: true` and no token.
 - Git: `git-sync` with the repository the person gave — `module-enable`, then `module-settings`.
 
 After each module: `POST /api/module-check {"space": "<id>", "id": "…"}`, and tell the person the result.
 
 ### 10. Demo task
 
-`POST /api/demo-task {"space": "<id>"}` → `{ok, id}`: a made-up budgeting app "Tally" with five pages, two states, a flow
+`POST /api/demo-task {"space": "<id>", "reuse": true}` → `{ok, id, space[, existed]}` (`reuse` — a retry does not create a second demo): a made-up budgeting app "Tally" with five pages, two states, a flow
 and two pins — to try Overview, comments and the inspector without an agent.
 
 ### 11. Open the canvas
 
-If the icon is installed: `open -a "Design Canvas"`. Otherwise: `open http://localhost:8765/app/`.
+If the icon is installed: `open -a "Design Canvas"`. Otherwise: `open <api>/app/`.
 
 ### 12. The last message
 

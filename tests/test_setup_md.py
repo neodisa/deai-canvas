@@ -1,5 +1,6 @@
 """`SETUP.md` (0.33.0) — інструкція для агента: кожен маршрут `/api/…` існує в `serve.py`, кожен файл репо, на який вона
 посилається, існує; правила про секрети й системне ПЗ на місці."""
+import json
 import os
 import re
 import sys
@@ -59,6 +60,24 @@ class SetupMd(unittest.TestCase):
         self.assertIn('sudo', self.md)
         self.assertIn('npx playwright install chromium', self.md)
         self.assertNotRegex(self.md, r'[а-яіїєґА-ЯІЇЄҐ]', 'SETUP.md — англійською (агент відповідає людині її мовою)')
+
+    def test_vercel_enable_replaces_the_default_publish_module_with_real_keys(self):
+        # 0.33.0: кожен новий простір уже має `static-publish` з роллю `publish` → без `replace` буде 409 `role-taken`
+        line = next(l for l in self.md.splitlines() if '"id": "vercel-publish"' in l)
+        self.assertIn('"replace": true', line)
+        with open(os.path.join(REPO, 'app', 'modules', 'vercel-publish', 'module.json'), encoding='utf-8') as f:
+            keys = {x['key']: x['type'] for x in json.load(f)['settings']}
+        self.assertEqual(keys['token'], 'secret')
+        self.assertEqual(keys['password'], 'secret')
+        self.assertIn('"secrets"', line)
+
+    def test_demo_task_is_retry_safe(self):
+        line = next(l for l in self.md.splitlines() if 'POST /api/demo-task' in l)
+        self.assertIn('"reuse": true', line)
+
+    def test_api_address_follows_the_prompt(self):
+        self.assertIn('http://127.0.0.1:8765', self.md)
+        self.assertRegex(self.md, r'address (named )?in the prompt|prompt names')
 
     def test_readme_has_both_install_prompts_and_no_legacy_quick_start(self):
         with open(os.path.join(REPO, 'README.md'), encoding='utf-8') as f:
