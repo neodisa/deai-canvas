@@ -13,7 +13,10 @@ const src = readFileSync(SRC, "utf8");
 const fn = src.match(/ {2}function stripRuntime\([\s\S]*?\n {2}\}/);
 assert.ok(fn, "у comment-layer.js немає stripRuntime");
 // eslint-disable-next-line no-new-func
+const grab = (n) => src.match(new RegExp(` {2}function ${n}\\([\\s\\S]*?\\n {2}\\}`))[0];
 const stripRuntime = new Function(`${fn[0]}\nreturn stripRuntime;`)();
+// eslint-disable-next-line no-new-func
+const mergeReplies = new Function(`${grab("stampKey")}\n${grab("mergeReplies")}\nreturn mergeReplies;`)();
 
 test("stripRuntime: _el/_pending коментаря і вкладені _pending відповідей зникають, agent лишається", () => {
   const el = { tag: "x" };
@@ -34,4 +37,17 @@ test("stripRuntime: _el/_pending коментаря і вкладені _pending
 
 test("stripRuntime: без replies поля не зʼявляється", () => {
   assert.ok(!("replies" in stripRuntime({ id: "a", _pending: false })));
+});
+
+test("stripRuntime: _goneReplies прибирається, биті записи replies відкидаються", () => {
+  const out = stripRuntime({ id: "a", _goneReplies: ["r"], replies: [null, 7, "s", { id: "r1", _pending: true }] });
+  assert.deepEqual(out, { id: "a", replies: [{ id: "r1" }] });
+});
+
+test("mergeReplies: усі ts читаються — за ts; є нечитний — порядок зовнішніх, нові в кінці", () => {
+  const e = (id, ts) => ({ id, ts });
+  assert.deepEqual(mergeReplies([e("a", "02.01.2026 10:00"), e("b", "01.01.2026 10:00")], [e("c", "01.01.2026 11:00")]).map((r) => r.id), ["b", "c", "a"]);
+  assert.deepEqual(mergeReplies([e("a", "02.01.2026 10:00"), e("b", "")], [e("c", "01.01.2026 11:00"), e("d", "x")]).map((r) => r.id), ["a", "b", "c", "d"]);
+  assert.deepEqual(mergeReplies([e("a", "1"), null, e("b", "2")], [null, { id: "a", ts: "9" }]).map((r) => [r.id, r.ts]), [["a", "9"], ["b", "2"]]);
+  assert.deepEqual(mergeReplies(undefined, [e("c", "01.01.2026 11:00")]).map((r) => r.id), ["c"]);
 });

@@ -24,11 +24,11 @@ const C = (id, extra = {}) => ({ id, author: "А", text: "т-" + id, status: "op
   meta: { seq: +id.replace(/\D/g, "") || 1, version: "2" }, ...extra });
 
 /** `holdSave` — `save` повертає проміс, що його розв'язує тест (`window.__release()`); `window.__subscribe` — зовнішнє оновлення. */
-async function boot({ withHost = true, seed = [], holdSave = false } = {}) {
+async function boot({ withHost = true, seed = [], holdSave = false, syncNotify = false } = {}) {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.setContent(PAGE);
   await page.addScriptTag({ content: BUNDLE });
-  await page.evaluate(({ withHost, seed, holdSave }) => {
+  await page.evaluate(({ withHost, seed, holdSave, syncNotify }) => {
     window.__ev = [];
     const mem = JSON.parse(JSON.stringify(seed));
     window.__saves = [];
@@ -40,19 +40,22 @@ async function boot({ withHost = true, seed = [], holdSave = false } = {}) {
       save: (l) => {
         window.__saves.push(JSON.stringify(l));
         mem.length = 0; mem.push(...JSON.parse(JSON.stringify(l)));
-        if (holdSave) return new Promise((res) => window.__resolvers.push(res));
+        // як local-adapter.js: оптимістично сповіщає підписника просто всередині save
+        if (syncNotify && sub) sub(JSON.parse(JSON.stringify(l)));
+        if (holdSave) return new Promise((res, rej) => window.__resolvers.push({ res, rej }));
       },
     };
     window.__mem = mem;
     window.__ext = (list) => sub(JSON.parse(JSON.stringify(list)));
-    window.__release = () => { window.__resolvers.splice(0).forEach((r) => r()); };
+    window.__release = () => { window.__resolvers.splice(0).forEach((r) => r.res()); };
+    window.__settle = (i, ok) => { const r = window.__resolvers[i]; if (ok) r.res(); else r.rej(new Error("збій запису")); };
     const host = withHost ? {
       onReady: () => window.__ev.push(["ready"]),
       onChange: (s) => window.__ev.push(["change", s]),
       onReply: (a) => window.__ev.push(["reply", a]),
     } : undefined;
     window.CommentLayer.init({ projectId: "t", storage: store, version: "2", user: { name: "Тест" }, host });
-  }, { withHost, seed, holdSave });
+  }, { withHost, seed, holdSave, syncNotify });
   return page;
 }
 const snap = (page) => page.evaluate(() => window.CommentLayer.snapshot());
@@ -189,5 +192,77 @@ test("agent: true у відповіді переживає reply і збереж
   assert.equal(reps[1].id, rid);
   assert.ok(!("agent" in reps[1]));
   assert.equal((await snap(page)).comments[0].replies[0].agent, true);
+  await page.close();
+});
+
+const PEND = (page) => page.evaluate(() => window.CommentLayer.snapshot().comments[0]);
+const EXT = (extra = {}) => ({ id: "c1", author: "А", text: "т-c1", status: "open", ts: "01.01.2026 10:00", meta: { seq: 1, version: "2" }, ...extra });
+
+test("гонка записів: старіший save не знімає «в польоті» нової відповіді; провал нового не губить її", async () => {
+  const page = await boot({ seed: [C("c1")], holdSave: true });
+  const a = await page.evaluate(() => window.CommentLayer.reply("c1", "A"));
+  const b = await page.evaluate(() => window.CommentLayer.reply("c1", "B"));
+  assert.ok(a && b);
+  assert.equal(await page.evaluate(() => window.__resolvers.length), 2);
+  await page.evaluate(() => window.__settle(0, true));
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 50)));
+  await page.evaluate(() => window.__settle(1, false));
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 50)));
+  let c = await PEND(page);
+  assert.equal(c.pending, true);
+  assert.equal(c.replies.find((r) => r.id === b).text, "B");
+  // зовнішня копія без B: B лишається
+  await page.evaluate((e) => window.__ext([e]), EXT());
+  c = await PEND(page);
+  assert.ok(c.replies.some((r) => r.id === b), JSON.stringify(c.replies));
+  await page.close();
+});
+
+test("надгробок: видалена у польоті відповідь не воскресає зі застарілої зовнішньої копії", async () => {
+  const rr = { id: "r1", author: "А", text: "a", ts: "01.01.2026 10:00" };
+  const page = await boot({ seed: [C("c1", { replies: [rr] })], holdSave: true });
+  assert.equal(await page.evaluate(() => window.CommentLayer.removeReply("c1", "r1")), true);
+  await page.evaluate((e) => window.__ext([e]), EXT({ replies: [rr] }));
+  assert.equal((await PEND(page)).replies.length, 0);
+  await page.evaluate((e) => window.__ext([e]), EXT({ replies: [rr] }));   // і вдруге
+  assert.equal((await PEND(page)).replies.length, 0);
+  assert.ok(!JSON.stringify(await PEND(page)).includes("_goneReplies"));
+  await page.evaluate(() => window.__release());
+  await page.waitForFunction(() => window.CommentLayer.snapshot().comments[0].pending === false);
+  await page.evaluate((e) => window.__ext([e]), EXT());
+  assert.ok(!((await PEND(page)).replies || []).some((r) => r.id === "r1"));
+  const saved = await page.evaluate(() => JSON.stringify(window.__mem));
+  assert.ok(!saved.includes("_goneReplies"));
+  await page.close();
+});
+
+test("порядок із реалістичним сховищем: onReply передує КОЖНОМУ change з відповіддю (save сповіщає синхронно)", async () => {
+  const page = await boot({ seed: [C("c1")], syncNotify: true });
+  await page.evaluate(() => { window.__ev.length = 0; });
+  const rid = await page.evaluate(() => window.CommentLayer.reply("c1", "x"));
+  const ev = await page.evaluate(() => window.__ev.map((e) => [e[0], e[0] === "change" ? (e[1].comments[0].replies || []).map((r) => r.id) : null]));
+  const iReply = ev.findIndex((e) => e[0] === "reply");
+  const withIdx = ev.map((e, i) => (e[0] === "change" && e[1].includes(rid) ? i : -1)).filter((i) => i >= 0);
+  assert.ok(iReply >= 0 && withIdx.length >= 1, JSON.stringify(ev));
+  assert.ok(withIdx.every((i) => i > iReply), JSON.stringify(ev));
+  await page.close();
+});
+
+test("биті записи в replies (null, число) відкидаються, нічого не кидає", async () => {
+  const page = await boot({ seed: [C("c1", { replies: [null, 5, { id: "r1", author: "А", text: "a", ts: "01.01.2026 10:00" }] })] });
+  assert.deepEqual((await snap(page)).comments[0].replies.map((r) => r.id), ["r1"]);
+  assert.ok(await page.evaluate(() => window.CommentLayer.reply("c1", "ok")));
+  await page.waitForFunction(() => window.__mem[0].replies.length === 2);
+  assert.deepEqual(await page.evaluate(() => window.__mem[0].replies.map((r) => r.id).length), 2);
+  await page.close();
+});
+
+test("рядок «N replies» є і на закритій картці", async () => {
+  const page = await boot({ withHost: false, seed: [C("c1", { status: "resolved", replies: [{ id: "r1", author: "А", text: "a", ts: "01.01.2026 10:00" }] })] });
+  await page.evaluate(() => window.CommentLayer.open());
+  await page.evaluate(() => { const sh = document.querySelector("[data-comment-layer]").shadowRoot; [...sh.querySelectorAll("button")].find((b) => /^Closed/.test(b.textContent)).click(); });
+  const html = await page.evaluate(() => document.querySelector("[data-comment-layer]").shadowRoot.innerHTML);
+  assert.match(html, /<div class="when">1 reply<\/div>/);
+  assert.match(html, /badge resolved/);
   await page.close();
 });

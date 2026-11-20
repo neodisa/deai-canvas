@@ -603,6 +603,12 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
           // без них. Локальна версія перекриває зовнішню з тим самим id, нова — додається.
           const mine = Array.isArray(local.replies) ? local.replies.filter((r) => r && r._pending) : [];
           if (mine.length) ext.replies = mergeReplies(ext.replies, mine);
+          // Видалена «у польоті» відповідь не воскресає зі застарілої зовнішньої копії.
+          const gone = Array.isArray(local._goneReplies) ? local._goneReplies : [];
+          if (gone.length) {
+            ext._goneReplies = gone;
+            if (Array.isArray(ext.replies)) ext.replies = ext.replies.filter((r) => !(r && gone.indexOf(r.id) >= 0));
+          }
         }
       }
       this.comments = [...byId.values()];
@@ -1761,16 +1767,21 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         new Promise((res) => setTimeout(() => res(null), ms))]);
     },
     async _persist() {
+      // Лічильник поколінь: лише НАЙНОВІШИЙ запис знімає «в польоті» (старіший, що встиг раніше, не знімає позначки новіших змін).
+      const gen = this._saveGen = (this._saveGen || 0) + 1;
       const plain = this.comments.map(stripRuntime);
       this._backupNow();
       try {
         const res = this.store.save(plain);
         if (res && typeof res.then === 'function') await res;   // Supabase adapter throws on failure
-        this.comments.forEach((c) => {                          // confirmed synced
-          c._pending = false;
-          if (Array.isArray(c.replies)) c.replies.forEach((r) => { if (r) r._pending = false; });
-        });
-        this._backupNow();                                      // нічого не висить → ключ прибрано
+        if (gen === this._saveGen) {
+          this.comments.forEach((c) => {                        // confirmed synced
+            c._pending = false;
+            delete c._goneReplies;
+            if (Array.isArray(c.replies)) c.replies.forEach((r) => { if (r) r._pending = false; });
+          });
+          this._backupNow();                                    // нічого не висить → ключ прибрано
+        }
       } catch (e) {
         console.warn('[comment-layer] primary store save failed; comments kept in local backup for retry', e && e.message);
       }
@@ -2031,8 +2042,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       return {
         version: this.appVersion, iteration: this._curIter(), pinsHidden: !!this._pinsHidden,
         comments: this.comments.map((c) => {
-          const { _el, _pending, fp, htmlSnapshot, ...rest } = c;
-          if (Array.isArray(rest.replies)) rest.replies = rest.replies.map(({ _pending: _rp, ...r }) => r);
+          const { _el, _pending, _goneReplies, fp, htmlSnapshot, ...rest } = c;
+          if (Array.isArray(rest.replies)) rest.replies = rest.replies.filter((r) => r && typeof r === 'object').map(({ _pending: _rp, ...r }) => r);
           return Object.assign({}, rest, rest.meta && typeof rest.meta === 'object' ? { meta: Object.assign({}, rest.meta) } : {},
             { n: this._seqOf(c), scope: scope(c), where: where(c), iter: this._pinIter(c), pending: !!_pending });
         }),
@@ -2079,6 +2090,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const c = this.comments.find((x) => x.id === id);
       if (!c || !Array.isArray(c.replies) || !c.replies.some((x) => x && x.id === rid)) return false;
       c.replies = c.replies.filter((x) => !(x && x.id === rid)); c._pending = true;
+      c._goneReplies = (c._goneReplies || []).concat(rid);
       this._persist(); this._render();
       return true;
     },
@@ -2092,8 +2104,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   };
 
   function stripRuntime(c) {
-    const { _el, _pending, ...rest } = c;
-    if (Array.isArray(rest.replies)) rest.replies = rest.replies.map(({ _pending: _rp, ...r }) => r);
+    const { _el, _pending, _goneReplies, ...rest } = c;
+    if (Array.isArray(rest.replies)) rest.replies = rest.replies.filter((r) => r && typeof r === 'object').map(({ _pending: _rp, ...r }) => r);
     return rest;
   }
   // `ДД.ММ.РРРР ГГ:ХХ` → `РРРРММДДГГХХ` для порівняння; не за форматом — порожньо (йде першим).
@@ -2104,11 +2116,14 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   // Злиття відповідей: локальні «у польоті» перекривають зовнішні з тим самим id, нові додаються;
   // порядок — за `ts`, за рівних — початковий (зовнішні першими).
   function mergeReplies(external, mine) {
-    const base = Array.isArray(external) ? external.slice() : [];
-    for (const r of mine) {
-      const i = base.findIndex((x) => x && x.id === r.id);
+    const ok = (r) => r && typeof r === 'object';
+    const base = Array.isArray(external) ? external.filter(ok) : [];
+    for (const r of mine.filter(ok)) {
+      const i = base.findIndex((x) => x.id === r.id);
       if (i >= 0) base[i] = r; else base.push(r);
     }
+    // Сортуємо за ts лише коли ВСІ ts читаються; інакше — порядок зовнішніх, нові локальні в кінці.
+    if (!base.every((r) => stampKey(r.ts))) return base;
     return base.map((r, i) => [r, i])
       .sort((a, b) => stampKey(a[0].ts).localeCompare(stampKey(b[0].ts)) || a[1] - b[1])
       .map((x) => x[0]);
