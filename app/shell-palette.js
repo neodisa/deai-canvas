@@ -163,6 +163,8 @@ function appActions(s) {
   /* «Баг / ідея» (0.23.0): відкриває діалог відгуку на будь-якому екрані (тому лежить тут, де є і `homeOpen`-гілка). */
   const out = [
     { id: "feedback", group: "gSet", labelKey: "fbOpen", icon: "comment", act: "feedback" },
+    /* «Знайомство з канвасом» (0.33.0): карта робочого місця, цикл роботи, демо-задача — скрізь, де «Баг / ідея». */
+    { id: "intro", group: "gSet", labelKey: "frTour", icon: "help", act: "intro" },
     { id: "update-check", group: "gSet", labelKey: "upCheck", icon: "refresh", act: "updatecheck" },
   ];
   if (pillModel(s.update)) out.push({ id: "update-notes", group: "gSet", labelKey: "upWhatsNew", icon: "down", act: "updatenotes" });

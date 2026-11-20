@@ -77,6 +77,7 @@ import { arrived, baseline, countNew, isNew, markSeen, newsByPage, readSeen, see
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
+import { introCardHTML } from './first-run.js';
 import {
   formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
   verdictText, writePayload,
@@ -2560,6 +2561,7 @@ const BAR_ACTIONS = {
   /* «Відгук» (смуга) і «Баг / ідея» (⌘K): той самий діалог, на будь-якому екрані й без задачі (`openFeedback`). */
   /* З кнопки острівця — поповер над нею (етап В); з ⌘K якоря нема — модальна картка. */
   feedback: (val, el) => openFeedback(el?.closest?.('#hud') ? el : null),
+  intro: () => openIntro(),
   updatenotes: () => openUpdateDialog(),
   updatecheck: () => checkUpdateNow(),
 
@@ -2992,6 +2994,41 @@ async function fetchFeedbackPreview(sess) {
   const r = await jsonPost('/api/feedback-preview', sess.previewBody());
   return r && r.status === 200 && r.body && r.body.ok === true && r.body.diag && typeof r.body.diag === 'object'
     && typeof r.body.diag_hash === 'string' && Number.isInteger(r.body.ring_seq) ? r.body : null;
+}
+
+/* ⌘K «Знайомство з канвасом» (0.33.0): картка `askForm` без якоря (модальна, як решта діалогів оболонки). Esc і «Закрити»
+   закриває оболонка; клік по підкладці — тут (у загальних діалогах він навмисно НЕ закриває: там бувають руйнівні питання,
+   а тут питання нема). «Відкрити демо» — лише коли є поточний простір. */
+let introOpen = false;
+async function openIntro() {
+  if (introOpen) return;
+  introOpen = true;
+  const space = spaceNow();
+  try {
+    await askForm(() => introCardHTML({ demo: !!space }), {
+      onMount(form) {
+        const scrim = form.closest('.cv-ask-scrim');
+        scrim?.addEventListener('click', (e) => { if (e.target === scrim) form.querySelector('[data-a="cancel"]')?.click(); });
+        form.querySelector('[data-fr="demo"]')?.addEventListener('click', () => {
+          form.querySelector('[data-a="cancel"]')?.click();
+          openDemo(space.id);
+        });
+      },
+    });
+  } finally {
+    introOpen = false;
+  }
+}
+
+/* Демо-задача «Tally» (0.33.0): у просторі вже є `tally-demo` — сервер віддає її (`existed`), і ми лише перемикаємось;
+   інакше вона щойно створена й поточна — відкриваємо, як задачу з майстра. `switchTask` сам екран не міняє (його докстрінг):
+   з екрана «Задачі» виходимо тим самим `leaveHome()`, що й клік по картці (`homeOpenTask`), інакше — `render()`, як вкладка. */
+async function openDemo(spaceId) {
+  let r;
+  try { r = await post('/api/demo-task', { space: spaceId, title: t('frDemoTaskTitle'), reuse: true }); }
+  catch (e) { tellError(t('frDemoFailed'), e.message); return; }
+  const ok = await (r.existed ? switchTask(r.id) : wizOpenTask(r));
+  if (r.existed && ok) { if (homeOpen) await leaveHome(); else await render(); }
 }
 
 let feedbackDialogOpen = false;

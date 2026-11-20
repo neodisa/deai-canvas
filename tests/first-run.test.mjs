@@ -71,3 +71,13 @@ test("кожен клас розмітки «Першого запуску» м�
   const classes = new Set([...html.matchAll(/class="([^"]+)"/g)].flatMap((m) => m[1].split(/\s+/)).filter((c) => c.startsWith("fr-")));
   for (const c of classes) assert.ok(new RegExp(`\\.${c}(?![\\w-])`).test(CSS), `.${c} без правила`);
 });
+
+test("проводка ⌘K: картка через askForm без якоря, клік по підкладці закриває, демо — /api/demo-task з reuse", () => {
+  const src = readFileSync(path.join(ROOT, "app", "app.js"), "utf8");
+  const body = src.slice(src.indexOf("async function openIntro("), src.indexOf("async function openDemo("));
+  assert.match(body, /askForm\(\(\) => introCardHTML\(\{ demo: /);
+  assert.match(body, /e\.target === scrim/);
+  const demo = src.slice(src.indexOf("async function openDemo("), src.indexOf("async function openDemo(") + 900);
+  assert.match(demo, /post\('\/api\/demo-task', \{ space: spaceId, title: t\('frDemoTaskTitle'\), reuse: true \}\)/);
+  assert.match(demo, /r\.existed \? switchTask\(r\.id\) : wizOpenTask\(r\)/);
+});

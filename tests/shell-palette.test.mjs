@@ -1087,3 +1087,28 @@ test("«В Figma» вимкнено в просторі — пункту в ⌘K
   assert.equal(has({ id: "p" }), true);
   assert.equal(has(null), true);
 });
+
+/* ── «Знайомство з канвасом» (0.33.0): є там само, де «Баг / ідея» (і на екрані «Задачі») ─────────────── */
+test("знайомство: пункт є на екрані задачі, «Задачі», «Підключення» й у майстрі; без ключа update (еталони) — нема", () => {
+  const ids = (st) => paletteActions(S(st)).filter((a) => a.id === "intro").map((a) => a.act);
+  for (const homeOpen of [true, false]) {
+    for (const homePage of homeOpen ? [undefined, "tasks", "conn", "wiz"] : [undefined]) {
+      assert.deepEqual(ids({ homeOpen, homePage, update: null }), ["intro"], `homeOpen=${homeOpen} ${homePage}`);
+    }
+  }
+  assert.deepEqual(ids({}), []);
+});
+
+test("знайомство: група gSet, іконка зі спрайта, підпис в обох словниках, обробник у BAR_ACTIONS; знаходиться в ⌘K", () => {
+  const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "app", "app.js"), "utf8");
+  const a = paletteActions(S({ update: null })).find((x) => x.id === "intro");
+  assert.equal(a.group, "gSet");
+  assert.ok(ico(a.icon));
+  for (const lang of ["uk", "en"]) assert.ok(DICT[lang][a.labelKey] !== undefined, `${lang}.${a.labelKey}`);
+  assert.match(src, /\n  intro: \(\) =>/);
+  setLang("uk");
+  assert.ok(filterActions(paletteActions(S({ update: null })), "знайомство").some((x) => x.id === "intro"));
+  setLang("en");
+  assert.ok(filterActions(paletteActions(S({ update: null, lang: "en" })), "tour").some((x) => x.id === "intro"));
+  setLang("uk");
+});
