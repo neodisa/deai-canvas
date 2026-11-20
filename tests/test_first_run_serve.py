@@ -3,11 +3,13 @@ import os
 import shutil
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, 'app'))
 sys.path.insert(0, HERE)
+import deai_modules  # noqa: E402
 import serve  # noqa: E402,F401
 import spaces_guard  # noqa: E402
 import test_spaces_serve as base  # noqa: E402
@@ -102,6 +104,35 @@ class ClaudeRoutes(base.Fixture):
         self.assertEqual(st, 200, body)
         self.assertEqual(_get(os.path.join(path, 'CLAUDE.md')), b'@AGENTS.md\n')
         self.assertTrue(os.path.isfile(os.path.join(path, 'AGENTS.md')))
+
+
+class PublishPassword(base.Fixture):
+    """`publish_password` простору: `true|false|null` — пароль превʼю модуля публікації; поля нема — постачальник пароля не має."""
+
+    def entry(self, sid):
+        st, body = self.jget('/api/spaces')
+        self.assertEqual(st, 200)
+        return next(e for e in body['spaces'] if e['id'] == sid)
+
+    def test_unset_then_set_then_unreadable(self):
+        self.assertIs(self.entry(self.p_id)['publish_password'], False, 'static-publish (неявний) має секрет password')
+        deai_modules.write_secrets(self.p_id, 'static-publish', {'password': 'pw-test-1'})
+        self.addCleanup(deai_modules.write_secrets, self.p_id, 'static-publish', {'password': None})
+        self.assertIs(self.entry(self.p_id)['publish_password'], True)
+        with mock.patch.object(deai_modules, 'read_secrets', side_effect=deai_modules.ModuleError('secrets-unreadable', 'x')):
+            self.assertIsNone(self.entry(self.p_id)['publish_password'])
+
+    def test_no_field_without_a_password_setting(self):
+        class NoPw:
+            id = 'static-publish'
+            def secret_keys(self):
+                return []
+        with mock.patch.object(deai_modules, 'provider', return_value=NoPw()):
+            self.assertNotIn('publish_password', self.entry(self.p_id))
+
+    def test_a_failing_provider_does_not_break_the_list(self):
+        with mock.patch.object(deai_modules, 'provider', side_effect=RuntimeError('boom')):
+            self.assertNotIn('publish_password', self.entry(self.p_id))
 
 
 if __name__ == '__main__':

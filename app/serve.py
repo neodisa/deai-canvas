@@ -5587,10 +5587,29 @@ def space_view(sp):
     return out
 
 
+_NO_PW = object()
+
+
+def _publish_password(sp, caps):
+    """Пароль превʼю простору (0.33.0): `True|False|None` — задано / не задано / не прочитати (`_secret_flags`); `_NO_PW` —
+    публікації нема чи її постачальник пароля не має (поля в списку тоді нема). Тотальна: збій — `_NO_PW`, список не падає."""
+    pid = (caps or {}).get('publish')
+    if not pid:
+        return _NO_PW
+    try:
+        m = deai_modules.provider('publish', sp)
+        if m is None or m.id != pid or 'password' not in m.secret_keys():
+            return _NO_PW
+        flags, _err = _secret_flags(sp['id'], m)
+    except Exception:  # noqa: BLE001 — один простір не ламає список (як `capabilities`)
+        return _NO_PW
+    return flags.get('password')
+
+
 def spaces_listing():
     """`spaces.listing()` + `capabilities` і `tracks`/`default_track` у кожному записі. Запис реєстру відновлюється з самого запису
     списку (вдруге реєстр не читаємо — списку вистачає одного знімка). Один збій простору не ламає список:
-    `capabilities` і напрямки не кидають.
+    `capabilities` і напрямки не кидають. `publish_password` (0.33.0) — див. `_publish_password`.
 
     `tracks` (4d-1) — `[{id, label}]` напрямків простору й `default_track`; ⛔ БЕЗ `root` і `repo`: шляхи й адреси репо не їдуть у
     браузер (форма «Нова задача» вибирає напрямок за назвою, а теку й репо додає сервер). Напрямки простору — ОДНЕ `_TrackView`
@@ -5601,6 +5620,9 @@ def spaces_listing():
     for e in out['spaces']:
         sp = {'id': e['id'], 'path': e['path']}
         e['capabilities'] = deai_modules.capabilities(sp)
+        pw = _publish_password(sp, e['capabilities'])
+        if pw is not _NO_PW:
+            e['publish_password'] = pw              # пароль превʼю (0.33.0): меню «Опублікувати» показує стан
         e['tools'] = spaces.space_tools(sp)         # вимикачі інструментів («В Figma»): смуга й ⌘K читають їх зі списку
         compat = deai_modules.compat_view(sp, e['capabilities'])
         if compat:
