@@ -1071,7 +1071,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (i >= 0) { this._multiSel.splice(i, 1); el.classList.remove('cl-msel'); }
       else { this._multiSel.push(el); el.classList.add('cl-msel'); }
       // Контекст multi-піна — від ПЕРШОГО вибраного елемента, у мить його вибору (і перезйомка, коли перший змінився).
-      if (this._multiSel[0] !== first) this._multiAt = this._multiSel[0] ? this._captureAt(this._multiSel[0]) : null;
+      if (this._multiSel[0] !== first) { try { this._multiAt = this._multiSel[0] ? this._captureAt(this._multiSel[0]) : null; } catch (e) { this._multiAt = null; } }
       if (this._mccount) this._mccount.textContent = this._multiSel.length;
     },
     _clearMulti() {
@@ -1085,8 +1085,9 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const text = this._mcta ? this._mcta.value.trim() : '';
       if (!this._multiSel.length || !text) { if (this._mcta) this._mcta.focus(); return; }
       const els = this._multiSel.slice();
-      const at = this._multiAt || this._captureAt(els[0]);   // ДО _clearMulti
-      const fps = els.map((el) => fingerprint(el, this.target));
+      let at = this._multiAt;   // ДО _clearMulti
+      if (!at) { try { at = this._captureAt(els[0]); } catch (e) { at = null; } }
+      const fps = els.map((el) => this._withoutOwnClasses(el, () => fingerprint(el, this.target)));
       const rect = unionRect(els);   // kept in meta so the selection region is on record
       // Screenshot the closest common ancestor: it shows every picked element in
       // context, and the element render path is the only reliable one.
@@ -1222,7 +1223,9 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     },
 
     _openCompose(el, sel, extra) {
-      const at = this._captureAt(el);   // контекст — у мить вибору цілі, не в мить збереження (SPA може змінити маршрут)
+      let at = null;
+      try { at = this._captureAt(el); } catch (e) { at = null; }   // збій захоплення — старий шлях (контекст у мить збереження), форма відкривається
+      // контекст — у мить вибору цілі, не в мить збереження (SPA може змінити маршрут)
       const existing = this._sh.querySelector('.compose'); if (existing) existing.remove();
       const r = el.getBoundingClientRect();
       const box = document.createElement('div');
@@ -1253,10 +1256,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       };
     },
 
-    /** Знімок контексту цілі в мить її вибору. `where` — з заголовком, `whereNoHead` — без (TD-36: заголовок лише для приватних). */
-    _captureAt(el) {
-      // Службові класи коментатора (підсвітка наведення, вибір multi) не мають потрапити ні у відбиток, ні в html піна:
-      // зі зняттям їх зараз `styleHash` розійшовся б із живим елементом. Знімаємо на час захвату й повертаємо як було.
+    /** Виконує `fn` без службових класів коментатора (`cl-hl`, `cl-msel`) на `el` і його нащадках; класи повертає в `finally`. */
+    _withoutOwnClasses(el, fn) {
       const held = [];
       const own = ['cl-hl', 'cl-msel'];
       try {
@@ -1265,6 +1266,16 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
           const had = own.filter((k) => n.classList.contains(k));
           if (had.length) { held.push([n, had]); n.classList.remove(...had); }
         }
+        return fn();
+      } finally {
+        for (const [n, had] of held) n.classList.add(...had);
+      }
+    },
+
+    /** Знімок контексту цілі в мить її вибору. `where` — з заголовком, `whereNoHead` — без (TD-36: заголовок лише для приватних). */
+    _captureAt(el) {
+      // Службові класи коментатора не мають потрапити ні у відбиток, ні в html піна (інакше `styleHash` розійдеться з живим елементом).
+      return this._withoutOwnClasses(el, () => {
         let where = null, whereNoHead = null;
         try { where = captureContext(el, this.target, { heading: true }); } catch (e) { where = null; }
         try { whereNoHead = captureContext(el, this.target, { heading: false }); } catch (e) { whereNoHead = null; }
@@ -1274,9 +1285,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
           fp: fingerprint(el, this.target), outerHTML: el.outerHTML, text: el.textContent,
           where, whereNoHead,
         };
-      } finally {
-        for (const [n, had] of held) n.classList.add(...had);
-      }
+      });
     },
 
     _addComment(el, text, sel, extra, aud) {
@@ -1382,6 +1391,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       let resolved = 0, carried = 0;
       for (const c of this.comments) {
         if (c.status !== 'open') continue;
+        if (this._otherPage(c)) continue;   // хост: пін іншої сторінки не належить цьому DOM — не вирішуємо й не переякорюємо
         const res = classify(c.fp, this.target);
         if (res.decision === 'RESOLVE') {
           c.status = 'resolved'; c.resolveReason = res.reason; c.resolvedV = this._version(); c.meta = c.meta || {}; c.meta.resolvedAt = Date.now(); resolved++;

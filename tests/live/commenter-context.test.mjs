@@ -259,6 +259,41 @@ test("multi: fp першого елемента і html — без cl-msel; кл
   assert.equal(JSON.stringify(c).includes("cl-msel"), false);
   const ref = await cleanFp(page, "#p");
   assert.equal(c.fp.styleHash, ref.styleHash);
+  const refQ = await cleanFp(page, "#q");
+  assert.equal(c.meta.fps.length, 2);
+  assert.equal(c.meta.fps[0].styleHash, ref.styleHash, "meta.fps[0] — без cl-msel");
+  assert.equal(c.meta.fps[1].styleHash, refQ.styleHash, "meta.fps[1] — без cl-msel");
+  await page.close();
+});
+
+test("збій захоплення контексту: форма відкривається, multi-лічильник не з'їжджає, пін зберігається старим шляхом", async () => {
+  const page = await boot({ withHost: true });
+  await page.evaluate(() => { window.CommentLayer._captureAt = () => { throw new Error("збій"); }; });
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  await page.click("#p");
+  await waitCompose(page);
+  await push(page, "/other#x");
+  const c = await saveCompose(page, "без at");
+  assert.equal(c.meta.route, "/other#x", "без at — контекст у мить збереження, як до 0.34");
+  await page.evaluate(() => window.CommentLayer.setMode("multi"));
+  await page.click("#p");
+  await page.click("#q");
+  assert.equal(await page.evaluate(`${SH}.querySelector('.mccount').textContent`), "2");
+  await page.evaluate(() => {
+    const sh = document.querySelector("[data-comment-layer]").shadowRoot;
+    sh.querySelector(".mcta").value = "multi без at"; sh.querySelector(".mcsave").click();
+  });
+  await page.waitForFunction(() => window.__mem.some((x) => x.text === "multi без at"));
+  await page.close();
+});
+
+test("хост: regenerated() не вирішує й не переякорює пін іншої сторінки", async () => {
+  const page = await boot({ withHost: true, version: "1/holovna", seed: HOST_SEED });
+  const before = await page.evaluate(() => JSON.stringify(window.__mem.find((c) => c.id === "a-poshuk").fp));
+  await page.evaluate(() => { document.querySelector("#p").remove(); window.CommentLayer.regenerated(); });
+  const after = await page.evaluate(() => { const c = window.__mem.find((x) => x.id === "a-poshuk"); return { status: c.status, fp: JSON.stringify(c.fp) }; });
+  assert.equal(after.status, "open");
+  assert.equal(after.fp, before);
   await page.close();
 });
 
