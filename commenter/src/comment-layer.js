@@ -517,8 +517,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
      `_applyTheme`; запасні значення в `var()` — на випадок, коли хост дав не всі. Той самий вигляд — і для `.compose`, і
      для форми «Кілька» (`.mcompose`). */
   const THEME_STYLE = `
-    .root.themed{--r:8px;--rsm:6px}
-    .root.themed .compose,.root.themed .mcompose{width:300px;background:var(--s2);border:1px solid var(--line2);border-radius:var(--r);padding:10px;
+    .root.themed .compose,.root.themed .mcompose{--r:8px;--rsm:6px;width:300px;background:var(--s2);border:1px solid var(--line2);border-radius:var(--r);padding:10px;
       box-shadow:0 16px 44px rgba(0,0,0,.5);font-family:system-ui,sans-serif}
     .root.themed .compose *,.root.themed .mcompose *{font-family:system-ui,sans-serif}
     .root.themed .compose .csel{margin:0 0 8px;padding:0;border:0;background:none;border-radius:0;font-style:normal;font-size:11.5px;color:var(--dim,var(--lo));
@@ -1204,7 +1203,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const r = t.rect;
       const box = document.createElement('div');
       box.className = 'compose';
-      this._applyTheme(); const L = this._labels();
+      this._applyTheme(); this._themeForm(box); const L = this._labels();
       const tgt = this._targetHTML(L, t.fp && t.fp.tag || '?', t.fp && t.fp.text || '');
       box.innerHTML = `<div class="csel">${L.target ? tgt : 'on ' + tgt}</div><textarea placeholder="${esc(L.placeholder || 'Leave a change request…')}"></textarea>
         ${this._audChipsHTML()}<div class="row"><button class="cancel">${esc(L.cancel || 'Cancel')}</button><button class="primary save">${esc(L.submit || 'Comment')}</button></div>`;
@@ -1284,7 +1283,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       box.style.left = Math.max(8, Math.min(r.left, rightBound)) + 'px';
       const m = extra && extra.mode;
       // What is being commented on — shown in every mode (like the text quote), so the target is always clear.
-      this._applyTheme(); const L = this._labels();
+      this._applyTheme(); this._themeForm(box); const L = this._labels();
       const desc = (e) => this._targetHTML(L, e.tagName.toLowerCase(), (e.textContent || '').replace(/\s+/g, ' ').trim());
       const note = m === 'multi' ? `${icon('multi', 13)} ${extra.count} elements`
         : m === 'area' ? `${icon('area', 13)} ` + (L.area ? fillLabel(L.area, { target: desc(el) }) : `area · ${desc(el)}`)
@@ -1938,7 +1937,10 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (h && typeof h.theme === 'function') { try { raw = h.theme(); } catch (e) { raw = null; } }
       const ok = themeFilter(raw);
       const keys = Object.keys(ok);
-      (this._themeKeys || []).forEach((k) => { if (!(k in ok)) root.style.removeProperty('--' + k); });
+      this._themeOk = ok;
+      /* Токени — лише на самих формах (`.mcompose` постійна, `.compose` — кожна при відкритті, `_themeForm`): піни, `.pinpop`,
+         лайтбокс і решта шару лишаються з власною палітрою. Клас `themed` на `.root` — лише для селекторів. */
+      root.querySelectorAll('.mcompose,.compose').forEach((f) => this._themeForm(f));
       const sr = root.getRootNode();
       const have = sr && sr.querySelector ? sr.querySelector('style[data-cl-theme]') : null;
       if (!keys.length) {
@@ -1946,12 +1948,17 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         root.classList.remove('themed'); this._themeKeys = [];
         return;
       }
-      keys.forEach((k) => root.style.setProperty('--' + k, ok[k]));
       root.classList.add('themed');
       if (!have && sr && sr.appendChild) {
         const st = document.createElement('style'); st.setAttribute('data-cl-theme', ''); st.textContent = THEME_STYLE; sr.appendChild(st);
       }
       this._themeKeys = keys;
+    },
+    /** Токени поточної теми — на форму `f` (і зняття тих, яких у темі вже нема). */
+    _themeForm(f) {
+      const ok = this._themeOk || {};
+      (this._themeKeys || []).forEach((k) => { if (!(k in ok)) f.style.removeProperty('--' + k); });
+      Object.keys(ok).forEach((k) => f.style.setProperty('--' + k, ok[k]));
     },
     /** Підписи форм від хоста: лише непорожні рядки відомих ключів; решта — англійський текст як був. */
     _labels() {
@@ -2322,7 +2329,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     if (!o || typeof o !== 'object') return r;
     THEME_KEYS.forEach((k) => {
       const v = Object.prototype.hasOwnProperty.call(o, k) ? o[k] : null;
-      if (typeof v === 'string' && v.trim() && v.length <= 200 && !/[;{}<>]/.test(v)) r[k] = v.trim();
+      if (typeof v === 'string' && v.trim() && v.length <= 200 && !/[;{}<>]/.test(v) && !/[\\]|\/\*|url\s*\(|image-set|@import/i.test(v)) r[k] = v.trim();
     });
     return r;
   }

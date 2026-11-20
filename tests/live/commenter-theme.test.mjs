@@ -58,14 +58,14 @@ test("host.theme: фон форми — s2, головна кнопка — sel,
   assert.equal(await themeStyles(page), 1);
   await cancel(page); await open(page);
   assert.equal(await themeStyles(page), 1, "повторне відкриття не множить <style>");
-  assert.equal(await q(page, ".root", "(el) => el.style.getPropertyValue('--bogus')"), "");
-  assert.equal(await q(page, ".root", "(el) => el.style.getPropertyValue('--s2')"), "rgb(1, 2, 3)");
+  assert.equal(await q(page, ".compose", "(el) => el.style.getPropertyValue('--bogus')"), "");
+  assert.equal(await q(page, ".compose", "(el) => el.style.getPropertyValue('--s2')"), "rgb(1, 2, 3)");
   assert.equal(await q(page, ".compose .csel", "(el) => getComputedStyle(el).fontStyle"), "normal", "цитата цілі — без курсиву");
   await page.close();
 });
 
 test("host.theme: шкідливе значення відкинуто — ні themed, ні <style>, ні токена", async () => {
-  for (const bad of [{ s2: "red;}" }, { s2: "x".repeat(201) }, { s2: "a<b" }, { s2: 5 }, { s2: "" }, { bogus: "red" }]) {
+  for (const bad of [{ s2: "red;}" }, { s2: "x".repeat(201) }, { s2: "a<b" }, { s2: "url(https://example.com/x)" }, { s2: "red\\" }, { s2: "/*x*/red" }, { s2: "image-set(x 1x)" }, { s2: "@import x" }, { s2: 5 }, { s2: "" }, { bogus: "red" }]) {
     const page = await boot({ theme: bad });
     await open(page);
     assert.equal(await themed(page), false, JSON.stringify(bad).slice(0, 40));
@@ -73,11 +73,41 @@ test("host.theme: шкідливе значення відкинуто — ні 
     assert.equal(await q(page, ".root", "(el) => el.getAttribute('style') || ''"), "");
     await page.close();
   }
-  // виняток у host.theme — так само «без теми»
-  const page = await boot({ theme: null });
-  await page.evaluate(() => { window.__theme = null; });
+});
+
+test("виняток у host.theme / host.labels — форма відкривається без теми й з англійськими рядками", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.setContent(PAGE);
+  await page.addScriptTag({ content: BUNDLE });
+  await page.evaluate(() => {
+    window.CommentLayer.init({ projectId: "t", storage: { load: () => [], save() {} }, version: "2", user: { name: "Тест" },
+      host: { onReady() {}, onChange() {}, onSelect() {}, onMode() {},
+        theme: () => { throw new Error("x"); }, labels: () => { throw new Error("y"); } } });
+    window.CommentLayer.setCommentMode(true);
+  });
   await open(page);
   assert.equal(await themed(page), false);
+  assert.equal(await themeStyles(page), 0);
+  assert.equal(await q(page, ".compose textarea", "(el) => el.getAttribute('placeholder')"), "Leave a change request…");
+  assert.equal(await q(page, ".compose .save", "(el) => el.textContent"), "Comment");
+  await page.close();
+});
+
+test("токени теми — лише на формах: піни, .pinpop і решта шару лишаються з власною палітрою", async () => {
+  const page = await boot({ theme: { ...THEME, s1: "rgb(9, 9, 9)", hi: "rgb(250, 0, 0)", "line2": "rgb(0, 250, 0)" } });
+  await open(page);
+  assert.equal(await bg(page, ".compose"), "rgb(1, 2, 3)", "форма має значення оболонки");
+  assert.equal(await bg(page, ".compose textarea"), "rgb(9, 9, 9)", "поле форми — s1 оболонки");
+  assert.equal(await bg(page, ".pinpop"), "rgb(21, 24, 29)", ".pinpop не мусить брати --s1 теми");
+  assert.equal(await q(page, ".pinpop", "(el) => getComputedStyle(el).borderTopColor"), "rgb(57, 65, 76)");
+  assert.equal(await q(page, ".root", "(el) => el.getAttribute('style') || ''"), "", "на .root токенів нема");
+  await cancel(page);
+  await page.evaluate(() => window.CommentLayer.setMode("multi"));
+  assert.equal(await bg(page, ".mcompose"), "rgb(1, 2, 3)");
+  assert.equal(await bg(page, ".pinpop"), "rgb(21, 24, 29)");
+  // тему прибрано — токенів немає й на формах
+  await page.evaluate(() => { window.__theme = {}; window.CommentLayer.setMode("element"); window.CommentLayer.setMode("multi"); });
+  assert.equal(await q(page, ".mcompose", "(el) => /--/.test(el.getAttribute('style') || '')"), false, "після зняття теми токени лишилися на .mcompose");
   await page.close();
 });
 
@@ -180,7 +210,7 @@ test("зміна теми й мови в оболонці діє на насту
   await open(page);
   assert.equal(await bg(page, ".compose"), "rgb(10, 20, 30)");
   assert.equal(await q(page, ".compose textarea", "(el) => el.getAttribute('placeholder')"), "What should change?");
-  assert.equal(await q(page, ".root", "(el) => el.style.getPropertyValue('--sel')"), "", "токен, якого більше нема, знято");
+  assert.equal(await q(page, ".compose", "(el) => el.style.getPropertyValue('--sel')"), "", "токен, якого більше нема, знято");
   assert.equal(await themeStyles(page), 1);
   await cancel(page);
   await page.evaluate(() => { window.__theme = {}; });
