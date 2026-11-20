@@ -238,7 +238,10 @@ function ensureSetup(fresh = false) {
   setupSt.busy = (async () => {
     try { setupSt.data = await api(`/api/setup${fresh ? '?fresh=1' : ''}`); } catch (e) { /* лишаємо що було */ }
     setupSt.busy = null;
-    if (homeOpen) paintHome(); else renderPanel();
+    /* Перемальовуємо лише те, що показує ці дані: панель задачі («Огляд») чи привітання. Майстер і «Налаштування» — ні:
+       фонова відповідь (повернення до вікна, `fresh`) не має чіпати набране (T7b у `tests/live/spaces-flows.test.mjs`). */
+    if (!homeOpen) renderPanel();
+    else if (homePage !== 'wiz' && needsWelcome(spacesResp)) paintHome();
     return setupSt.data;
   })();
   return setupSt.busy;

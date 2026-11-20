@@ -105,3 +105,10 @@ test("пароль: намір `pw` ставиться в `enterConnections` П�
   const set = fn.indexOf("connPwPending = pw;");
   assert.ok(guard > 0 && set > guard, "`connPwPending = pw` — після останнього раннього виходу");
 });
+
+test("відповідь /api/setup перемальовує лише привітання чи панель задачі — майстер ні (T7b: набране не губиться на focus)", () => {
+  const src = readFileSync(path.join(ROOT, "app", "app.js"), "utf8");
+  const body = src.slice(src.indexOf("function ensureSetup("), src.indexOf("const setupShots"));
+  assert.match(body, /if \(!homeOpen\) renderPanel\(\);\n\s+else if \(homePage !== 'wiz' && needsWelcome\(spacesResp\)\) paintHome\(\);/);
+  assert.doesNotMatch(body, /if \(homeOpen\) paintHome\(\)/, "безумовна перемальовка дому зачіпала б майстер і «Налаштування»");
+});
