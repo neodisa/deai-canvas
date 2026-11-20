@@ -37,6 +37,7 @@ import threading
 import time
 import traceback
 import unittest
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -69,6 +70,7 @@ BUNDLE_SHA256 = '2db2912f16939a3b21b472980a7ada746b33a6a40708bc555cb0be255c6eb5b
 LOOPBACK = ('127.0.0.1',)
 PROXY_VARS = ('http_proxy', 'https_proxy', 'all_proxy', 'ftp_proxy', 'no_proxy')
 TABLE = '/rest/v1/comments'
+REPLIES = '/rest/v1/comment_replies'
 _REAL = None
 
 
@@ -122,6 +124,8 @@ class FakeSupabase:
     def __init__(self, key=KEY):
         self.key = key
         self.rows = []
+        self.replies = []                               # таблиця `comment_replies` (рядки у формі PostgREST)
+        self.no_replies_table = None                    # те саме, що `no_table`, але лише для `comment_replies`
         self.requests = []                              # {method, path, raw_path, raw_query, query, headers, body}
         self.no_table = None                            # None | 'PGRST205' | '42P01' | 'plain'
         self.redirect_to = None                         # `http://127.0.0.1:<порт>` «чужого» сервера: відповідь — 3xx на нього
@@ -186,9 +190,10 @@ class FakeSupabase:
         self.thread.join(5)
 
     # ---- сценарій
-    def override(self, method, status, body=None, headers=None, delay=0, times=None):
+    def override(self, method, status, body=None, headers=None, delay=0, times=None, path=None, when=None):
+        """`path` — лише для запитів на цей шлях (`TABLE`, `REPLIES`); `when(rec)` — лише коли предикат істинний; без них — на будь-який."""
         self.overrides.append({'method': method, 'status': status, 'body': body, 'headers': headers or {},
-                               'delay': delay, 'times': times})
+                               'delay': delay, 'times': times, 'path': path, 'when': when})
 
     def reqs(self, method=None):
         return [r for r in self.requests if method is None or r['method'] == method]
@@ -204,7 +209,8 @@ class FakeSupabase:
     # ---- відповіді
     def respond(self, rec):
         for o in self.overrides:
-            if o['method'] in (None, rec['method']) and (o['times'] is None or o['times'] > 0):
+            if (o['method'] in (None, rec['method']) and o.get('path') in (None, rec['path']) and (o.get('when') is None or o['when'](rec))
+                    and (o['times'] is None or o['times'] > 0)):
                 if o['times'] is not None:
                     o['times'] -= 1
                 return o['status'], o['body'], o['headers'], o['delay']
@@ -212,29 +218,48 @@ class FakeSupabase:
             return self.redirect_code, None, {'Location': self.redirect_to + rec['raw_path']}, 0
         if rec['headers'].get('apikey') != self.key:
             return self._err(rec, 401, 'PGRST301', 'Invalid API key')
-        if rec['path'] != TABLE:
+        if rec['path'] not in (TABLE, REPLIES):
             return 404, {'message': 'no such route'}, {}, 0
-        if self.no_table == 'PGRST205':
-            return self._err(rec, 404, 'PGRST205', "Could not find the table 'public.comments' in the schema cache")
-        if self.no_table == '42P01':
-            return self._err(rec, 404, '42P01', 'relation "public.comments" does not exist')
-        if self.no_table == 'plain':
+        replies = rec['path'] == REPLIES
+        name = 'comment_replies' if replies else 'comments'
+        scenario = self.no_replies_table if replies else self.no_table
+        if scenario == 'PGRST205':
+            return self._err(rec, 404, 'PGRST205', f"Could not find the table 'public.{name}' in the schema cache")
+        if scenario == '42P01':
+            return self._err(rec, 404, '42P01', f'relation "public.{name}" does not exist')
+        if scenario == 'plain':
             return 404, 'Not Found', {}, 0
+        store = self.replies if replies else self.rows
+        if rec['method'] == 'POST':
+            if not replies:
+                return 405, {'message': 'method not allowed'}, {}, 0
+            new = json.loads(rec['body'] or b'{}')
+            new.setdefault('created_at', f'2026-11-20T10:{len(store):02d}:00Z')
+            store.append(new)
+            if 'return=representation' in rec['headers'].get('prefer', ''):
+                return 201, [dict(new)], {}, 0
+            return 201, None, {}, 0
         reserved = ('select', 'order', 'limit', 'offset')
-        matched = list(self.rows)
+        matched = list(store)
         for k, vals in rec['query'].items():
             if k in reserved:
                 continue
             for v in vals:
-                if not v.startswith('eq.'):
+                if v.startswith('in.(') and v.endswith(')'):
+                    allowed = self._in_values(v[4:-1])
+                    matched = [r for r in matched if str(r.get(k)) in allowed]
+                elif v.startswith('eq.'):
+                    matched = [r for r in matched if str(r.get(k)) == v[3:]]
+                else:
                     return self._err(rec, 400, 'PGRST100', f'unsupported operator in {k}')
-                matched = [r for r in matched if str(r.get(k)) == v[3:]]
         cols = (rec['query'].get('select') or ['*'])[0]
         if rec['method'] == 'GET':
-            if (rec['query'].get('order') or [''])[0] == 'id':
-                matched.sort(key=lambda r: r['id'])
+            order = (rec['query'].get('order') or [''])[0]
+            if order:
+                col, _, direction = order.partition('.')
+                matched.sort(key=lambda r: str(r.get(col)), reverse=direction == 'desc')
             if cols != '*':
-                matched = [{c: r.get(c) for c in cols.split(',')} for r in matched]
+                matched = [{c.split(':')[0]: self._col(r, c) for c in cols.split(',')} for r in matched]
             lim = (rec['query'].get('limit') or [None])[0]
             if lim is not None:
                 matched = matched[:int(lim)]
@@ -247,6 +272,37 @@ class FakeSupabase:
                 return 200, ([{c: r.get(c) for c in cols.split(',')} for r in matched] if cols != '*' else matched), {}, 0
             return 204, None, {}, 0
         return 405, {'message': 'method not allowed'}, {}, 0
+
+    @staticmethod
+    def _col(r, c):
+        """Колонка `select`: `ім'я` або псевдонім `alias:meta->>key` (текст ключа jsonb `meta`, як у PostgREST)."""
+        if ':' not in c:
+            return r.get(c)
+        _, expr = c.split(':', 1)
+        col, key = expr.split('->>')
+        val = (r.get(col) or {}).get(key)
+        return None if val is None else str(val)
+
+    @staticmethod
+    def _in_values(text):
+        """Вміст `in.(…)` PostgREST: значення через кому, у подвійних лапках — з `\\"` і `\\\\` усередині (кома в лапках — не роздільник)."""
+        out, cur, quoted, i = [], '', False, 0
+        while i < len(text):
+            ch = text[i]
+            if quoted and ch == '\\' and i + 1 < len(text):
+                cur += text[i + 1]
+                i += 2
+                continue
+            if ch == '"':
+                quoted = not quoted
+            elif ch == ',' and not quoted:
+                out.append(cur)
+                cur = ''
+            else:
+                cur += ch
+            i += 1
+        out.append(cur)
+        return out
 
 
 class Tripwire:
@@ -461,7 +517,7 @@ class CatalogTest(Base):
 
     def test_the_folder_ships_the_schema_the_readme_and_nothing_stray(self):
         self.assertEqual(sorted(n for n in os.listdir(MODULE_DIR) if n != '__pycache__'),
-                         ['LICENSE-supabase-js', 'README.md', 'adapter.js', 'module.json', 'schema.sql', 'server.py',
+                         ['LICENSE-supabase-js', 'README.md', 'adapter.js', 'module.json', 'replies.sql', 'schema.sql', 'server.py',
                           'supabase.min.js'])
 
     def test_loading_leaves_no_bytecode_behind(self):
@@ -645,12 +701,15 @@ class ListTest(Base):
         self.assertIn('/', chan)
         self.fn('list')(self.ctx(), chan)
         self.assertEqual([(r['method'], r['url']) for r in self.seen],
-                         [('GET', f'{URL}{TABLE}?project_id=eq.{q(chan)}&order=id&select=*&limit=5001')])
-        (rec,) = self.api.requests
+                         [('GET', f'{URL}{TABLE}?project_id=eq.{q(chan)}&order=id&select=*&limit=5001'),
+                          ('GET', f'{URL}{REPLIES}?project_id=eq.{q(chan)}&order=created_at'
+                                  f'&select=id,comment_id,author,text,ts,edited_ts,agent&limit=20001')])
+        rec, rrec = self.api.requests
         self.assertEqual(rec['raw_path'], f'{TABLE}?project_id=eq.deai%2F{self.sp["id"]}%2Ftask-1&order=id&select=*&limit=5001')
         self.assertEqual(rec['body'], b'')
         self.assertEqual({k: v for k, v in rec['headers'].items() if k in ('apikey', 'authorization', 'accept')},
                          {'apikey': KEY, 'authorization': 'Bearer ' + KEY, 'accept': 'application/json'})
+        self.assertEqual((rrec['path'], rrec['body']), (REPLIES, b''))
 
     def test_hostile_channels_stay_inside_one_filter(self):
         ctx = self.ctx()
@@ -658,9 +717,10 @@ class ListTest(Base):
                      '../x', 'a?b', 'x' * 190):
             self.api.requests.clear()
             self.fn('list')(ctx, chan)
-            (rec,) = self.api.requests
+            rec, rrec = self.api.requests
             self.assertEqual(set(rec['query']), {'project_id', 'order', 'select', 'limit'}, chan)
             self.assertEqual(rec['query']['project_id'], ['eq.' + chan], chan)
+            self.assertEqual(rrec['query']['project_id'], ['eq.' + chan], chan)
 
     def test_only_rows_of_the_channel_come_back_ordered_by_id(self):
         chan, other = self.chan('t1'), self.chan('t2')
@@ -770,7 +830,7 @@ class ListTest(Base):
         self.fn('list')(self.ctx(), chan)
         self.fn('resolve')(self.ctx(), chan, 'a', 'r')
         self.fn('check')(self.ctx())
-        self.assertEqual([r['timeout'] for r in self.seen], [8, 8, 4])
+        self.assertEqual([r['timeout'] for r in self.seen], [8, 8, 8, 4, 4], 'list: коментарі+відповіді, resolve, check: коментарі+відповіді')
 
     def test_a_giant_answer_is_refused(self):
         self.patch_globals(MAX_BODY=1000)
@@ -802,7 +862,7 @@ class RecentTest(Base):
         self.api.override('GET', 200, [{'id': 'a', 'ts': 't', 'author': 'o', 'status': 'open', 'version': '2'}])
         got = self.fn('recent')(self.ctx(), chan)
         self.assertEqual(got, [{'id': 'a', 'ts': 't', 'author': 'o', 'status': 'open', 'version': '2'}])
-        (rec,) = self.api.requests
+        rec = self.api.requests[0]
         self.assertEqual(rec['method'], 'GET')
         self.assertEqual(rec['query']['project_id'], ['eq.' + chan])
         self.assertEqual(rec['query']['status'], ['eq.open'])
@@ -964,8 +1024,9 @@ class CheckTest(Base):
             self.api.overrides.clear()
             self.api.override('GET', 200, body)
             res = self.fn('check')(self.ctx())
-            self.assertEqual(res, {'ok': True, 'detail': 'таблиця comments доступна'})
-            (rec,) = self.api.requests
+            self.assertEqual(res, {'ok': True, 'replies': True, 'detail': 'таблиці comments і comment_replies доступні'})
+            rec, rrec = self.api.requests
+            self.assertEqual((rrec['method'], rrec['raw_path'], rrec['body']), ('GET', f'{REPLIES}?select=id&limit=1', b''))
             self.assertEqual((rec['method'], rec['raw_path'], rec['body']), ('GET', f'{TABLE}?select=id&limit=1', b''))
             self.assertEqual((rec['headers']['apikey'], rec['headers']['authorization']), (KEY, 'Bearer ' + KEY))
 
@@ -1058,7 +1119,8 @@ class CheckTest(Base):
 
     def test_through_the_core_it_is_the_same_verdict_scrubbed(self):
         self.ctx()
-        self.assertEqual(dm.check(self.sp, MID), {'ok': True, 'detail': 'таблиця comments доступна'})
+        # ядро лишає у вердикті лише `ok`/`error`/`detail`: поле `replies` модуля до нього не доходить
+        self.assertEqual(dm.check(self.sp, MID), {'ok': True, 'detail': 'таблиці comments і comment_replies доступні'})
         self.api.override('GET', 401, {'message': 'Invalid API key'})
         res = dm.check(self.sp, MID)
         self.assertEqual((res['ok'], res['error']), (False, 'bad-key'))
@@ -1083,9 +1145,10 @@ class KeySafetyTest(Base):
 
     def test_the_key_is_only_in_the_two_headers_of_requests_to_the_configured_host(self):
         self.run_everything()
-        self.assertEqual(len(self.seen), 4, 'list, resolve ×2, check; client_config у мережу не ходить')
+        self.assertEqual(len(self.seen), 6, 'list ×2 (коментарі, відповіді), resolve ×2, check ×2; client_config у мережу не ходить')
         for req in self.seen:
-            self.assertTrue(req['url'].startswith(f'https://{HOST}/rest/v1/comments'), req['url'])
+            self.assertTrue(req['url'].startswith((f'https://{HOST}/rest/v1/comments', f'https://{HOST}/rest/v1/comment_replies')),
+                            req['url'])
             self.assertEqual(urllib.parse.urlsplit(req['url']).hostname, HOST)
             self.assertEqual(req['headers']['apikey'], KEY)
             self.assertEqual(req['headers']['authorization'], 'Bearer ' + KEY)
@@ -1199,6 +1262,408 @@ PUBLIC_KEYS = [
     jwt({'role': ['service_role']}), jwt({'role': 'Service_Role'}), jwt({'role': 'service_role_x'}), jwt({'x': {'role': 'service_role'}}),
     jwt('[' * 5000), 'eyJ.!!!.sig', 'sb_Secret_x', 'xsb_secret_x',
 ]
+
+
+# ------------------------------------------------------------------------------------------ відповіді (0.34)
+
+def reply_row(rid, comment_id, channel, **over):
+    """Рядок таблиці `comment_replies` у формі PostgREST."""
+    out = {'id': rid, 'comment_id': comment_id, 'project_id': channel, 'author': 'Олена', 'text': f'відповідь {rid}',
+           'ts': '20.11.2026 10:00', 'edited_ts': None, 'agent': False, 'created_at': f'2026-11-20T10:00:{len(rid) % 60:02d}Z'}
+    out.update(over)
+    return out
+
+
+class RepliesBase(Base):
+    def reply(self, *args, ctx=None):
+        """`reply` ядро поки не вантажить (його немає в `ROLE_OPTIONAL_FUNCTIONS`: це справа агента) — беремо з глобалів модуля."""
+        return self.g['reply'](ctx if ctx is not None else self.ctx(), *args)
+
+    def reply_fails(self, *args, ctx=None):
+        try:
+            self.reply(*args, ctx=ctx)
+        except BaseException as e:  # noqa: BLE001
+            return e
+        self.fail('очікували виняток')
+
+    def breaks_network_for_replies(self):
+        real = self.g['_open']
+
+        def op(req, timeout):
+            if '/comment_replies' in req.full_url:
+                raise OSError('обрив')
+            return real(req, timeout)
+        self.patch_globals(_open=op)
+
+
+class ListRepliesTest(RepliesBase):
+    def test_replies_are_attached_to_their_comments_in_created_order(self):
+        chan = self.chan()
+        self.api.rows = [row('a', chan), row('b', chan), row('c', chan)]
+        self.api.replies = [
+            reply_row('r2', 'a', chan, created_at='2026-11-20T10:02:00Z', agent=True, edited_ts='20.11.2026 11:00', text='друга'),
+            reply_row('r1', 'a', chan, created_at='2026-11-20T10:01:00Z', text='перша'),
+            reply_row('r3', 'b', chan, created_at='2026-11-20T10:03:00Z', ts=None),
+            reply_row('rx', 'a', self.chan('other'), created_at='2026-11-20T10:00:00Z')]
+        a, b, c = self.fn('list')(self.ctx(), chan)
+        self.assertEqual(a['replies'], [
+            {'id': 'r1', 'author': 'Олена', 'text': 'перша', 'ts': '20.11.2026 10:00'},
+            {'id': 'r2', 'author': 'Олена', 'text': 'друга', 'ts': '20.11.2026 10:00', 'editedTs': '20.11.2026 11:00', 'agent': True}])
+        self.assertEqual(b['replies'], [{'id': 'r3', 'author': 'Олена', 'text': 'відповідь r3', 'ts': None}])
+        self.assertNotIn('replies', c, 'коментар без відповідей лишається таким, як був')
+        self.assertNotIn('editedTs', a['replies'][0])
+        self.assertNotIn('agent', a['replies'][0], '`agent` лише коли true')
+
+    def test_orphan_replies_are_dropped(self):
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.api.replies = [reply_row('r1', 'gone', chan), reply_row('r2', 'a', chan, created_at='2026-11-20T10:05:00Z')]
+        (a,) = self.fn('list')(self.ctx(), chan)
+        self.assertEqual([r['id'] for r in a['replies']], ['r2'])
+
+    def test_a_missing_replies_table_gives_the_comments_without_replies_and_no_error(self):
+        chan = self.chan()
+        for how in ('plain', 'PGRST205', '42P01'):
+            self.api.no_replies_table = how
+            self.api.rows = [row('a', chan)]
+            got = self.fn('list')(self.ctx(), chan)
+            self.assertEqual([c['id'] for c in got], ['a'], how)
+            self.assertNotIn('replies', got[0], how)
+
+    def test_any_failure_of_the_replies_request_keeps_the_comments(self):
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        for status, body in ((500, {'message': 'oops'}), (401, {'message': 'Invalid API key'}), (403, None), (302, None),
+                             (200, {'message': 'not a list'}), (200, 'not json')):
+            self.api.overrides.clear()
+            self.api.override('GET', status, body, path=REPLIES)
+            got = self.fn('list')(self.ctx(), chan)
+            self.assertEqual([c['id'] for c in got], ['a'], status)
+            self.assertNotIn('replies', got[0], status)
+
+    def test_a_network_failure_and_an_oversize_answer_of_the_replies_keep_the_comments(self):
+        chan = self.chan()
+        self.api.rows = [row('a', chan, fp=None, html_snapshot=None, meta=None)]
+        self.api.override('GET', 200, json.dumps([reply_row('r1', 'a', chan, text='x' * 5000)]), path=REPLIES)
+        self.patch_globals(MAX_BODY=1000)
+        got = self.fn('list')(self.ctx(), chan)
+        self.assertEqual([c['id'] for c in got], ['a'])
+        self.assertNotIn('replies', got[0])
+        self.api.overrides.clear()
+        self.breaks_network_for_replies()
+        got = self.fn('list')(self.ctx(), chan)
+        self.assertEqual([c['id'] for c in got], ['a'])
+
+    def test_the_comments_failure_is_still_an_error_and_replies_are_not_asked_for(self):
+        self.api.no_table = 'PGRST205'
+        e = self.fails('list', self.chan())
+        self.assertEqual(e.code, 'module-error')
+        self.assertEqual(len(self.api.requests), 1)
+
+
+class RecentRepliesTest(RepliesBase):
+    def seed(self, chan):
+        self.api.rows = [row('a', chan, created_at='2026-11-20T09:01:00Z'), row('b', chan, created_at='2026-11-20T09:02:00Z', meta={}),
+                         row('c', chan, status='resolved', created_at='2026-11-20T09:03:00Z')]
+        self.api.replies = [reply_row('r1', 'a', chan, created_at='2026-11-20T10:01:00Z'),
+                            reply_row('r2', 'c', chan, created_at='2026-11-20T10:02:00Z'),
+                            reply_row('r3', 'b', chan, created_at='2026-11-20T10:03:00Z', author='Агент'),
+                            reply_row('r4', 'a', chan, created_at='2026-11-20T10:04:00Z')]
+
+    def test_comment_items_then_replies_of_open_comments_newest_first(self):
+        chan = self.chan()
+        self.seed(chan)
+        got = self.fn('recent')(self.ctx(), chan)
+        self.assertEqual(got, [
+            {'id': 'b', 'ts': '19.10.2026 10:00', 'author': 'Олена', 'status': 'open', 'version': None},
+            {'id': 'a', 'ts': '19.10.2026 10:00', 'author': 'Олена', 'status': 'open', 'version': '2/x'},
+            {'id': 'r4', 'ts': '20.11.2026 10:00', 'author': 'Олена', 'status': 'open', 'version': '2/x', 'parent': 'a'},
+            {'id': 'r3', 'ts': '20.11.2026 10:00', 'author': 'Агент', 'status': 'open', 'version': None, 'parent': 'b'},
+            {'id': 'r1', 'ts': '20.11.2026 10:00', 'author': 'Олена', 'status': 'open', 'version': '2/x', 'parent': 'a'}])
+        self.assertNotIn('r2', [i['id'] for i in got], 'відповідь на закритий коментар не рахується')
+        for item in got:
+            self.assertFalse({'text', 'htmlSnapshot', 'html_snapshot', 'fp', 'meta'} & set(item), item)
+
+    def test_the_requests_are_light_and_the_parent_filter_is_quoted(self):
+        chan = self.chan()
+        self.seed(chan)
+        self.fn('recent')(self.ctx(), chan)
+        c, r, p = self.api.requests
+        self.assertEqual((c['path'], r['path'], p['path']), (TABLE, REPLIES, TABLE))
+        self.assertEqual(r['query']['select'], ['id,comment_id,author,ts'])
+        self.assertEqual((r['query']['order'], r['query']['limit']), (['created_at.desc'], ['200']))
+        self.assertEqual(r['query']['project_id'], ['eq.' + chan])
+        self.assertEqual(p['query']['id'], ['in.("a","b","c")'])
+        self.assertIn('id=in.(%22a%22,%22b%22,%22c%22)', p['raw_query'])
+        self.assertEqual((p['query']['status'], p['query']['project_id']), (['eq.open'], ['eq.' + chan]))
+        self.assertEqual(p['query']['select'], ['id,version:meta->>version'])
+
+    def test_awkward_comment_ids_stay_inside_their_quotes(self):
+        chan = self.chan()
+        weird = 'x,"y)\\z&=#'
+        self.api.rows = [row(weird, chan), row('plain', chan)]
+        self.api.replies = [reply_row('r1', weird, chan, created_at='2026-11-20T10:01:00Z'),
+                            reply_row('r2', 'plain', chan, created_at='2026-11-20T10:02:00Z')]
+        got = self.fn('recent')(self.ctx(), chan)
+        self.assertEqual([i['parent'] for i in got if 'parent' in i], ['plain', weird])
+
+    def test_a_long_parent_list_is_asked_in_chunks(self):
+        chan = self.chan()
+        self.patch_globals(IN_CHUNK=2)
+        self.api.rows = [row(f'k{i}', chan) for i in range(5)]
+        self.api.replies = [reply_row(f'rr{i}', f'k{i}', chan, created_at=f'2026-11-20T10:0{i}:00Z') for i in range(5)]
+        got = self.fn('recent')(self.ctx(), chan)
+        self.assertEqual([i['parent'] for i in got if 'parent' in i], ['k4', 'k3', 'k2', 'k1', 'k0'])
+        parents = [r for r in self.api.requests if r['path'] == TABLE and 'id' in r['query']]
+        self.assertEqual([r['query']['id'][0].count('","') + 1 for r in parents], [2, 2, 1])
+
+    def test_a_replies_failure_returns_just_the_comments(self):
+        chan = self.chan()
+        self.seed(chan)
+        want = [i for i in self.fn('recent')(self.ctx(), chan) if 'parent' not in i]
+        self.assertEqual([i['id'] for i in want], ['b', 'a'])
+        for how in ('no-table', 500, 'not-list', 'parents-500', 'parents-not-list', 'network'):
+            self.api.overrides.clear()
+            self.api.no_replies_table = None
+            if how == 'no-table':
+                self.api.no_replies_table = 'PGRST205'
+            elif how == 500:
+                self.api.override('GET', 500, {'message': 'oops'}, path=REPLIES)
+            elif how == 'not-list':
+                self.api.override('GET', 200, {'x': 1}, path=REPLIES)
+            elif how == 'parents-500':
+                self.api.override('GET', 500, {'message': 'oops'}, path=TABLE, when=lambda rec: 'in.' in rec['query'].get('id', [''])[0])
+            elif how == 'parents-not-list':
+                self.api.override('GET', 200, {'x': 1}, path=TABLE, when=lambda rec: 'in.' in rec['query'].get('id', [''])[0])
+            elif how == 'network':
+                self.breaks_network_for_replies()
+            self.assertEqual(self.fn('recent')(self.ctx(), chan), want, how)
+
+    def test_without_replies_no_parent_request_is_made(self):
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.fn('recent')(self.ctx(), chan)
+        self.assertEqual([r['path'] for r in self.api.requests], [TABLE, REPLIES])
+
+
+class ReplyTest(RepliesBase):
+    def open_comment(self, cid='a', **over):
+        chan = self.chan()
+        self.api.rows = [row(cid, chan, **over)]
+        return chan
+
+    def test_posts_a_reply_of_the_agent_to_an_open_comment(self):
+        chan = self.open_comment()
+        got = self.reply(chan, 'a', 'Зроблено', 'Агент')
+        self.assertEqual(set(got), {'id'})
+        self.assertRegex(got['id'], r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
+        get, post = self.api.requests
+        self.assertEqual((get['method'], get['path']), ('GET', TABLE))
+        self.assertEqual(get['raw_query'], f'id=eq.a&project_id=eq.{q(chan)}&select=id,status')
+        self.assertEqual((post['method'], post['path']), ('POST', REPLIES))
+        self.assertEqual(post['headers']['prefer'], 'return=representation')
+        self.assertEqual(post['headers']['content-type'], 'application/json')
+        body = json.loads(post['body'])
+        self.assertRegex(body.pop('ts'), r'^\d\d\.\d\d\.\d{4} \d\d:\d\d$')
+        self.assertEqual(body, {'id': got['id'], 'comment_id': 'a', 'project_id': chan, 'author': 'Агент', 'text': 'Зроблено',
+                                'agent': True})
+        self.assertIs(json.loads(post['body'])['agent'], True)
+        for rec in (get, post):
+            self.assertEqual((rec['headers']['apikey'], rec['headers']['authorization']), (KEY, 'Bearer ' + KEY))
+        self.assertEqual([r['id'] for r in self.api.replies], [got['id']])
+        (a,) = self.fn('list')(self.ctx(), chan)
+        self.assertEqual([(r['text'], r['agent']) for r in a['replies']], [('Зроблено', True)])
+
+    def test_every_reply_gets_its_own_id(self):
+        chan = self.open_comment()
+        self.assertNotEqual(self.reply(chan, 'a', 't', 'x')['id'], self.reply(chan, 'a', 't', 'x')['id'])
+
+    def test_a_missing_comment_is_refused_and_nothing_is_posted(self):
+        chan = self.open_comment()
+        for cid, ch in (('zzz', chan), ('a', self.chan('other'))):
+            e = self.reply_fails(ch, cid, 'текст', 'Агент')
+            self.assertIsInstance(e, dm.ModuleError)
+            self.assertEqual((e.code, e.message), ('module-error', 'коментар не знайдено'))
+        self.assertEqual(self.api.reqs('POST'), [])
+
+    def test_a_closed_comment_is_refused_and_nothing_is_posted(self):
+        chan = self.open_comment(status='resolved')
+        e = self.reply_fails(chan, 'a', 'текст', 'Агент')
+        self.assertEqual((e.code, e.message), ('module-error', 'коментар закрито — відповідати можна лише на відкритий'))
+        self.assertEqual(self.api.reqs('POST'), [])
+        self.assertEqual(self.api.replies, [])
+
+    def test_a_missing_replies_table_says_to_run_replies_sql(self):
+        chan = self.open_comment()
+        for how in ('plain', 'PGRST205', '42P01'):
+            self.api.no_replies_table = how
+            e = self.reply_fails(chan, 'a', 'текст', 'Агент')
+            self.assertEqual((e.code, e.message), ('module-error',
+                                                    'у проєкті нема таблиці відповідей — виконайте replies.sql у SQL-редакторі проєкту'), how)
+
+    def test_a_missing_comments_table_is_the_comments_text(self):
+        self.api.no_table = 'PGRST205'
+        e = self.reply_fails(self.chan(), 'a', 'текст', 'Агент')
+        self.assertIn('schema.sql', e.message)
+
+    def test_other_errors_go_through_the_common_classification(self):
+        chan = self.open_comment()
+        self.api.override('POST', 500, {'message': 'oops'}, path=REPLIES)
+        e = self.reply_fails(chan, 'a', 'текст', 'Агент')
+        self.assertEqual((e.code, e.message), ('module-error', 'Supabase відповів HTTP 500: oops'))
+        self.api.overrides.clear()
+        self.api.override('GET', 503, None, path=TABLE)
+        self.assertIn('HTTP 503', self.reply_fails(chan, 'a', 'текст', 'Агент').message)
+        self.api.overrides.clear()
+        self.breaks_network_for_replies()
+        self.assertIn('недоступний', self.reply_fails(chan, 'a', 'текст', 'Агент').message)
+
+    def test_a_2xx_answer_without_the_created_row_is_not_a_confirmation(self):
+        chan = self.open_comment()
+        for body in (None, [], {'id': 'x'}, 'not json', b'5'):
+            self.api.overrides.clear()
+            self.api.override('POST', 201, body, path=REPLIES)
+            e = self.reply_fails(chan, 'a', 'текст', 'Агент')
+            self.assertEqual(e.code, 'module-error', repr(body))
+            self.assertIn('не підтвердив', e.message, repr(body))
+
+    def test_bad_input_is_refused_before_any_request(self):
+        chan = self.open_comment()
+        cases = [(chan, 'a', '', 'Агент'), (chan, 'a', '   \n', 'Агент'), (chan, 'a', None, 'Агент'), (chan, 'a', 5, 'Агент'),
+                 (chan, 'a', 'т', ''), (chan, 'a', 'т', '  '), (chan, 'a', 'т', None), (chan, 'a', 'т', 7),
+                 ('', 'a', 'т', 'А'), (None, 'a', 'т', 'А'), (chan, '', 'т', 'А'), (chan, None, 'т', 'А'), (chan, 5, 'т', 'А'),
+                 (chan, 'a\ud800', 'т', 'А')]
+        for args in cases:
+            e = self.reply_fails(*args)
+            self.assertIsInstance(e, dm.ModuleError, repr(args))
+            self.assertEqual(e.code, 'module-error', repr(args))
+        self.assertEqual(self.seen, [])
+
+    def test_text_and_author_are_trimmed_and_cut(self):
+        chan = self.open_comment()
+        self.reply(chan, 'a', '  ' + 'ж' * 4500 + '  ', ' ' + 'А' * 150)
+        body = json.loads(self.api.reqs('POST')[-1]['body'])
+        self.assertEqual(body['text'], 'ж' * 4000)
+        self.assertEqual(body['author'], 'А' * 100)
+        self.reply(chan, 'a', 'ж' * 4000, 'x')
+        self.assertEqual(len(json.loads(self.api.reqs('POST')[-1]['body'])['text']), 4000)
+        self.reply(chan, 'a', '  привіт\n', 'x')
+        self.assertEqual(json.loads(self.api.reqs('POST')[-1]['body'])['text'], 'привіт')
+
+    def test_a_lone_surrogate_in_the_text_becomes_a_question_mark(self):
+        chan = self.open_comment()
+        self.reply(chan, 'a', 'a\ud800b', 'Агент\udc00')
+        body = json.loads(self.api.reqs('POST')[-1]['body'])
+        self.assertEqual((body['text'], body['author']), ('a?b', 'Агент?'))
+
+    def test_hostile_ids_stay_inside_their_filters(self):
+        chan = self.chan()
+        weird = 'a&status=eq.resolved#'
+        self.api.rows = [row(weird, chan)]
+        self.reply(chan, weird, 'т', 'А')
+        get = self.api.requests[0]
+        self.assertEqual(get['query']['id'], ['eq.' + weird])
+        self.assertEqual(set(get['query']), {'id', 'project_id', 'select'})
+
+    def test_the_module_stays_valid_when_the_core_does_not_know_reply_yet(self):
+        m = dm.catalog()[MID]
+        self.assertEqual((m.status, m.error), ('ok', None))
+        self.assertTrue(callable(self.g['reply']))
+        self.assertNotIn('reply', sum(dm.ROLE_OPTIONAL_FUNCTIONS.values(), ()), 'додати `reply` у ядро — Task 9')
+        self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS['comments'], ('recent',))
+
+
+class CheckRepliesTest(RepliesBase):
+    BASE = 'таблиця comments доступна'
+
+    def test_both_tables_answer(self):
+        self.assertEqual(self.fn('check')(self.ctx()),
+                         {'ok': True, 'replies': True, 'detail': 'таблиці comments і comment_replies доступні'})
+
+    def test_a_missing_replies_table_keeps_ok_and_says_what_to_run(self):
+        for how in ('plain', 'PGRST205', '42P01'):
+            self.api.no_replies_table = how
+            self.assertEqual(self.fn('check')(self.ctx()),
+                             {'ok': True, 'replies': False,
+                              'detail': self.BASE + '; для відповідей виконайте replies.sql у SQL-редакторі проєкту'}, how)
+
+    def test_an_erroring_replies_probe_keeps_ok_and_carries_the_classified_text(self):
+        for status, body, text in ((500, {'message': 'oops'}, 'Supabase відповів HTTP 500: oops'),
+                                   (401, {'message': 'Invalid API key'}, 'Supabase не прийняв ключ (HTTP 401): Invalid API key'),
+                                   (200, {'x': 1}, 'Supabase відповів HTTP 200, але не списком рядків')):
+            self.api.overrides.clear()
+            self.api.override('GET', status, body, path=REPLIES)
+            res = self.fn('check')(self.ctx())
+            self.assertEqual(res, {'ok': True, 'replies': False,
+                                   'detail': self.BASE + '; таблиця відповідей не відповіла: ' + text}, status)
+        self.api.overrides.clear()
+        self.breaks_network_for_replies()
+        res = self.fn('check')(self.ctx())
+        self.assertEqual((res['ok'], res['replies']), (True, False))
+        self.assertEqual(res['detail'], self.BASE + '; таблиця відповідей не відповіла: Supabase недоступний (OSError)')
+
+    def test_a_failing_comments_probe_is_not_followed_by_a_replies_probe(self):
+        self.api.no_table = 'PGRST205'
+        res = self.fn('check')(self.ctx())
+        self.assertEqual((res['ok'], res['error']), (False, 'no-schema'))
+        self.assertNotIn('replies', res)
+        self.assertEqual([r['path'] for r in self.api.requests], [TABLE])
+
+    def test_both_probes_use_the_check_budget(self):
+        self.fn('check')(self.ctx())
+        self.assertEqual([(r['url'].split('?')[0][len(URL):], r['timeout']) for r in self.seen],
+                         [(TABLE, 4), (REPLIES, 4)])
+
+
+class RepliesKeySafetyTest(RepliesBase):
+    def test_errors_of_every_replies_path_never_carry_the_key(self):
+        self.api.echo_key = True
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        texts = []
+        for status in (400, 401, 403, 404, 500, 503):
+            self.api.overrides.clear()
+            self.api.override(None, status, {'code': 'XX000', 'message': f'oops {KEY}', 'details': f'key={KEY}',
+                                             'hint': f'Authorization: Bearer {KEY}'}, path=REPLIES)
+            for call in (lambda: self.reply(chan, 'a', 'т', 'А'), lambda: self.fn('check')(self.ctx()),
+                         lambda: self.fn('list')(self.ctx(), chan), lambda: self.fn('recent')(self.ctx(), chan)):
+                try:
+                    texts.append(json.dumps(call()))
+                except BaseException as e:  # noqa: BLE001
+                    texts += self.exc_texts(e)
+        self.assertTrue(texts)
+        for t in texts:
+            self.assertNotIn(KEY, t)
+            for part in KEY.split('.'):
+                if len(part) > 8:
+                    self.assertNotIn(part, t)
+
+    def test_request_with_a_table_sends_the_key_only_to_the_project_url(self):
+        ctx = self.ctx()
+        status, _ = self.g['_request'](ctx, 'GET', 'select=id&limit=1', timeout=4, table=self.g['REPLIES_PATH'])
+        self.assertEqual(status, 200)
+        (req,) = self.seen
+        self.assertEqual(req['url'], f'{URL}{REPLIES}?select=id&limit=1')
+        self.assertEqual((req['headers']['apikey'], req['headers']['authorization']), (KEY, 'Bearer ' + KEY))
+        self.assertNotIn(KEY, req['url'])
+        self.g['_request'](ctx, 'GET', 'select=id', timeout=4)
+        self.assertEqual(self.seen[-1]['url'], f'{URL}{TABLE}?select=id', 'без `table` — як і раніше таблиця comments')
+
+    def test_a_redirect_on_the_replies_path_does_not_leak_the_key(self):
+        evil = self.evil_server()
+        self.api.redirect_to = evil.base
+        status, _ = self.g['_request'](self.ctx(), 'GET', 'select=id', timeout=4, table=self.g['REPLIES_PATH'])
+        self.assertEqual(status, 302)
+        self.assertEqual(evil.requests, [], 'за переадресацією не йдемо: ключ чужому хосту не віддано')
+        res = self.fn('check')(self.ctx())
+        self.assertTrue(res['ok'] is False or res.get('replies') is False)
+        self.assertEqual(evil.requests, [])
+
+    def test_only_the_request_function_knows_the_key_headers(self):
+        src = _read(SERVER).decode('utf-8')
+        self.assertEqual(len(re.findall(r"'apikey'", src)), 1)
+        self.assertEqual(len(re.findall(r"'Authorization'", src)), 1)
+
 
 
 class ServiceKeyTest(Base):
@@ -1424,7 +1889,7 @@ class StaticTest(unittest.TestCase):
                 mods |= {a.name.split('.')[0] for a in n.names}
             elif isinstance(n, ast.ImportFrom):
                 mods.add((n.module or '').split('.')[0])
-        self.assertEqual(mods, {'base64', 'json', 're', 'ssl', 'certifi', 'urllib'})
+        self.assertEqual(mods, {'base64', 'json', 're', 'ssl', 'certifi', 'urllib', 'time', 'uuid'})
         for core in ('serve', 'deai_modules', 'spaces'):
             self.assertNotIn(core, mods)
 
@@ -1465,7 +1930,7 @@ class StaticTest(unittest.TestCase):
             '5a68fe329bb3d7474b136e44739ed3ea655bf381c6104297c9c536f5387a59a8',
             '48c6e1190dd76af4a94fcf5827775d9e434743caf23920146c8bb5dc374a8d6a',
         }
-        for name in ('server.py', 'adapter.js', 'schema.sql', 'README.md', 'module.json', 'LICENSE-supabase-js'):
+        for name in ('server.py', 'adapter.js', 'schema.sql', 'replies.sql', 'README.md', 'module.json', 'LICENSE-supabase-js'):
             text = _read(os.path.join(MODULE_DIR, name)).decode('utf-8')
             found = [m.group(0) for m in bad.finditer(text)]
             found += [w for w in re.findall(r'\w+', text.lower())
@@ -1557,9 +2022,10 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
 
     def test_enabling_through_the_api_runs_the_check_against_the_service(self):
         body = self.enable_via_api()
-        self.assertEqual(body['check'], {'ok': True, 'detail': 'таблиця comments доступна'})
+        self.assertEqual(body['check'], {'ok': True, 'detail': 'таблиці comments і comment_replies доступні'})
         self.assertEqual(body['module']['id'], MID)
-        self.assertEqual([(r['method'], r['url']) for r in self.seen], [('GET', f'{URL}{TABLE}?select=id&limit=1')])
+        self.assertEqual([(r['method'], r['url']) for r in self.seen],
+                         [('GET', f'{URL}{TABLE}?select=id&limit=1'), ('GET', f'{URL}{REPLIES}?select=id&limit=1')])
         self.assertEqual(dm.provider('comments', self.plain).id, MID)
         self.assertEqual(dm.capabilities(self.plain)['comments'], MID)
 
@@ -1613,7 +2079,7 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
         html = self.page('project')
         self.assertNotIn('window.__deaiCommentsCfg', html)
         self.assertNotIn(KEY, html)
-        self.assertEqual(len(self.seen), 1, 'після порчі адреси в мережу більше не ходили')
+        self.assertEqual(len(self.seen), 2, 'після порчі адреси в мережу більше не ходили (лише check при вмиканні: comments і відповіді)')
 
     def test_a_service_key_never_reaches_a_page_or_the_overview_config(self):
         key = jwt(SERVICE_CLAIMS)

@@ -1,4 +1,4 @@
--- Deai Canvas · module `supabase-comments` · schema of the shared comments table.
+-- Deai Canvas · module `supabase-comments` · schema of the shared comments table (and of its replies, `comment_replies`).
 --
 -- Run this ONCE in the SQL editor of YOUR Supabase project (Dashboard -> SQL Editor -> New query -> Run).
 -- The module never changes the schema itself: that would need a service key, and it is deliberately not given one.
@@ -8,6 +8,9 @@
 -- !! has a table `public.comments` of its own, this script ADOPTS it — it turns row-level security on, replaces its
 -- !! policies with the open ones below and grants the public (anon) key full read/write access to it. Run it only in a
 -- !! project where `public.comments` is yours to hand over (a fresh one, or one that already holds Deai Canvas comments).
+-- !! The same holds for `public.comment_replies`, which the last block of this script creates the same way (also available
+-- !! alone as `replies.sql`: for a project that already has the comments schema, and for a shared database whose comments
+-- !! policies differ — there run ONLY `replies.sql`, never this whole file).
 create table if not exists public.comments (
   -- Client-assigned globally-unique id (uuid string). Sequential ids collide
   -- across reviewers, so the browser layer generates a uuid; the DB never assigns one.
@@ -108,3 +111,87 @@ begin
 exception when duplicate_object then
   null;
 end $$;
+
+-- >>> replies
+create table if not exists public.comment_replies (
+  -- Client-assigned globally-unique id (uuid string), like `comments.id`.
+  id         text primary key,
+  comment_id text not null,
+  project_id text not null,
+  author     text not null,
+  text       text not null,
+  ts         text,
+  edited_ts  text,
+  agent      boolean not null default false,
+  created_at timestamptz default now()
+);
+
+create index if not exists comment_replies_project_idx on public.comment_replies(project_id);
+
+alter table public.comment_replies enable row level security;
+
+-- Same open policies as `cl_*` on `comments` (see the notes in `schema.sql`): the public key can read and write replies.
+drop policy if exists clr_read   on public.comment_replies;
+drop policy if exists clr_insert on public.comment_replies;
+drop policy if exists clr_update on public.comment_replies;
+drop policy if exists clr_delete on public.comment_replies;
+create policy clr_read   on public.comment_replies for select using (true);
+create policy clr_insert on public.comment_replies for insert with check (true);
+create policy clr_update on public.comment_replies for update using (true) with check (true);
+create policy clr_delete on public.comment_replies for delete using (true);
+
+-- The table privilege itself, which a fresh project may not grant to the Data API roles automatically.
+grant select, insert, update, delete on public.comment_replies to anon, authenticated;
+
+-- Grants and RLS are separate layers: the TRUNCATE privilege ignores policies entirely.
+revoke truncate, references, trigger on public.comment_replies from anon, authenticated;
+
+-- project_id is immutable, and one request cannot wipe more than one project's replies (at most 100 rows: the adapter
+-- deletes the replies of a few comments per request). `row_security_active()` keeps both guards off service_role/owner.
+create or replace function public.clr_project_id_immutable() returns trigger
+language plpgsql set search_path = pg_catalog, public as $$
+begin
+  if row_security_active('public.comment_replies')
+     and new.project_id is distinct from old.project_id then
+    raise exception 'comment_replies.project_id is immutable (% -> %)', old.project_id, new.project_id
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clr_project_id_immutable on public.comment_replies;
+create trigger clr_project_id_immutable before update on public.comment_replies
+for each row execute function public.clr_project_id_immutable();
+
+create or replace function public.clr_delete_scope_guard() returns trigger
+language plpgsql set search_path = pg_catalog, public as $$
+declare n int; p int;
+begin
+  if not row_security_active('public.comment_replies') then
+    return null;
+  end if;
+  select count(*), count(distinct project_id) into n, p from removed;
+  if p > 1 then
+    raise exception 'a delete must stay within one project_id (got %)', p
+      using errcode = 'check_violation';
+  end if;
+  if n > 100 then
+    raise exception 'at most 100 replies may be deleted per request (got %)', n
+      using errcode = 'check_violation';
+  end if;
+  return null;
+end $$;
+
+drop trigger if exists clr_delete_scope_guard on public.comment_replies;
+create trigger clr_delete_scope_guard after delete on public.comment_replies
+referencing old table as removed
+for each statement execute function public.clr_delete_scope_guard();
+
+-- Realtime for live updates (no error when the table is already published).
+do $$
+begin
+  alter publication supabase_realtime add table public.comment_replies;
+exception when duplicate_object then
+  null;
+end $$;
+-- <<< replies

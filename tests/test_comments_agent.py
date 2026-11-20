@@ -115,6 +115,10 @@ class Net:
     def __init__(self):
         self.calls, self.rows, self.bodies, self.error = [], [], [], None
 
+    def comment_calls(self):
+        """Виклики таблиці `comments`: `list` (0.34) додатково читає `comment_replies` — тут той другий запит не рахується."""
+        return [c for c in self.calls if '/rest/v1/comment_replies' not in c[1]]
+
     def __call__(self, req, timeout=None, context=None):
         self.calls.append((req.get_method(), req.full_url))
         if req.data:
@@ -342,7 +346,7 @@ class InboxModuleTest(AgentEnv):
         self.use(self.liga)
         self.net.rows = [rest('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7)]
         _, legacy_out, _ = self.inbox(['--all'])
-        self.assertEqual(len(self.net.calls), 1, 'контроль: ЛІГА питає свій Supabase')
+        self.assertEqual(len(self.net.comment_calls()), 1, 'контроль: ЛІГА питає свій Supabase')
         self.assertTrue(self.pin_lines(module_out))
         self.assertEqual(self.pin_lines(module_out), self.pin_lines(legacy_out))
 
@@ -524,14 +528,14 @@ class InboxOtherProvidersTest(AgentEnv):
         self.assertIn('-- ПРОЄКТ (колеги + історія, Supabase) --', out)
         self.assertIn('• P#7 [2/me--welcome] Кнопку вирівняти  [c0ffee01 · Олена]', out)
         # запит модуля: канал у `project_id`, `select=*` (свідома відмінність від 0.9.0: перелік колонок)
-        self.assertEqual(self.net.calls, [('GET', f'{sbconf.SB_URL}/rest/v1/comments?project_id=eq.dc%2Flx'
-                                                  '&order=id&select=*&limit=5001')])
+        self.assertEqual(self.net.comment_calls(), [('GET', f'{sbconf.SB_URL}/rest/v1/comments?project_id=eq.dc%2Flx'
+                                                            '&order=id&select=*&limit=5001')])
         self.assertEqual(self.svc.log, [])
         rc, out, _ = self.inbox(['resolve', 'c0ffee01', '--reason', 'готово'])
         self.assertEqual(rc, 0, out)
         self.assertIn('✓ c0ffee01 закрито (проєкт, Іт.1): «готово»', out)
-        self.assertEqual([m for m, _ in self.net.calls], ['GET', 'GET', 'PATCH'])
-        self.assertEqual(self.net.calls[-1][1], f'{sbconf.SB_URL}/rest/v1/comments?id=eq.c0ffee01-aaaa'
+        self.assertEqual([m for m, _ in self.net.comment_calls()], ['GET', 'GET', 'PATCH'])
+        self.assertEqual(self.net.comment_calls()[-1][1], f'{sbconf.SB_URL}/rest/v1/comments?id=eq.c0ffee01-aaaa'
                                                 '&project_id=eq.dc%2Flx&select=id')
         self.assertEqual(self.svc.log, [])
 
@@ -595,7 +599,7 @@ class InboxOtherProvidersTest(AgentEnv):
         rc, out, _ = self.inbox(['--all'])
         self.assertEqual(rc, 0, out)
         self.assertIn('(колеги + історія, Supabase)', out)
-        self.assertEqual(len(self.net.calls), 1)
+        self.assertEqual(len(self.net.comment_calls()), 1)
 
     def test_a_module_that_does_not_answer_in_time_is_a_message(self):
         self.mkcm('slow', settings=[], server=tm.CHECK_ONLY + (
@@ -847,7 +851,7 @@ class DecisionTest(AgentEnv):
         self.assertEqual([p['id'] for p in pc.pins({'comment_project': 'dc/custom'}, 'lx')], ['c0ffee01-aaaa'])
         self.assertIn('project_id=eq.dc%2Fcustom&', self.net.calls[-1][1])
         pc.resolve({'comment_project': 'dc/custom'}, 'lx', 'c0ffee01-aaaa', 'r')
-        self.assertEqual([m for m, _ in self.net.calls], ['GET', 'PATCH'])
+        self.assertEqual([m for m, _ in self.net.comment_calls()], ['GET', 'PATCH'])
         self.assertEqual(self.svc.log, [], 'ЛІГА не ходить у модуль простору')
 
     def test_the_league_passes_the_iteration_and_a_space_module_gets_none(self):
@@ -1264,7 +1268,7 @@ class CommentsRouteTest(ServerEnv):
         self.net.rows = rows
         st, body, _ = self.get('project')
         self.assertEqual((st, body), (200, {'project': 'dc/lx', 'comments': rows, 'all': True}))
-        self.assertEqual(len(self.net.calls), 1)
+        self.assertEqual(len(self.net.comment_calls()), 1)
         self.assertEqual(self.svc.log, [])
         st, body, _ = self.get('internal')
         self.assertEqual(body['project'], 'dc/lx/internal')
@@ -1401,7 +1405,7 @@ class StateTest(AgentEnv):
         self.use(self.liga)
         self.net.rows = [assigned(rest('c0ffee01-aaaa', 'a')), assigned(rest('c0ffee02-bbbb', 'b', status='resolved'))]
         self.assertIn('+ 1 проєктних', self.line())
-        self.assertEqual(len(self.net.calls), 1)
+        self.assertEqual(len(self.net.comment_calls()), 1)
 
 
 class CommentNewsRouteTest(ServerEnv):
