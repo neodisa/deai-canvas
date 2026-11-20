@@ -169,7 +169,7 @@ test("1: перемикання на «P» без інтеграцій — см�
   assert.ok(acts.includes("publish") && acts.includes("dd:pub"), `публікація модулем зникла в просторі без інтеграцій (${acts})`);
   await page.click('#bar [data-dd="pub"]');
   assert.deepEqual(await page.$$eval("#bar .dd--right [data-act]", (els) => els.map((e) => e.dataset.act)),
-    ["togglepub", "openpreview", "copylink"], "дропдаун публікації модулем: пароль ЛІГА чи Teams там не мають бути");
+    ["togglepub", "openpreview", "copylink", "modpw"], "дропдаун публікації модулем: пароль ЛІГА чи Teams там не мають бути; «Пароль превʼю» (0.33.0) — є");
   await page.keyboard.press("Escape");
 
   /* Назад у простір з інтеграціями: «Команда» повертається (свідок для «нема» вище). */
