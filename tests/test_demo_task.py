@@ -72,6 +72,13 @@ class DemoTask(base.Fixture):
         self.assertEqual((st, other['id'], other.get('existed')), (200, 'tally-demo-3', None),
                          '`tally-demo` живе в іншому просторі — тут нова')
 
+        # 0.33.0: демо вже є в цьому просторі під іншим номером → `reuse` віддає ЙОГО, а не плодить `tally-demo-4`
+        st, again_e = self.post('/api/demo-task', {'space': self.e_id, 'reuse': True})
+        self.assertEqual((st, again_e['id'], again_e['space'], again_e.get('existed')), (200, 'tally-demo-3', self.e_id, True))
+        self.assertFalse(os.path.exists(os.path.join(self.e_path, 'tally-demo-4')), '`reuse` нічого не створює')
+        st, again_p = self.post('/api/demo-task', {'space': self.p_id, 'reuse': True})
+        self.assertEqual((st, again_p['id'], again_p.get('existed')), (200, 'tally-demo', True), 'найнижчий номер')
+
     def test_refusals(self):
         st, body = self.post('/api/demo-task', {'space': 'nope-space'})
         self.assertEqual((st, body['code']), (400, 'unknown-space'))

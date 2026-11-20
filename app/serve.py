@@ -384,6 +384,24 @@ def demo_task_id():
         n += 1
 
 
+def demo_task_in(space_id):
+    """Id найнижчої за НОМЕРОМ (не за рядком) демо-задачі, що живе рівно в просторі `space_id` і більше ніде: `tally-demo`, далі
+    `tally-demo-2`, `-3`… Нема такої чи реєстр не прочитати → `None` (тоді `reuse` створює нову, як і раніше). Шар вимкнено —
+    стара поведінка: `find_task(DEMO_ID)` проти id простору."""
+    try:
+        if not spaces.layer_on():
+            home = spaces.find_task(DEMO_ID)
+            return DEMO_ID if home is not None and home.get('id') == space_id else None
+        found = []
+        for tid, where in spaces.task_ids_by_space(spaces.load_registry()).items():
+            m = re.fullmatch(re.escape(DEMO_ID) + r'(?:-(\d+))?', tid)
+            if m and where == [space_id]:
+                found.append((int(m.group(1) or 1), tid))
+        return min(found)[1] if found else None
+    except (spaces.SpacesError, spaces.AmbiguousTask, OSError, ValueError):
+        return None
+
+
 def demo_comments(origin, pins_file=DEMO_PINS):
     """Піни шаблону → записи локального каналу задачі (та сама форма, що пише `/api/local-comments`), з адресою `origin`."""
     with open(pins_file, encoding='utf-8') as f:
@@ -8876,19 +8894,16 @@ class Handler(SimpleHTTPRequestHandler):
     def _demo_task(self, payload):
         """`POST /api/demo-task {space, title?, reuse?}` → `{ok, id, space[, existed]}` (0.33.0): демо-задача «Tally» у просторі
         `space` — той самий `_task_new` з `from` = шаблон (`DEMO_DIR`), далі два піни (`DEMO_PINS`) у локальний канал задачі з
-        адресою цього сервера. `reuse: true` (⌘K «Відкрити демо»): `tally-demo` уже в цьому просторі — віддати її, нічого не
-        створюючи. Відмови — ті самі, що в `task-new` з `from`; `space` не рядок чи порожній — 400 `bad-request`."""
+        адресою цього сервера. `reuse: true` (⌘K «Відкрити демо»): демо вже в цьому просторі (`demo_task_in`: найнижчий номер із
+        `tally-demo`, `tally-demo-2`… , що живе лише тут) — віддати його, нічого не створюючи. Відмови — ті самі, що в `task-new` з `from`; `space` не рядок чи порожній — 400 `bad-request`."""
         want = payload.get('space')
         if not isinstance(want, str) or not want:
             self._space_error(400, 'bad-request', 'space must be a non-empty string')
             return
         if payload.get('reuse') is True:
-            try:
-                home = spaces.find_task(DEMO_ID)
-            except spaces.AmbiguousTask:
-                home = None
-            if home is not None and home.get('id') == want:
-                self._send_json({'ok': True, 'id': DEMO_ID, 'space': want, 'existed': True})
+            have = demo_task_in(want)
+            if have is not None:
+                self._send_json({'ok': True, 'id': have, 'space': want, 'existed': True})
                 return
         title = payload.get('title')
         title = title.strip()[:200] if isinstance(title, str) and title.strip() else 'Tally — demo'
