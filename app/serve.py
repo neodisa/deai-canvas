@@ -7302,8 +7302,17 @@ class Handler(SimpleHTTPRequestHandler):
         # дані піна. Адаптер їх і так не шле; тут — рубіж для будь-якого писаря
         # і самоочищення старих файлів, де `_el` осів у кожному піні (fb 05.11.2026).
         # `_aud` — службова позначка адресата комбінованого сховища (0.27.0).
-        comments = [{k: v for k, v in c.items() if k not in ('_el', '_pending', '_aud')}
-                    if isinstance(c, dict) else c for c in comments]
+        # 0.34: `_goneReplies` (надгробки відповідей) і `_pending` у самих відповідях — теж runtime.
+        def _scrub(c):
+            if not isinstance(c, dict):
+                return c
+            o = {k: v for k, v in c.items()
+                 if k not in ('_el', '_pending', '_aud', '_goneReplies')}
+            if isinstance(o.get('replies'), list):
+                o['replies'] = [{k: v for k, v in r.items() if k != '_pending'}
+                                if isinstance(r, dict) else r for r in o['replies']]
+            return o
+        comments = [_scrub(c) for c in comments]
         atomic_write_json(self._local_file(task), comments, indent=1)
         self._send_json({'ok': True, 'count': len(comments)})
 

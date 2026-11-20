@@ -12,7 +12,7 @@
  * Attaches window.DeaiDualStore. Без DOM: тест — `tests/dual-store.test.mjs`.
  */
 (function () {
-  var FIELDS = ['id', 'author', 'text', 'status', 'fp', 'htmlSnapshot', 'meta', 'bornV', 'resolvedV', 'resolveReason', 'ts'];
+  var FIELDS = ['id', 'author', 'text', 'status', 'fp', 'htmlSnapshot', 'meta', 'bornV', 'resolvedV', 'resolveReason', 'ts', 'replies'];
   function strip(c) { var o = {}; for (var k in c) if (k !== '_aud') o[k] = c[k]; return o; }
   function tag(list, aud) {
     return (list || []).map(function (c) { var o = {}; for (var k in c) o[k] = c[k]; o._aud = aud; return o; });
@@ -79,6 +79,16 @@
       return Promise.race([settled, guard]);
     }
     store.ready = Promise.all([Promise.resolve(local.ready), teamReady()]).then(function () {});
+    /* Причина, чому відповіді командного каналу недоступні (0.34): лише коли команда жива, а її модуль сам сказав. */
+    Object.defineProperty(store, 'repliesDown', { enumerable: true, get: function () {
+      if (!team || store.teamDown) return null;
+      return typeof team.repliesDown === 'string' && team.repliesDown ? team.repliesDown : null;
+    } });
+    store.supportsReplies = function (aud) {
+      if (aud === 'local') return true;
+      if (aud === 'project') return !!team && team.supportsReplies === true;
+      return false;
+    };
     store.load = function () { return union(); };
     store.save = function (list) {
       var mine = { local: [], project: [] };

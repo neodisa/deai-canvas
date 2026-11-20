@@ -354,3 +354,108 @@ test("впалий запис не зупиняє чергу: наступний
 
   assert.ok(server.rows.some((c) => c.id === "next"), "після впалого запису черга стала");
 });
+
+/* ---------- Відповіді піна (0.34) ---------- */
+const reply = (id, ts, extra = {}) => ({ id, author: "Lead", text: `відповідь ${id}`, ts, ...extra });
+const copyOf = (s) => s.load().map((c) => JSON.parse(JSON.stringify(c)));
+
+test("replies переживають save/load: файл → вкладка → файл", async () => {
+  const r = reply("r1", "20.11.2026 10:00", { editedTs: "20.11.2026 10:05", agent: true });
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  await s.save([{ ...copyOf(s)[0], replies: [r] }]);
+  assert.deepEqual(server.rows[0].replies, [r]);
+  await s.refresh();
+  assert.deepEqual(copyOf(s)[0].replies, [r]);
+});
+
+test("clean: зайві поля відповіді відкинуто, agent:true лишається, agent:false — ні, спадок без id дослівно, не-обʼєкти геть", async () => {
+  const legacy = { who: "claude", body: "старий формат", n: [1, { z: 2 }] };
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  await s.save([copyOf(s)[0], { ...pin("n"), replies: [
+    { ...reply("r1", "20.11.2026 10:00", { agent: true }), _pending: true, junk: 1 },
+    reply("r2", "20.11.2026 10:01", { agent: false }),
+    legacy, "рядок", 7, null,
+  ] }]);
+  assert.deepEqual(server.rows[1].replies, [
+    reply("r1", "20.11.2026 10:00", { agent: true }),
+    reply("r2", "20.11.2026 10:01"),
+    legacy,
+  ]);
+  assert.equal("agent" in server.rows[1].replies[1], false);
+  await s.save([...copyOf(s), { ...pin("m"), replies: "не масив" }, { ...pin("e"), replies: [] }]);
+  assert.equal("replies" in server.rows[2], false, "не-масив має прибрати ключ");
+  assert.equal("replies" in server.rows[3], false, "порожній масив — теж");
+});
+
+test("одночасно: агент дописав A на диск, вкладка додала B — обидві, за ts", async () => {
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  server.rows = [pin("a", { replies: [reply("A", "20.11.2026 10:00", { agent: true })] })];
+  await s.save([{ ...seen[0], replies: [reply("B", "20.11.2026 11:00")] }]);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["A", "B"]);
+  server.rows = [pin("a", { replies: [reply("A", "20.11.2026 12:00", { agent: true })] })];
+  await s.refresh();
+  const seen2 = copyOf(s);
+  server.rows[0].replies.push(reply("C", "20.11.2026 09:00", { agent: true }));
+  await s.save([{ ...seen2[0], replies: [...seen2[0].replies, reply("D", "20.11.2026 10:30")] }]);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["C", "D", "A"], "порядок за ts");
+});
+
+test("вкладка прибрала відповідь, яку знала, а на диску вона ще є — її нема", async () => {
+  const server = fakeServer([pin("a", { replies: [reply("r1", "20.11.2026 10:00"), reply("r2", "20.11.2026 10:01")] })]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  await s.save([{ ...seen[0], replies: [seen[0].replies[1]] }]);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["r2"]);
+  await s.save([{ ...copyOf(s)[0], replies: undefined }]);
+  assert.equal("replies" in server.rows[0], false, "порожній результат — без ключа");
+});
+
+test("відповідь на диску, якої вкладка не знала, лишається, коли вкладка міняє лише текст піна", async () => {
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  server.rows = [pin("a", { replies: [reply("A", "20.11.2026 10:00", { agent: true })] })];
+  await s.save([{ ...seen[0], text: "нова правка" }]);
+  assert.equal(server.rows[0].text, "нова правка");
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["A"]);
+});
+
+test("вкладка правила текст відповіді R, диск не мінявся — правка виграє", async () => {
+  const server = fakeServer([pin("a", { replies: [reply("R", "20.11.2026 10:00")] })]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  const edited = { ...seen[0].replies[0], text: "виправлено", editedTs: "20.11.2026 10:30" };
+  await s.save([{ ...seen[0], replies: [edited] }]);
+  assert.equal(server.rows[0].replies[0].text, "виправлено");
+  assert.equal(server.rows[0].replies[0].editedTs, "20.11.2026 10:30");
+});
+
+test("спадковий запис без id на диску переживає відповідь вкладки, лишаючись попереду", async () => {
+  const legacy = { who: "claude", body: "від попередника" };
+  const server = fakeServer([pin("a", { replies: [legacy] })]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  await s.save([{ ...seen[0], replies: [...seen[0].replies, reply("B", "20.11.2026 10:00")] }]);
+  assert.deepEqual(server.rows[0].replies, [legacy, reply("B", "20.11.2026 10:00")]);
+});
+
+test("зміна лише replies викликає запис; незмінений пін лишає сирі replies сервера", async () => {
+  const server = fakeServer([pin("a"), pin("b")]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  const w0 = server.writes;
+  await s.save([{ ...seen[0], replies: [reply("B", "20.11.2026 10:00")] }, seen[1]]);
+  assert.equal(server.writes, w0 + 1);
+  assert.equal(server.rows[0].replies.length, 1);
+  // Незмінений пін b: на диску сирі replies у «чужій» формі — не чіпаємо.
+  const raw = [{ ts: 5, anything: true }, { id: "x", text: "t", extraField: 1 }];
+  server.rows[1] = { ...server.rows[1], replies: raw };
+  await s.refresh();
+  const seen2 = copyOf(s);
+  await s.save([{ ...seen2[0], text: "інша" }, seen2[1]]);
+  assert.deepEqual(server.rows[1].replies, raw);
+});

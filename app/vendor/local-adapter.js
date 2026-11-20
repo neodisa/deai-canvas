@@ -6,15 +6,80 @@
  * Attaches window.CommentLayerLocal. Serializable fields only (drops _el/_pending).
  */
 (function () {
+  /* Відповіді піна (0.34). Запис зі строковим `id` зводиться до відомих полів;
+     запис БЕЗ `id` — спадок від попередника (формат невідомий) — лишається
+     дослівно, його ні губити, ні переписувати не можна. Не-обʼєкти відкидаємо. */
+  function cleanReplies(rs) {
+    if (!Array.isArray(rs)) return null;
+    var out = [];
+    for (var i = 0; i < rs.length; i++) {
+      var r = rs[i];
+      if (!r || typeof r !== 'object' || Array.isArray(r)) continue;
+      if (typeof r.id !== 'string') { out.push(JSON.parse(JSON.stringify(r))); continue; }
+      var o = { id: r.id };
+      if (r.author !== undefined) o.author = r.author;
+      if (r.text !== undefined) o.text = r.text;
+      if (r.ts !== undefined) o.ts = r.ts;
+      if (r.editedTs !== undefined) o.editedTs = r.editedTs;
+      if (r.agent === true) o.agent = true;
+      out.push(o);
+    }
+    return out.length ? out : null;
+  }
   function clean(list) {
     return (list || []).map(function (c) {
-      return {
+      var o = {
         id: c.id, author: c.author, text: c.text, status: c.status, fp: c.fp,
         htmlSnapshot: c.htmlSnapshot || null, meta: c.meta || null,
         bornV: c.bornV, resolvedV: c.resolvedV || null,
         resolveReason: c.resolveReason || null, ts: c.ts || null,
       };
+      var rs = cleanReplies(c.replies);
+      if (rs) o.replies = rs;
+      return o;
     });
+  }
+  /* `ДД.ММ.РРРР ГГ:ХХ` → `РРРРММДДГГХХ`; не розібралось — null. */
+  function tsKey(ts) {
+    var m = /^(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})$/.exec(String(ts));
+    return m ? m[3] + m[2] + m[1] + m[4] + m[5] : null;
+  }
+  function replyList(v) { return Array.isArray(v) ? v : []; }
+  /* ⛔ ЗЛИТТЯ ВІДПОВІДЕЙ ПО id (0.34, спека §1). `S` — на сервері (там міг дописати
+     агент), `W` — що вкладка знала, `M` — що вкладка шле. Узагальнене «поле
+     змінила вкладка → бери її» тут не годиться: воно б стерло відповідь агента. */
+  function mergeReplies(S, W, M) {
+    S = replyList(S); W = replyList(W); M = replyList(M);
+    var legacy = [], sById = {}, wById = {}, mById = {}, order = [], seen = {}, i, r;
+    function isId(x) { return x && typeof x.id === 'string'; }
+    for (i = 0; i < S.length; i++) {
+      r = S[i];
+      if (!r || typeof r !== 'object') continue;
+      if (!isId(r)) { legacy.push(r); continue; }
+      sById[r.id] = r;
+      if (!seen[r.id]) { seen[r.id] = 1; order.push(r.id); }
+    }
+    for (i = 0; i < W.length; i++) if (isId(W[i])) wById[W[i].id] = W[i];
+    for (i = 0; i < M.length; i++) {
+      if (!isId(M[i])) continue;
+      mById[M[i].id] = M[i];
+      if (!seen[M[i].id]) { seen[M[i].id] = 1; order.push(M[i].id); }
+    }
+    var kept = [];
+    for (i = 0; i < order.length; i++) {
+      var id = order[i], mine = mById[id], was = wById[id], srv = sById[id], pick;
+      if (mine) pick = (!was || !same(was, mine)) ? mine : (srv || mine);
+      else if (was) pick = null;                              // вкладка прибрала
+      else pick = srv;                                        // чужа, вкладка не знала
+      if (pick) kept.push(pick);
+    }
+    var keys = kept.map(function (x) { return tsKey(x.ts); });
+    if (keys.every(function (k) { return k !== null; })) {
+      var idx = kept.map(function (x, n) { return { x: x, k: keys[n], n: n }; });
+      idx.sort(function (a, b) { return a.k < b.k ? -1 : a.k > b.k ? 1 : a.n - b.n; });
+      kept = idx.map(function (e) { return e.x; });
+    }
+    return legacy.concat(kept);
   }
   /* ⛔ ЗНІМОК — окремі обʼєкти, яких шар не торкався і не торкнеться.
      Шар кладе отримане від адаптера у `this.comments` і вішає на піни `c._el`
@@ -43,9 +108,13 @@
     for (k in s) out[k] = s[k];
     var group = STATUS_GROUP.some(function (f) { return !same(w[f], m[f]); });
     for (k in m) {
-      if (k === 'meta') continue;
+      if (k === 'meta' || k === 'replies') continue;
       var mine = STATUS_GROUP.indexOf(k) >= 0 ? group : !same(w[k], m[k]);
       if (mine) out[k] = m[k];
+    }
+    if (!same(w.replies, m.replies)) {            // не міняла — лишаються серверні сирі
+      var rs = mergeReplies(s.replies, w.replies, m.replies);
+      if (rs.length) out.replies = rs; else delete out.replies;
     }
     if (!same(w.meta, m.meta) || group) out.meta = mergeMeta(s.meta, w.meta, m.meta, group);
     return out;

@@ -257,3 +257,59 @@ test("close(), потім пізня відмова готовності ком�
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(closes(T), 1);
 });
+
+/* ---------- Відповіді (0.34) ---------- */
+test("зміна лише replies пишеться в потрібне під-сховище за _aud, інше не чіпає", async () => {
+  const L = fake([P("l1")]), T = fake([P("t1")]);
+  const d = load()({ local: L.store, team: T.store });
+  await d.ready;
+  const r = { id: "r1", author: "a", text: "відп", ts: "20.11.2026 10:00" };
+  let list = d.load().map((c) => (c.id === "t1" ? { ...c, replies: [r] } : { ...c }));
+  await d.save(list);
+  assert.equal(L.log.filter((e) => e[0] === "save").length, 0, "локальне не мало писатись");
+  assert.deepEqual(plain(T.log.at(-1)[1][0].replies), [r]);
+  list = d.load().map((c) => (c.id === "l1" ? { ...c, replies: [r] } : { ...c }));
+  const tn = T.log.length;
+  await d.save(list);
+  assert.deepEqual(plain(L.log.at(-1)[1][0].replies), [r]);
+  assert.equal(T.log.length, tn, "командне не мало писатись");
+});
+
+test("repliesDown: null без команди; null при teamDown; пропускає team.repliesDown", async () => {
+  const L = fake();
+  const none = load()({ local: L.store });
+  assert.equal(none.repliesDown, null);
+  const down = load()({ local: L.store, teamDown: "VPN" });
+  assert.equal(down.teamDown, "VPN");
+  assert.equal(down.repliesDown, null);
+  const T = fake();
+  T.store.repliesDown = "модуль без відповідей";
+  const d = load()({ local: L.store, team: T.store });
+  assert.equal(d.repliesDown, "модуль без відповідей");
+  assert.equal(Object.keys(d).includes("repliesDown"), true, "enumerable");
+  T.store.repliesDown = "";
+  assert.equal(d.repliesDown, null);
+  T.store.repliesDown = 5;
+  assert.equal(d.repliesDown, null);
+  T.store.repliesDown = "x";
+  await d.ready;
+  d.close();                                    // команда знята — причини нема
+  assert.equal(d.repliesDown, null);
+});
+
+test("supportsReplies: local так; project лише з team.supportsReplies === true; інше — ні", async () => {
+  const L = fake();
+  const T = fake();
+  const d = load()({ local: L.store, team: T.store });
+  assert.equal(d.supportsReplies("local"), true);
+  assert.equal(d.supportsReplies("project"), false, "прапора нема");
+  T.store.supportsReplies = "yes";
+  assert.equal(d.supportsReplies("project"), false, "не строго true");
+  T.store.supportsReplies = true;
+  assert.equal(d.supportsReplies("project"), true);
+  assert.equal(d.supportsReplies("other"), false);
+  assert.equal(d.supportsReplies(undefined), false);
+  const noTeam = load()({ local: L.store });
+  assert.equal(noTeam.supportsReplies("project"), false);
+  assert.equal(noTeam.supportsReplies("local"), true);
+});

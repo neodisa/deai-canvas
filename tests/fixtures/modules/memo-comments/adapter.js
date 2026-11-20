@@ -52,6 +52,7 @@
     var ready = get().then(function (rows) { cache = rows; }, function () { cache = []; });
     return {
       ready: ready,
+      supportsReplies: true,               // коментарі зберігаються цілком, `replies` їдуть разом із ними
       load: function () { return cache; },
       save: function (comments) {
         cache = comments.slice();
