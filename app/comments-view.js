@@ -176,7 +176,7 @@ const FILTER_KEY = { local: "cmtFLocal", project: "cmtFTeam", all: "cmtFAll" };
 
 /** st: {snapshot, query, selectedId, editingId, delAsk (id картки з питанням «Видалити назавжди?»), expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down}
  *  Гілка відповідей (0.34; без `threads` картка як була): `threads: Set` (розгорнуті id коментарів), `replying: id`, `replyEdit: "cid|rid"`,
- *  `replyDelAsk: "cid|rid"`, `isOwnReply(r)`, `canDeleteReply(r)`, `repliesOff(c) → рядок причини|null`; `fresh` — id коментарів І відповідей.
+ *  `replyDelAsk: "cid|rid"`, `repliesDown: рядок причини` (смуга «відповіді команди недоступні», коли команда жива), `isOwnReply(r)`, `canDeleteReply(r)`, `repliesOff(c) → рядок причини|null`; `fresh` — id коментарів І відповідей.
  *  Необовʼязково (превʼю, 0.32.0; без них — Deai як було): `isOwn(c)`, `actions: {any, own, closed}` (дозволені `data-act`), `adding: boolean` (кнопка «Додати коментар»), `emptyKey` (ключ i18n порожнього списку; за замовчуванням `cmtEmpty`). */
 export function commentsPanelHTML(st) {
   const filter = FILTERS.includes(st.filter) ? st.filter : "local";
@@ -202,7 +202,8 @@ export function commentsPanelHTML(st) {
         + (n.fresh[f] ? `<span class="cmt-fnew" title="${esc(t("cmtNewTitle"))}">+${n.fresh[f]}</span>` : "")
         + "</button>").join("") + "</div>";
   }
-  const down = st.teamDown ? `<p class="cmt-teamdown" role="alert">${esc(t("cmtTeamDown", st.teamDown))}</p>` : "";
+  const down = st.teamDown ? `<p class="cmt-teamdown" role="alert">${esc(t("cmtTeamDown", st.teamDown))}</p>`
+    : (typeof st.repliesDown === "string" && st.repliesDown ? `<p class="cmt-teamdown" role="alert">${esc(t("cmtTeamRepliesDown", st.repliesDown))}</p>` : "");
   let body;
   if (!st.snapshot) {
     body = st.down ? `<p class="cmt-down" role="alert">${esc(t("cmtDown", st.down))}</p>` : `<p class="insp-hint">${esc(t("cmtLoading"))}</p>`;

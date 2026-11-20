@@ -90,7 +90,7 @@ test("«нові»: при відкритій панелі тост не пок�
   assert.match(branch, /cmtNewsN = 0; cmtNewsPages = \{\};/);
   assert.ok(body.indexOf("newsToast(came)") > open + branch.length, "тост — лише після гілки відкритої панелі");
   assert.match(body, /const came = arrived\(cmtPrevIds, fresh\);/, "лише те, що зʼявилось у знімку ПІД ЧАС сесії");
-  assert.match(body, /if \(!seen\) \{ seen = baseline\(team\);/, "перший погляд — усе наявне бачене");
+  assert.match(body, /if \(!seen\) \{ seen = baseline\(news\);/, "перший погляд — усе наявне бачене");
 });
 
 test("відкриття панелі посуває маркер «бачив» ОДРАЗУ й складає розділ «нових»", () => {
@@ -129,7 +129,7 @@ test("усі читання й записи localStorage у проводці к�
 
 test("ревʼю T9: маркер «бачив» не пишеться, поки командного нема (впало чи не заведене)", () => {
   const body = fn("cmtNewsUpdate");
-  assert.match(body, /if \(!seen\) \{ seen = baseline\(team\); if \(!cmtTeamDown && !noTeamComments\(\)\) saveSeen\(key, seen\); \}/,
+  assert.match(body, /if \(!seen\) \{ seen = baseline\(news\); if \(!cmtTeamDown && !noTeamComments\(\)\) saveSeen\(key, seen\); \}/,
     "базова лінія зі знімка без команди порожня: усі колеги стали б «новими» при поверненні команди");
 });
 
@@ -293,4 +293,79 @@ test("кошик у картці (етап В): cmtdel питає, cmtdelyes в�
   assert.match(src, /if \(cmtFree && cmtOpen && cmtDelAsk && ev\.key === 'Escape'\) \{ ev\.preventDefault\(\); closeDelAsk\(true\); return; \}/);
   assert.match(src, /if \(cmtDelAsk && !ev\.target\.closest\?\.\('\.cmt-acts--cfm'\)\) \{ cmtDelAsk = null; paintComments\(\); \}/);
   assert.match(src, /editingId: cmtEditing, delAsk: cmtDelAsk,/);
+});
+
+/* --- Відповіді в картці (0.34, Task 7b) --- */
+test("відповіді: усі 10 дій у BAR_ACTIONS (кожна в окремому рядку), виклики шару — у try", () => {
+  for (const k of ["cmtthread", "cmtreply", "cmtreplysend", "cmtreplycancel", "cmtredit", "cmtreditsave", "cmtreditcancel", "cmtrdel", "cmtrdelyes", "cmtrdelno"]) act(k);
+  assert.match(act("cmtreplysend"), /cmtreplysend: \(id\) => \{$/);
+  for (const [k, call] of [["cmtreplysend", "reply\\("], ["cmtreditsave", "editReply\\("], ["cmtrdelyes", "removeReply\\("]]) {
+    const m = new RegExp(`^  ${k}: [\\s\\S]*?\\n  \\},$`, "m").exec(src);
+    assert.ok(m, k);
+    assert.match(m[0], new RegExp(`try \\{[^\\n]*${call}[^\\n]*\\} catch \\(e\\) \\{\\}`), `${k}: виклик шару в try`);
+  }
+});
+
+test("readRepliesDown: лише непорожній РЯДОК із store.repliesDown, решта й чужий документ — null; усередині try", () => {
+  const body = fn("readRepliesDown");
+  assert.match(body, /try \{/);
+  const readRepliesDown = new Function(`function readRepliesDown(L) ${body}\nreturn readRepliesDown;`)();
+  assert.equal(readRepliesDown({ store: { repliesDown: "no-replies-schema" } }), "no-replies-schema");
+  for (const bad of [{ store: { repliesDown: 1 } }, { store: { repliesDown: "" } }, { store: {} }, null, undefined]) assert.equal(readRepliesDown(bad), null);
+  assert.equal(readRepliesDown({ get store() { throw new Error("чужий документ"); } }), null);
+});
+
+/** repliesOff + права + смуга з підставленими залежностями. */
+function repliesKit({ team = true, down = null, supports = true, teamDown = null, me = "Я", snap }) {
+  const L = { store: { repliesDown: down, supportsReplies: (a) => (a === "local" ? true : supports) } };
+  const lines = ["parentOfReply", "repliesWritable", "isOwnReply", "canDeleteReply"].map((n) => new RegExp(`^const ${n} = .*$`, "m").exec(src)[0]).join("\n");
+  const whole = (n) => { const i = src.indexOf(`function ${n}(`); return src.slice(i, src.indexOf("{", i)) + fn(n); };
+  const code = `${["readRepliesDown", "readSupportsReplies", "repliesOff", "repliesBanner"].map(whole).join("\n")}\n${lines}\nreturn { repliesOff, repliesBanner: () => repliesBanner(cmtLayer()), isOwnReply, canDeleteReply };`;
+  return new Function("t", "audOf", "cmtLayer", "noTeamComments", "cmtTeamDown", "cmtSnap", "myName", code)(
+    (k) => k, (c) => (c && c._aud === "project" ? "project" : "local"), () => L, () => !team, teamDown, snap, () => me);
+}
+const cm = (id, aud, replies) => ({ id, _aud: aud, status: "open", replies });
+const R = { mine: { id: "r1", author: "Я", text: "x" }, other: { id: "r2", author: "Хтось", text: "y" }, agent: { id: "r3", author: "Я", agent: true, text: "z" } };
+
+test("repliesOff: локальний — null; командний — непорожній рядок при repliesDown чи supportsReplies('project') === false; інакше null", () => {
+  const snap = { comments: [] };
+  const loc = cm("l", "local", []), tm = cm("t", "project", []);
+  assert.equal(repliesKit({ down: "no-replies-schema", snap }).repliesOff(loc), null, "локальний завжди можна");
+  assert.equal(repliesKit({ snap }).repliesOff(tm), null);
+  assert.equal(repliesKit({ down: "no-replies-schema", snap }).repliesOff(tm), "cmtRepliesOff");
+  assert.equal(repliesKit({ supports: false, snap }).repliesOff(tm), "cmtRepliesOff", "модуль без відповідей: адаптер мовчки відкине — ховаємо поле");
+});
+
+test("смуга відповідей: no-replies-schema / інша причина / модуль без підтримки; нема команди чи вона впала — без смуги", () => {
+  const snap = { comments: [] };
+  assert.equal(repliesKit({ down: "no-replies-schema", snap }).repliesBanner(), "cmtRepliesNoSchema");
+  assert.equal(repliesKit({ down: "rls denied", snap }).repliesBanner(), "rls denied");
+  assert.equal(repliesKit({ supports: false, snap }).repliesBanner(), "cmtRepliesNoModule");
+  assert.equal(repliesKit({ snap }).repliesBanner(), null);
+  assert.equal(repliesKit({ team: false, supports: false, snap }).repliesBanner(), null, "команди нема");
+  assert.equal(repliesKit({ teamDown: "x", supports: false, snap }).repliesBanner(), null, "команда впала — є смуга teamDown");
+});
+
+test("права на відповіді: змінити — лише свою людську; видалити — будь-яку; при repliesOff батька обидві кнопки зникають", () => {
+  const tm = cm("t", "project", [R.mine, R.other, R.agent]), loc = cm("l", "local", [{ ...R.mine, id: "r9" }]);
+  const snap = { comments: [tm, loc] };
+  const ok = repliesKit({ snap });
+  assert.deepEqual([R.mine, R.other, R.agent].map(ok.isOwnReply), [true, false, false], "змінити — лише свою, не агента");
+  assert.deepEqual([R.mine, R.other, R.agent].map(ok.canDeleteReply), [true, true, true]);
+  const off = repliesKit({ down: "no-replies-schema", snap });
+  assert.deepEqual([R.mine, R.other, R.agent].map(off.isOwnReply), [false, false, false], "чужа відповідь під вимкненими відповідями не редагується");
+  assert.deepEqual([R.mine, R.other, R.agent].map(off.canDeleteReply), [false, false, false], "видалення б «вдалось» і не дійшло до сервера");
+  assert.equal(off.isOwnReply({ ...R.mine, id: "r9" }), true, "локальний коментар лишається редагованим");
+  assert.equal(off.canDeleteReply({ id: "r9" }), true);
+  assert.equal(repliesKit({ me: "", snap }).isOwnReply(R.mine), false, "без імені «своїх» нема");
+});
+
+test("новини з відповідями: cmtNewsUpdate і setCommentsOpen беруть newsItems, не teamOf; «бачив» ведуть і відповіді (вони в newsItems)", () => {
+  assert.match(fn("cmtNewsUpdate"), /const news = newsItems\(all\);/);
+  assert.match(fn("setCommentsOpen"), /newsItems\(cmtSnap\?\.comments\)/);
+  assert.doesNotMatch(src, /teamOf\(/);
+  assert.match(fn("cmtNewsUpdate"), /cmtPrevIds = snapIds\(all\);/, "id відповідей у попередньому знімку: стара відповідь не «зʼявляється» щоразу");
+  assert.match(fn("newsToast"), /replyNewsToast\(came\[came\.length - 1\]\)/);
+  assert.match(fn("replyNewsToast"), /t\('cmtReplyToast', r\.author \|\| '—', par \? par\.n : '—'\)/);
+  assert.match(fn("replyNewsToast"), /cmtThreads\.add\(r\.parent\)/);
 });

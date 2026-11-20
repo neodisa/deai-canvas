@@ -73,8 +73,8 @@ import { applyRecentTitles, pruneRenamed } from './recent-titles.js';
 import { islandToolsHTML } from './island.js';
 import { cmtLabels, cmtTheme } from './cmt-form.js';
 import { commentsPanelHTML } from './comments-view.js';
-import { FILTERS, openCount } from './comments-model.js';
-import { arrived, baseline, countNew, isNew, markSeen, newsByPage, readSeen, seenKey, teamOf, writeSeen } from './comment-news.js';
+import { FILTERS, audOf, openCount } from './comments-model.js';
+import { arrived, baseline, countNew, isNew, markSeen, newsByPage, newsItems, readSeen, seenKey, writeSeen } from './comment-news.js';
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
@@ -139,6 +139,12 @@ let cmtTool = null;   // `CommentLayer.tool()` поточного виду дл�
 let cmtDelAsk = null;   // id картки, де показано питання «Видалити назавжди?» (етап В)
 let cmtOpen = false, cmtSnap = null, cmtSel = null, cmtQuery = '', cmtEditing = null, cmtDraft = null, frameCmtReady = false;
 const cmtExpanded = { earlier: false, closed: false };
+/** Відповіді (0.34): розгорнуті гілки (id коментарів), коментар із відкритим полем, чернетки полів (id → текст), правка відповіді
+ *  `"cid|rid"` із чернеткою, питання «Видалити відповідь?» `"cid|rid"`. Скидаються там, де `cmtEditing`/`cmtDelAsk`. */
+const cmtThreads = new Set();
+const cmtReplyDraft = new Map();
+let cmtReplying = null, cmtReplyEdit = null, cmtReplyEditDraft = null, cmtReplyDelAsk = null;
+function cmtReplyReset() { cmtThreads.clear(); cmtReplyDraft.clear(); cmtReplying = null; cmtReplyEdit = null; cmtReplyEditDraft = null; cmtReplyDelAsk = null; }
 /** Фільтр панелі «Для Claude / Команда / Усі» (Б2) — памʼятається на вікно; типова — «Для Claude». */
 let cmtFilter = (() => { try { const v = localStorage.getItem('dc-cmt-filter'); return FILTERS.includes(v) ? v : 'local'; } catch (e) { return 'local'; } })();
 /** Причина, з якої командні недоступні (`L.store.teamDown`), або `null`. */
@@ -1902,11 +1908,13 @@ function cmtDown() {
    нічого не видаляючи. */
 document.addEventListener('click', (ev) => {
   if (cmtDelAsk && !ev.target.closest?.('.cmt-acts--cfm')) { cmtDelAsk = null; paintComments(); }
+  if (cmtReplyDelAsk && !ev.target.closest?.('.cmt-reply .cfm')) { cmtReplyDelAsk = null; paintComments(); }
 }, true);
 /* Клік у макет — це клік в iframe: до `document` він не долітає, зате вікно оболонки втрачає фокус. Фокус пішов у рамку —
    питання знімається, нічого не видаляючи (та сама ідея, що в поповері `ask.js`). */
 window.addEventListener('blur', () => setTimeout(() => {
   if (cmtDelAsk && document.activeElement?.tagName === 'IFRAME') { cmtDelAsk = null; paintComments(); }
+  if (cmtReplyDelAsk && document.activeElement?.tagName === 'IFRAME') { cmtReplyDelAsk = null; paintComments(); }
 }, 0));
 /** Зняти питання «Видалити назавжди?»; `refocus` — повернути фокус на кошик тієї картки (Esc, «Скасувати»), а не лишати на `body`. */
 function closeDelAsk(refocus) {
@@ -1915,17 +1923,30 @@ function closeDelAsk(refocus) {
   paintComments();
   if (refocus && id) cmtEl.querySelector(`[data-act="cmtdel"][data-val="${CSS.escape(id)}"]`)?.focus();
 }
+/** Зняти питання «Видалити відповідь?»; `refocus` — фокус назад на кошик тієї відповіді. */
+function closeReplyDelAsk(refocus) {
+  const key = cmtReplyDelAsk;
+  cmtReplyDelAsk = null;
+  paintComments();
+  if (refocus && key) cmtEl.querySelector(`[data-act="cmtrdel"][data-val="${CSS.escape(key)}"]`)?.focus();
+}
 function paintComments() {
+  const L = cmtLayer();
   const html = cmtOpen && !homeOpen ? commentsPanelHTML({ snapshot: cmtSnap, query: cmtQuery, selectedId: cmtSel,
     editingId: cmtEditing, delAsk: cmtDelAsk, expanded: cmtExpanded, filter: cmtFilter, dual: !noTeamComments(), teamDown: cmtTeamDown,
-    fresh: cmtFresh, down: cmtSnap ? null : cmtDown() }) : '';
+    fresh: cmtFresh, down: cmtSnap ? null : cmtDown(),
+    threads: cmtThreads, replying: cmtReplying, replyEdit: cmtReplyEdit, replyDelAsk: cmtReplyDelAsk,
+    isOwnReply, canDeleteReply, repliesOff: (c) => repliesOff(c, L), repliesDown: cmtSnap ? repliesBanner(L) : null }) : '';
   cmtTool = cmtOpen && !homeOpen ? readTool(cmtLayer()) : null;
   /* Фокус і каретку поля пошуку / редагування — назад після перезапису (той самий прийом, що в `paintInsp`). */
   const act = document.activeElement;
   const cfmSel = act && cmtEl.contains(act) && act.closest('.cmt-acts--cfm')
-    ? `.cmt-acts--cfm .${act.classList.contains('cfm-yes') ? 'cfm-yes' : 'cfm-no'}` : null;   // фокус на кнопці питання «Видалити назавжди?»
-  const keep = act && cmtEl.contains(act) && (act.id === 'cmt-q' || act.classList.contains('cmt-edit'))
-    ? { sel: act.id === 'cmt-q' ? '#cmt-q' : '.cmt-edit', range: [act.selectionStart, act.selectionEnd] }
+    ? `.cmt-acts--cfm .${act.classList.contains('cfm-yes') ? 'cfm-yes' : 'cfm-no'}`
+    : (act && cmtEl.contains(act) && act.closest('.cmt-reply .cfm') ? `.cmt-reply .cfm .${act.classList.contains('cfm-yes') ? 'cfm-yes' : 'cfm-no'}` : null);   // питання «Видалити відповідь?»   // фокус на кнопці питання «Видалити назавжди?»
+  /* Поле відповіді / правки відповіді: їх кілька на панелі — шукаємо за `data-val` (id коментаря чи `cid|rid`). */
+  const rKind = act && cmtEl.contains(act) ? ['cmt-rta', 'cmt-redit'].find((k) => act.classList.contains(k)) : null;
+  const keep = act && cmtEl.contains(act) && (act.id === 'cmt-q' || act.classList.contains('cmt-edit') || rKind)
+    ? { sel: rKind ? `.${rKind}[data-val="${CSS.escape(act.dataset.val || '')}"]` : (act.id === 'cmt-q' ? '#cmt-q' : '.cmt-edit'), range: [act.selectionStart, act.selectionEnd] }
     : (cfmSel ? { sel: cfmSel, range: [0, 0] } : null);
   const top = cmtEl.querySelector('.cmt-body')?.scrollTop || 0;
   cmtEl.hidden = !html;
@@ -1940,6 +1961,9 @@ function paintComments() {
   /* Чернетка редагування: шаблон малює textarea зі ЗБЕРЕЖЕНИМ текстом, а знімок коментатора приходить і сам (збереження
      піна, збагачення) — без цього набране мовчки поверталось би до старого. Тримаємо в `cmtDraft` (оновлює `input`). */
   if (cmtEditing && cmtDraft != null) { const ed = cmtEl.querySelector('.cmt-edit'); if (ed) ed.value = cmtDraft; }
+  /* Те саме для відповідей: набране в полі відповіді (по коментарю) і в правці відповіді переживає перемальовування. */
+  for (const ta of cmtEl.querySelectorAll('.cmt-rta')) { const d = cmtReplyDraft.get(ta.dataset.val); if (d != null) ta.value = d; }
+  if (cmtReplyEdit && cmtReplyEditDraft != null) { const ed = cmtEl.querySelector('.cmt-redit'); if (ed) ed.value = cmtReplyEditDraft; }
   if (keep) {
     const el = cmtEl.querySelector(keep.sel);
     el?.focus(); try { el?.setSelectionRange(...keep.range); } catch (e) {}
@@ -1954,6 +1978,40 @@ function loadSeen(key) { try { return readSeen(localStorage.getItem(key)); } cat
 function saveSeen(key, set) { try { localStorage.setItem(key, writeSeen(set)); } catch (e) {} }
 /** Причина падіння командного з комбінованого сховища шару (`DeaiDualStore.teamDown`), або `null`. */
 function readTeamDown(L) { try { const v = L && L.store && L.store.teamDown; return typeof v === 'string' && v ? v : null; } catch (e) { return null; } }
+/** Причина, з якої відповіді командного каналу недоступні (`DeaiDualStore.repliesDown`; `'no-replies-schema'` — у базі нема таблиці), або `null`. */
+function readRepliesDown(L) { try { const v = L && L.store && L.store.repliesDown; return typeof v === 'string' && v ? v : null; } catch (e) { return null; } }
+/** Чи командний канал уміє відповіді: `true`/`false`; сховище без `supportsReplies` (не комбіноване) — `null` (невідомо — не блокуємо). */
+function readSupportsReplies(L) { try { const f = L && L.store && L.store.supportsReplies; return typeof f === 'function' ? !!f.call(L.store, 'project') : null; } catch (e) { return null; } }
+/** Чому під цим коментарем не можна відповісти: рядок-причина чи `null`. Локальний — завжди можна. Командний при недоступних відповідях
+ *  ховає поле й кнопку: адаптер без таблиці/підтримки мовчки ВІДКИДАЄ відповіді, тож це єдиний запобіжник від «відповів у порожнечу». */
+function repliesOff(c, L = cmtLayer()) {
+  if (!c || audOf(c) !== 'project') return null;
+  if (readRepliesDown(L) || readSupportsReplies(L) === false) return t('cmtRepliesOff');
+  return null;
+}
+/** Смуга «відповіді команди недоступні» — текст причини або `null` (команди нема / вона впала, і так є смуга `teamDown`). */
+function repliesBanner(L) {
+  if (noTeamComments() || cmtTeamDown) return null;
+  const down = readRepliesDown(L);
+  if (down) return down === 'no-replies-schema' ? t('cmtRepliesNoSchema') : down;
+  return readSupportsReplies(L) === false ? t('cmtRepliesNoModule') : null;
+}
+/** Права на відповіді в Deai: змінити — лише свою (не агента), видалити — будь-яку. */
+/** Коментар-батько відповіді за її id у знімку. Поки `repliesOff(батько)` — відповіді лише читаємо: адаптер не пише (правка зависла б, видалення не дійшло б
+ *  до сервера, і відповідь зʼявилась би знову), тож кнопок немає. */
+const parentOfReply = (r) => (r && cmtSnap?.comments?.find((c) => c && Array.isArray(c.replies) && c.replies.some((x) => x && x.id === r.id))) || null;
+const repliesWritable = (r) => { const c = parentOfReply(r); return !!c && repliesOff(c) == null; };
+const isOwnReply = (r) => !!r && !r.agent && !!myName() && r.author === myName() && repliesWritable(r);
+const canDeleteReply = (r) => !!r && repliesWritable(r);
+/** Ключ `"cid|rid"` → `[cid, rid]`. */
+const splitReplyKey = (k) => { const i = String(k).indexOf('|'); return i < 0 ? [String(k), ''] : [String(k).slice(0, i), String(k).slice(i + 1)]; };
+const replyOf = (cid, rid) => { const c = cmtSnap?.comments?.find((x) => x && x.id === cid); return c && Array.isArray(c.replies) ? c.replies.find((r) => r && r.id === rid) || null : null; };
+/** Усі id знімка — коментарів І їхніх відповідей: «зʼявилось» (`arrived`) рахується й для відповідей. */
+function snapIds(all) {
+  const s = new Set();
+  for (const c of all) { if (!c) continue; s.add(c.id); if (Array.isArray(c.replies)) for (const r of c.replies) if (r && typeof r.id === 'string') s.add(r.id); }
+  return s;
+}
 /** Свіжість локальних (Б2.1): комбіноване сховище перечитує локальні піни з диска (їх міг дописати Claude).
  *  Під екраном «Задачі» — тиша: макет схований, а вихід (`leaveHome` → `render()`) однаково перезавантажує рамку. */
 const cmtRefreshLocal = () => { if (homeOpen) return; try { const st = cmtLayer()?.store; (st?.refreshLocal || st?.refresh)?.call(st); } catch (e) {} };
@@ -1961,18 +2019,18 @@ const cmtRefreshLocal = () => { if (homeOpen) return; try { const st = cmtLayer(
 let cmtNewsTask = null;
 let cmtNewsPagesKey = '{}';
 function cmtNewsUpdate() {
-  if (cmtNewsTask !== currentTaskId) { cmtNewsTask = currentTaskId; cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news'); }
+  if (cmtNewsTask !== currentTaskId) { cmtNewsTask = currentTaskId; cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news'); cmtReplyReset(); }
   const all = cmtSnap && Array.isArray(cmtSnap.comments) ? cmtSnap.comments : null;
   if (!all || !currentTaskId) { cmtNewsN = 0; cmtNewsPages = {}; cmtNewsTree(); return; }
-  const team = teamOf(all);
+  const news = newsItems(all);   // командні коментарі + відповіді на відкриті коментарі будь-якого каналу
   const key = cmtSeenKey();
   let seen = loadSeen(key);
   /* Командного нема (впав чи не заведений) — знімок без команди порожній: базова лінія з нього зробила б «новими» усіх колег,
      коли команда повернеться. Маркер лишаємо незаданим: першим базовим стане перший справжній знімок команди. */
-  if (!seen) { seen = baseline(team); if (!cmtTeamDown && !noTeamComments()) saveSeen(key, seen); }
-  const fresh = team.filter((c) => isNew(c, seen, myName()));
+  if (!seen) { seen = baseline(news); if (!cmtTeamDown && !noTeamComments()) saveSeen(key, seen); }
+  const fresh = news.filter((c) => isNew(c, seen, myName()));
   const came = arrived(cmtPrevIds, fresh);
-  cmtPrevIds = new Set(all.map((c) => c.id));
+  cmtPrevIds = snapIds(all);
   if (cmtOpen) {
     for (const c of fresh) cmtFresh.add(c.id);
     if (fresh.length) saveSeen(key, markSeen(seen, fresh.map((c) => c.id)));
@@ -1999,9 +2057,25 @@ function setCmtFilter(f) {
   try { localStorage.setItem('dc-cmt-filter', f); } catch (e) {}
   paintComments();
 }
+/** Тост про нову відповідь (0.34): автор і номер піна-батька; «Показати» відкриває панель, вибирає батька й розгортає його гілку. */
+function replyNewsToast(r) {
+  const par = cmtSnap?.comments?.find((c) => c && c.id === r.parent);
+  notice('cmt-news', t('cmtReplyToast', r.author || '—', par ? par.n : '—'), [{
+    act: 'cmtshownew', label: t('cmtShowNew'),
+    run: () => {
+      dropNotice('cmt-news');
+      /* Вкладка — адресата батька: відповідь на локальний пін видно на «Для AI», на командний — на «Команді». */
+      const want = par && audOf(par) === 'project' ? 'project' : 'local';
+      if (cmtFilter !== 'all' && cmtFilter !== want) setCmtFilter(want);
+      setCommentsOpen(true); cmtSel = r.parent; cmtThreads.add(r.parent); paintComments(); cmtLayer()?.focus(r.parent);
+    },
+  }]);
+}
 function newsToast(came) {
-  const last = came[came.length - 1];
-  notice('cmt-news', came.length === 1 ? t('cmtNewToast', last.author || '—') : t('cmtNewToastN', came.length), [{
+  const comments = came.filter((c) => !c.parent);
+  if (!comments.length) { replyNewsToast(came[came.length - 1]); return; }   // самі відповіді — тост про відповідь; коментарі — як було
+  const last = comments[comments.length - 1];
+  notice('cmt-news', comments.length === 1 ? t('cmtNewToast', last.author || '—') : t('cmtNewToastN', comments.length), [{
     act: 'cmtshownew', label: t('cmtShowNew'),
     /* Новини — завжди командні: на «Для Claude» їх (недорученими) не видно, тож «Показати» веде на «Команду». */
     run: () => { dropNotice('cmt-news'); if (cmtFilter === 'local') setCmtFilter('project'); setCommentsOpen(true); cmtSel = last.id; paintComments(); cmtLayer()?.focus(last.id); },
@@ -2012,12 +2086,12 @@ function setCommentsOpen(on) {
   /* Інспектор і коментарі — взаємно виключні: обидва ділять праву панель і обидва ловлять клік по макету. */
   if (on) { const api = inspectorApi(); if (api?.on) { api.set(false); paintBar(); } }
   cmtOpen = on;
-  if (!on) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtFresh.clear(); }
+  if (!on) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtReplyReset(); cmtFresh.clear(); }
   else {
     /* Маркер «бачив» посуваємо ОДРАЗУ на відкритті: нові стають розділом «Нові від команди» цього відкриття (поправка 13). */
     const key = cmtSeenKey();
     const seen = loadSeen(key) || new Set();
-    const fresh = teamOf(cmtSnap?.comments).filter((c) => isNew(c, seen, myName()));
+    const fresh = newsItems(cmtSnap?.comments).filter((c) => isNew(c, seen, myName()));
     fresh.forEach((c) => cmtFresh.add(c.id));
     if (fresh.length) saveSeen(key, markSeen(seen, fresh.map((c) => c.id)));
     cmtNewsN = 0; cmtNewsPages = {}; cmtNewsTree();
@@ -2036,7 +2110,7 @@ function cmtViewSwitch() {
   if (cmtView === mode) return;
   const was = cmtView;
   cmtView = mode;
-  cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null;
+  cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtReplyReset();
   cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news');
   if (mode === 'canvas') {
     if (was) try { const FL = frame.contentWindow?.CommentLayer; if (FL?.commentMode) FL.setCommentMode(false); } catch (e) {}
@@ -2057,7 +2131,7 @@ function cmtViewSwitch() {
 function dropFrameCmt({ sel = false } = {}) {
   frameCmtReady = false;
   if (mode !== 'canvas') { cmtSnap = null; cmtTeamDown = null; }
-  if (sel) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news'); }
+  if (sel) { cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtReplyReset(); cmtFresh.clear(); cmtPrevIds = null; dropNotice('cmt-news'); }
   paintComments();
 }
 /** Відкритий модальний шар оболонки (палітра/довідка, будь-який діалог `askForm`): клавіші C/H тоді не наші. */
@@ -2083,7 +2157,7 @@ function onCommentsEvent(src, m) {
     cmtSel = typeof m.id === 'string' ? m.id : null;
     if (!cmtOpen) setCommentsOpen(true); else paintComments();
   } else if (m.ev === 'mode') {
-    if (!m.on && cmtOpen) { cmtOpen = false; cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; paintComments(); }
+    if (!m.on && cmtOpen) { cmtOpen = false; cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtReplyReset(); paintComments(); }
     else if (m.on && !cmtOpen) { cmtOpen = true; paintComments(); }
   }
 }
@@ -2354,6 +2428,34 @@ const BAR_ACTIONS = {
     paintComments();
   },
   cmteditcancel: () => { cmtEditing = null; cmtDraft = null; paintComments(); },
+  /* Відповіді (0.34): права й `repliesOff` перевіряємо ще раз тут, а не лише в розмітці; виклики шару — у try, як і решта. */
+  cmtthread: (id) => { if (cmtThreads.has(id)) cmtThreads.delete(id); else cmtThreads.add(id); paintComments(); },
+  cmtreply: (id) => { cmtReplying = id; paintComments(); cmtEl.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`)?.focus(); },
+  cmtreplysend: (id) => {
+    const c = cmtSnap?.comments?.find((x) => x && x.id === id);
+    const text = String(cmtEl.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`)?.value ?? cmtReplyDraft.get(id) ?? '').trim();
+    if (!c || c.status !== 'open' || !text || repliesOff(c) != null) return;
+    try { if (cmtLayer()?.reply(id, text)) { cmtReplyDraft.delete(id); if (cmtReplying === id) cmtReplying = null; cmtThreads.add(id); } } catch (e) {}
+    paintComments();
+  },
+  cmtreplycancel: (id) => { cmtReplyDraft.delete(id); if (cmtReplying === id) cmtReplying = null; paintComments(); },
+  cmtredit: (key) => { cmtReplyEdit = key; cmtReplyEditDraft = null; cmtReplyDelAsk = null; paintComments(); cmtEl.querySelector('.cmt-redit')?.focus(); },
+  cmtreditsave: (key) => {
+    const [cid, rid] = splitReplyKey(key);
+    if (!isOwnReply(replyOf(cid, rid))) return;
+    try { if (cmtLayer()?.editReply(cid, rid, cmtEl.querySelector('.cmt-redit')?.value)) { cmtReplyEdit = null; cmtReplyEditDraft = null; } } catch (e) {}
+    paintComments();
+  },
+  cmtreditcancel: () => { cmtReplyEdit = null; cmtReplyEditDraft = null; paintComments(); },
+  cmtrdel: (key) => { cmtReplyDelAsk = key; paintComments(); cmtEl.querySelector('.cmt-reply .cfm .cfm-no')?.focus(); },
+  cmtrdelyes: (key) => {
+    if (cmtReplyDelAsk !== key) return;
+    cmtReplyDelAsk = null;
+    const [cid, rid] = splitReplyKey(key);
+    try { if (cmtLayer()?.removeReply(cid, rid) && cmtReplyEdit === key) { cmtReplyEdit = null; cmtReplyEditDraft = null; } } catch (e) {}
+    paintComments();
+  },
+  cmtrdelno: () => closeReplyDelAsk(true),
   cmtcarry: (id) => { cmtLayer()?.carry(id); },
   cmtshot: (id) => { cmtLayer()?.openShot(id); },
   cmtsec: (k) => { if (k in cmtExpanded) { cmtExpanded[k] = !cmtExpanded[k]; paintComments(); } },
@@ -7601,16 +7703,20 @@ cmtEl.addEventListener('click', (ev) => {
 });
 cmtEl.addEventListener('input', (ev) => {
   if (ev.target.classList?.contains('cmt-edit')) { cmtDraft = ev.target.value; return; }
+  if (ev.target.classList?.contains('cmt-rta')) { cmtReplyDraft.set(ev.target.dataset.val, ev.target.value); return; }
+  if (ev.target.classList?.contains('cmt-redit')) { cmtReplyEditDraft = ev.target.value; return; }
   if (ev.target.id !== 'cmt-q') return;
   cmtQuery = ev.target.value;
   paintComments();
 });
 /* ⌘/Ctrl+Enter зберігає редагування, Esc скасовує; `stopPropagation`, щоб глобальний Esc не закрив панель. */
 cmtEl.addEventListener('keydown', (ev) => {
-  const ta = ev.target.closest?.('.cmt-edit');
+  const ta = ev.target.closest?.('.cmt-edit, .cmt-rta, .cmt-redit');
   if (!ta) return;
-  if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); BAR_ACTIONS.cmteditsave(ta.dataset.val); }
-  else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.cmteditcancel(); }
+  const [save, cancel] = ta.classList.contains('cmt-rta') ? ['cmtreplysend', 'cmtreplycancel']
+    : ta.classList.contains('cmt-redit') ? ['cmtreditsave', 'cmtreditcancel'] : ['cmteditsave', 'cmteditcancel'];
+  if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); BAR_ACTIONS[save](ta.dataset.val); }
+  else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS[cancel](ta.dataset.val); }
 });
 cmtEl.setAttribute('aria-label', t('cmtTitle'));
 
@@ -9222,6 +9328,7 @@ document.addEventListener('keydown', (ev) => {
   }
   /* Esc при питанні «Видалити назавжди?» (етап В) знімає лише питання — панель лишається. */
   if (cmtFree && cmtOpen && cmtDelAsk && ev.key === 'Escape') { ev.preventDefault(); closeDelAsk(true); return; }
+  if (cmtFree && cmtOpen && cmtReplyDelAsk && ev.key === 'Escape') { ev.preventDefault(); closeReplyDelAsk(true); return; }
   if (cmtFree && cmtOpen && ev.key === 'Escape') { setCommentsOpen(false); return; }
 
   /* ⌥M (режим) і ⌘\ (панель шарів) — акорди із ЗАТВЕРДЖЕНОГО прототипу

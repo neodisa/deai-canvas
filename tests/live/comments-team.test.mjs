@@ -22,7 +22,7 @@
 // 4d-4b: кеш браузерів Playwright читається при ІМПОРТІ playwright — `_env.mjs` мусить бути раніше за нього
 import "./_env.mjs";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -546,6 +546,155 @@ test("10: типово «Для AI»; фільтр під пошуком, заг
   await page.waitForSelector('#hud [data-act="comments"]');
   await openPanel(page);
   assert.equal(await page.getAttribute(tab("all"), "aria-pressed"), "true", "остання вибрана вкладка не відновилась");
+});
+
+/* ── 11–14: відповіді (0.34) ─────────────────────────────────────────────────────────────────────── */
+
+const memoRow = (env, id, task = "fixture") => (env.memo.store.get(channelOf(task)) ?? []).find((c) => c.id === id);
+const REPLY_TS = "20.11.2026 12:00";
+/** Дочекатись бази маркера «бачив» (перший знімок) — далі все нове справді нове. */
+const baseReady = (page) => until(async () => (await lsGet(page, seenKey())) !== null, "маркер-база dc-seen");
+/** Адаптер модуля без підтримки відповідей: той самий файл, але `supportsReplies: false`. */
+async function noRepliesAdapter(page) {
+  await page.route(`**/api/module-client/${MODULE}/adapter.js`, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.text()).replace("supportsReplies: true", "supportsReplies: false");
+    await route.fulfill({ response: res, body });
+  });
+}
+
+test("11: відповідь на командний пін — запис у memo (replies), без смуги «недоступні»", async (t) => {
+  const env = await boot(t);
+  const { page } = env;
+  await seedTeam(env, { id: "team-1", author: "Колега", text: "Командний" });
+  await openShell(env);
+  await openPanel(page);
+  await page.click('#cmt-panel [data-act="cmtfilter"][data-val="project"]');
+  const card = '#cmt-panel .cmt-card[data-cid="team-1"]';
+  await page.waitForSelector(`${card} [data-act="cmtreply"]`);
+  assert.equal(await page.locator("#cmt-panel .cmt-teamdown").count(), 0, "смуга при живих відповідях");
+  await page.click(`${card} [data-act="cmtreply"]`);
+  await page.fill(`${card} textarea.cmt-rta`, "Відповідь команді");
+  await page.click(`${card} [data-act="cmtreplysend"]`);
+  const row = await until(() => { const r = memoRow(env, "team-1"); return r && (r.replies ?? []).some((x) => x.text === "Відповідь команді") ? r : null; }, "відповідь у memo");
+  assert.equal(row.replies.length, 1);
+  assert.equal("_pending" in row.replies[0], false, "службове _pending потрапило в командне сховище");
+  assert.match(await page.textContent(`${card} .cmt-rsum`), /1 відповідь/);
+});
+
+test("12: чужа відповідь у memo → «Нове», бейдж острівця, тост «Нова відповідь від …», «+1» на фільтрі; права; «бачив» переживає перезавантаження", async (t) => {
+  const env = await boot(t);
+  const { page } = env;
+  await page.addInitScript(() => { try { localStorage.setItem("comment-layer:user", "Я Тест"); } catch (e) { /* ні */ } });   // «своя» людина відома: чужу відповідь редагувати не можна
+  await seedTeam(env, { id: "team-1", author: "Колега", text: "Командний" });
+  await openShell(env);
+  await baseReady(page);
+  assert.equal(await newCount(page), null);
+
+  memoRow(env, "team-1").replies = [{ id: "rep-x", author: "Колега Два", text: "Чужа відповідь", ts: REPLY_TS }];
+  await until(async () => (await newCount(page)) === "1", "бейдж «нових» від відповіді", 8000);
+  const notice = await page.waitForSelector('.cv-notice[data-notice="cmt-news"]', { timeout: 5000 });
+  assert.match(await notice.textContent(), /Нова відповідь від Колега Два · #\d+/);
+
+  await page.click('.cv-notice[data-notice="cmt-news"] [data-act="cmtshownew"]');
+  await page.waitForSelector("#cmt-panel:not([hidden]) .cmt-sec--new .cmt-card");
+  assert.equal(await page.getAttribute('#cmt-panel [data-act="cmtfilter"][data-val="project"]', "aria-pressed"), "true", "«Показати» не перемкнув на «Команду»");
+  assert.equal(await page.textContent('#cmt-panel [data-act="cmtfilter"][data-val="project"] .cmt-fnew'), "+1", "нема «+1» на фільтрі");
+  const card = '#cmt-panel .cmt-sec--new .cmt-card[data-cid="team-1"]';
+  await page.waitForSelector(`${card} .cmt-reply--new`);
+  /* права: чужу відповідь можна видалити, але не змінити */
+  assert.equal(await page.locator(`${card} .cmt-reply [data-act="cmtrdel"]`).count(), 1);
+  assert.equal(await page.locator(`${card} .cmt-reply [data-act="cmtredit"]`).count(), 0, "чужу відповідь можна редагувати");
+  assert.equal(await newCount(page), null, "бейдж лишився при відкритій панелі");
+
+  await page.reload();
+  await page.waitForSelector('#hud [data-act="comments"]');
+  await until(async () => (await totalCount(page)) !== null, "число відкритих після перезавантаження");
+  await sleep(1500);
+  assert.equal(await newCount(page), null, "відповідь знову «нова» після перезавантаження");
+  assert.equal(await page.locator('.cv-notice[data-notice="cmt-news"]').count(), 0, "плашка про вже бачену відповідь");
+});
+
+test("12б: та сама відповідь у наступному знімку (змінився лише текст) не «зʼявляється» вдруге — другого тосту нема", async (t) => {
+  const env = await boot(t);
+  const { page } = env;
+  await seedTeam(env, { id: "team-1", author: "Колега", text: "Командний" });
+  await openShell(env);
+  await baseReady(page);
+  memoRow(env, "team-1").replies = [{ id: "rep-x", author: "Колега Два", text: "Чужа відповідь", ts: REPLY_TS }];
+  await page.waitForSelector('.cv-notice[data-notice="cmt-news"]', { timeout: 8000 });
+  await page.evaluate(() => document.querySelector('.cv-notice[data-notice="cmt-news"]').remove());
+  memoRow(env, "team-1").replies[0].text = "Чужа відповідь, виправлена";
+  await sleep(2500);
+  assert.equal(await page.locator('.cv-notice[data-notice="cmt-news"]').count(), 0, "стара відповідь знову дала тост");
+});
+
+test("13: відповідь агента (agent:true) у файлі задачі → те саме після focus вікна; «Для AI» показує «+1»", async (t) => {
+  const env = await boot(t);
+  const { page } = env;
+  await seedLocal(env, { id: "loc-1", author: "Фікстура", text: "Локальний" });
+  await openShell(env);
+  await baseReady(page);
+  assert.equal(await newCount(page), null);
+
+  const rows = localList(env);
+  rows.find((c) => c.id === "loc-1").replies = [{ id: "rep-agent", author: "Claude", agent: true, text: "Готово, виправив", ts: REPLY_TS }];
+  writeFileSync(localFile(env), JSON.stringify(rows, null, 1));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+
+  await until(async () => (await newCount(page)) === "1", "бейдж від відповіді агента", 8000);
+  const notice = await page.waitForSelector('.cv-notice[data-notice="cmt-news"]', { timeout: 5000 });
+  assert.match(await notice.textContent(), /Нова відповідь від Claude · #\d+/);
+  await page.click('.cv-notice[data-notice="cmt-news"] [data-act="cmtshownew"]');
+  await page.waitForSelector("#cmt-panel:not([hidden]) .cmt-sec--new .cmt-card");
+  assert.equal(await page.getAttribute('#cmt-panel [data-act="cmtfilter"][data-val="local"]', "aria-pressed"), "true");
+  assert.equal(await page.textContent('#cmt-panel [data-act="cmtfilter"][data-val="local"] .cmt-fnew'), "+1");
+  const reply = '#cmt-panel .cmt-sec--new .cmt-reply--new';
+  await page.waitForSelector(reply);
+  assert.equal(await page.locator(`${reply} .cmt-ragent`).count(), 1, "відповідь агента без позначки агента");
+  assert.equal(await page.locator(`${reply} [data-act="cmtredit"]`).count(), 0, "відповідь агента можна редагувати");
+
+  /* Імʼя вікна збігається з автором відповіді агента: редагування закрито саме прапорцем `agent`, а не відмінністю імен. */
+  await page.evaluate(() => localStorage.setItem("comment-layer:user", "Claude"));
+  await page.reload();
+  await page.waitForSelector('#hud [data-act="comments"]');
+  await openPanel(page);
+  await page.click('#cmt-panel .cmt-card[data-cid="loc-1"] [data-act="cmtthread"]');
+  await page.waitForSelector("#cmt-panel .cmt-reply .cmt-ragent");
+  assert.equal(await page.locator("#cmt-panel .cmt-reply [data-act=\"cmtrdel\"]").count(), 1, "видалити відповідь агента можна");
+  assert.equal(await page.locator("#cmt-panel .cmt-reply [data-act=\"cmtredit\"]").count(), 0, "відповідь агента з тим самим імʼям редагується");
+});
+
+test("14: модуль без підтримки відповідей → смуга й нотатка, у командній картці нема поля, кнопок над відповідями нема; локальна відповідає", async (t) => {
+  const env = await boot(t);
+  const { page } = env;
+  await noRepliesAdapter(page);
+  await seedLocal(env, { id: "loc-1", author: "Фікстура", text: "Локальний" });
+  await seedTeam(env, { id: "team-1", author: "Колега", text: "Командний", seq: 2 });
+  memoRow(env, "team-1").replies = [{ id: "rep-old", author: "Колега", text: "Стара відповідь", ts: REPLY_TS }];
+  await openShell(env);
+  await openPanel(page);
+  await page.waitForSelector("#cmt-panel .cmt-teamdown", { timeout: 8000 });
+  assert.match(await page.textContent("#cmt-panel .cmt-teamdown"), /Відповіді команди недоступні: модуль коментарів не підтримує відповідей/);
+
+  await page.click('#cmt-panel [data-act="cmtfilter"][data-val="project"]');
+  const team = '#cmt-panel .cmt-card[data-cid="team-1"]';
+  await page.waitForSelector(`${team} .cmt-rsum`);
+  await page.click(`${team} .cmt-rsum`);   // розгорнути (є стара відповідь)
+  await page.waitForSelector(`${team} .cmt-reply`);
+  assert.match(await page.textContent(`${team} .cmt-rnote`), /Відповіді команди недоступні/);
+  for (const sel of ["textarea.cmt-rta", '[data-act="cmtreply"]', '[data-act="cmtredit"]', '[data-act="cmtrdel"]']) {
+    assert.equal(await page.locator(`${team} ${sel}`).count(), 0, `у командній картці без відповідей є ${sel}`);
+  }
+
+  await page.click('#cmt-panel [data-act="cmtfilter"][data-val="local"]');
+  const loc = '#cmt-panel .cmt-card[data-cid="loc-1"]';
+  await page.waitForSelector(`${loc} [data-act="cmtreply"]`);
+  assert.equal(await page.locator(`${loc} .cmt-rnote`).count(), 0, "нотатка під локальним");
+  await page.click(`${loc} [data-act="cmtreply"]`);
+  await page.fill(`${loc} textarea.cmt-rta`, "Локальна відповідь");
+  await page.click(`${loc} [data-act="cmtreplysend"]`);
+  await until(() => localList(env).some((c) => (c.replies ?? []).some((r) => r.text === "Локальна відповідь")), "відповідь у файлі задачі");
 });
 
 guardRealDeai("g: справжній ~/.deai не зʼявився і не змінився (ізоляція живих тестів)");

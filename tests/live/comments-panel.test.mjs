@@ -701,6 +701,91 @@ test("26: кошик у картці — питання на місці; Esc / �
   assert.equal(dialogs, 0, "з'явилось нативне вікно браузера");
 });
 
+/* ───────── 0.34: відповіді в картці (локальний пін) ───────── */
+const localRows = (dir) => { try { return JSON.parse(readFileSync(path.join(dir, ".dc-local-comments.json"), "utf8")); } catch (e) { return []; } };
+const repTexts = (page) => page.$$eval("#cmt-panel .cmt-reply .cmt-rtext", (els) => els.map((e) => e.textContent));
+
+test("27: відповідь на локальний пін — «1 відповідь», запис у файлі задачі; пошук за текстом відповіді; змінити свою, ⌘↵ друга, видалити з питанням", async (t) => {
+  const { page, frame, dir } = await boot(t, PORT_BASE + 70);
+  await page.click('#hud [data-act="comments"]');
+  await until(() => modesShown(frame));
+  await addComment(frame, "Для відповідей");
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  const card = "#cmt-panel .cmt-card";
+
+  await page.click(`${card} [data-act="cmtreply"]`);
+  await page.waitForSelector("#cmt-panel textarea.cmt-rta");
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cmt-rta")), true, "поле відповіді не отримало фокус");
+  await page.fill("#cmt-panel textarea.cmt-rta", "Перша відповідь");
+  await page.click(`${card} [data-act="cmtreplysend"]`);
+  await until(async () => /1 відповідь/.test((await page.textContent(`${card} .cmt-rsum`)) ?? ""));
+  await until(async () => (await repTexts(page)).join() === "Перша відповідь");
+  await until(() => localRows(dir).some((c) => (c.replies || []).some((r) => r.text === "Перша відповідь")));
+
+  /* пошук — і за текстом відповіді */
+  await page.fill("#cmt-q", "Перша відпов");
+  await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === 1);
+  await page.fill("#cmt-q", "нема-такого-слова");
+  await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === 0);
+  await page.fill("#cmt-q", "");
+  await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === 1);
+
+  /* змінити свою */
+  await page.click(`${card} .cmt-reply [data-act="cmtredit"]`);
+  await page.waitForSelector("#cmt-panel textarea.cmt-redit");
+  await page.fill("#cmt-panel textarea.cmt-redit", "Змінена відповідь");
+  await page.click(`${card} [data-act="cmtreditsave"]`);
+  await until(async () => (await repTexts(page)).join() === "Змінена відповідь");
+  assert.equal(await page.locator(`${card} .cmt-redited`).count(), 1, "нема позначки «змінено»");
+  await until(() => localRows(dir).some((c) => (c.replies || []).some((r) => r.text === "Змінена відповідь")));
+
+  /* ⌘↵ у полі відповіді шле */
+  await page.click("#cmt-panel textarea.cmt-rta");
+  await page.keyboard.type("Друга відповідь");
+  await page.keyboard.press("Meta+Enter");
+  await until(async () => (await repTexts(page)).join("|") === "Змінена відповідь|Друга відповідь");
+  await until(async () => /2 відповіді/.test((await page.textContent(`${card} .cmt-rsum`)) ?? ""));
+
+  /* прибрати: питання; «ні» нічого не прибирає; «так» прибирає */
+  await page.click(`${card} .cmt-reply:first-child [data-act="cmtrdel"]`);
+  await page.waitForSelector(`${card} [data-act="cmtrdelyes"]`);
+  await page.click(`${card} [data-act="cmtrdelno"]`);
+  await until(async () => (await page.locator(`${card} [data-act="cmtrdelyes"]`).count()) === 0);
+  assert.equal((await repTexts(page)).length, 2, "«Скасувати» прибрало відповідь");
+  await page.click(`${card} .cmt-reply:first-child [data-act="cmtrdel"]`);
+  await page.waitForSelector(`${card} [data-act="cmtrdelyes"]`);
+  await page.keyboard.press("Escape");   // Esc знімає лише питання, панель лишається
+  await until(async () => (await page.locator(`${card} [data-act="cmtrdelyes"]`).count()) === 0);
+  assert.equal(await panelOpen(page), true, "Esc при питанні закрив панель");
+  assert.equal((await repTexts(page)).length, 2, "Esc прибрав відповідь");
+  await page.click(`${card} .cmt-reply:first-child [data-act="cmtrdel"]`);
+  await page.click(`${card} [data-act="cmtrdelyes"]`);
+  await until(async () => (await repTexts(page)).join() === "Друга відповідь");
+  await until(() => { const r = localRows(dir).find((c) => c.text === "Для відповідей"); return !!r && (r.replies || []).map((x) => x.text).join() === "Друга відповідь"; });
+});
+
+test("28: закритий коментар — рядок гілки без поля й без дій над відповідями", async (t) => {
+  const { page, frame } = await boot(t, PORT_BASE + 80);
+  await page.click('#hud [data-act="comments"]');
+  await until(() => modesShown(frame));
+  await addComment(frame, "Закриємо");
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  await page.click('#cmt-panel [data-act="cmtreply"]');
+  await page.fill("#cmt-panel textarea.cmt-rta", "Відповідь до закриття");
+  await page.click('#cmt-panel [data-act="cmtreplysend"]');
+  await page.waitForSelector("#cmt-panel .cmt-reply");
+  await page.click('#cmt-panel [data-act="cmtres"]');
+  await page.waitForSelector('#cmt-panel .cmt-fold[data-val="closed"]');
+  await page.click('#cmt-panel .cmt-fold[data-val="closed"]');
+  await page.waitForSelector("#cmt-panel .cmt-card--closed .cmt-rsum");
+  /* гілка після відповіді вже розгорнута; закриття її не згортає */
+  assert.equal(await page.getAttribute("#cmt-panel .cmt-card--closed .cmt-rsum", "aria-expanded"), "true");
+  await page.waitForSelector("#cmt-panel .cmt-card--closed .cmt-reply");
+  for (const sel of ["textarea.cmt-rta", '[data-act="cmtreply"]', '[data-act="cmtredit"]', '[data-act="cmtrdel"]']) {
+    assert.equal(await page.locator(`#cmt-panel .cmt-card--closed ${sel}`).count(), 0, `у закритому є ${sel}`);
+  }
+});
+
 /* ───────── 0.34: форма над макетом — у токенах і мові оболонки (`host.theme`, `host.labels`) ───────── */
 test("20: форма коментаря над макетом — themed, фон = --s2 оболонки, підписи мовою оболонки (uk), тег чипом", async (t) => {
   const { page, frame } = await boot(t, PORT_BASE + 50);
