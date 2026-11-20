@@ -1308,7 +1308,7 @@ class SpaceRoutes(Fixture):
         self.assertNotIn('off', body)
         for s in body['spaces']:
             # `capabilities` (етап 2а, Task 6) додає `serve.spaces_listing`; `spaces.listing()` і `describe` — без нього
-            self.assertEqual(set(s) - {'compat'}, {'id', 'name', 'color', 'path', 'tasks', 'available',
+            self.assertEqual(set(s) - {'compat', 'publish_password'}, {'id', 'name', 'color', 'path', 'tasks', 'available',
                                                    'legacy', 'capabilities', 'tracks', 'default_track', 'tools'})   # `tracks` — 4d-1, `tools` — етап Е
             self.assertEqual('compat' in s, s['id'] == self.legacy_id, s['id'])      # `compat` — лише простір з явним `vercel-publish` у режимі ЛІГА (4d-3c)
         legacy, p, e = body['spaces']

@@ -109,6 +109,13 @@ class ClaudeRoutes(base.Fixture):
 class PublishPassword(base.Fixture):
     """`publish_password` простору: `true|false|null` — пароль превʼю модуля публікації; поля нема — постачальник пароля не має."""
 
+    def setUp(self):
+        super().setUp()
+        # Секрет пишемо в `DEAI_HOME` фікстури (вже тимчасовий); явне присвоєння — для статичного охоронця `test_serve`.
+        patcher = mock.patch.dict(os.environ, {'DEAI_HOME': self.deai})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def entry(self, sid):
         st, body = self.jget('/api/spaces')
         self.assertEqual(st, 200)
