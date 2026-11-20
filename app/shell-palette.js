@@ -78,6 +78,7 @@
 import { figmaWhyKey, flowWhyKey, linkWhyKey } from "./bar-model.js";
 import { figmaOff, hasPublish, hasVcs } from "./spaces-model.js";
 import { pillModel } from "./update-model.js";
+import { shotsBlock } from "./setup-model.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
@@ -368,12 +369,13 @@ export function paletteActions(state) {
     const { running, have, stale, bad } = s.shots;
     const staleKnown = stale !== null && stale !== undefined;
     const allFresh = !running && have > 0 && staleKnown && stale === 0 && !bad;
+    const blk = running ? null : shotsBlock(s.shots.setup);   // 0.33.0: знімати нема чим — причина з `/api/setup`
     out.push({
       id: "shoot", group: "gFrames",
       labelKey: running ? "shotsStop" : (have > 0 ? "shotsUpdateBare" : "shotsTakeBare"),
       icon: running ? "stop" : (have > 0 ? "refresh" : "camera"),
       act: "shoot",
-      disabled: allFresh, whyKey: allFresh ? "whyFresh" : "",
+      disabled: allFresh || !!blk, whyKey: blk ? blk.whyKey : (allFresh ? "whyFresh" : ""),
     });
   }
 

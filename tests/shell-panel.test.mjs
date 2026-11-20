@@ -859,3 +859,31 @@ test("рядок із news: бурштиновий лічильник row-news �
   assert.equal(panelHTML(S({ rows: [deepRow({})] })).includes("row-news"), false);
   assert.match(panelHTML(S({ rows: [deepRow({ news: 250 })] })), />99\+<\/span>/);
 });
+
+/* ── «Перший запуск» (0.33.0): знімати нема чим — блок каже чому й що виконати; кнопка вимкнена ─────────── */
+const CMD = "cd /d && npm install && npx playwright install chromium";
+test("кадри без Chromium: бурштиновий рядок, команда з кнопкою копіювання, «Зняти» вимкнена з причиною", () => {
+  for (const state of ["no-browser", "no-playwright"]) {
+    const h = shotsBlock(panelHTML(S({ shotsOpen: false, shots: { bad: false, running: false, have: 0, done: 0, total: 5, stale: null, setup: { state, command: CMD } } })));
+    assert.match(h, /<p class="shots-s shots-s--warn" id="shots-why">Для знімків бракує Chromium для Playwright\. Виконайте в терміналі:<\/p>/);
+    assert.match(h, /<code class="cn-code" id="shots-cmd">cd \/d &amp;&amp; npm install &amp;&amp; npx playwright install chromium<\/code>/);
+    assert.match(h, /data-act="shotscmd" aria-label="Скопіювати команду"/);
+    assert.match(h, /data-act="shoot" disabled aria-describedby="shots-why"/);
+  }
+});
+
+test("кадри без Node: рядок про Node.js 20+, команди нема, кнопка вимкнена; ok/unknown — блок як був", () => {
+  const h = shotsBlock(panelHTML(S({ shots: { bad: false, running: false, have: 0, done: 0, total: 5, stale: null, setup: { state: "no-node", command: null } } })));
+  assert.match(h, /Для знімків потрібен Node\.js 20\+ — nodejs\.org/);
+  assert.doesNotMatch(h, /shotscmd/);
+  assert.match(h, /data-act="shoot" disabled/);
+  const base = { bad: false, running: false, have: 0, done: 0, total: 5, stale: null };
+  for (const setup of [{ state: "ok" }, { state: "unknown" }, undefined]) {
+    assert.equal(panelHTML(S({ shots: { ...base, setup } })), panelHTML(S({ shots: base })), JSON.stringify(setup));
+  }
+});
+
+test("кадри: прогін іде — блок прогону, а не причина (зупинити можна завжди)", () => {
+  const h = shotsBlock(panelHTML(S({ shots: { bad: false, running: true, have: 1, done: 1, total: 5, stale: null, setup: { state: "no-browser", command: CMD } } })));
+  assert.doesNotMatch(h, /shots-why/);
+});

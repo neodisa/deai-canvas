@@ -242,6 +242,7 @@ function ensureSetup(fresh = false) {
   })();
   return setupSt.busy;
 }
+const setupShots = () => (setupSt.data?.shots ? { setup: setupSt.data.shots } : {});
 const welcomeView = () => ({ setup: setupSt.data, origin: location.origin });
 /* Копіювання з кліку: `writeText` — ПЕРШИМ викликом, поки жест людини ще живий (як `agentsCopy`). */
 async function frCopy(text, doneKey) {
@@ -2307,6 +2308,7 @@ const BAR_ACTIONS = {
     const wantCanvas = val === 'overview';
     if (wantCanvas === (mode === 'canvas')) return;
     mode = wantCanvas ? 'canvas' : 'single';
+    if (wantCanvas) ensureSetup();
     /* Перемикач — НЕ побічна перебудова: людина свідомо вийшла з полотна (або
        вернулась на нього) і чекає побачити все спочатку, а не кадр, у якому
        колись зумнулась. Забути світ треба саме тут: `buildCanvas` переносить
@@ -5631,7 +5633,7 @@ function panelState() {
     crumbs: focusNode ? crumbOf(focusNode.id) : (pickedPage ? crumbOf(pickedPage) : []),
     /* `overview` — чи ми в «Огляді»: тривогу кадрів панель піднімає лише там, де
        свіжість справді міряють (`shotsView`, fb-22092026-c74093). */
-    shots: curIter() ? { ...shotsState(), overview: mode === 'canvas' } : null,
+    shots: curIter() ? { ...shotsState(), overview: mode === 'canvas', ...setupShots() } : null,
     shotsOpen,
   };
 }
@@ -5658,6 +5660,7 @@ function panelState() {
  * нарізно від решти панелі. Тепер перемальовка одна на все, і саме тому їй
  * потрібне це збереження, якого точковий патч не потребував узагалі. */
 function renderPanel() {
+  if (mode === 'canvas' && !setupSt.asked) ensureSetup();   // «Огляд» при старті
   let el = document.getElementById('pages-panel');
   if (!el) {
     el = document.createElement('div');
@@ -5740,6 +5743,7 @@ function setPanelCollapsed(v) {
 }
 
 const PANEL_ACTIONS = {
+  shotscmd: () => frCopy(setupSt.data?.shots?.command ?? '', 'frCmdCopied'),
   panel: () => setPanelCollapsed(!panelCollapsed),
 
   /* Одна дія на ДВА контроли секції кадрів — тихий рядок (розгорнути) і
@@ -6927,6 +6931,13 @@ async function refreshPanelFromDisk() {
 window.addEventListener('focus', () => { syncTuneFromDisk(); refreshPanelFromDisk(); });
 /* Свіжість локальних піни (Б2.1): Claude міг дописати їх на диск, поки вікно не мало фокуса. */
 window.addEventListener('focus', cmtRefreshLocal);
+/* «Перший запуск» (0.33.0): людина могла щойно виконати команду в терміналі — перепитати стан знімків, коли вікно знову у
+   фокусі; лише поки знімати нема чим і не частіше разу на 5 с. */
+window.addEventListener('focus', () => {
+  const st = setupSt.data?.shots?.state;
+  if (!st || st === 'ok' || st === 'unknown' || Date.now() - setupSt.at < 5000) return;
+  ensureSetup(true);
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') { syncTuneFromDisk(); refreshPanelFromDisk(); }
 });
@@ -7862,11 +7873,15 @@ async function shootWithProgress(it, { auto = false } = {}) {
   } else if (!res.ok) {
     /* Автостарт не сміє кидати модалку в обличчя: дизайнер її не просив. Ручний
        перезнім — навпаки, там `tell`, бо людина натиснула й чекає відповіді. */
-    const msg = r.failed?.length
-      ? t('errShootPartial', it, r.shot?.length ?? 0)
-        + r.failed.map((f) => t('errShootFailedItem', f.id, f.problem)).join('\n')
-      : t('errShootCrashed', it)
-        + (res.error || res.stderr || r.raw || t('errShootNoReason'));
+    /* 0.33.0: Playwright без Chromium — людська причина й команда замість дампу; блок «Кадри» теж має це побачити. */
+    if (res.code === 'no-browser') ensureSetup(true);
+    const msg = res.code === 'no-browser'
+      ? t('frShootNoBrowser', it) + (res.command || '')
+      : r.failed?.length
+        ? t('errShootPartial', it, r.shot?.length ?? 0)
+          + r.failed.map((f) => t('errShootFailedItem', f.id, f.problem)).join('\n')
+        : t('errShootCrashed', it)
+          + (res.error || res.stderr || r.raw || t('errShootNoReason'));
     if (auto) toast(r.failed?.length ? t('toastShootAutoFailedCount', r.failed.length) : t('toastShootAutoFailedGeneric'));
     else tell(msg);
   } else {
@@ -9080,7 +9095,7 @@ function paletteState() {
     pickedPage,
     ...paletteTreeTarget(),
     gl: st.gl, glBrand: vcsBrand(st.glLabel, st.space), iterLabel: st.iterLabel,
-    shots: curIter() ? shotsState() : null,
+    shots: curIter() ? { ...shotsState(), ...setupShots() } : null,
     lang: getLang(),
     canInstall: pwa.canInstall(),
     standalone: pwa.isStandalone(),

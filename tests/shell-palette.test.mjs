@@ -1112,3 +1112,12 @@ test("знайомство: група gSet, іконка зі спрайта, �
   assert.ok(filterActions(paletteActions(S({ update: null, lang: "en" })), "tour").some((x) => x.id === "intro"));
   setLang("uk");
 });
+
+test("«Зняти кадри» у ⌘K: знімати нема чим — вимкнено з причиною зі `/api/setup`; прогін — зупинка доступна", () => {
+  const shoot = (setup, running = false) => paletteActions(S({ shots: { have: 0, stale: null, total: 5, running, bad: false, done: 0, setup } }))
+    .find((a) => a.id === "shoot");
+  assert.deepEqual([shoot({ state: "no-browser", command: "x" }).disabled, shoot({ state: "no-browser", command: "x" }).whyKey], [true, "frShotsNoBrowserWhy"]);
+  assert.deepEqual([shoot({ state: "no-node" }).disabled, shoot({ state: "no-node" }).whyKey], [true, "frShotsNoNodeWhy"]);
+  assert.equal(shoot({ state: "ok" }).disabled, false);
+  assert.equal(shoot({ state: "no-browser", command: "x" }, true).disabled, false, "зупинка прогону не блокується");
+});

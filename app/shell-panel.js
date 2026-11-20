@@ -38,6 +38,7 @@
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
+import { shotsBlock } from "./setup-model.js";
 
 /**
  * Рядок дерева. `hasKids` дає каретку — і лише тоді; каретки без дітей
@@ -214,6 +215,20 @@ function shotsView(s) {
  */
 function shotsHTML(shots, open) {
   const v = shotsView(shots);
+  /* «Перший запуск» (0.33.0): знімати нема чим (`/api/setup` → `shots.setup`) — блок каже чому й що виконати, а «Зняти»
+     вимкнена з цією причиною поруч. Не під час прогону: зупинити його можна завжди. Тихого вигляду тут нема — це проблема. */
+  const blk = shots.running ? null : shotsBlock(shots.setup);
+  if (blk) {
+    const line = t(blk.lineKey);
+    const cmd = blk.command
+      ? `<div class="shots-cmd"><code class="cn-code" id="shots-cmd">${esc(blk.command)}</code>`
+        + `<button class="icob" data-act="shotscmd" aria-label="${esc(t("frCopyCmd"))}" title="${esc(t("frCopyCmd"))}">${ico("copy", 14)}</button></div>`
+      : "";
+    return `<div class="shots"><div class="shots-h"><b>${esc(t("frames"))}</b></div>`
+      + `<p class="shots-s shots-s--warn" id="shots-why">${esc(line)}</p>${cmd}`
+      + `<button class="ctl shots-btn" data-act="shoot" disabled aria-describedby="shots-why" title="${esc(line)}">`
+      + `${ico(v.icon)}<span>${esc(v.label)}</span></button></div>`;
+  }
   if (v.quiet && !open) {
     /* Іконка `check`, а не `refresh`: рядок не пропонує оновлювати (нічого
        не застаріло), він лише КАЖЕ стан і відкриває решту. */
@@ -254,8 +269,9 @@ function shotsHTML(shots, open) {
 
 function shotsRailHTML(shots) {
   const v = shotsView(shots);
+  const blk = shots.running ? null : shotsBlock(shots.setup);
   return `<div class="shots">
-    <button class="icob" data-act="shoot" title="${esc(v.line)}">${ico("camera")}</button>
+    <button class="icob" data-act="shoot"${blk ? " disabled" : ""} title="${esc(blk ? t(blk.lineKey) : v.line)}">${ico("camera")}</button>
   </div>`;
 }
 

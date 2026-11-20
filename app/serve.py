@@ -3981,6 +3981,7 @@ LAYER_BUNDLE = 'comment-layer.min.js'
 #: `ext-inspect.js` (власний модуль превʼю), `shell-inspect.js`, `insp-panel.js`, `insp-model.js` — панель інспектора лише для
 #: перегляду (0.32.0). `insp-model.js` імпортує `./vendor/inspector-core.js`, тож `shell/vendor/` (`SHELL_VENDOR`) — частина
 #: того самого замикання; сам оверлей з `shell/vendor/` бере `../i18n.js` і `../esc.js` звідси.
+#: `setup-model.js` — `shotsBlock` (0.33.0): `shell-panel.js` і `shell-palette.js` беруть звідти причину «знімати нема чим».
 #: Модулі їдуть звідси байт у байт. Опція «під зовнішній режим» у спільному модулі допустима, лише коли ДЕФОЛТНИЙ вихід
 #: приколений золотими тестами (так 0.32.0 додав `readonly` панелі інспектора); гілка «а в превʼю інакше» без цього ламала б
 #: інструмент.
@@ -3989,7 +3990,8 @@ SHELL_MODULES = ('i18n.js', 'icons.js', 'shell-panel.js', 'viewport.js',
                  'styles.css', 'ask.js', 'esc.js', 'ext-shell.js', 'ext-bar.js',
                  'tree-model.js', 'clean-view.js', 'island.js',
                  'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js',
-                 'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js', 'ext-follow.js')
+                 'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js', 'ext-follow.js',
+                 'setup-model.js')
 
 #: Типова ширина кадру. МУСИТЬ дорівнювати `CANVAS_W` у app/viewport.js:
 #: саме на ній тримається правило ключа («типова ширина суфікса не додає»), і
