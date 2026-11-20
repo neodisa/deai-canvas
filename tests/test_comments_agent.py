@@ -849,7 +849,7 @@ class DecisionTest(AgentEnv):
         pc = self.pc(self.liga)
         self.net.rows = [rest('c0ffee01-aaaa', 'x')]
         self.assertEqual([p['id'] for p in pc.pins({'comment_project': 'dc/custom'}, 'lx')], ['c0ffee01-aaaa'])
-        self.assertIn('project_id=eq.dc%2Fcustom&', self.net.calls[-1][1])
+        self.assertIn('project_id=eq.dc%2Fcustom&', self.net.comment_calls()[-1][1])      # запит до `comments`, не до відповідей
         pc.resolve({'comment_project': 'dc/custom'}, 'lx', 'c0ffee01-aaaa', 'r')
         self.assertEqual([m for m, _ in self.net.comment_calls()], ['GET', 'PATCH'])
         self.assertEqual(self.svc.log, [], 'ЛІГА не ходить у модуль простору')

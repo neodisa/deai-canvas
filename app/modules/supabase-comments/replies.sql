@@ -31,7 +31,7 @@ create index if not exists comment_replies_project_idx on public.comment_replies
 
 alter table public.comment_replies enable row level security;
 
--- Same open policies as `cl_*` on `comments` (see the notes in `schema.sql`): the public key can read and write replies.
+-- Same open policies as `cl_*` on `comments` (rationale: the notes on the `comments` table in the module's `schema.sql`): the public key can read and write replies.
 drop policy if exists clr_read   on public.comment_replies;
 drop policy if exists clr_insert on public.comment_replies;
 drop policy if exists clr_update on public.comment_replies;

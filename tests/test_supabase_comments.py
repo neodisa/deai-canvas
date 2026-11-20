@@ -255,9 +255,9 @@ class FakeSupabase:
         cols = (rec['query'].get('select') or ['*'])[0]
         if rec['method'] == 'GET':
             order = (rec['query'].get('order') or [''])[0]
-            if order:
-                col, _, direction = order.partition('.')
-                matched.sort(key=lambda r: str(r.get(col)), reverse=direction == 'desc')
+            for part in reversed([x for x in order.split(',') if x]):     # `a.desc,b.asc`: стабільне сортування з останнього ключа
+                col, _, direction = part.partition('.')
+                matched.sort(key=lambda r, col=col: str(r.get(col)), reverse=direction == 'desc')
             if cols != '*':
                 matched = [{c.split(':')[0]: self._col(r, c) for c in cols.split(',')} for r in matched]
             lim = (rec['query'].get('limit') or [None])[0]
@@ -702,7 +702,7 @@ class ListTest(Base):
         self.fn('list')(self.ctx(), chan)
         self.assertEqual([(r['method'], r['url']) for r in self.seen],
                          [('GET', f'{URL}{TABLE}?project_id=eq.{q(chan)}&order=id&select=*&limit=5001'),
-                          ('GET', f'{URL}{REPLIES}?project_id=eq.{q(chan)}&order=created_at'
+                          ('GET', f'{URL}{REPLIES}?project_id=eq.{q(chan)}&order=created_at.asc,id.asc'
                                   f'&select=id,comment_id,author,text,ts,edited_ts,agent&limit=20001')])
         rec, rrec = self.api.requests
         self.assertEqual(rec['raw_path'], f'{TABLE}?project_id=eq.deai%2F{self.sp["id"]}%2Ftask-1&order=id&select=*&limit=5001')
@@ -830,7 +830,13 @@ class ListTest(Base):
         self.fn('list')(self.ctx(), chan)
         self.fn('resolve')(self.ctx(), chan, 'a', 'r')
         self.fn('check')(self.ctx())
-        self.assertEqual([r['timeout'] for r in self.seen], [8, 8, 8, 4, 4], 'list: коментарі+відповіді, resolve, check: коментарі+відповіді')
+        # один дедлайн на виклик: кожен запит іде з `min(свій строк, що лишилося)` — трохи менше за повний бюджет, але ніколи не більше
+        got = [r['timeout'] for r in self.seen]
+        for t, full in zip(got, [8, 8, 8, 4, 4]):
+            self.assertLessEqual(t, full)
+            self.assertGreater(t, full - 1)
+        self.assertEqual(len(got), 5, 'list: коментарі+відповіді, resolve, check: коментарі+відповіді')
+        self.assertEqual(got[2], 8, 'resolve — один запит: його строк і є бюджет')
 
     def test_a_giant_answer_is_refused(self):
         self.patch_globals(MAX_BODY=1000)
@@ -1391,7 +1397,7 @@ class RecentRepliesTest(RepliesBase):
         c, r, p = self.api.requests
         self.assertEqual((c['path'], r['path'], p['path']), (TABLE, REPLIES, TABLE))
         self.assertEqual(r['query']['select'], ['id,comment_id,author,ts'])
-        self.assertEqual((r['query']['order'], r['query']['limit']), (['created_at.desc'], ['200']))
+        self.assertEqual((r['query']['order'], r['query']['limit']), (['created_at.desc,id.desc'], ['200']))
         self.assertEqual(r['query']['project_id'], ['eq.' + chan])
         self.assertEqual(p['query']['id'], ['in.("a","b","c")'])
         self.assertIn('id=in.(%22a%22,%22b%22,%22c%22)', p['raw_query'])
@@ -1611,8 +1617,154 @@ class CheckRepliesTest(RepliesBase):
 
     def test_both_probes_use_the_check_budget(self):
         self.fn('check')(self.ctx())
-        self.assertEqual([(r['url'].split('?')[0][len(URL):], r['timeout']) for r in self.seen],
-                         [(TABLE, 4), (REPLIES, 4)])
+        got = [(r['url'].split('?')[0][len(URL):], r['timeout']) for r in self.seen]
+        self.assertEqual([g[0] for g in got], [TABLE, REPLIES])
+        for _, t in got:
+            self.assertTrue(3 < t <= 4, t)             # спільний дедлайн 4 с: другий запит — з тим, що лишилося
+
+
+class BudgetTest(RepliesBase):
+    """Один спільний дедлайн на виклик: повільна таблиця відповідей не з'їдає бюджет коментарів (ядро чекає 5 с на `check`, 10 с на решту)."""
+
+    def tight(self, budget=0.6):
+        self.patch_globals(CALL_TIMEOUT_S=budget, CHECK_TIMEOUT_S=budget, REPLIES_MIN_S=0.3, REPLY_POST_MIN_S=0.3)
+
+    def timed(self, fn, *args):
+        t0 = time.monotonic()
+        out = fn(*args)
+        return out, time.monotonic() - t0
+
+    def test_a_slow_replies_table_still_gives_the_comments_within_the_budget(self):
+        self.tight()
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.api.override('GET', 200, [], path=REPLIES, delay=3)
+        got, spent = self.timed(self.fn('list'), self.ctx(), chan)
+        self.assertEqual([c['id'] for c in got], ['a'])
+        self.assertNotIn('replies', got[0])
+        self.assertLess(spent, 1.5, 'не чекали 3 с відповіді таблиці відповідей')
+
+    def test_list_does_not_even_ask_for_replies_when_the_comments_ate_the_budget(self):
+        self.tight()
+        chan = self.chan()
+        self.api.override('GET', 200, [row('a', chan)], path=TABLE, delay=0.4)
+        self.api.override('GET', 200, [reply_row('r1', 'a', chan)], path=REPLIES, delay=0.4)
+        got, spent = self.timed(self.fn('list'), self.ctx(), chan)
+        self.assertEqual([c['id'] for c in got], ['a'])
+        self.assertNotIn('replies', got[0])
+        self.assertEqual([r['path'] for r in self.api.requests], [TABLE], 'залишок < REPLIES_MIN_S: запиту до відповідей нема')
+        self.assertLess(spent, 0.6)
+
+    def test_check_stays_ok_and_says_replies_were_not_checked(self):
+        self.tight()
+        self.api.override('GET', 200, [], path=TABLE, delay=0.4)
+        res, spent = self.timed(self.fn('check'), self.ctx())
+        self.assertEqual(res, {'ok': True, 'replies': None,
+                               'detail': 'таблиця comments доступна; таблицю відповідей не перевірено — не вистачило часу'})
+        self.assertEqual([r['path'] for r in self.api.requests], [TABLE])
+        self.assertLess(spent, 0.6)
+
+    def test_check_with_a_slow_replies_probe_answers_inside_the_budget(self):
+        self.tight()
+        self.api.override('GET', 200, [], path=REPLIES, delay=3)
+        res, spent = self.timed(self.fn('check'), self.ctx())
+        self.assertEqual((res['ok'], res['replies']), (True, False))
+        self.assertIn('таблиця відповідей не відповіла', res['detail'])
+        self.assertLess(spent, 1.5)
+
+    def test_recent_returns_only_comments_when_the_budget_is_spent(self):
+        self.tight()
+        chan = self.chan()
+        self.api.override('GET', 200, [{'id': 'a', 'ts': 't', 'author': 'o', 'status': 'open', 'version': '2'}], path=TABLE, delay=0.4)
+        got, spent = self.timed(self.fn('recent'), self.ctx(), chan)
+        self.assertEqual([i['id'] for i in got], ['a'])
+        self.assertEqual([r['path'] for r in self.api.requests], [TABLE])
+        self.assertLess(spent, 0.6)
+
+    def test_recent_with_a_slow_replies_table_returns_the_comments(self):
+        self.tight()
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.api.override('GET', 200, [], path=REPLIES, delay=3)
+        got, spent = self.timed(self.fn('recent'), self.ctx(), chan)
+        self.assertEqual([i['id'] for i in got], ['a'])
+        self.assertLess(spent, 1.5)
+
+    def test_recent_stops_between_parent_chunks_when_the_budget_is_gone(self):
+        self.tight(0.6)
+        self.patch_globals(IN_CHUNK=1)
+        chan = self.chan()
+        self.api.rows = [row('a', chan), row('b', chan)]
+        self.api.replies = [reply_row('r1', 'a', chan), reply_row('r2', 'b', chan)]
+        self.api.override('GET', 200, [{'id': 'a', 'version': '2'}], path=TABLE, delay=0.4,
+                          when=lambda rec: 'in.' in rec['query'].get('id', [''])[0])
+        got = self.fn('recent')(self.ctx(), chan)
+        self.assertEqual([i for i in got if 'parent' in i], [], 'частину батьків не дочекались — самі коментарі')
+        asked = [r for r in self.api.requests if r['path'] == TABLE and 'in.' in r['query'].get('id', [''])[0]]
+        self.assertEqual(len(asked), 1, 'після першої пачки бюджету не лишилось — другої нема')
+
+    def test_reply_does_not_post_when_too_little_budget_is_left(self):
+        self.tight()
+        chan = self.chan()
+        self.api.override('GET', 200, [{'id': 'a', 'status': 'open'}], path=TABLE, delay=0.4)
+        e = self.reply_fails(chan, 'a', 'текст', 'Агент')
+        self.assertIsInstance(e, dm.ModuleError)
+        self.assertEqual(e.code, 'module-error')
+        self.assertIn('відповідь не надіслано', e.message)
+        self.assertEqual(self.api.reqs('POST'), [], 'POST не йшов')
+        self.assertEqual(self.api.replies, [])
+
+    def test_reply_posts_when_the_budget_is_enough(self):
+        self.tight(3)
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.assertTrue(self.reply(chan, 'a', 'текст', 'Агент')['id'])
+        post = self.seen[-1]
+        self.assertEqual(post['method'], 'POST')
+        self.assertLessEqual(post['timeout'], 3)
+
+
+class OrderAndTextsTest(RepliesBase):
+    def test_list_orders_replies_by_created_at_then_id(self):
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.api.replies = [reply_row('r2', 'a', chan), reply_row('r1', 'a', chan)]        # однаковий `created_at`
+        (a,) = self.fn('list')(self.ctx(), chan)
+        self.assertEqual([r['id'] for r in a['replies']], ['r1', 'r2'])
+        self.assertEqual(self.api.requests[1]['query']['order'], ['created_at.asc,id.asc'])
+
+    def test_recent_orders_replies_newest_first_then_by_id_descending(self):
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.api.replies = [reply_row('r1', 'a', chan), reply_row('r2', 'a', chan),
+                            reply_row('r0', 'a', chan, created_at='2026-11-20T09:00:00Z')]
+        got = self.fn('recent')(self.ctx(), chan)
+        self.assertEqual([i['id'] for i in got if 'parent' in i], ['r2', 'r1', 'r0'])
+        self.assertEqual(self.api.requests[1]['query']['order'], ['created_at.desc,id.desc'])
+
+    def test_the_fake_honours_a_multi_key_order(self):
+        self.api.replies = [{'id': 'b', 'created_at': '1'}, {'id': 'a', 'created_at': '1'}, {'id': 'c', 'created_at': '0'}]
+        status, payload = self.g['_request'](self.ctx(), 'GET', 'order=created_at.asc,id.desc&select=id', timeout=4,
+                                             table='/rest/v1/comment_replies')
+        self.assertEqual([r['id'] for r in json.loads(payload)], ['c', 'b', 'a'])
+
+    def test_a_403_on_the_replies_table_names_it_and_replies_sql(self):
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.api.override('GET', 403, {'message': 'denied'}, path=REPLIES)
+        res = self.fn('check')(self.ctx())
+        self.assertIn('таблицю comment_replies (replies.sql)', res['detail'])
+        self.assertNotIn('schema.sql', res['detail'])
+        self.api.overrides.clear()
+        self.api.override('POST', 403, {'message': 'denied'}, path=REPLIES)
+        e = self.reply_fails(chan, 'a', 'т', 'А')
+        self.assertIn('таблицю comment_replies (replies.sql)', e.message)
+        self.assertNotIn('schema.sql', e.message)
+
+    def test_a_403_on_the_comments_table_keeps_its_old_text(self):
+        self.api.override('GET', 403, {'message': 'denied'}, path=TABLE)
+        res = self.fn('check')(self.ctx())
+        self.assertIn('таблицю comments (schema.sql)', res['detail'])
 
 
 class RepliesKeySafetyTest(RepliesBase):
