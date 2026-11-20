@@ -363,6 +363,9 @@ function ddPublish(c) {
         cls: sub.warnKey ? "dd-item--warn" : "",
       });
     }
+    if (sub.id === "modpw") {
+      return ddItem({ act: sub.id, icon: "lock", title: t(sub.labelKey), sub: t("frPwSub", t(sub.stateKey)) });
+    }
     const icon = sub.id === "openpreview" ? "ext" : "link";
     const why = sub.disabled ? t(sub.whyKey) : "";
     /* Підпис «локально» (публікація модулем, `bar-model.js`): ключ і аргументи з моделі, а не склеєний

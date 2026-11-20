@@ -81,3 +81,14 @@ test("проводка ⌘K: картка через askForm без якоря, 
   assert.match(demo, /post\('\/api\/demo-task', \{ space: spaceId, title: t\('frDemoTaskTitle'\), reuse: true \}\)/);
   assert.match(demo, /r\.existed \? switchTask\(r\.id\) : wizOpenTask\(r\)/);
 });
+
+test("пароль: меню веде в Модулі з шухлядою на полі пароля; картка — `pw` відкриває ту саму шухляду", async () => {
+  const { barHTML } = await import("../app/shell-bar.js");
+  const src = readFileSync(path.join(ROOT, "app", "app.js"), "utf8");
+  assert.match(src, /\n  modpw: \(\) => \{ openDd = null; openPublishPassword\(\); \}/);
+  assert.match(src, /act === 'pw'\) openCnDrawer\(e, 'edit', null, 'password'\)/);
+  assert.match(src, /openCnDrawer\(e, 'edit', null, 'password'\)/);
+  assert.match(src, /\[data-cn-field="\$\{CSS\.escape\(focusKey\)\}"\]/);
+  assert.match(src, /\(want \?\? el\.querySelector\('\[data-cn-field\]'\)/, "фокус — на названому полі, а не на першому");
+  assert.equal(typeof barHTML, "function");
+});

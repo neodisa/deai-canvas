@@ -262,6 +262,13 @@ function setConnSec(sec) {
 /* Роль, до картки якої веде вхід («Налаштувати…» синку → `vcs`): після першого списку фокус іде на картку її модуля, а не першу.
    Порожньо — як завжди. Знімається разом із `connFocusPending` (`loadConn`) і чиститься кожним входом без ролі (`enterConnections`). */
 let connFocusRole = '';
+/* «Пароль превʼю» з меню публікації (0.33.0): після першого списку модулів — шухляда постачальника публікації з фокусом на паролі. */
+let connPwPending = false;
+function openPublishPassword() {
+  setConnSec('mods');
+  connPwPending = true;
+  enterConnections('publish');
+}
 /* Лічильник входів на «Підключення»: `enterConnections` чекає перелік просторів, і за цей час людина могла піти (`enterHome` із явною
    сторінкою — логотип, майстер; `leaveHome` — відкрила задачу) або клікнути вдруге. Оголошено ТУТ з тієї самої причини, що `cnDrawer`:
    `enterHome` читає його з першого `render()`. Зміну задачі чи простору рахує `taskSwitchGen`. */
@@ -2724,6 +2731,9 @@ const BAR_ACTIONS = {
     }
   },
 
+  /* Пароль превʼю модуля (0.33.0): веде в «Налаштування → Модулі» з шухлядою на полі пароля. */
+  modpw: () => { openDd = null; openPublishPassword(); },
+
   /* Пароль превʼю (ідея 02.09.2026). Пишемо лише в tasks.json: гейт у зібраному
      превʼю міняє ПОВНА публікація (вона ж ставить його в кожну сторінку). Тому
      відповідь чесно ділиться на три: ще не публікувалось / той самий / превʼю
@@ -4376,6 +4386,12 @@ async function loadConn({ spaces = true } = {}) {
     /* Не з-під палітри чи діалогу: їм фокус належить. */
     if (!paletteOverlay && !askUp()) focusConnLanding(role);
   }
+  if (connPwPending) {
+    connPwPending = false;
+    const pid = connSpace()?.capabilities?.publish;
+    const pe = pid ? (connState.list || []).find((x) => x.id === pid) : null;
+    if (pe && !paletteOverlay && !askUp()) openCnDrawer(pe, 'edit', null, 'password');
+  }
 }
 
 /**
@@ -4524,6 +4540,7 @@ async function connAction(act, id, role, via = '') {
   if (act === 'enable') openCnDrawer(e, 'enable', via === 'catalog' ? { role } : null);
   else if (act === 'configure') openCnDrawer(e, 'edit');
   else if (act === 'disable') askConnDisable(e);
+  else if (act === 'pw') openCnDrawer(e, 'edit', null, 'password');
   else if (act === 'trust' || act === 'trustinfo') connTrust(e, act);
 }
 
@@ -4967,7 +4984,7 @@ function syncCnDrawer() {
   if (check) { check.disabled = !!cnDrawer.busy || dirty; check.title = dirty ? t('cnCheckSavedFirst') : ''; }
 }
 
-function openCnDrawer(e, mode, fromCatalog = null) {
+function openCnDrawer(e, mode, fromCatalog = null, focusKey = '') {
   const fields = formFields(e);
   const init = initialForm(fields);
   /* З каталогу: кнопка там уже сказала «Замінити {тримач}» — це й є згода (`catalogHolders`: кого вона називала); закриття шухляди
@@ -4977,7 +4994,9 @@ function openCnDrawer(e, mode, fromCatalog = null) {
     ...(fromCatalog ? { catalogHolders: roleHolders(e, connState.list) } : {}) };
   paintCnDrawer();
   const el = cnDrawerNode();
-  (el.querySelector('[data-cn-field]') ?? el.querySelector('[data-cn-dr="submit"]'))?.focus({ preventScroll: true });
+  /* `focusKey` (0.33.0, «Пароль превʼю»): шухляда відкривається одразу на потрібному полі. */
+  const want = focusKey ? el.querySelector(`[data-cn-field="${CSS.escape(focusKey)}"]`) : null;
+  (want ?? el.querySelector('[data-cn-field]') ?? el.querySelector('[data-cn-dr="submit"]'))?.focus({ preventScroll: true });
 }
 
 /** Закрити без питань. Фокус — на кнопку картки, що відкрила панель (після запису дія могла змінитись: «Підключити» →

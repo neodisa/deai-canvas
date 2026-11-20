@@ -37,6 +37,7 @@
  */
 
 import { figmaOff, hasNotify, hasPublish, hasVcs, isLegacyPublish, vcsBrand } from "./spaces-model.js";
+import { PW_STATE_KEY, pwItem } from "./setup-model.js";
 
 /**
  * Яруси зникнення в зоні 2, ширина вікна в пікселях. Значення підтверджені
@@ -325,6 +326,9 @@ export function barModel(s) {
       warnKey: s.pwError ? "pwUnreadable" : (s.pwStale ? "pubPwStale" : (s.pwUngated ? "pubPwUngated" : "")),
       warnArgs: s.pwUngated ? [s.pwUngated] : [],
     }] : []),
+    /* Пароль превʼю модуля (0.33.0): один на простір — секрет постачальника публікації (`publish_password` у `/api/spaces`).
+       Не ЛІГА (там свій `pubpw` на задачу). Веде в «Налаштування → Модулі» з шухлядою на полі пароля (`app.js`, `modpw`). */
+    ...(!legacy && pwItem(s.space) ? [{ id: "modpw", labelKey: "frPwLine", stateKey: PW_STATE_KEY[pwItem(s.space).state] }] : []),
   ];
   /* Застереження модуля «за адресою» (Vercel, 2b-1): `s.pubGate`/`s.pubGateStale` — те, що віддав сервер
      (`publish_gate`/`publish_gate_stale`, `app.js` лише переказує). РІВНО булеві: поле не прийшло (`undefined`) —
