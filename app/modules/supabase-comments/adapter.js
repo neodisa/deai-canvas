@@ -176,6 +176,9 @@
     var repliesDown = null;                  // null чи причина: 'no-replies-schema' (таблиці нема) або текст помилки
     var goneReplies = {};                    // надгробки: id відповідей, видалених кимось іще (чи нами): ні upsert, ні delete
     var lastCarried = {};                    // id відповідей, що ніс ОСТАННІЙ виклик save (до їх запису в базу)
+    var retryDel = {};                       // id відповідей, чиє видалення впало: наступні save повторюють його, а не «забувають»
+    var noSchemaWarned = false;
+    var lastFetch = 0;                       // `mine` останнього запущеного fetchAll: відрізняє «витіснене save» від «витіснене новішим читанням»
     var badWarned = {};                      // id некоректних відповідей, про які вже попереджено
     var repliesRealtime = null;              // окремий канал realtime для відповідей (лише коли таблиця є)
     var listeners = typeof cfg.onChange === 'function' ? [cfg.onChange] : [];
@@ -230,7 +233,7 @@
       var any = false;
       var byOwner = {};
       Object.keys(writtenReplies).forEach(function (id) {
-        if (carried[id] || fl.base[id] || goneReplies[id]) return;
+        if (carried[id] || fl.base[id] || goneReplies[id] || retryDel[id]) return;
         (byOwner[replyOwner[id]] = byOwner[replyOwner[id]] || []).push(id);
       });
       cache = cache.map(function (c) {
@@ -333,6 +336,7 @@
     function fetchAll(fromCatch) {
       if (closed) return Promise.resolve();  // подія realtime після close() нічого не питає в бази
       var mine = ++seq;
+      lastFetch = mine;
       var lost = function () { if (fromCatch === true) scheduleCatch(CACHE_TTL_MS); };
       /* Обидві таблиці — паралельно; відповіді не можуть зламати читання коментарів (їхня помилка стає `repliesDown`). */
       var cq = Promise.resolve(client.from(TABLE).select('*').eq('project_id', channel).order('id'));
@@ -341,7 +345,12 @@
       catch (e) { rq = Promise.resolve({ error: e }); }
       return Promise.all([cq, rq]).then(function (both) {
         var res = both[0], rres = both[1] || {};
-        if (closed || mine !== seq) { lost(); return; }
+        if (closed || mine !== seq) {
+          lost();
+          /* Витіснене НАШИМ save/remove (а не новішим читанням) — зміна ззовні, що його запустила, не губиться: ще одне читання. */
+          if (!closed && lastFetch === mine) scheduleFetch();
+          return;
+        }
         if (res.error) { loadError = String(res.error.message || res.error); warn('fetch failed', res.error); lost(); return; }
         loadError = null;
         freshRead = true;
@@ -360,6 +369,7 @@
           repRows.forEach(function (r) { if (r && r.id != null) seenIds[r.id] = true; });
           Object.keys(writtenReplies).forEach(function (id) { if (!seenIds[id]) goneReplies[id] = true; });
           Object.keys(seenIds).forEach(function (id) { delete goneReplies[id]; });
+          Object.keys(retryDel).forEach(function (id) { if (!seenIds[id]) delete retryDel[id]; });   // база вже без неї: повторювати нічого
           attachReplies(cache, repRows);
         } else if (noTable(rres)) {
           supportsReplies = false; repliesDown = 'no-replies-schema';
@@ -515,8 +525,25 @@
     /* Що з відповідей треба записати: рядки до upsert-а (відрізняються від `writtenReplies`) і id до видалення (були в базі,
        а коментар, що ними володів і лишається в списку, їх більше не несе). Без таблиці відповідей — нічого. */
     function planReplies(comments, fl) {
-      var up = [], del = [];
-      if (!supportsReplies) return { up: up, del: del };
+      var up = [], del = [], block = false;
+      if (!supportsReplies) {
+        /* Відповіді недоступні. Тимчасовий збій (repliesDown — повідомлення): save з незбереженою відповіддю мусить ВІДХИЛИТИСЬ,
+           інакше коментатор зніме _pending, і відповідь зникне мовчки. Таблиці нема назавжди ('no-replies-schema'): відкидаємо з
+           одним попередженням (інтерфейс не пропонує відповідей у такому проєкті). */
+        var lost = false;
+        comments.forEach(function (c) {
+          (Array.isArray(c.replies) ? c.replies : []).forEach(function (r) {
+            if (!r || typeof r.id !== 'string' || goneReplies[r.id]) return;
+            if (typeof r.author !== 'string' || typeof r.text !== 'string') return;
+            if (writtenReplies[r.id] !== stable(replyToRow(r, c.id, channel))) lost = true;
+          });
+        });
+        if (lost && typeof repliesDown === 'string') {
+          if (repliesDown === 'no-replies-schema') { if (!noSchemaWarned) { noSchemaWarned = true; warn('replies dropped', 'table comment_replies is missing in this project'); } }
+          else block = true;
+        }
+        return { up: up, del: del, block: block };
+      }
       var kept = {}, have = {}, seen = {};
       comments.forEach(function (c) {
         kept[c.id] = true;
@@ -535,9 +562,9 @@
       /* Видаляємо лише те, що викликач БАЧИВ (fl.base: знімок writtenReplies у момент виклику save + те, що ніс попередній
          виклик): відповідь, що зʼявилась після виклику, ним не видалена — просто його список її не знав. */
       Object.keys(writtenReplies).forEach(function (id) {
-        if (kept[replyOwner[id]] && !have[id] && !goneReplies[id] && fl.base[id]) del.push(id);
+        if (kept[replyOwner[id]] && !have[id] && !goneReplies[id] && (fl.base[id] || retryDel[id])) del.push(id);
       });
-      return { up: up, del: del };
+      return { up: up, del: del, block: false };
     }
 
     function doSave(comments, fl) {
@@ -550,7 +577,7 @@
          сама різниця, окремо: нова відповідь до незмінного коментаря не чіпає `comments`. */
       var changed = rows.filter(function (r) { return written[r.id] !== stable(r); });
       var plan = planReplies(comments, fl);
-      if (!changed.length && !plan.up.length && !plan.del.length) {
+      if (!changed.length && !plan.up.length && !plan.del.length && !plan.block) {
         cache = comments.slice(); seq++;
         var back0 = reattachForeign(fl, carriedIds(comments));
         syncSnap(); if (dropped || back0) emit(); return Promise.resolve();
@@ -563,7 +590,7 @@
         }
         var out = chk.rows;
         plan = planReplies(comments, fl);
-        if (!out.length && !plan.up.length && !plan.del.length) {
+        if (!out.length && !plan.up.length && !plan.del.length && !plan.block) {
           cache = comments.slice(); seq++;
           var back1 = reattachForeign(fl, carriedIds(comments));
           syncSnap(); if (dropped || back1) emit(); return null;
@@ -589,7 +616,13 @@
               }, function (e) { res.repErr = e || { message: 'rejected' }; return null; });   // відхилений проміс = помилка цієї пачки
             });
           }, Promise.resolve());
-        }).then(function () { return res; });
+        }).then(function () {
+          if (!res.err && !res.repErr && plan.block) {
+            res.repErr = { message: 'replies unavailable' };
+            scheduleFetch();                 // збій міг минути: перечитати, щоб відповіді знову запрацювали
+          }
+          return res;
+        });
       }).then(function (res) {
         if (!res) return;
         var out = res.out, err = res.err;
@@ -612,13 +645,15 @@
           }
           out.forEach(function (r) { written[r.id] = stable(r); });
           if (res.upDone) res.plan.up.forEach(function (r) { writtenReplies[r.id] = stable(r); replyOwner[r.id] = r.comment_id; });
-          res.delDone.forEach(function (id) { delete writtenReplies[id]; delete replyOwner[id]; });
+          res.delDone.forEach(function (id) { delete writtenReplies[id]; delete replyOwner[id]; delete retryDel[id]; });
+          res.plan.del.forEach(function (id) { if (res.delDone.indexOf(id) < 0) retryDel[id] = true; });
           var back2 = reattachForeign(fl, carriedIds(comments));
           syncSnap();
           if (adopted || dropped || back2) emit();    // споживачі беруть злитий стан (чужа зміна не губиться, видалене зникає)
           if (res.repErr) { warn('replies save failed', res.repErr); throw new Error('supabase replies save failed: ' + res.repErr.message); }
           return;
         }
+        res.plan.del.forEach(function (id) { retryDel[id] = true; });
         if (reattachForeign(fl, carriedIds(comments))) emit();
         warn('save failed after retries', err);
         throw new Error('supabase save failed: ' + err.message);
@@ -651,8 +686,8 @@
            виклик (він міг іще не дійти до writtenReplies). Видаляти save може лише це. */
         var base = keysOf(writtenReplies);
         Object.keys(lastCarried).forEach(function (id) { base[id] = true; });
+        Object.keys(retryDel).forEach(function (id) { base[id] = true; });
         fl.base = base;
-        fl.baseServer = keysOf(writtenReplies);
         lastCarried = carriedIds(comments);
         var p = chain.then(function () { return doSave(comments, fl); });
         var after = function () { if (fl.dropped && !closed) setTimeout(function () { if (!closed) emit(); }, 0); };
