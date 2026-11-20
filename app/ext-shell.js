@@ -53,7 +53,6 @@ import { CMT_ACTS, CMT_EVENTS, createExtComments } from "./ext-comments.js";
 import { extBarHTML } from "./ext-bar.js";
 import { createExtInspect } from "./ext-inspect.js";
 import { followPageOf } from "./ext-follow.js";
-import { islandToolsHTML } from "./island.js";
 import { LANG_KEY, readStoredLang, setLang, t } from "./i18n.js";
 import { SPRITE, ico } from "./icons.js";
 import { rowsLayout, worldBox } from "./layout.js";
@@ -490,7 +489,7 @@ export function overviewWorld(rows, cardW, heightOf) {
  * скопійований сюди, він шукав би «Іт.3» у рядку «It.3» — не знаходив і тихо
  * лишав кирилицю в English-режимі, тобто відтворював рівно ту саму ваду.
  */
-export function extBarState(man, ui) {
+export function extBarState(man, ui, tools = null) {
   const iters = man?.iters ?? [];
   const tag = (it) => t("iterTag", it.num);
   const cur = iters.find((x) => x.id === ui.it);
@@ -509,6 +508,7 @@ export function extBarState(man, ui) {
     overviewWhyKey: overviewWhyKey(man, ui.it),
     copied: !!ui.copied,
     error: ui.error || "",
+    tools,
   };
 }
 
@@ -525,8 +525,8 @@ let man = null;
 let copyTimer = null;
 
 /**
- * Модель острівця превʼю (0.32.0). «Коментарі» зʼявляються лише коли збірка має командні коментарі (Task 3); «Інспектор» — коли
- * в документі рамки є оверлей (`insp.has()`, Task 4) і вид живий; «Сховати інтерфейс» є завжди.
+ * Інструменти превʼю (0.32.1: з острівця внизу — у праву частину смуги). «Коментарі» зʼявляються лише коли збірка має командні
+ * коментарі; «Інспектор» — коли в документі рамки є оверлей (`insp.has()`) і вид живий; «Сховати інтерфейс» є завжди.
  */
 const island = { comments: false, last: null };
 
@@ -536,8 +536,7 @@ let cmt = null;
 /** Інспектор лише для перегляду (Task 4): панель `#insp-panel` + оверлей рамки; створюється в `open()` завжди. */
 let insp = null;
 
-/** Набір кнопок острівця за прапорцями; порядок і роздільники — у `islandToolsHTML`. «Коментарі» — лише там, де є живий макет
- *  (в «Огляді» кадри — знімки, коментатора в них нема). */
+/** Набір кнопок за прапорцями. «Коментарі» — лише там, де є живий макет (в «Огляді» кадри — знімки, коментатора в них нема). */
 function islandTools() {
   const live = effMode(man, ui) !== "overview";
   return [island.comments && live && "cmt", live && insp?.has() && "insp", "clean"].filter(Boolean);
@@ -546,15 +545,22 @@ function islandTools() {
 /** Закрити бічні панелі превʼю (коментарі, інспектор): «Сховати інтерфейс» їх закриває. */
 function closeSidePanels() { cmt?.setOpen(false); insp?.setOn(false); }
 
-/** Острівець унизу по центру: монтується в `#hud` обгортки (у старої обгортки точки нема — тоді нічого й не малюємо). */
+/** Стан кнопок інструментів для смуги. */
+function toolsState() {
+  return { list: islandTools(), commentsOn: !!cmt?.isOpen(), commentsCount: cmt ? cmt.count() : 0, inspectorOn: !!insp?.isOn() };
+}
+
+/** Перемалювати смугу, коли змінився стан інструментів (лічильник, увімкнено/ні, зʼявився оверлей). Фокус клавіатури повертається на ту
+ *  саму кнопку — `innerHTML` її знищує. Без змін — нічого не чіпаємо. */
 function paintIsland() {
-  const hud = el("hud");
-  if (!hud) return;
-  const html = `<div class="island" role="group" aria-label="${t("islandNav")}"><div class="isl-tools">`
-    + `${islandToolsHTML({ tools: islandTools(), commentsOn: !!cmt?.isOpen(), commentsCount: cmt ? cmt.count() : 0, inspectorOn: !!insp?.isOn() })}</div></div>`;
+  const bar = el("bar");
+  if (!bar || !man) return;
+  const html = extBarHTML(extBarState(man, ui, toolsState()));
   if (html === island.last) return;
   island.last = html;
-  hud.innerHTML = html;
+  const act = document.activeElement?.closest?.("#bar .ext-tools")?.dataset ? document.activeElement.dataset.act : null;
+  bar.innerHTML = html;
+  if (act) bar.querySelector(`.ext-tools [data-act="${act}"]`)?.focus();
 }
 
 const el = (id) => document.getElementById(id);
@@ -572,13 +578,15 @@ function panelNode() {
 }
 
 function paint() {
-  el("bar").innerHTML = extBarHTML(extBarState(man, ui));
+  const barHtml = extBarHTML(extBarState(man, ui, toolsState()));
+  island.last = barHtml;
+  el("bar").innerHTML = barHtml;
   const node = panelNode();
   node.className = `panel${ui.collapsed ? " panel--rail" : ""}`;
   node.innerHTML = panelHTML(extPanelState(man, ui));
   cmt?.setActive(effMode(man, ui) !== "overview");
   insp?.setActive(effMode(man, ui) !== "overview");
-  paintIsland();
+  paintIsland();   // setActive міг змінити набір кнопок — докрасити смугу
   document.body.classList.add("with-panel");
   document.body.classList.toggle("panel-collapsed", ui.collapsed);
 }
@@ -1083,7 +1091,7 @@ const EXT_ACTIONS = {
     apply();
   },
   copylink: () => copyLink(),
-  /* Кнопка острівця «Сховати інтерфейс» — той самий перемикач, що й акорд ⇧⌘\\. */
+  /* Кнопка смуги «Сховати інтерфейс» — той самий перемикач, що й акорд ⇧⌘\\. */
   clean: () => toggleClean(true),
   /* Перезавантаження, а не повторний `fetch`: маніфест не прочитався — це або
      недоїхала публікація, або мережа глядача, і в обох випадках чесніше
@@ -1144,12 +1152,6 @@ function wire() {
     const m = ev.data;
     if (cmt && m && m.type === "dc-comments" && CMT_EVENTS.has(m.ev)) cmt.onMessage(ev);
   });
-  /* Скільки знизу рамки перекриває острівець: форма коментаря в макеті лягає над ним (`PREVIEW_HOST_ARG.bottomInset`). */
-  window.__dcIslandInset = () => {
-    const f = el("frame")?.getBoundingClientRect();
-    const i = el("hud")?.querySelector(".island")?.getBoundingClientRect();
-    return i && i.height && f ? Math.max(0, Math.round(f.bottom - i.top + 8)) : 0;
-  };
 }
 
 /** Чистий перегляд у превʼю: оболонка й піни сховані, кнопка повернення — завжди. */

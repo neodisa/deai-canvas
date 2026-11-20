@@ -281,10 +281,10 @@ describe("зовнішня оболонка на зібраному publish/", (
       assert.equal(await page.locator(`#pages-panel [data-act="${act}"]`).count(), 0,
         `«${act}» у статичному превʼю нікуди не веде`);
     }
-    // 0.32.0: інспектор у превʼю є — але лише для перегляду, і кнопка живе в ОСТРІВЦІ (не в смузі). Деталі — `preview-inspector.test.mjs`.
+    // 0.32.0: інспектор у превʼю є — але лише для перегляду. З 0.32.1 кнопка в смузі згори (зона 3), острівця внизу нема. Деталі — `preview-inspector.test.mjs`.
     // Межа, яку тримає publish, лишилась: жодного сервера (`/api/…`) і жодного тюнера.
-    await page.locator('#hud [data-act="inspector"]').waitFor();
-    assert.equal(await page.locator('#bar [data-act="inspector"]').count(), 0, "кнопка інспектора в смузі");
+    await page.locator('#bar [data-act="inspector"]').waitFor();
+    assert.equal(await page.locator('#hud').count(), 0, "острівець (#hud) лишився в превʼю");
     assert.equal(await page.locator('[data-act="insptune"], [data-act="insptunecolor"], .insp-foot').count(), 0, "у превʼю є тюнер");
   });
 
@@ -298,7 +298,8 @@ describe("зовнішня оболонка на зібраному publish/", (
        а вимкнений «Огляд» перевіряється окремим тестом нижче. */
     const acts = await page.evaluate(() => [...document.querySelectorAll(
       "#bar [data-act], #bar [data-dd]")]
-      .filter((el) => el.offsetParent !== null && !el.disabled
+      // Інструменти (`.ext-tools`) — окремий тест нижче: «Сховати» вмикає чистий перегляд, що ховає смугу посеред циклу.
+      .filter((el) => !el.closest(".ext-tools") && el.offsetParent !== null && !el.disabled
         && el.getAttribute("aria-pressed") !== "true")
       .map((el) => el.dataset.dd
         ? `dd:${el.dataset.dd}`
@@ -344,55 +345,106 @@ describe("зовнішня оболонка на зібраному publish/", (
   }, sel);
   const cleanOn = (page) => page.evaluate(() => document.documentElement.classList.contains("cv-clean"));
 
-  test("острівець: по центру внизу, «Інспектор» і «Сховати інтерфейс», без «баг» і AI", async (t) => {
+  test("інструменти: у правій частині смуги перед «Скопіювати посилання», без «баг» і AI, острівця внизу немає", async (t) => {
     const { ctx, page } = await fresh();
     t.after(() => ctx.close());
     await page.goto(`${base}/${IT1}`);
     await unlock(page);
-    const isl = page.locator("#hud .island");
-    await isl.waitFor();
-    await page.locator('#hud [data-act="inspector"]').waitFor();      // зʼявляється, коли в рамці піднявся оверлей
-    const box = await isl.boundingBox();
-    assert.ok(Math.abs(box.x + box.width / 2 - VIEW.width / 2) <= 2, `острівець не по центру: ${JSON.stringify(box)}`);
-    assert.ok(VIEW.height - (box.y + box.height) < 40 && box.y + box.height <= VIEW.height, `острівець не внизу: ${JSON.stringify(box)}`);
-    const acts = await page.evaluate(() => [...document.querySelectorAll("#hud [data-act]")].map((b) => b.dataset.act));
-    assert.deepEqual(acts, ["inspector", "clean"]);       // коментарів у цій збірці нема (manifest.comments)
-    assert.equal(await page.locator('#hud [data-act="feedback"], #hud #claude-hud, #hud .isl-claude').count(), 0);
-    assert.equal(await page.locator("#hud .isl-sep").count(), 1, "роздільник лише між інспектором і «Сховати»");
-    const btn = page.locator('#hud [data-act="clean"]');
+    await page.locator('#bar .ext-tools [data-act="inspector"]').waitFor();      // зʼявляється, коли в рамці піднявся оверлей
+    const acts = await page.evaluate(() => [...document.querySelectorAll("#bar .zone-3 [data-act]")].map((b) => b.dataset.act));
+    assert.deepEqual(acts, ["inspector", "clean", "copylink"]);       // коментарів у цій збірці нема (manifest.comments)
+    assert.equal(await page.locator('[data-act="feedback"], #claude-hud, .isl-claude').count(), 0);
+    const b = await page.evaluate(() => {
+      const r = (q) => document.querySelector(q).getBoundingClientRect();
+      const bar = r("#bar .bar"), tools = r("#bar .ext-tools"), copy = r('#bar [data-act="copylink"]');
+      return { barTop: bar.top, barBottom: bar.bottom, toolsRight: tools.right, copyLeft: copy.left, copyRight: copy.right, vw: innerWidth,
+        toolsTop: tools.top, toolsBottom: tools.bottom };
+    });
+    assert.ok(b.toolsRight <= b.copyLeft + 1, `інструменти не перед «Скопіювати посилання»: ${JSON.stringify(b)}`);
+    assert.ok(b.copyRight <= b.vw && b.copyRight > b.vw - 40, `права група не в правому куті: ${JSON.stringify(b)}`);
+    assert.ok(b.toolsTop >= b.barTop && b.toolsBottom <= b.barBottom, `інструменти поза смугою: ${JSON.stringify(b)}`);
+    const btn = page.locator('#bar [data-act="clean"]');
     assert.equal(await btn.getAttribute("aria-label"), "Сховати інтерфейс");
     assert.match(await btn.getAttribute("title"), /⇧⌘\\/);
     // Іконка справді намальована (symbol є в спрайті), а не порожній квадрат.
     assert.equal(await page.locator("#sprite #i-clean").count(), 1);
   });
 
-  test("кожен видимий контрол острівця щось робить на клік", async (t) => {
+  test("0.32.1: острівця в превʼю нема, а низ макета нічим не закритий (жодного елемента оболонки поверх рамки)", async (t) => {
+    const { ctx, page } = await fresh();
+    t.after(() => ctx.close());
+    await page.goto(`${base}/${IT1}`);
+    await unlock(page);
+    await page.locator('#bar .ext-tools [data-act="clean"]').waitFor();
+    assert.equal(await page.locator("#hud, .island, .isl-tools").count(), 0, "острівець є в DOM превʼю");
+    assert.equal(await page.evaluate(() => [...document.querySelectorAll(".island, .isl-btn")]
+      .filter((e) => e.getClientRects().length > 0).length), 0, "острівець видно");
+    const hit = await page.evaluate(() => {
+      const f = document.getElementById("frame").getBoundingClientRect();
+      const out = [];
+      for (const dy of [4, 20, 60, 118]) {
+        for (const fx of [0.1, 0.5, 0.9]) {
+          const x = Math.round(f.left + f.width * fx), y = Math.round(f.bottom - dy);
+          const e = document.elementFromPoint(x, y);
+          if (e?.id !== "frame") out.push({ x, y, hit: e ? `${e.tagName}#${e.id}.${e.className}` : null });
+        }
+      }
+      return { frameBottom: f.bottom, vh: innerHeight, out };
+    });
+    assert.ok(hit.frameBottom >= hit.vh - 1, `рамка не доходить до низу вікна: ${JSON.stringify(hit)}`);
+    assert.deepEqual(hit.out, [], "нижні 120px макета закриті елементом оболонки");
+  });
+
+  test("0.32.1: смуга не переповнюється на 768 і 375 (підписи ховаються, перемикач ширин поступається)", async (t) => {
+    const { ctx, page } = await fresh();
+    t.after(() => ctx.close());
+    await page.goto(`${base}/${IT1}`);
+    await unlock(page);
+    await page.locator('#bar .ext-tools [data-act="clean"]').waitFor();
+    const bad = [];
+    for (const width of [1440, 768, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const m = await page.evaluate(() => {
+        const bar = document.querySelector("#bar .bar");
+        const z = [...bar.querySelectorAll(".zone")].map((e) => e.getBoundingClientRect());
+        const copy = document.querySelector('#bar [data-act="copylink"]').getBoundingClientRect();
+        const tools = [...document.querySelectorAll("#bar .ext-tools .ctl")].map((e) => e.getBoundingClientRect().width);
+        return { barSW: bar.scrollWidth, barCW: bar.clientWidth, docSW: document.documentElement.scrollWidth, vw: innerWidth,
+          copyRight: copy.right, tools, zoneOverlap: z[0].right > z[1].left + 1 || z[1].right > z[2].left + 1 };
+      });
+      if (m.barSW > m.barCW || m.docSW > m.vw || m.copyRight > m.vw) bad.push({ width, why: "переповнення", ...m });
+      if (m.tools.some((w) => w < 28)) bad.push({ width, why: "ціль кнопки < 28px", ...m });
+      if (m.zoneOverlap) bad.push({ width, why: "зони налізають одна на одну", ...m });
+    }
+    assert.deepEqual(bad, [], JSON.stringify(bad, null, 1));
+  });
+
+  test("кожен видимий контрол інструментів щось робить на клік", async (t) => {
     const { ctx, page } = await fresh();
     t.after(() => ctx.close());
     await page.goto(base);
     await unlock(page);
-    await page.locator('#hud [data-act="inspector"]').waitFor();
-    const acts = await page.evaluate(() => [...document.querySelectorAll("#hud [data-act]")]
+    await page.locator('#bar .ext-tools [data-act="inspector"]').waitFor();
+    const acts = await page.evaluate(() => [...document.querySelectorAll("#bar .ext-tools [data-act]")]
       .filter((el) => el.offsetParent !== null && !el.disabled).map((el) => el.dataset.act));
-    assert.ok(acts.length >= 2, "в острівці мають бути «Інспектор» і «Сховати інтерфейс»");
-    // знімок «що на екрані»: клас `<html>`, клас `<body>` (панель справа), сам острівець (натиснута кнопка) і оверлей `ask()`
-    const snap = () => page.evaluate(() => document.documentElement.className + "|" + document.body.className + "|"
-      + document.getElementById("hud").innerHTML + "|" + !!document.querySelector(".cv-ask-scrim"));
+    assert.deepEqual(acts, ["inspector", "clean"], "у смузі мають бути «Інспектор» і «Сховати інтерфейс»");
+    // знімок «що на екрані»: клас `<html>`, клас `<body>` (панель справа), сама група (натиснута кнопка) і оверлей `ask()`
+    const snapJs = () => document.documentElement.className + "|" + document.body.className + "|"
+      + document.querySelector("#bar .ext-tools").innerHTML + "|" + !!document.querySelector(".cv-ask-scrim");
     for (const act of acts) {
-      const before = await snap();
-      await page.locator(`#hud [data-act="${act}"]`).first().click();
+      const before = await page.evaluate(snapJs);
+      await page.locator(`#bar .ext-tools [data-act="${act}"]`).first().click();
       try {
-        await page.waitForFunction(([b]) => (document.documentElement.className + "|" + document.body.className + "|"
-          + document.getElementById("hud").innerHTML + "|" + !!document.querySelector(".cv-ask-scrim")) !== b,
-        [before], { timeout: 4000 });
+        await page.waitForFunction(([b, f]) => new Function(`return (${f})()`)() !== b, [before, snapJs.toString()], { timeout: 4000 });
       } catch (e) {
-        assert.fail(`клік по «${act}» на острівці не змінив нічого — забутий рядок у EXT_ACTIONS`);
+        assert.fail(`клік по «${act}» у смузі не змінив нічого — забутий рядок у EXT_ACTIONS`);
       }
       if (await cleanOn(page)) await page.click("#cv-unclean");
     }
   });
 
-  test("«Сховати інтерфейс»: ховає смугу, дерево й острівець; «Показати інтерфейс» і ⇧⌘\\ (з обгортки й з рамки) повертають", async (t) => {
+  test("«Сховати інтерфейс»: ховає смугу з інструментами й дерево; «Показати інтерфейс» і ⇧⌘\\ (з обгортки й з рамки) повертають", async (t) => {
     const { ctx, page } = await fresh();
     t.after(() => ctx.close());
     await page.goto(`${base}/${IT1}`);
@@ -400,15 +452,15 @@ describe("зовнішня оболонка на зібраному publish/", (
     await page.waitForFunction(() => document.getElementById("frame")?.contentWindow?.document?.querySelector("h1"),
       null, { timeout: 15000 });
     const all = async () => ({ bar: await shownBox(page, "#bar .bar"), tree: await shownBox(page, "#pages-panel"),
-      island: await shownBox(page, "#hud .island") });
-    assert.deepEqual(await all(), { bar: true, tree: true, island: true });
+      tools: await shownBox(page, "#bar .ext-tools") });
+    assert.deepEqual(await all(), { bar: true, tree: true, tools: true });
 
-    await page.click('#hud [data-act="clean"]');
-    assert.deepEqual(await all(), { bar: false, tree: false, island: false }, "інтерфейс не сховався");
+    await page.click('#bar [data-act="clean"]');
+    assert.deepEqual(await all(), { bar: false, tree: false, tools: false }, "інтерфейс не сховався");
     assert.equal(await shownBox(page, "#cv-unclean"), true);
 
     await page.click("#cv-unclean");
-    assert.deepEqual(await all(), { bar: true, tree: true, island: true }, "«Показати інтерфейс» не повернув");
+    assert.deepEqual(await all(), { bar: true, tree: true, tools: true }, "«Показати інтерфейс» не повернув");
 
     await page.keyboard.press("ControlOrMeta+Shift+Backslash");
     assert.equal(await cleanOn(page), true, "акорд з обгортки не сховав");
@@ -416,14 +468,44 @@ describe("зовнішня оболонка на зібраному publish/", (
     assert.equal(await cleanOn(page), false, "акорд з обгортки не повернув");
 
     // З рамки: клік по макету віддає їй фокус — акорд ловить слухач документа рамки.
-    await page.click('#hud [data-act="clean"]');
+    await page.click('#bar [data-act="clean"]');
     await page.frameLocator("#frame").locator("h1").click();
     await page.keyboard.press("ControlOrMeta+Shift+Backslash");
     await page.waitForFunction(() => !document.documentElement.classList.contains("cv-clean"), null, { timeout: 3000 });
-    assert.deepEqual(await all(), { bar: true, tree: true, island: true }, "акорд з рамки не повернув інтерфейс");
+    assert.deepEqual(await all(), { bar: true, tree: true, tools: true }, "акорд з рамки не повернув інтерфейс");
     await page.frameLocator("#frame").locator("h1").click();
     await page.keyboard.press("ControlOrMeta+Shift+Backslash");
     assert.equal(await cleanOn(page), true, "акорд з рамки не сховав");
+  });
+
+  test("0.32.1: ⇧⌘\\ (Meta+Shift+Backslash) перемикає чистий перегляд і з фокусом на тілі обгортки, і з фокусом у рамці", async (t) => {
+    const { ctx, page } = await fresh();
+    t.after(() => ctx.close());
+    await page.goto(`${base}/${IT1}`);
+    await unlock(page);
+    await page.waitForFunction(() => document.getElementById("frame")?.contentWindow?.document?.querySelector("h1"),
+      null, { timeout: 15000 });
+    const CH = "Meta+Shift+Backslash";
+    const wait = (v, why) => page.waitForFunction((x) => document.documentElement.classList.contains("cv-clean") === x, v, { timeout: 3000 })
+      .catch(() => assert.fail(why));
+    // (а) фокус на тілі обгортки
+    await page.evaluate(() => { document.activeElement?.blur(); window.focus(); });
+    assert.equal(await page.evaluate(() => document.activeElement === document.body), true, "фокус не на тілі обгортки");
+    await page.keyboard.press(CH);
+    await wait(true, "акорд з тіла обгортки не сховав інтерфейс");
+    await page.keyboard.press(CH);
+    await wait(false, "акорд з тіла обгортки не повернув інтерфейс");
+    // (б) фокус у рамці
+    await page.frameLocator("#frame").locator("h1").click();
+    assert.equal(await page.evaluate(() => document.activeElement === document.getElementById("frame")), true, "фокус не в рамці");
+    await page.keyboard.press(CH);
+    await wait(true, "акорд з рамки не сховав інтерфейс");
+    await page.keyboard.press(CH);
+    await wait(false, "акорд з рамки не повернув інтерфейс");
+    // і з фокусом у рамці ПІСЛЯ повернення (слухач рамки не лишився «одноразовим»)
+    await page.frameLocator("#frame").locator("h1").click();
+    await page.keyboard.press(CH);
+    await wait(true, "повторний акорд з рамки не спрацював");
   });
 
   test("перемикач ширин задає ширину рамки", async (t) => {
@@ -748,18 +830,18 @@ describe("«Огляд» на зібраному publish/ з кадрами", ()
   test("«Інспектор» лише в «Макеті»: в «Огляді» кнопки нема, а відкритий оверлей гаситься (кадри — знімки, живого DOM нема)", async (t) => {
     const { ctx, page } = await open();
     t.after(() => ctx.close());
-    const btn = page.locator('#hud [data-act="inspector"]');
+    const btn = page.locator('#bar [data-act="inspector"]');
     await btn.waitFor();
     await btn.click();
     await page.waitForFunction(() => document.getElementById("frame").contentWindow.CanvasInspector.on === true, null, { timeout: 5000 });
     assert.equal(await page.evaluate(() => !document.getElementById("insp-panel").hidden), true, "панель не відкрилась");
     await overview(page);
-    assert.equal(await page.locator('#hud [data-act="inspector"]').count(), 0, "кнопка інспектора в «Огляді»");
+    assert.equal(await page.locator('#bar [data-act="inspector"]').count(), 0, "кнопка інспектора в «Огляді»");
     assert.equal(await page.evaluate(() => document.getElementById("insp-panel").hidden), true, "панель лишилась в «Огляді»");
     assert.equal(await page.evaluate(() => document.getElementById("frame").contentWindow.CanvasInspector.on), false,
       "оверлей лишився ввімкненим під полотном");
     await page.click('#bar [data-act="mode"][data-val="layout"]');
-    await page.locator('#hud [data-act="inspector"]').waitFor();
+    await page.locator('#bar [data-act="inspector"]').waitFor();
   });
 
   test("колесо змінює масштаб полотна", async (t) => {

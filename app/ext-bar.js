@@ -124,7 +124,7 @@ function zone2(st) {
       aria-pressed="${st.vp === p.id}"
       title="${esc(p.label)}" aria-label="${esc(p.label)}">${ico(p.id)}</button>`).join("");
   return `<div class="seg" role="group" data-seg="mode">${mode}</div>
-    <div class="seg seg--icons" role="group" data-seg="vp">${vp}</div>`;
+    <div class="seg seg--icons seg--ext-vp" role="group" data-seg="vp">${vp}</div>`;
 }
 
 /**
@@ -137,9 +137,30 @@ function zone2(st) {
  */
 function zone3(st) {
   const done = !!st.copied;
-  return `<button class="ctl ctl--out" data-act="copylink"
-    title="${esc(t("copyLink"))}">${ico(done ? "check" : "link")}
-    <span>${esc(done ? t("toastCopied") : t("copyLink"))}</span></button>`;
+  return `${toolsHTML(st.tools)}<button class="ctl ctl--out" data-act="copylink"
+    title="${esc(t("copyLink"))}" aria-label="${esc(done ? t("toastCopied") : t("copyLink"))}">${ico(done ? "check" : "link")}
+    <span class="lbl-copy">${esc(done ? t("toastCopied") : t("copyLink"))}</span></button>`;
+}
+
+/**
+ * Інструменти превʼю (0.32.1) — кнопки-іконки ПЕРЕД «Копіювати посилання», у правому верхньому куті смуги. Раніше це був острівець
+ * внизу по центру, який закривав макет. Дії ті самі (`comments` / `inspector` / `clean` в `EXT_ACTIONS`), підказки й aria — ті самі
+ * ключі словника. `tools` = { list: ['cmt','insp','clean'] (видимість рахує проводка), commentsOn, commentsCount, inspectorOn };
+ * без нього (або з порожнім списком) група не малюється.
+ */
+function toolsHTML(tools) {
+  const list = Array.isArray(tools?.list) ? tools.list : [];
+  const btn = (act, on, label, tip, icon, badge = "") => `<button class="ctl ctl--icon ctl--tool${on ? " ctl--on" : ""}"`
+    + ` data-act="${act}"${on === null ? "" : ` aria-pressed="${on}"`} aria-label="${esc(label)}" title="${esc(tip)}">${ico(icon)}${badge}</button>`;
+  const parts = [];
+  if (list.includes("cmt")) {
+    const n = Number(tools.commentsCount) || 0;
+    const badge = n > 0 ? `<span class="isl-count" aria-hidden="true">${n > 99 ? "99+" : n}</span>` : "";
+    parts.push(btn("comments", !!tools.commentsOn, t("cmtIsland", n), t("cmtKey"), "comment", badge));
+  }
+  if (list.includes("insp")) parts.push(btn("inspector", !!tools.inspectorOn, t("inspector"), t("inspectorKey"), "inspect"));
+  if (list.includes("clean")) parts.push(btn("clean", null, t("islandClean"), t("islandCleanKey"), "clean"));
+  return parts.length ? `<div class="ext-tools" role="group" aria-label="${esc(t("islandNav"))}">${parts.join("")}</div>` : "";
 }
 
 /**
@@ -157,6 +178,7 @@ function zone3(st) {
  *     ('' — увімкнений)
  *   vp: id пресета з `viewport.js`
  *   copied: boolean — щойно скопійоване посилання
+ *   tools: { list, commentsOn, commentsCount, inspectorOn } — інструменти превʼю (`toolsHTML`); немає — немає й групи
  *   error: string — ГОТОВИЙ рядок помилки для смуги під баром ('' — немає)
  *
  * `error` приходить уже перекладеним, як `pagesError` у панелі: цей модуль

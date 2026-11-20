@@ -7,7 +7,7 @@
  * 127.0.0.1); `POST /api/publish`. Мережі нема: `context.route` рве все, що не локальне. Жоден запит не сміє піти на `/api/…`.
  *
  * Мапа «перевірка → запобіжник → що станеться, якщо його прибрати»:
- *   1 острівець і I           — `live && insp?.has()` у `islandTools()` + `shellKey` (`ext-inspect.js`). Прибери — кнопки нема, I мовчить.
+ *   1 кнопка смуги і I           — `live && insp?.has()` у `islandTools()` + `shellKey` (`ext-inspect.js`). Прибери — кнопки нема, I мовчить.
  *   2 значення й токен зі знімка — `tok=…` у тезі (`preview_inspector_tag`) і його читання в `inspector.js`; `ds-snapshot.json` у збірці.
  *                              Прибери будь-що — чип зникає, а вирок `token` стає `unknown`; `--bf-ink` не стає `off-ds`.
  *   3 панель лише для перегляду — `readonly: true` у `paint()` (`ext-inspect.js`) → `panelHTML(…, { readonly })`. Прибери — поля вводу, підвал тюнера.
@@ -220,16 +220,16 @@ describe("інспектор у превʼю: збірка із знімком �
     return o;
   };
 
-  test("1: у острівці «Інспектор»; I на оболонці й I з фокусом у рамці вмикають і вимикають його", async (t) => {
+  test("1: у смузі «Інспектор»; I на оболонці й I з фокусом у рамці вмикають і вимикають його", async (t) => {
     const o = await open(t);
     const { page, frame } = o;
-    const btn = page.locator('.island [data-act="inspector"]');
+    const btn = page.locator('#bar [data-act="inspector"]');
     await btn.waitFor();
     assert.equal(await btn.getAttribute("aria-label"), "Інспектор");
     assert.match(await btn.getAttribute("title"), /I · Alt/);
     assert.equal(await btn.getAttribute("aria-pressed"), "false");
-    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll("#hud [data-act]")].map((b) => b.dataset.act)),
-      ["comments", "inspector", "clean"], "порядок кнопок острівця");
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll("#bar .ext-tools [data-act]")].map((b) => b.dataset.act)),
+      ["comments", "inspector", "clean"], "порядок кнопок інструментів у смузі");
     assert.equal(await panelShown(page), false, "панель відкрита до натискання");
 
     await focusShell(page);
@@ -251,9 +251,9 @@ describe("інспектор у превʼю: збірка із знімком �
     await until(async () => !(await on(frame)), "I з рамки вимкнула");
     assert.equal(await panelShown(page), false);
 
-    // кнопка острівця — той самий перемикач; закриття в шапці панелі теж
+    // кнопка смуги — той самий перемикач; закриття в шапці панелі теж
     await btn.click();
-    await until(() => on(frame), "кнопка острівця");
+    await until(() => on(frame), "кнопка смуги");
     await page.locator('#insp-panel [data-act="inspector"]').click();
     await until(async () => !(await on(frame)), "кнопка закриття в шапці панелі");
     assert.equal(await panelShown(page), false);
@@ -349,8 +349,8 @@ describe("інспектор у превʼю: збірка із знімком �
     const o = await open(t, { init: () => { try { localStorage.setItem("comment-layer:user", "Тест"); } catch (e) { /* ні */ } } });
     const { page, frame } = o;
     await until(() => frame.evaluate(() => !!(window.CommentLayer && window.CommentLayer._inited)).catch(() => false), "коментатор у рамці");
-    const cbtn = page.locator('.island [data-act="comments"]');
-    const ibtn = page.locator('.island [data-act="inspector"]');
+    const cbtn = page.locator('#bar [data-act="comments"]');
+    const ibtn = page.locator('#bar [data-act="inspector"]');
     await cbtn.waitFor();
 
     await page.keyboard.press("c");
@@ -394,7 +394,7 @@ describe("інспектор у превʼю: збірка із знімком �
     await page.keyboard.press("i");
     await until(() => on(frame), "інспектор");
     await pin(o, "#ok");
-    await page.click('.island [data-act="clean"]');
+    await page.click('#bar [data-act="clean"]');
     await until(clean, "чистий перегляд");
     assert.equal(await on(frame), false, "оверлей лишився ввімкненим у чистому вигляді");
     assert.equal(await panelShown(page), false);
@@ -413,7 +413,7 @@ describe("інспектор у превʼю: збірка із знімком �
 
     await page.keyboard.press("ControlOrMeta+Shift+Backslash");
     await until(async () => !(await clean()), "акорд повернув інтерфейс");
-    assert.equal(await shownBox(page, "#hud .island"), true);
+    assert.equal(await shownBox(page, "#bar .ext-tools"), true);
     assert.equal(await on(frame), false, "повернення не вмикає інспектор саме");
 
     // акорд з відкритим інспектором — з рамки

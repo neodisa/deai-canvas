@@ -3168,13 +3168,12 @@ class PreviewWrapper(unittest.TestCase):
         self.assertIn('shell/ext-shell.js', h)
         self.assertEqual(h.count('type="module"'), 1)
 
-    def test_island_mount_is_an_empty_inert_point(self):
-        """0.32.0: острівець превʼю монтується в `#hud` (клас `cv-hud` — його ховає й чистий перегляд). Точка ПОРОЖНЯ:
-        стара оболонка її не наповнює, тож у зіставленні зі старим `shell/` вона нічого не показує."""
-        import re
-        m = re.search(r'<div id="hud" class="cv-hud">(.*?)</div>', self._html(), re.S)
-        self.assertIsNotNone(m, 'нема точки монтування острівця')
-        self.assertEqual(m.group(1), '', 'точка мусить бути порожньою — наповнює її ext-shell.js')
+    def test_no_island_mount_in_preview(self):
+        """0.32.1: інструменти превʼю переїхали зі скинутого внизу острівця в смугу згори (`ext-bar.js`) — точки `#hud` у
+        обгортці більше нема: нічого, що могло б закрити низ макета."""
+        h = self._html()
+        self.assertNotIn('id="hud"', h)
+        self.assertNotIn('cv-hud', h)
 
     def test_comments_panel_mount_is_an_empty_hidden_inert_point(self):
         """0.32.0 (Task 3): панель командних коментарів монтується в `#cmt-panel` (справа, `.insp.cmt` — розмітку й відступи
@@ -5381,8 +5380,11 @@ class PreviewHostArg(unittest.TestCase):
     def test_preview_host_reports_to_the_shell_and_supplies_the_name(self):
         js = serve.PREVIEW_HOST_ARG
         for need in ('host: (function', "'dc-comments'", 'onReady', 'onChange', 'onSelect', 'onMode',
-                     "ev: 'add'", 'userName: function', "localStorage.getItem('comment-layer:user')", 'bottomInset'):
+                     "ev: 'add'", 'userName: function', "localStorage.getItem('comment-layer:user')"):
             self.assertIn(need, js)
+        # 0.32.1: острівця внизу превʼю нема — відступу під нього теж (інструменти в смузі згори).
+        self.assertNotIn('bottomInset', js)
+        self.assertNotIn('__dcIslandInset', js)
 
     def test_host_mode_only_inside_our_shell(self):
         """Пряме посилання на внутрішню сторінку (без оболонки) чи чужий вбудовувач — НЕ режим хоста: інакше схована ручка

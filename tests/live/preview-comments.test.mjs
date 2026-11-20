@@ -8,7 +8,7 @@
  * скриптом). Допоміжний `outside` мусить бути порожнім у кінці кожного тесту.
  *
  * Мапа «перевірка → запобіжник → що станеться, якщо його прибрати»:
- *   1 острівець і C        — `island.comments = true` в `open()` лише з `manifest.comments`; `EXT_ACTIONS.comments`; клавіша C у
+ *   1 кнопка смуги і C        — `island.comments = true` в `open()` лише з `manifest.comments`; `EXT_ACTIONS.comments`; клавіша C у
  *                            `wire()`. Закриті — без дій: `PREVIEW_ACTIONS.closed = []` у `ext-comments.js`.
  *   2 імʼя перед першим    — `ensureName()` у `setAdding`: прибери виклик — коментатор сам спитає `prompt()` чи підпише «Anonymous».
  *   3 чужий коментар       — `st.isOwn`/`PREVIEW_ACTIONS.own` у `paint`: без них чужа картка отримала б «Редагувати/Видалити».
@@ -217,13 +217,13 @@ async function addComment(o, env, text, { name = "Тест", expectDialog = true
   return until(() => (env.memo.store.get(CHANNEL) ?? []).find((c) => c.text === text) ?? null, `коментар «${text}» у сервісі`);
 }
 
-test("1: після входу в острівці «Коментарі» з числом відкритих; C відкриває панель; закриті — згорнуті, «Зроблено · Іт.N», без дій", async (t) => {
+test("1: після входу в смузі «Коментарі» з числом відкритих; C відкриває панель; закриті — згорнуті, «Зроблено · Іт.N», без дій", async (t) => {
   const env = await boot(t, { port: 0 });
   await seed(env, SEED);
   const o = await openPreview(env, t);
   const { page } = o;
 
-  const btn = page.locator('.island [data-act="comments"]');
+  const btn = page.locator('#bar [data-act="comments"]');
   await btn.waitFor();
   assert.equal(await btn.locator(".isl-count").textContent(), "2", "число відкритих на кнопці");
   assert.equal(await panelOpen(page), false, "панель відкрита до натискання");
@@ -467,8 +467,8 @@ test("8: збірка без командних коментарів — ні к
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   await enter(page, env);
-  await page.locator(".island").waitFor();
-  assert.equal(await page.locator('.island [data-act="comments"]').count(), 0, "кнопка «Коментарі» без коментарів у збірці");
+  await page.locator("#bar .ext-tools").waitFor();
+  assert.equal(await page.locator('#bar [data-act="comments"]').count(), 0, "кнопка «Коментарі» без коментарів у збірці");
   await page.keyboard.press("c");
   assert.equal(await panelOpen(page), false, "C відкрила панель без коментарів у збірці");
   assert.equal(await page.locator("#cmt-panel .cmt-card, #cmt-panel .cmt-top").count(), 0);

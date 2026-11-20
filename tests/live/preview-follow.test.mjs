@@ -320,7 +320,7 @@ test("6: інспектор увімкнено, рамка йде на іншу 
   await until(() => f2.evaluate(() => !!window.CanvasInspector).catch(() => false), "оверлей нової сторінки");
   assert.equal(await overlayOn(f2), false, "інспектор переїхав увімкненим (у Deai він вимикається)");
   assert.equal(await panel(), false);
-  assert.equal(await page.locator('.island [data-act="inspector"]').getAttribute("aria-pressed"), "false");
+  assert.equal(await page.locator('#bar [data-act="inspector"]').getAttribute("aria-pressed"), "false");
   await o.ctx.unroute(/\/(vendor\/inspector|comment-layer\/.*)\.js/);
 
   /* (б) перехід по дереву: `apply()` — документ ще старий, але панель закрита вже на старті навігації. */

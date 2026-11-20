@@ -298,3 +298,44 @@ test("класи ті самі, що в смузі інструмента", () =
       `клас «${cls}» зник — смуга приїде без стилів`);
   }
 });
+
+/* ── 0.32.1: інструменти превʼю — у правому верхньому куті смуги, а не острівцем над макетом ─────────────────────────────────── */
+const TOOLS = (o = {}) => ({ list: ["cmt", "insp", "clean"], commentsOn: false, commentsCount: 0, inspectorOn: false, ...o });
+const toolActs = (h) => [...h.matchAll(/<button class="ctl ctl--icon ctl--tool[^"]*"\s+data-act="(\w+)"/g)].map((m) => m[1]);
+
+test("інструменти: три кнопки в порядку коментарі → інспектор → сховати, усі ПЕРЕД «Копіювати посилання», у зоні 3", () => {
+  const h = html({ tools: TOOLS() });
+  assert.deepEqual(toolActs(h), ["comments", "inspector", "clean"]);
+  const z3 = h.slice(h.indexOf('class="zone zone-3"'));
+  assert.ok(z3.indexOf('data-act="clean"') < z3.indexOf('data-act="copylink"'), "інструменти мусять стояти перед «Копіювати посилання»");
+  assert.ok(z3.indexOf('data-act="comments"') > -1 && h.indexOf('data-act="comments"') > h.indexOf('class="zone zone-3"'), "кнопки не в зоні 3");
+});
+
+test("інструменти: підказки й aria ті самі, що були в острівця; aria-pressed — на перемикачах, не на «Сховати»", () => {
+  const h = html({ tools: TOOLS({ commentsOn: true, inspectorOn: false, commentsCount: 2 }) });
+  assert.match(h, /data-act="comments" aria-pressed="true" aria-label="Коментарі, відкритих: 2" title="Коментарі · C"/);
+  assert.match(h, /data-act="inspector" aria-pressed="false" aria-label="Інспектор" title="Інспектор · I /);
+  assert.match(h, /data-act="clean" aria-label="Сховати інтерфейс" title="Сховати інтерфейс \(⇧⌘\\\)"/);
+  assert.ok(!/data-act="clean" aria-pressed/.test(h));
+  assert.match(h, /class="ctl ctl--icon ctl--tool ctl--on"\s+data-act="comments"/, "увімкнена кнопка не підсвічена");
+});
+
+test("інструменти: бейдж відкритих — на кнопці «Коментарі»; 0 — без бейджа; 120 — 99+", () => {
+  assert.match(html({ tools: TOOLS({ commentsCount: 3 }) }), /data-act="comments"[^>]*>[^]*?<span class="isl-count" aria-hidden="true">3<\/span><\/button>/);
+  assert.ok(!html({ tools: TOOLS({ commentsCount: 0 }) }).includes("isl-count"));
+  assert.match(html({ tools: TOOLS({ commentsCount: 120 }) }), />99\+</);
+});
+
+test("інструменти: без командних коментарів нема «Коментарів»; в «Огляді» (лише «Сховати») нема й інспектора; без tools групи немає", () => {
+  assert.deepEqual(toolActs(html({ tools: TOOLS({ list: ["insp", "clean"] }) })), ["inspector", "clean"]);
+  assert.deepEqual(toolActs(html({ tools: TOOLS({ list: ["clean"] }) })), ["clean"]);
+  assert.ok(!html({ tools: TOOLS({ list: ["clean"] }) }).includes('data-act="inspector"'));
+  assert.ok(!html().includes("ext-tools"), "група малюється й без станy інструментів");
+  assert.ok(!html({ tools: TOOLS({ list: [] }) }).includes("ext-tools"));
+});
+
+test("«Скопіювати посилання»: підпис у `.lbl-copy` (ховається на вузькому), а aria-label лишається", () => {
+  const h = html();
+  assert.match(h, /data-act="copylink"[^>]*aria-label="Скопіювати посилання"/);
+  assert.match(h, /<span class="lbl-copy">Скопіювати посилання<\/span>/);
+});

@@ -1134,6 +1134,14 @@ body.with-panel.panel-collapsed.with-cmt .cv-canvas{width:calc(100% - var(--pane
    ЗОВСІМ»), лише для нового контролу. */
 @container (max-width:1300px){ .lbl-gl{display:none} }
 @container (max-width:1180px){ .lbl-mode,.lbl-upd{display:none} }
+/* Превʼю (0.32.1): інструменти — іконки в правому куті смуги перед «Копіювати посилання». Бейдж коментарів сидить на кнопці
+   (`.isl-count` — абсолютний), на увімкненій кнопці (фон `--sel`) міняє колір, щоб не злитись із нею. */
+.ext-tools{display:flex;align-items:center;gap:2px}
+.ctl--tool{position:relative}
+.ctl--on .isl-count{background:var(--on-sel);color:var(--sel)}
+@container (max-width:960px){ .lbl-copy{display:none} .zone-3 .ctl--out{width:var(--h-ctl);padding:0;justify-content:center} }
+/* Телефон: ширину кадру глядач не вибирає (екран один), тож перемикач ширин у зовнішній смузі — перший, що поступається місцем. */
+@container (max-width:640px){ .seg--ext-vp{display:none} }
 @container (max-width:1060px){
   .view-extra{display:none}
   .view-more{display:inline-flex}

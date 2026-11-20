@@ -3035,8 +3035,7 @@ PREVIEW_HOST_ARG = """,
               try { v = localStorage.getItem('comment-layer:user') || ''; } catch (e) { v = ''; }
               if (v && v !== 'Anonymous') return v;
               try { return String(window.parent.__dcPreviewUser || ''); } catch (e) { return ''; }
-            },
-            bottomInset: function () { try { var f = window.parent && window.parent.__dcIslandInset; return typeof f === 'function' ? f() : 0; } catch (e) { return 0; } }
+            }
           };
         })()"""
 
@@ -3829,8 +3828,6 @@ PAGES_PREVIEW_PAGE = """<!DOCTYPE html><html lang="uk"><head><meta charset="utf-
 <div id="sprite"></div>
 <div id="bar" class="bar-mount"></div>
 <div id="stage" class="cv-stage"><iframe id="frame" class="cv-frame"></iframe></div>
-<!-- Острівець превʼю (0.32.0): порожня точка монтування; наповнює її `ext-shell.js`, стара оболонка її не чіпає. -->
-<div id="hud" class="cv-hud"></div>
 <!-- Панель коментарів (0.32.0): порожня точка монтування справа; наповнює її `ext-shell.js` лише в збірці з командними коментарями. -->
 <div id="cmt-panel" class="insp cmt" hidden></div>
 <!-- Панель інспектора (0.32.0): та сама точка справа, лише для перегляду; наповнює її `ext-shell.js`, стара оболонка її не чіпає. -->

@@ -134,11 +134,11 @@ test("D: зовнішнє превʼю — акорд і кнопка", async (t
   await page.click("#cv-unclean");
   assert.equal(await shown(page, "#bar .bar"), true, "кнопка не повернула оболонку превʼю");
 
-  // 0.32.0: острівець превʼю — видимий, його кнопка ховає все (і сам острівець), акорд повертає.
-  assert.equal(await shown(page, "#hud .island"), true, "острівця превʼю нема");
-  await page.click('#hud [data-act="clean"]');
-  assert.equal(await shown(page, "#hud .island"), false, "острівець лишився в чистому перегляді");
+  // 0.32.1: інструменти превʼю — у смузі згори; їхня кнопка ховає все (і саму смугу), акорд повертає.
+  assert.equal(await shown(page, "#bar .ext-tools"), true, "інструментів превʼю нема");
+  await page.click('#bar [data-act="clean"]');
+  assert.equal(await shown(page, "#bar .ext-tools"), false, "інструменти лишились у чистому перегляді");
   assert.equal(await shown(page, "#bar .bar"), false);
   await page.keyboard.press(CHORD);
-  assert.equal(await shown(page, "#hud .island"), true, "акорд не повернув острівець");
+  assert.equal(await shown(page, "#bar .ext-tools"), true, "акорд не повернув інструменти");
 });
