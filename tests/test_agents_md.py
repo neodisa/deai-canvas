@@ -4,6 +4,7 @@
 файл новішої версії не понижується; кожна команда й кожен `/api/…` у шаблоні існують. Усе — у тимчасових теках.
 """
 import getpass
+import json
 import importlib.util
 import os
 import re
@@ -63,6 +64,7 @@ class Render(Tmp):
         self.assertEqual(lines[-1], '')
         self.assertIn('<deai>/bin/inbox.py', b)
         self.assertIn('<deai>/docs/modules/authoring.md', b)
+        self.assertIn('<deai>/app/serve.py', b)
         self.assertIn('/api/agents-md?space=<id>', b)
         self.assertIn('paths.deai', b)
         self.assertNotIn('{version}', b)
@@ -264,6 +266,35 @@ class TemplateIsReal(unittest.TestCase):
         self.assertIn('<deai>/docs/modules/authoring.md', self.tpl)
         self.assertTrue(os.path.isfile(os.path.join(REPO, 'docs', 'modules', 'authoring.md')))
 
+    def test_every_deai_path_exists_in_the_repo(self):
+        """Кожен `<deai>/<шлях>` із шаблону існує відносно кореня репо (serve.py, inbox.py, authoring.md…)."""
+        found = sorted(set(re.findall(r'<deai>/([A-Za-z0-9_./-]+[A-Za-z0-9_])', self.tpl)))
+        self.assertIn('app/serve.py', found)
+        self.assertIn('bin/inbox.py', found)
+        self.assertIn('docs/modules/authoring.md', found)
+        for rel in found:
+            with self.subTest(path=rel):
+                self.assertTrue(os.path.exists(os.path.join(REPO, rel)), rel)
+
+    def test_the_api_paths_cover_tasks_and_iterations(self):
+        paths = set(re.findall(r'/api/[a-z][a-z-]*', self.tpl))
+        for p in ('/api/tasks', '/api/task-new', '/api/iteration', '/api/spaces', '/api/modules'):
+            self.assertIn(p, paths)
+
+    def test_every_header_in_the_template_is_in_serve(self):
+        headers = sorted(set(re.findall(r'\bX-[A-Za-z][A-Za-z-]*', self.tpl)))
+        self.assertIn('X-Canvas-Task', headers)
+        for h in headers:
+            with self.subTest(header=h):
+                self.assertIn(h, self.serve_src)
+
+    def test_no_team_policy_in_the_template(self):
+        """Шаблон — довідник продукту: коли форкати ітерацію, вирішує кожна команда сама."""
+        for line in ('Ask the designer before creating', 'Do not edit an old iteration', 'latest iteration',
+                     'frozen copy', 'Close a comment only after'):
+            with self.subTest(line=line):
+                self.assertNotIn(line, self.tpl)
+
 
 class Routes(base.Fixture):
     @classmethod
@@ -368,6 +399,22 @@ class Routes(base.Fixture):
         _put(os.path.join(q, 'AGENTS.md'), b'# Team rules\n')
         self.assertEqual(self.post('/api/space-new', {'name': 'Adopted', 'path': q})[0], 200)
         self.assertTrue(_get(os.path.join(q, 'AGENTS.md')).endswith(b'\n# Team rules\n'))
+
+
+class IterationHeader(base.Fixture):
+    """Шаблон радить `POST /api/iteration` із `X-Canvas-Task`: ітерація має лягти в названу задачу, не в поточну."""
+
+    def test_the_header_names_the_task_that_gets_the_iteration(self):
+        spaces.switch_space(self.legacy_id)            # поточна — `a`; пишемо в `x` іншого простору
+        before_a = serve.load_meta({'dir': self.a_dir})['iterations']
+        st, body = self.post('/api/iteration', {'from': 'it1', 'note': 'via header'}, {'X-Canvas-Task': 'x'})
+        self.assertEqual((st, body['ok'], body['iteration']['id']), (200, True, 'it2'))
+        self.assertEqual(body['iteration']['from'], 'it1')
+        with open(os.path.join(self.x_dir, 'iterations.json'), encoding='utf-8') as f:
+            ids = [i['id'] for i in json.load(f)['iterations']]
+        self.assertEqual(ids, ['it1', 'it2'])
+        self.assertTrue(os.path.isfile(os.path.join(self.x_dir, 'iterations', 'it2', 'index.html')))
+        self.assertEqual(serve.load_meta({'dir': self.a_dir})['iterations'], before_a)   # поточна задача не зачеплена
 
 
 class ImplicitSpace(base.Bare):
