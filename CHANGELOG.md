@@ -16,7 +16,7 @@ appear exactly where something would otherwise not work — Overview screenshots
 - ⌘K «Знайомство з канвасом»: карта робочого місця з легендою, цикл роботи, «Відкрити демо».
 - Демо-задача «Tally» (`POST /api/demo-task`): пʼять сторінок, два стани, флоу й два піни; також у кроці 4 майстра.
 - `GET /api/setup`: версія, шляхи установки, стан знімків «Огляду» (`ok | no-node | no-playwright | no-browser | unknown`).
-- Налаштування → AGENTS.md: «Запуск агента» (`cd <тека> && claude`) і стан `CLAUDE.md` з «Підключити».
+- Налаштування → AGENTS.md: «Запуск агента» (`cd <тека> && claude`) і стан `CLAUDE.md` з «Підключити» (`POST /api/agents-md {space, claude: true}`).
 - Пароль превʼю видно: рядок на картці модуля публікації й пункт «Пароль превʼю» в меню «Опублікувати» (також у виді задачі).
 
 ### Змінено
