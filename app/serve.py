@@ -8757,10 +8757,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     @staticmethod
     def _write_space_agents_md(sid):
-        """Новий простір дістає AGENTS.md одразу; збій запису НЕ валить створення простору — лише лог (stderr)."""
+        """Новий простір дістає AGENTS.md і (коли його нема) CLAUDE.md з `@AGENTS.md` одразу; збій запису НЕ валить створення простору — лише лог (stderr)."""
         try:
             sp = next(s for s in spaces.read_registry()['spaces'] if s['id'] == sid)
             agents_md.write(sp['path'], version=updater.current_version(UPDATER_ROOT))
+            agents_md.claude_ensure(sp['path'])     # CLAUDE.md з `@AGENTS.md` — лише коли його нема (0.33.0)
         except Exception as e:    # noqa: BLE001 — навмисно: AGENTS.md — додаток до простору, не його умова
             print(f'agents-md: not written for new space {sid}: {type(e).__name__}', file=sys.stderr)
 
@@ -8786,12 +8787,14 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'space': sid, 'tools': tools})
 
     def _agents_md_post(self, payload):
-        """`POST /api/agents-md {space}`: створити/оновити блок."""
-        self._agents_md(payload.get('space'), True)
+        """`POST /api/agents-md {space[, claude: true]}`: створити/оновити блок; з `claude: true` — лише підключити CLAUDE.md
+        (`agents_md.claude_connect`: дописати `@AGENTS.md` на початок чи створити файл), AGENTS.md не чіпається."""
+        self._agents_md(payload.get('space'), 'claude' if payload.get('claude') is True else True)
 
     def _agents_md(self, want, write):
         """`GET|POST /api/agents-md[?space=]` → `{ok, space, …agents_md.status, paths}`. POST створює/оновлює блок (`ValueError('newer')` →
-        409 `newer`, файл цілий). Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
+        409 `newer`, файл цілий). `claude` — стан CLAUDE.md теки простору (`agents_md.claude_status`); `write='claude'` —
+        лише підключити його. Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
         у відповіді, у файл вони не потрапляють. Версія — та сама, що `current` у `GET /api/update`."""
         sp = self._module_space(want)
         if sp is None:
@@ -8802,8 +8805,17 @@ class Handler(SimpleHTTPRequestHandler):
             return
         version = updater.current_version(UPDATER_ROOT)
         try:
-            if write:
+            if write == 'claude':
+                agents_md.claude_connect(folder)
+                st = agents_md.status(folder, version=version)
+            elif write:
+                existed = os.path.lexists(os.path.join(folder, agents_md.NAME))
                 st = agents_md.write(folder, version=version)
+                if not existed:
+                    try:
+                        agents_md.claude_ensure(folder)   # «Створити»: CLAUDE.md лише коли його нема; збій — не збій AGENTS.md
+                    except OSError:
+                        pass
             else:
                 st = agents_md.status(folder, version=version)
         except ValueError as e:
@@ -8813,7 +8825,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_error(503, 'unreadable', 'unreadable')
             return
         deai = UPDATER_ROOT
-        self._send_json({'ok': True, 'space': sp['id'], **st,
+        self._send_json({'ok': True, 'space': sp['id'], **st, 'claude': agents_md.claude_status(folder),
                          'paths': {'deai': deai, 'inbox': os.path.join(deai, 'bin', 'inbox.py'),
                                    'authoring': os.path.join(deai, 'docs', 'modules', 'authoring.md')}})
 
