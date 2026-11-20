@@ -103,7 +103,7 @@ function foldHTML(key, title, items, st, kind) {
 const FILTER_KEY = { local: "cmtFLocal", project: "cmtFTeam", all: "cmtFAll" };
 
 /** st: {snapshot, query, selectedId, editingId, delAsk (id картки з питанням «Видалити назавжди?»), expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down}
- *  Необовʼязково (превʼю, 0.32.0; без них — Deai як було): `isOwn(c)`, `actions: {any, own, closed}` (дозволені `data-act`), `adding: boolean` (кнопка «Додати коментар»). */
+ *  Необовʼязково (превʼю, 0.32.0; без них — Deai як було): `isOwn(c)`, `actions: {any, own, closed}` (дозволені `data-act`), `adding: boolean` (кнопка «Додати коментар»), `emptyKey` (ключ i18n порожнього списку; за замовчуванням `cmtEmpty`). */
 export function commentsPanelHTML(st) {
   const filter = FILTERS.includes(st.filter) ? st.filter : "local";
   const hidden = !!(st.snapshot && st.snapshot.pinsHidden);
@@ -137,7 +137,7 @@ export function commentsPanelHTML(st) {
     const none = !s.fresh.length && !s.open.length && !s.earlier.length && !s.closed.length;
     // Коментарі є, але запит чи активний фільтр адресата сховали всі — «нема збігів», а не «ще немає».
     const hasAny = Array.isArray(st.snapshot.comments) && st.snapshot.comments.length > 0;
-    const empty = none ? `<p class="insp-hint">${esc(t(st.query || hasAny ? "cmtNoMatch" : "cmtEmpty"))}</p>` : "";
+    const empty = none ? `<p class="insp-hint">${esc(t(st.query || hasAny ? "cmtNoMatch" : st.emptyKey || "cmtEmpty"))}</p>` : "";
     const fresh = s.fresh.length
       ? `<section class="cmt-sec cmt-sec--new" aria-label="${esc(t("cmtNewTitle"))}"><h3 class="cmt-h cmt-h--new">${esc(t("cmtNewTitle"))}`
         + ` <span>${s.fresh.length}</span></h3>${s.fresh.map((c) => cardHTML(c, st, "open")).join("")}</section>` : "";

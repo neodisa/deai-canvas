@@ -1143,7 +1143,8 @@ async function open() {
       mount.hidden = true;
       document.body.appendChild(mount);
     }
-    cmt = createExtComments({ frame: el("frame"), mount, channel: String(man.comments.channel || ""), onChange: paintIsland });
+    cmt = createExtComments({ frame: el("frame"), mount, channel: String(man.comments.channel || ""), onChange: paintIsland,
+      canToggle: () => !clean && effMode(man, ui) !== "overview" });
     island.comments = true;
     paintIsland();
   }

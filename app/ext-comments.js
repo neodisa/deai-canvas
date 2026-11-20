@@ -8,7 +8,10 @@
  *     колбек коментатора `onAdd`). Те саме імʼя в іншому браузері — чужий коментар;
  *   · закривати й відкривати знову — лише в Deai: тут для цього НЕМА ні кнопок, ні дій у реєстрі (`CMT_ACTS`);
  *   · імʼя питаємо один раз — перед першим додаванням (діалог оболонки), не при відкритті панелі;
- *   · `prompt()` у превʼю не буває ніколи: імʼя дає оболонка (`host.userName` у `PREVIEW_HOST_ARG`, `serve.py`).
+ *   · `prompt()` у превʼю не буває ніколи: імʼя дає оболонка (`host.userName` у `PREVIEW_HOST_ARG`, `serve.py`): рамка читає
+ *     localStorage, а коли він недоступний — `window.parent.__dcPreviewUser`, куди оболонка кладе введене імʼя;
+ *   · як у Deai: панель відкрито й імʼя вже відоме — додавання вмикається одразу (відкрита панель = режим додавання); імені
+ *     нема — панель лише читається, а «+» питає імʼя й вмикає режим. «+» лишається перемикачем (вимкнути, щоб клацати макет).
  *
  * ⛔ Це ІНТЕРФЕЙСНЕ обмеження, а не замок: публічний ключ у кожній сторінці технічно дозволяє все. Справжній замок — правила
  * на боці сховища (окрема задача, поза 0.32; див. спеку етапу Ж).
@@ -30,10 +33,30 @@ export const OWN_PREFIX = "dc-own:";
 /** Посилки коментатора з рамки, які панель приймає (`PREVIEW_HOST_ARG`). */
 export const CMT_EVENTS = new Set(["ready", "change", "select", "mode", "add"]);
 /** Що можна глядачеві: «Показати» всім; змінити/видалити — своїм; закритим — нічого. Закрити/відкрити/доручити тут немає зовсім. */
-export const PREVIEW_ACTIONS = { any: ["cmtshow"], own: ["cmtedit", "cmtdel"], closed: [] };
+export const PREVIEW_ACTIONS = { any: ["cmtshow", "cmtshot"], own: ["cmtedit", "cmtdel"], closed: [] };
 /** Дії панелі, які оболонка перекладає в `EXT_ACTIONS`. Закрити/відкрити знову/доручити/перенести — свідомо поза цим переліком. */
-export const CMT_ACTS = ["comments", "cmtadd", "cmtshow", "cmtedit", "cmteditsave", "cmteditcancel", "cmtdel", "cmtdelyes",
+export const CMT_ACTS = ["comments", "cmtadd", "cmtshow", "cmtshot", "cmtedit", "cmteditsave", "cmteditcancel", "cmtdel", "cmtdelyes",
   "cmtdelno", "cmtsec", "cmtpins"];
+
+/** Імʼя з сирого значення: порожнє й старе службове «Anonymous» (до 0.32 рамка писала його після скасованого `prompt()`) — не імʼя. */
+export function cleanName(raw) {
+  const v = String(raw == null ? "" : raw).trim();
+  return v === "Anonymous" ? "" : v;
+}
+
+/** Імʼя автора: сховище, а коли воно недоступне чи порожнє — те, що оболонка тримає в памʼяті (`fallback()`). */
+export function readNameFrom(getStorage, fallback) {
+  let v = "";
+  try { v = cleanName(getStorage().getItem(USER_KEY)); } catch (e) { v = ""; }
+  return v || cleanName(fallback());
+}
+
+/** Чи можна глядачеві змінити/видалити коментар: він СВІЙ і ВІДКРИТИЙ у поточному знімку (закритим — ніколи, хоч би й підробили `data-val`). */
+export function canTouch(own, snap, id) {
+  if (!own.has(id)) return false;
+  const c = snap && Array.isArray(snap.comments) ? snap.comments.find((x) => x && x.id === id) : null;
+  return !!c && c.status !== "resolved";
+}
 
 /** Скільки останніх id авторства пам'ятаємо; більше — старі випадають (браузер не мусить рости від років коментування). */
 const OWN_MAX = 500;
@@ -97,11 +120,12 @@ function nameFormHTML() {
  * `onChange()` — оболонка перемальовує острівець (число відкритих, натиснута кнопка). Усе сховище — через функції:
  * `storage()` (за замовчуванням `localStorage`).
  */
-export function createExtComments({ frame, mount, channel, onChange = () => {}, storage = () => localStorage }) {
+export function createExtComments({ frame, mount, channel, onChange = () => {}, storage = () => localStorage, canToggle = () => true }) {
   const own = ownStore(storage, `${OWN_PREFIX}${channel || location.pathname}`);
   const st = {
     open: false, active: true, adding: false, ready: false, readyDoc: null, snap: null, sel: null, query: "",
     editing: null, draft: null, delAsk: null, expanded: { earlier: false, closed: false },
+    wantAdd: false,
   };
   mount.setAttribute("aria-label", t("cmtTitle"));
 
@@ -113,19 +137,18 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       return L && typeof L.snapshot === "function" ? L : null;
     } catch (e) { return null; }
   };
-  const readName = () => {
-    let v = "";
-    try { v = String(storage().getItem(USER_KEY) || "").trim(); } catch (e) { v = ""; }
-    return v || String(window.__dcPreviewUser || "").trim();
-  };
+  const readName = () => readNameFrom(storage, () => window.__dcPreviewUser);
   const visible = () => st.open && st.active;
+  /** Додавання ввімкнене чи ось-ось увімкнеться (рамка ще вантажиться): для «+» і підказки порожньої панелі. */
+  const armed = () => st.adding || st.wantAdd;
 
   function paint() {
     const ownIds = own.all();
     const html = visible() ? commentsPanelHTML({
       snapshot: st.snap, query: st.query, selectedId: st.sel, editingId: st.editing, delAsk: st.delAsk,
       expanded: st.expanded, filter: "all", dual: false, teamDown: null, fresh: null, down: null,
-      isOwn: (c) => ownIds.has(c.id), actions: PREVIEW_ACTIONS, adding: st.adding,
+      isOwn: (c) => ownIds.has(c.id), actions: PREVIEW_ACTIONS, adding: armed(),
+      emptyKey: armed() ? "cmtEmpty" : "cmtEmptyPlus",
     }) : "";
     /* Фокус і каретку поля пошуку / редагування — назад після перезапису (той самий прийом, що в `paintComments` Deai). */
     const act = document.activeElement;
@@ -155,8 +178,9 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   }
 
   /** Рамка втратила свого коментатора (нова адреса, чужий документ): старі картки з мертвими діями не лишаємо. */
-  function dropFrame() {
+  function dropFrame({ keepWant = false } = {}) {
     st.ready = false; st.readyDoc = null; st.snap = null; st.adding = false;
+    if (!keepWant) st.wantAdd = false;
     reset();
     paint();
   }
@@ -169,8 +193,18 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       reset();
       if (st.adding) { try { layer()?.setCommentMode(false); } catch (e) { /* рамка пішла */ } }
       st.adding = false;
+      st.wantAdd = false;
+    } else if (st.active && readName()) {
+      armOpen();
     }
     paint();
+  }
+
+  /** Як у Deai: відкрита панель = режим додавання, але лише коли імʼя вже відоме (без нього — тільки читання, «+» спитає). */
+  function armOpen() {
+    const L = layer();
+    if (!L) { st.wantAdd = true; return; }       // рамка ще не відзвітувала: вмикаємо на її `ready`
+    try { L.setCommentMode(true); st.adding = true; } catch (e) { st.wantAdd = false; }
   }
 
   /** Імʼя перед ПЕРШИМ коментарем: є — `true` одразу; нема — діалог оболонки; «Скасувати» — `false` (додавання не вмикаємо). */
@@ -190,6 +224,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   }
 
   async function setAdding(on) {
+    st.wantAdd = false;
     if (on) {
       if (!(await ensureName())) return;
       const L = layer();                      // ПІСЛЯ діалогу: за цей час рамка могла піти на іншу сторінку
@@ -203,13 +238,14 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     paint();
   }
 
-  const ownGuard = (id) => own.has(id);
+  const ownGuard = (id) => canTouch(own, st.snap, id);
 
   const actions = {
     comments: () => setOpen(!st.open),
-    cmtadd: () => setAdding(!st.adding),
+    cmtadd: () => setAdding(!armed()),
     cmtshow: (id) => { st.sel = id; try { layer()?.focus(id); } catch (e) { /* рамка пішла */ } paint(); },
     cmtsec: (k) => { if (k in st.expanded) { st.expanded[k] = !st.expanded[k]; paint(); } },
+    cmtshot: (id) => { try { layer()?.openShot(id); } catch (e) { /* рамка пішла */ } },
     cmtpins: () => { try { layer()?.togglePins(); } catch (e) { /* рамка пішла */ } },
     /* Видалення й редагування — лише СВОЇХ: перевірка тут, а не лише в розмітці. Розмітку можна обійти (чужа картка
        без кнопки, але з дією в реєстрі), реєстр — ні. */
@@ -228,8 +264,9 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       if (!ownGuard(id)) return;
       st.editing = id; st.draft = null; paint(); mount.querySelector(".cmt-edit")?.focus();
     },
-    cmteditsave: (id) => {
-      if (!ownGuard(id)) return;
+    cmteditsave: () => {
+      const id = st.editing;               // id з стану, а не з кнопки: `data-val` можна підробити
+      if (!id || !ownGuard(id)) return;
       const ta = mount.querySelector(".cmt-edit");
       let ok = false;
       try { ok = !!layer()?.editComment(id, ta?.value); } catch (e) { ok = false; }
@@ -264,7 +301,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   mount.addEventListener("keydown", (ev) => {
     const ta = ev.target.closest?.(".cmt-edit");
     if (!ta) return;
-    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); actions.cmteditsave(ta.dataset.val); }
+    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); actions.cmteditsave(); }
     else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); actions.cmteditcancel(); }
   });
 
@@ -282,6 +319,10 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       try { st.readyDoc = frame.contentDocument; } catch (e) { st.readyDoc = null; }
       const L = layer();
       try { st.snap = L ? L.snapshot() : null; } catch (e) { st.snap = null; }
+      if (st.wantAdd) {
+        st.wantAdd = false;
+        if (visible() && readName() && L && !st.adding) armOpen();
+      }
       paint();
     } else if (m.ev === "change") {
       if (m.snapshot && Array.isArray(m.snapshot.comments)) { st.snap = m.snapshot; paint(); }
@@ -301,6 +342,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   /** `C` у макеті (фокус у рамці) — як на оболонці. */
   function frameKey(ev) {
     if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey || ev.repeat || ev.isComposing) return;
+    if (ev.defaultPrevented || !canToggle()) return;
     if (typingIn(ev, frame.contentDocument) || document.querySelector(".cv-ask-scrim, .cv-ask-pop")) return;
     if ((ev.key || "").toLowerCase() === "c" || ev.code === "KeyC") { ev.preventDefault(); ev.stopPropagation(); actions.comments(); }
   }
@@ -314,7 +356,9 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       dropFrame();                       // чужий документ чи пісочниця: коментатора там не дістати
       return;
     }
-    if (!w.CommentLayer || st.readyDoc !== doc) dropFrame();
+    /* `load` приходить РАНІШЕ за `ready` коментатора (той стартує асинхронно): відкладене «додавання» тут не скидаємо —
+       його вмикає `ready` цього ж документа. Решту (картки, вибір) скидаємо. */
+    if (!w.CommentLayer || st.readyDoc !== doc) dropFrame({ keepWant: true });
   }
 
   return {
@@ -329,6 +373,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       if (st.active === on) return;
       st.active = on;
       if (!on && st.adding) { try { layer()?.setCommentMode(false); } catch (e) { /* рамка пішла */ } st.adding = false; }
+      if (!on) st.wantAdd = false;
       paint();
     },
     own,

@@ -5317,9 +5317,22 @@ class PreviewHostArg(unittest.TestCase):
             self.assertNotIn(bad, js)
         self.assertNotIn('defaultUser', serve.MODULE_COMMENT_SNIPPET)    # і сам шаблон сніпета його не вміє
 
-    def test_opaque_origin_does_not_break_post_message(self):
-        """`postMessage(…, 'null')` кидає: у локальній копії (пісочниця) цільове походження — `'*'`, отримувач перевіряє сам."""
-        self.assertIn("o === 'null' ? '*' : o", serve.PREVIEW_HOST_ARG)
+    def test_opaque_origin_sends_nothing_and_never_posts_to_star(self):
+        """Непрозоре походження (пісочниця `/published/`): оболонка там не дістане коментатора, тож посилок нема взагалі, і
+        ніколи не `'*'` (інакше чужий вбудовувач слухав би снапшоти)."""
+        js = serve.PREVIEW_HOST_ARG
+        self.assertIn("if (o === 'null') return;", js)
+        self.assertNotIn("'*'", js)
+        self.assertLess(js.index("if (o === 'null') return;"), js.index('window.parent.postMessage'))
+
+    def test_preview_user_name_falls_back_to_the_shell_memory(self):
+        """Без localStorage (блокований) імʼя в рамки — з `window.parent.__dcPreviewUser`; старе «Anonymous» — не імʼя."""
+        js = serve.PREVIEW_HOST_ARG
+        self.assertIn('window.parent.__dcPreviewUser', js)
+        self.assertIn("v !== 'Anonymous'", js)
+        html = serve.inject_module_comment_layer('<html><body></body></html>', '../comment-layer', [],
+                                                 {'channel': 'c'}, version='1', host='preview')
+        self.assertIn('window.parent.__dcPreviewUser', html)
 
     def test_injected_snippet_in_host_preview_mode(self):
         html = serve.inject_module_comment_layer('<html><body></body></html>', '../comment-layer', [],

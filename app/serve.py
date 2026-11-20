@@ -2943,13 +2943,15 @@ HOST_ARG = """,
 # ⛔ `userName` присутній ЗАВЖДИ: він і є ознакою «prompt() не кличеться» (`getUser` у коментаторі). ⛔ Жодного `defaultUser`:
 # особа машини дизайнера в публічне превʼю не їде. Адресатів (`defaultAudience`) і `bottomInset` острівця тут нема: у превʼю
 # одна аудиторія, а відступ під острівець дає `window.parent.__dcIslandInset` (його ставить `ext-shell.js`, якщо є).
-# `postMessage` у `'*'` — лише коли походження непрозоре (`location.origin === 'null'`: локальна копія в пісочниці), інакше
-# `targetOrigin` кидає; отримувач все одно перевіряє і `source`, і `origin`.
+# Непрозоре походження (`location.origin === 'null'`: локальна копія `/published/` під CSP `sandbox`, чужий вбудовувач) — НІЧОГО не
+# шлемо (не `'*'`): оболонка там усе одно не дістане `frame.contentWindow.CommentLayer`, тож кнопки панелі були б мертві;
+# без `ready` острівець просто не показує «Коментарі». Отримувач і далі перевіряє і `source`, і `origin`.
+# `userName`: localStorage, а коли він кидає чи порожній — `window.parent.__dcPreviewUser` (імʼя, яке оболонка тримає в памʼяті).
 PREVIEW_HOST_ARG = """,
         host: (function () {
           var send = function (m) {
             m.type = 'dc-comments';
-            try { var o = location.origin; window.parent.postMessage(m, o === 'null' ? '*' : o); } catch (e) {}
+            try { var o = location.origin; if (o === 'null') return; window.parent.postMessage(m, o); } catch (e) {}
           };
           return {
             onReady: function () { send({ ev: 'ready' }); },
@@ -2957,7 +2959,12 @@ PREVIEW_HOST_ARG = """,
             onSelect: function (id) { send({ ev: 'select', id: id }); },
             onMode: function (on) { send({ ev: 'mode', on: !!on }); },
             onAdd: function (id) { send({ ev: 'add', id: id }); },
-            userName: function () { try { return localStorage.getItem('comment-layer:user') || ''; } catch (e) { return ''; } },
+            userName: function () {
+              var v = '';
+              try { v = localStorage.getItem('comment-layer:user') || ''; } catch (e) { v = ''; }
+              if (v && v !== 'Anonymous') return v;
+              try { return String(window.parent.__dcPreviewUser || ''); } catch (e) { return ''; }
+            },
             bottomInset: function () { try { var f = window.parent && window.parent.__dcIslandInset; return typeof f === 'function' ? f() : 0; } catch (e) { return 0; } }
           };
         })()"""

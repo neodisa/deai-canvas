@@ -157,7 +157,7 @@ async function enter(page, env) {
 }
 
 /** Новий контекст браузера: нічого, крім локального, не пускає; CDN `html2canvas` — порожній скрипт; `prompt` — кидає й рахує. */
-async function openPreview(env, t, { promptStub = true } = {}) {
+async function openPreview(env, t, { promptStub = true, init = null, initArg = null, early = false } = {}) {
   const ctx = await browser.newContext({ viewport: VIEW });
   t.after(() => ctx.close());
   const outside = [];
@@ -176,10 +176,12 @@ async function openPreview(env, t, { promptStub = true } = {}) {
       window.prompt = (...a) => { window.__prompts.push(a); throw new Error("prompt() is not supported"); };
     });
   }
+  if (init) await ctx.addInitScript(init, initArg);
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   await enter(page, env);
+  if (early) return { ctx, page, outside, errors };
   const frame = await until(() => page.frames().find((f) => /\/it1\/holovna\/index\.html$/.test(f.url())) ?? null, "рамка макета");
   await frame.waitForLoadState("load");
   await until(() => frame.evaluate(() => !!(window.CommentLayer && window.CommentLayer._inited)).catch(() => false), "коментатор у рамці");
@@ -474,7 +476,151 @@ test("8: збірка без командних коментарів — ні к
   assert.deepEqual(errors, []);
 });
 
-test("9: ізоляція — жодного запиту за межі машини, справжній ~/.deai не зачеплено", () => {
+const PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const preName = ([k, v]) => { try { localStorage.setItem(k, v); } catch { /* пісочниця */ } };
+const mode = (frame) => frame.evaluate(() => !!window.CommentLayer.commentMode);
+
+test("10: імʼя вже збережене — відкрита панель вмикає додавання, як у Deai: клік по макету створює пін без жодного діалогу", async (t) => {
+  const env = await boot(t, { port: 8000 });
+  await seed(env, SEED);
+  const o = await openPreview(env, t, { init: preName, initArg: [USER_KEY, "Збережене Імʼя"] });
+  const { page, frame } = o;
+  assert.equal(await mode(frame), false, "додавання ввімкнене до відкриття панелі");
+  await page.keyboard.press("c");
+  await until(() => mode(frame), "відкрита панель з відомим імʼям не ввімкнула додавання");
+  const add = page.locator('#cmt-panel [data-act="cmtadd"]');
+  assert.equal(await add.getAttribute("aria-pressed"), "true");
+  await frame.locator("h1").click();
+  const ta = frame.locator("[data-comment-layer] .compose textarea");
+  await ta.waitFor();
+  await ta.fill("Без діалогу");
+  await frame.locator("[data-comment-layer] .compose .save").click();
+  const row = await until(() => (env.memo.store.get(CHANNEL) ?? []).find((c) => c.text === "Без діалогу") ?? null, "коментар у сервісі");
+  assert.equal(row.author, "Збережене Імʼя");
+  assert.equal(await page.locator(".cv-ask--form").count(), 0, "імʼя спитали, хоч воно збережене");
+  // «+» — перемикач: вимикає додавання, щоб клацати макет
+  await until(async () => (await add.getAttribute("aria-pressed")) === "true" || !(await mode(frame)), "стан після створення");
+  if (await mode(frame)) { await add.click(); }
+  await until(async () => !(await mode(frame)) && (await add.getAttribute("aria-pressed")) === "false", "«+» вимикає додавання");
+  assert.deepEqual(await prompts(o), { shell: [], frame: [] });
+  assert.deepEqual(o.errors, []);
+});
+
+test("11: імені нема — панель лише читає; «+» питає імʼя ОДИН раз; далі відкриття панелі вмикає додавання одразу", async (t) => {
+  const env = await boot(t, { port: 9000 });
+  await seed(env, []);
+  const o = await openPreview(env, t);
+  const { page, frame } = o;
+  await page.keyboard.press("c");
+  const add = page.locator('#cmt-panel [data-act="cmtadd"]');
+  await add.waitFor();
+  assert.equal(await mode(frame), false, "без імені панель увімкнула додавання");
+  assert.equal(await add.getAttribute("aria-pressed"), "false");
+  assert.match(await page.locator("#cmt-panel .cmt-body").innerText(), /Натисніть «\+», щоб залишити коментар\./);
+  await add.click();
+  await page.locator(".cv-ask--form").waitFor();
+  await page.fill('.cv-ask--form input[name="name"]', "Нова Людина");
+  await page.click('.cv-ask--form button[data-a="ok"]');
+  await until(() => mode(frame), "після імені додавання не ввімкнулось");
+  assert.match(await page.locator("#cmt-panel .cmt-body").innerText(), /Натисніть на макет, щоб залишити\./);
+  // закрити й відкрити: імʼя є — арм одразу, діалогу нема
+  await page.keyboard.press("c");
+  await until(async () => !(await mode(frame)), "закриття панелі не вимкнуло додавання");
+  await page.keyboard.press("c");
+  await until(() => mode(frame), "повторне відкриття не ввімкнуло додавання");
+  assert.equal(await page.locator(".cv-ask--form").count(), 0, "імʼя спитали вдруге");
+  assert.deepEqual(await prompts(o), { shell: [], frame: [] });
+  assert.deepEqual(o.errors, []);
+});
+
+test("12: localStorage недоступний у обох вікнах — коментар підписано введеним імʼям, не «Anonymous»; prompt не кличеться", async (t) => {
+  const env = await boot(t, { port: 10000 });
+  await seed(env, []);
+  const o = await openPreview(env, t, { init: () => {
+    Object.defineProperty(window, "localStorage", { configurable: true, get() { throw new DOMException("blocked", "SecurityError"); } });
+  } });
+  const row = await addComment(o, env, "З блокованим сховищем", { name: "Без Сховища" });
+  assert.equal(row.author, "Без Сховища");
+  assert.deepEqual(await prompts(o), { shell: [], frame: [] });
+});
+
+test("13: старе «Anonymous» у сховищі — не імʼя: панель не армиться, «+» питає, діалог без передзаповнення", async (t) => {
+  const env = await boot(t, { port: 11000 });
+  await seed(env, []);
+  const o = await openPreview(env, t, { init: preName, initArg: [USER_KEY, "Anonymous"] });
+  const { page, frame } = o;
+  await page.keyboard.press("c");
+  await sleep(500);
+  assert.equal(await mode(frame), false, "«Anonymous» прийняли за імʼя");
+  await page.locator('#cmt-panel [data-act="cmtadd"]').click();
+  await page.locator(".cv-ask--form").waitFor();
+  assert.equal(await page.inputValue('.cv-ask--form input[name="name"]'), "");
+});
+
+test("14: «C» у макеті в чистому вигляді не відкриває панель і не повертає інтерфейс", async (t) => {
+  const env = await boot(t, { port: 12000 });
+  await seed(env, SEED);
+  const o = await openPreview(env, t);
+  const { page, frame } = o;
+  await page.keyboard.press("ControlOrMeta+Shift+Backslash");
+  await until(() => page.evaluate(() => document.documentElement.classList.contains("cv-clean")), "чистий вигляд");
+  await frame.locator("h1").click();
+  await page.keyboard.press("c");
+  await sleep(400);
+  assert.equal(await panelOpen(page), false, "C у рамці відкрила панель у чистому вигляді");
+  assert.equal(await page.evaluate(() => document.documentElement.classList.contains("cv-clean")), true, "чистий вигляд скасовано");
+});
+
+test("15: картка зі знімком — кнопка «cmtshot» відкриває знімок у коментаторі; зміна «свого» бере id зі стану, а не з кнопки", async (t) => {
+  const env = await boot(t, { port: 13000 });
+  const rows = await seed(env, SEED);
+  rows[0].meta.shotUrl = PIXEL;
+  env.memo.store.set(CHANNEL, rows);
+  const o = await openPreview(env, t);
+  const { page, frame } = o;
+  await page.keyboard.press("c");
+  const shot = page.locator('#cmt-panel [data-act="cmtshot"][data-val="seed-open"]');
+  await shot.waitFor();
+  await shot.click();
+  await frame.locator("[data-comment-layer] .cllb").waitFor();
+  await frame.locator("[data-comment-layer] .cllb").click();    // закрити знімок: він накриває макет
+  await frame.locator("[data-comment-layer] .cllb").waitFor({ state: "detached" });
+
+  const row = await addComment(o, env, "Свій для підробки", { name: "Автор" });
+  const card = page.locator(`#cmt-panel .cmt-card[data-cid="${row.id}"]`);
+  await card.waitFor();
+  await card.locator('[data-act="cmtedit"]').click();
+  await card.locator("textarea.cmt-edit").fill("Підроблене збереження");
+  await page.evaluate(() => {
+    const b = document.createElement("button");
+    b.dataset.act = "cmteditsave"; b.dataset.val = "seed-open";
+    document.body.appendChild(b); b.click(); b.remove();
+  });
+  await until(() => (env.memo.store.get(CHANNEL) ?? []).find((c) => c.id === row.id)?.text === "Підроблене збереження", "збережено id зі стану");
+  assert.equal(env.memo.store.get(CHANNEL).find((c) => c.id === "seed-open").text, "Кнопка зливається з фоном", "чужий коментар змінено");
+});
+
+test("16: панель відкрито, коли рамка ще вантажиться, а імʼя відоме — додавання вмикається на `ready` рамки", async (t) => {
+  const env = await boot(t, { port: 14000 });
+  await seed(env, SEED);
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  const o = await openPreview(env, t, { init: preName, initArg: [USER_KEY, "Рано"], early: true });
+  /* Рамка вже стартувала (оболонка її створює при вході); тримаємо лише ПЕРЕХІД на іншу сторінку — і відкриваємо панель
+     посеред нього: коментатора в рамці ще нема. */
+  const { page } = o;
+  await o.ctx.route(/\/it1\/poshuk\/index\.html$/, async (route) => { await gate; await route.continue(); });
+  await page.locator('#pages-panel .row', { hasText: "Пошук" }).first().click();
+  await page.keyboard.press("c");
+  assert.equal(await panelOpen(page), true);
+  release();
+  const frame = await until(() => page.frames().find((f) => /\/it1\/poshuk\/index\.html$/.test(f.url())) ?? null, "рамка нової сторінки");
+  await until(() => frame.evaluate(() => !!(window.CommentLayer && window.CommentLayer._inited)).catch(() => false), "коментатор нової сторінки");
+  await until(() => mode(frame), "відкладене додавання не ввімкнулось на ready");
+  assert.equal(await page.locator('#cmt-panel [data-act="cmtadd"]').getAttribute("aria-pressed"), "true");
+});
+
+test("99: ізоляція — жодного запиту за межі машини, справжній ~/.deai не зачеплено", () => {
   assert.deepEqual(OUTSIDE, [], `запити за межі машини:\n${OUTSIDE.join("\n")}`);
   guardRealDeai();
 });
