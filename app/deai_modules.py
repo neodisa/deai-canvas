@@ -84,8 +84,9 @@ import stat
 import threading
 import time
 import types
+import unicodedata
 from collections import OrderedDict
-from urllib.parse import quote, unquote, unquote_plus
+from urllib.parse import quote, unquote, unquote_plus, urlsplit
 
 import isolation
 import module_trust
@@ -108,6 +109,8 @@ MAX_TOOL_RESULT = 256 * 1024
 #: Рядки відповіді дії (`run_action`): `text` ≤ 300, `url` ≤ 2048 і лише http(s).
 ACTION_TEXT_MAX = 300
 ACTION_URL_MAX = 2048
+#: Скільки викликів `tool_*`/`action_*` одного модуля простору може бути в польоті одночасно (потік, що пережив тайм-аут, теж рахується).
+MAX_INFLIGHT = 4
 #: Клавіші, зайняті самим Deai (інструмент модуля їх не бере).
 RESERVED_KEYS = frozenset('CIHMP')
 #: Шлях панелі інструмента: 2..4 сегменти (панель — завжди в підтеці, не поряд із `server.py`), останній — `.html`.
@@ -184,7 +187,7 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
 #: Коди ЯДРА для своїх модулів і довіри (етап 3c). Окремо від `STATUS`: `_run` пропускає як є лише коди `STATUS`, тож
 #: модуль не кине «module-untrusted» від свого імені.
 CORE_STATUS = {'unknown-function': 404, 'unknown-action': 404, 'unknown-task': 404, 'unknown-iteration': 404,
-               'bad-request': 400, 'body-too-large': 413, 'isolated': 409,     # виклики інструментів і дій (M1, Task 4)
+               'bad-request': 400, 'body-too-large': 413, 'isolated': 409, 'module-busy': 429,     # виклики інструментів і дій (M1, Task 4)
                'module-untrusted': 409, 'module-changed': 409, 'module-refused': 409, 'trust-needs-ui': 403,
                'trust-declined': 409, 'trust-no-confirm': 409, 'trust-busy': 409, 'trust-unreadable': 409}
 #: Своїх модулів у просторі — не більше (за абеткою); решта — примітки `too-many-modules`.
@@ -1156,14 +1159,62 @@ def call_tool(space, mid, fn, args):
     if not isinstance(fn, str) or not TOOL_FN_RE.fullmatch(fn) or m.fn(fn) is None:
         raise ModuleError('unknown-function', message='unknown function')
     _check_isolation(space, mid)
-    val = call(m, fn, module_ctx(space, m), args, timeout=TOOL_TIMEOUT)
+    val = _call_limited(space, m, fn, module_ctx(space, m), (args,), TOOL_TIMEOUT)
+    return _plain_json(val)
+
+
+_inflight = {}
+_inflight_lock = threading.Lock()
+
+
+def _call_limited(space, m, name, ctx, args, timeout):
+    """`call` з ліміном `MAX_INFLIGHT` одночасних викликів на (простір, модуль): лічильник росте перед викликом і спадає РІВНО раз у
+    `finally` обгортки — тобто коли завершиться сам потік модуля, навіть якщо HTTP-сторона вже отримала `check-timeout`."""
+    key = (_space_id(space), m.id)
+    f = m.fn(name)
+    with _inflight_lock:
+        if _inflight.get(key, 0) >= MAX_INFLIGHT:
+            raise ModuleError('module-busy', message='too many calls of this module are running')
+        _inflight[key] = _inflight.get(key, 0) + 1
+    state = {'started': False, 'released': False}
+
+    def release():
+        with _inflight_lock:
+            if state['released']:
+                return
+            state['released'] = True
+            n = _inflight.get(key, 0) - 1
+            if n > 0:
+                _inflight[key] = n
+            else:
+                _inflight.pop(key, None)
+
+    def wrapper(c, *a):
+        state['started'] = True
+        try:
+            return f(c, *a)
+        finally:
+            release()
+    wrapper.__name__ = name
+    try:
+        return call(m, wrapper, ctx, *args, timeout=timeout)
+    except BaseException:
+        if not state['started']:
+            release()                       # потік не стартував: звільнити саме тут (`release` ідемпотентний)
+        raise
+
+
+def _plain_json(val, limit=MAX_TOOL_RESULT):
+    """Відповідь модуля → ЧИСТА копія (`json.loads(json.dumps(val))`): підклас `dict` з підступним `items()` чи `NaN` не доживає до
+    відповіді. Будь-який виняток (`Exception`) при серіалізації — `module-error` «result is not JSON»; >`limit` байтів — «too big»."""
     try:
         text = json.dumps(val, allow_nan=False)
-    except (TypeError, ValueError, RecursionError):
+        out = json.loads(text)
+    except Exception:  # noqa: BLE001 — код модуля міг підсунути що завгодно; текст винятку не віддаємо
         raise ModuleError('module-error', message='result is not JSON') from None
-    if len(text.encode('utf-8')) > MAX_TOOL_RESULT:
+    if len(text.encode('utf-8')) > limit:
         raise ModuleError('module-error', message='result is too big')
-    return val
+    return out
 
 
 def action_module(space, mid, aid):
@@ -1178,33 +1229,52 @@ def action_module(space, mid, aid):
     return m, act
 
 
+_BAD_CATEGORIES = ('Cc', 'Cf', 'Zs', 'Zl', 'Zp')
+
+
 def _clean_url(v):
-    """`v`, коли це рядок ≤ `ACTION_URL_MAX` зі схемою http/https (без урахування регістру) без пробілів і керівних; інакше `None`."""
+    """`v`, коли це рядок ≤ `ACTION_URL_MAX` зі схемою http/https (без урахування регістру), НЕПОРОЖНІМ хостом і без символів категорій
+    Cc/Cf/Zs/Zl/Zp (керівні, невидимі, пробіли, bidi); інакше `None`. Адреса лишається як є."""
     if not isinstance(v, str) or not 0 < len(v) <= ACTION_URL_MAX:
         return None
-    if not re.match(r'(?i)https?://', v) or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in v):
+    if any(unicodedata.category(c) in _BAD_CATEGORIES for c in v):
+        return None
+    try:
+        sp = urlsplit(v)
+        host = sp.hostname
+    except ValueError:
+        return None
+    if sp.scheme.lower() not in ('http', 'https') or not v.lower().startswith(sp.scheme.lower() + '://') or not host:
         return None
     return v
 
 
+def _clean_text(v):
+    """`text` дії: без символів Cc/Cf (крім `\\n`), потім ≤ `ACTION_TEXT_MAX`."""
+    return ''.join(c for c in v if c == '\n' or unicodedata.category(c) not in ('Cc', 'Cf'))[:ACTION_TEXT_MAX]
+
+
 def run_action(space, mid, aid, target, where=None):
     """`POST /api/module-action` без HTTP: `action_<id>` модуля з `target` (`{'from', 'task', 'iteration'}`, його збирає викликач).
-    `where` — звідки викликано: мусить бути в `where` дії (інакше `bad-request`). Відповідь — `{'ok', 'text'?, 'url'?}`: `ok` — лише
-    `bool` (інакше `module-error`), `text` — лише рядок ≤ 300, `url` — лише безпечний (`_clean_url`), решта відкидається мовчки."""
+    `where` — звідки викликано: мусить бути в `where` дії (інакше `bad-request`). Відповідь модуля СПЕРШУ проходить круговий JSON
+    (`_plain_json`), далі лише прості типи: `{'ok', 'text'?, 'url'?}` — `ok` лише `bool` (інакше `module-error`), `text` — рядок без
+    Cc/Cf ≤ 300, `url` — безпечний (`_clean_url`), решта відкидається мовчки."""
     m, act = action_module(space, mid, aid)
     if where is None:
         where = target.get('from') if isinstance(target, dict) else None
     if not isinstance(where, str) or where not in act['where']:
         raise ModuleError('bad-request', message='the action is not available from there')
     _check_isolation(space, mid)
-    val = call(m, 'action_' + act['id'].replace('-', '_'), module_ctx(space, m), target,
-               timeout=act['timeout_s'] or ACTION_TIMEOUT)
-    if not isinstance(val, dict) or type(val.get('ok')) is not bool:
+    val = _call_limited(space, m, 'action_' + act['id'].replace('-', '_'), module_ctx(space, m), (target,),
+                        act['timeout_s'] or ACTION_TIMEOUT)
+    val = _plain_json(val, MAX_TOOL_RESULT)
+    ok = val.get('ok') if type(val) is dict else None
+    if type(ok) is not bool:
         raise ModuleError('module-error', message='action result must be {"ok": bool, ...}')
-    out = {'ok': val['ok']}
-    if isinstance(val.get('text'), str):
-        out['text'] = val['text'][:ACTION_TEXT_MAX]
-    url = _clean_url(val.get('url'))
+    out = {'ok': ok}
+    text, url = val.get('text'), _clean_url(val.get('url'))
+    if type(text) is str:
+        out['text'] = _clean_text(text)
     if url is not None:
         out['url'] = url
     return out

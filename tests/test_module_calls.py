@@ -36,10 +36,12 @@ URL_CASES = {
     'js': 'javascript:alert(1)', 'data': 'data:text/html,<b>x</b>', 'lead': ' https://x.example', 'ctrl': 'https://x.example/\nz',
     'tab': 'https://x.example/\tz', 'space': 'https://x.example/a b', 'long': 'https://x.example/' + 'a' * 3000,
     'edge': 'https://x.example/' + 'a' * (2048 - len('https://x.example/')), 'over': 'https://x.example/' + 'a' * (2049 - len('https://x.example/')),
-    'num': 5, 'ftp': 'ftp://x.example/',
+    'nohost': 'https://', 'nohost2': 'https:///path', 'zwsp': 'https://x\u200by', 'bidi': 'https://x\u202ey', 'c1': 'https://x\x9bz',
+    'nbsp': 'https://x\u00a0y', 'backslash': 'https:\\\\evil', 'ipv6': 'https://[::1', 'num': 5, 'ftp': 'ftp://x.example/',
 }
 SERVER = tmo.OWN_SERVER + '''
 import json
+import threading
 import time
 URLS = %r
 
@@ -49,7 +51,7 @@ def tool_echo(ctx, args):
 
 
 def tool_slow(ctx, args):
-    time.sleep(3)
+    time.sleep(1)
     return 1
 
 
@@ -67,6 +69,43 @@ def tool_nan(ctx, args):
 
 def tool_big(ctx, args):
     return "x" * (300 * 1024)
+
+
+class Evil(dict):
+    def items(self):
+        raise RuntimeError("leak " + __file__)
+
+
+def tool_evil(ctx, args):
+    return Evil(a=1)
+
+
+class Sub(dict):
+    pass
+
+
+def tool_sub(ctx, args):
+    return Sub(a=[1, 2])
+
+
+_gate = threading.Event()
+
+
+def tool_block(ctx, args):
+    _gate.wait(10)
+    return "done"
+
+
+def tool_release(ctx, args=None):
+    _gate.set()
+
+
+def action_evil(ctx, target):
+    return Evil(ok=True)
+
+
+def action_subdict(ctx, target):
+    return Sub(ok=True, text="a\\x00b\\u200bc\\u202ed\\nline\\x9bx" + "z" * 400)
 
 
 def tool_edge(ctx, args):
@@ -92,7 +131,7 @@ def action_url(ctx, target):
 
 
 def action_slow(ctx, target):
-    time.sleep(3)
+    time.sleep(1.5)
     return {"ok": True}
 
 
@@ -109,7 +148,8 @@ def action_with_dash(ctx, target):
 ACTIONS = [{'id': 'echo', 'label': 'Echo', 'where': ['palette', 'task']},
            {'id': 'shape', 'label': 'Shape', 'where': ['palette']}, {'id': 'url', 'label': 'Url', 'where': ['palette']},
            {'id': 'slow', 'label': 'Slow', 'where': ['palette'], 'timeout_s': 1},
-           {'id': 'fast-fail', 'label': 'F', 'where': ['palette']}, {'id': 'with-dash', 'label': 'W', 'where': ['palette']}]
+           {'id': 'fast-fail', 'label': 'F', 'where': ['palette']}, {'id': 'with-dash', 'label': 'W', 'where': ['palette']},
+           {'id': 'evil', 'label': 'E', 'where': ['palette']}, {'id': 'subdict', 'label': 'S', 'where': ['palette']}]
 
 
 def setUpModule():
@@ -136,6 +176,19 @@ class Calls(tmo.OwnEnv):
             httpd.server_close()
         self.addCleanup(stop)
         self.raw = []
+        self.addCleanup(self.drain_inflight)
+
+    def drain_inflight(self):
+        """Потоки-сироти (тайм-аути) доживають: відпускаємо засув, чекаємо, поки лічильник спаде, і лише тоді чистимо стан."""
+        try:
+            dm.catalog(self.sp)['acme'].fn('tool_release')(None, None)
+        except Exception:  # noqa: BLE001 — модуля `acme` у тесті могло не бути
+            pass
+        for _ in range(120):
+            if not dm._inflight:
+                break
+            threading.Event().wait(0.05)
+        dm._inflight.clear()
 
     def mod(self, mid='acme', tools=(TOOL,), actions=ACTIONS, api=2, trusted=True, enabled=True, sp=None):
         extra = {'api': api}
@@ -379,7 +432,7 @@ class ActionTests(Calls):
             self.assertEqual(self.act('shape'), (200, {'ok': False}))
 
     def test_url_filter(self):
-        keep = {'good', 'upper', 'plain', 'edge'}
+        keep = {'good', 'upper', 'plain', 'edge'}   # решта — відкинуто
         for k, v in URL_CASES.items():
             with self.subTest(case=k), mock.patch.dict(os.environ, {'URL_CASE': k}):
                 st, body = self.act('url')
@@ -414,6 +467,105 @@ class ActionTests(Calls):
         self.refused(*self.act(), 409, 'isolated')
         with mock.patch.object(isolation, 'isolated', return_value=False):
             self.assertEqual(self.act()[0], 200)
+
+
+class HardeningTests(Calls):
+    def test_hostile_result_objects_never_escape(self):
+        self.mod()
+        self.task()
+        st, body = self.tool('tool_evil', {})
+        self.refused(st, body, 502, 'module-error')
+        self.assertEqual(body['error'], 'result is not JSON')
+        self.assertNotIn('leak', json.dumps(body))
+        self.assertEqual(self.tool('tool_sub', {}), (200, {'value': {'a': [1, 2]}}))
+        st, body = self.act('evil')
+        self.refused(st, body, 502, 'module-error')
+        self.assertEqual(body['error'], 'result is not JSON')
+
+    def test_action_text_is_stripped_of_control_and_format_chars(self):
+        self.mod()
+        self.task()
+        st, body = self.act('subdict')
+        self.assertEqual((st, body['ok']), (200, True))
+        self.assertEqual(body['text'], 'abcd\nlinex' + 'z' * (300 - len('abcd\nlinex')))
+
+    def test_tool_result_is_a_sanitized_copy(self):
+        self.mod()
+        self.assertEqual(dm.call_tool(self.sp, 'acme', 'tool_sub', None), {'a': [1, 2]})
+        self.assertIs(type(dm.call_tool(self.sp, 'acme', 'tool_sub', None)), dict)
+
+    def test_inflight_cap_per_module(self):
+        self.mod()
+        self.task()
+        with mock.patch.object(dm, 'TOOL_TIMEOUT', 0.2):
+            for i in range(dm.MAX_INFLIGHT):
+                self.refused(*self.tool('tool_block', {}), 504, 'check-timeout')
+            st, body = self.tool('tool_echo', 1)
+            self.refused(st, body, 429, 'module-busy')
+            st, body = self.act('echo')
+            self.refused(st, body, 429, 'module-busy')
+            # інший модуль того ж простору — не зачеплений
+            self.mod('other')
+            self.assertEqual(self.tool('tool_echo', 1, mid='other')[0], 200)
+        m = dm.catalog(self.sp)['acme']
+        m.fn('tool_release')(None, None)
+        for _ in range(100):
+            if not dm._inflight.get((self.sp['id'], 'acme')):
+                break
+            threading.Event().wait(0.05)
+        self.assertEqual(self.tool('tool_echo', 2), (200, {'value': {'args': 2}}))
+        self.assertFalse(dm._inflight.get((self.sp['id'], 'acme')))
+
+    def test_inflight_is_released_after_an_exception(self):
+        self.mod()
+        for _ in range(dm.MAX_INFLIGHT + 2):
+            self.refused(*self.tool('tool_boom', {}), 502, 'module-error')
+        self.assertEqual(self.tool('tool_echo', 1)[0], 200)
+
+    def raw_req(self, head, body=b''):
+        import socket
+        s = socket.create_connection(('127.0.0.1', self.port), timeout=4)
+        try:
+            s.sendall(head.encode() + body)
+            buf = b''
+            while True:
+                try:
+                    d = s.recv(65536)
+                except socket.timeout:
+                    self.fail('no prompt answer: %r' % buf)
+                if not d:
+                    break
+                buf += d
+                if b'\r\n\r\n' in buf and buf.endswith(b'}'):
+                    break
+            return buf.decode('utf-8', 'replace')
+        finally:
+            s.close()
+
+    def head(self, path, length):
+        return ('POST %s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %s\r\n\r\n' % (path, length))
+
+    def test_negative_and_garbage_content_length(self):
+        self.mod()
+        for path in ('/api/module-tool', '/api/module-action'):
+            for ln in ('-1', 'abc'):
+                with self.subTest(path=path, ln=ln):
+                    out = self.raw_req(self.head(path, ln))
+                    self.assertIn(' 400 ', out.split('\r\n')[0])
+                    self.assertIn('"code": "bad-request"', out)
+
+    def test_huge_content_length_is_413_without_waiting(self):
+        self.mod()
+        for path in ('/api/module-tool', '/api/module-action'):
+            with self.subTest(path=path):
+                out = self.raw_req(self.head(path, '99999999999'))
+                self.assertIn(' 413 ', out.split('\r\n')[0])
+                self.assertIn('"code": "body-too-large"', out)
+                self.assertIn('Connection: close', out)
+
+    def test_other_routes_keep_their_behaviour(self):
+        self.mod()
+        self.assertEqual(self.req('/api/module-check', {'id': 'acme', 'space': self.sp['id']})[0], 200)
 
 
 class CspPin(unittest.TestCase):

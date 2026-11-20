@@ -7468,12 +7468,20 @@ class Handler(SimpleHTTPRequestHandler):
         if not self._take_task():
             return
         try:
+            if self.path in ('/api/module-tool', '/api/module-action'):
+                try:
+                    length = int(self.headers.get('Content-Length', 0))
+                except ValueError:
+                    length = -1
+                if length < 0:                  # ⛔ від'ємна/сміттєва довжина: `rfile.read(-1)` чекала б кінця потоку
+                    self._refuse_unread(400, 'bad-request', 'bad Content-Length')
+                    return
             length = int(self.headers.get('Content-Length', 0))
             if length > feedback.BODY_MAX and self.path in ('/api/feedback', '/api/feedback-preview'):
                 self._space_error(413, 'body-too-large', 'feedback body is too large')       # ДО читання: пам'ять не роздуваємо
                 return
             if length > MODULE_CALL_BODY_MAX and self.path in ('/api/module-tool', '/api/module-action'):
-                self._space_error(413, 'body-too-large', 'module call body is too large')   # так само: ДО читання
+                self._refuse_unread(413, 'body-too-large', 'module call body is too large')   # так само: ДО читання
                 return
             raw_body = self.rfile.read(length) if length else b''
             self._body_read = True      # далі центральна відмова тіло вже не вичитує
@@ -8965,6 +8973,19 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _module_check(self, payload):
         self._module_post(payload, 'check')
+
+    def _refuse_unread(self, status, code, error):
+        """Відмова БЕЗ читання тіла (лише маршрути викликів модулів): `Connection: close` і закрите зʼєднання — тіло, яке клієнт
+        обіцяв (`Content-Length: 99999999999`), не вичитуємо й не чекаємо."""
+        self._body_read = True                  # центральна відмова тіло теж не вичитує
+        self.close_connection = True
+        body = json.dumps({'ok': False, 'code': code, 'error': error}).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(body)
 
     def _module_tool(self, payload):
         """`POST /api/module-tool {space?, module, fn, args?}` → `{value}` (`deai_modules.call_tool`: лише `tool_*` модуля з

@@ -469,7 +469,7 @@ class CatalogExtraTest(OwnEnv):
                 'trust-declined': 409, 'trust-no-confirm': 409, 'trust-busy': 409, 'trust-unreadable': 409,
                 # виклики інструментів і дій (M1, Task 4)
                 'unknown-function': 404, 'unknown-action': 404, 'unknown-task': 404, 'unknown-iteration': 404,
-                'bad-request': 400, 'body-too-large': 413, 'isolated': 409}
+                'bad-request': 400, 'body-too-large': 413, 'isolated': 409, 'module-busy': 429}
         self.assertEqual(dm.CORE_STATUS, want)
         for code, status in want.items():
             self.assertEqual(dm.ModuleError(code).status, status, code)
