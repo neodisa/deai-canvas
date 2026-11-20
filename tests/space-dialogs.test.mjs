@@ -191,13 +191,13 @@ test("parseTags: по комах, обрізає, порожні відкида�
   assert.deepEqual(parseTags(5), ["5"]);
 });
 
-test("привітання: кнопка data-th=spacenew, заголовок, підводка про агента, логотип", () => {
+test("привітання: промпт агентові, кнопки майстра, заголовок, логотип", () => {
   const h = welcomeHTML();
-  assert.match(h, /<button class="ctl ctl--pri" data-th="spacenew">/);
+  assert.match(h, /<button class="ctl ctl--out" data-th="spacenew">/);
   assert.match(h, /<button class="ctl ctl--out" data-th="spaceopen">/);
   assert.match(h, /Відкрити наявну теку простору/);
   assert.match(h, /<h1 class="th-h">Вітаю в Deai Canvas<\/h1>/);
-  assert.match(h, /створи простір Клієнт X/);
+  assert.match(h, /Налаштувати через агента/);
   assert.match(h, /<svg class="logo"/);
   assert.match(h, /class="th-in th-welcome"/);
 });

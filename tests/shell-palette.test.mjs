@@ -1132,3 +1132,37 @@ test("дії модулів у ⌘K: лише на екрані задачі, в
   assert.deepEqual(pick({ modActs: [] }), []);
   assert.deepEqual(paletteActions(S({ hasTask: true })).filter((a) => a.id.startsWith("modact:")), []);
 });
+
+/* ── «Знайомство з канвасом» (0.33.0): є там само, де «Баг / ідея» (і на екрані «Задачі») ─────────────── */
+test("знайомство: пункт є на екрані задачі, «Задачі», «Підключення» й у майстрі; без ключа update (еталони) — нема", () => {
+  const ids = (st) => paletteActions(S(st)).filter((a) => a.id === "intro").map((a) => a.act);
+  for (const homeOpen of [true, false]) {
+    for (const homePage of homeOpen ? [undefined, "tasks", "conn", "wiz"] : [undefined]) {
+      assert.deepEqual(ids({ homeOpen, homePage, update: null }), ["intro"], `homeOpen=${homeOpen} ${homePage}`);
+    }
+  }
+  assert.deepEqual(ids({}), []);
+});
+
+test("знайомство: група gSet, іконка зі спрайта, підпис в обох словниках, обробник у BAR_ACTIONS; знаходиться в ⌘K", () => {
+  const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "app", "app.js"), "utf8");
+  const a = paletteActions(S({ update: null })).find((x) => x.id === "intro");
+  assert.equal(a.group, "gSet");
+  assert.ok(ico(a.icon));
+  for (const lang of ["uk", "en"]) assert.ok(DICT[lang][a.labelKey] !== undefined, `${lang}.${a.labelKey}`);
+  assert.match(src, /\n  intro: \(\) =>/);
+  setLang("uk");
+  assert.ok(filterActions(paletteActions(S({ update: null })), "знайомство").some((x) => x.id === "intro"));
+  setLang("en");
+  assert.ok(filterActions(paletteActions(S({ update: null, lang: "en" })), "tour").some((x) => x.id === "intro"));
+  setLang("uk");
+});
+
+test("«Зняти кадри» у ⌘K: знімати нема чим — вимкнено з причиною зі `/api/setup`; прогін — зупинка доступна", () => {
+  const shoot = (setup, running = false) => paletteActions(S({ shots: { have: 0, stale: null, total: 5, running, bad: false, done: 0, setup } }))
+    .find((a) => a.id === "shoot");
+  assert.deepEqual([shoot({ state: "no-browser", command: "x" }).disabled, shoot({ state: "no-browser", command: "x" }).whyKey], [true, "frShotsNoBrowserWhy"]);
+  assert.deepEqual([shoot({ state: "no-node" }).disabled, shoot({ state: "no-node" }).whyKey], [true, "frShotsNoNodeWhy"]);
+  assert.equal(shoot({ state: "ok" }).disabled, false);
+  assert.equal(shoot({ state: "no-browser", command: "x" }, true).disabled, false, "зупинка прогону не блокується");
+});

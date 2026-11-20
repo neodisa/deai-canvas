@@ -1,0 +1,77 @@
+{
+ "flows": [
+  {
+   "id": "first-run",
+   "title": "First run",
+   "nodes": [
+    {
+     "id": "n-empty",
+     "page": "dashboard-empty",
+     "label": "Empty home",
+     "pos": {
+      "col": 0,
+      "row": 0
+     }
+    },
+    {
+     "id": "n-dash",
+     "page": "dashboard",
+     "label": "Home",
+     "pos": {
+      "col": 1,
+      "row": 0
+     }
+    },
+    {
+     "id": "n-tx",
+     "page": "transactions",
+     "label": "Transactions",
+     "pos": {
+      "col": 2,
+      "row": 0
+     }
+    },
+    {
+     "id": "n-budget",
+     "page": "budgets",
+     "label": "Budgets",
+     "pos": {
+      "col": 2,
+      "row": 1
+     }
+    },
+    {
+     "id": "n-prof",
+     "page": "profile",
+     "label": "Profile",
+     "pos": {
+      "col": 3,
+      "row": 0
+     }
+    }
+   ],
+   "edges": [
+    {
+     "from": "n-empty",
+     "to": "n-dash",
+     "label": "Add first expense"
+    },
+    {
+     "from": "n-dash",
+     "to": "n-tx",
+     "label": "Open list"
+    },
+    {
+     "from": "n-dash",
+     "to": "n-budget",
+     "label": "Set a limit"
+    },
+    {
+     "from": "n-tx",
+     "to": "n-prof",
+     "label": "Change currency"
+    }
+   ]
+  }
+ ]
+}

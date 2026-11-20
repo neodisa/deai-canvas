@@ -236,18 +236,22 @@ function step4HTML(v) {
   const busy = !!v.busy;
   const dis = busy ? " disabled" : "";
   const folder = s.source === "folder";
+  const demo = s.source === "demo";
+  /* Демо-задача (0.33.0): назву й id дає канвас (`/api/demo-task`), тож поля вимкнені, а причина — поруч і в `aria-describedby`. */
+  const fdis = busy || demo ? " disabled" : "";
   const lead = s.tasks > 0 ? t("wzS4LeadHas", s.tasks) : t("wzS4Lead");
   const radio = (val, key) => `<label class="cn-check"><input type="radio" name="wz-src" value="${val}"`
-    + `${(val === "folder") === folder ? " checked" : ""}${dis}> ${esc(t(key))}</label>`;
+    + `${s.source === val ? " checked" : ""}${dis}> ${esc(t(key))}</label>`;
   const form = `<form class="wz-form wz-task" data-wz-step="4" data-form="task" novalidate${busy ? ' aria-busy="true"' : ""}>
       <div class="cn-field"><label class="cn-lbl" for="tf-title">${esc(t("newTaskTitle"))}</label>
         <input class="cn-inp" id="tf-title" name="title" type="text" value="${esc(s.title)}" autocomplete="off"
-          placeholder="${esc(t("newTaskTitlePh"))}" aria-describedby="wz-err"${dis}></div>
+          placeholder="${esc(t("newTaskTitlePh"))}" aria-describedby="wz-demo-why wz-err"${fdis}></div>
       <div class="cn-field"><label class="cn-lbl" for="tf-id">${esc(t("newTaskId"))}</label>
         <input class="cn-inp" id="tf-id" name="id" type="text" value="${esc(s.id)}" autocomplete="off" spellcheck="false"
-          aria-describedby="wz-err"${dis}></div>
+          aria-describedby="wz-demo-why wz-err"${fdis}>
+        <p class="cn-hint" id="wz-demo-why"${demo ? "" : " hidden"}>${esc(t("frDemoFieldsWhy"))}</p></div>
       <fieldset class="wz-src"><legend class="cn-lbl">${esc(t("wzSource"))}</legend>
-        ${radio("empty", "wzSourceEmpty")}${radio("folder", "wzSourceFolder")}</fieldset>
+        ${radio("empty", "wzSourceEmpty")}${radio("folder", "wzSourceFolder")}${radio("demo", "frSourceDemo")}</fieldset>
       <div class="cn-field" id="wz-from-f"${folder ? "" : " hidden"}><label class="cn-lbl" for="wz-from">${esc(t("wzFromLabel"))}</label>
         <input class="cn-inp" id="wz-from" name="from" type="text" value="${esc(s.from)}" autocomplete="off" spellcheck="false"
           placeholder="~/" aria-describedby="wz-from-hint wz-err"${dis}>

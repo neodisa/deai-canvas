@@ -170,6 +170,8 @@ class ProviderCallersPinTheSpace(unittest.TestCase):
         ('app/serve.py', 'comments_provider', 'provider', 'comments', 'name'): 1,
         ('app/serve.py', 'ds_tokens_view', 'provider', 'tokens', 'name'): 1,
         ('app/serve.py', 'published_target', 'provider', 'publish', 'name'): 1,
+        # 0.33.0: пароль превʼю в списку просторів і в просторі задачі — простір передано явно (форма `name`)
+        ('app/serve.py', '_publish_password', 'provider', 'publish', 'name'): 1,
         ('app/serve.py', 'ProjectComments.__init__', 'comments_provider', 'comments', 'name'): 1,
         ('app/serve.py', 'publish_comments', 'comments_provider', 'comments', 'name'): 1,
         ('app/serve.py', 'Handler._commented', 'comments_provider', 'comments', 'name'): 1,

@@ -134,3 +134,9 @@ export const flowJson = () => ({ flows: [{ id: "first-run", title: "First run", 
   { from: "n-dash", to: "n-budget", label: "Set a limit" },
   { from: "n-tx", to: "n-prof", label: "Change currency" },
 ] }] });
+
+/** Two pins of the demo task (0.33.0): an open one and one the agent closed with an explanation. `sel` exists in `pages(2)`. */
+export const DEMO_PINS = [
+  { page: "dashboard", sel: "#cta-add", text: "Make this the only filled button on the screen. Secondary actions should be outlined.", who: "Designer", status: "open" },
+  { page: "dashboard", sel: "#balance .v", text: "Show cents in a lighter weight.", who: "Designer", status: "resolved", reason: "Cents are now 60% opacity, weight 500." },
+];

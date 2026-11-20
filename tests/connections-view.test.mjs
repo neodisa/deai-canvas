@@ -749,7 +749,7 @@ test("a11y: картка сама не role=button і без tabindex; назв�
   assert.match(h, /^<div class="mc" data-id="static-publish">/);
   assert.match(h, /<div class="mc-name"><b><button type="button" class="mc-open" data-cn="card" data-id="static-publish">Публікація в теку<\/button><\/b>/);
   const buttons = h.match(/<button\b/g) || [];
-  assert.equal(buttons.length, 3, "назва, «⋯», дія — три незалежні кнопки, жодної вкладеної в іншу");
+  assert.equal(buttons.length, 4, "назва, «⋯», дія і «Змінити/Задати» пароля превʼю (0.33.0) — незалежні кнопки, жодної вкладеної в іншу");
   assert.doesNotMatch(h, /<button[^>]*>(?:(?!<\/button>)[^])*<button/, "кнопка в кнопці");
   assert.doesNotMatch(connPageHTML(view()), /role="button"/, "на сторінці розділу «Модулі» role=button нема взагалі");
   assert.match(mcardHTML(LIST[1], new Map([["static-publish", "check"]]), null, SP), /^<div class="mc" data-id="static-publish" aria-busy="true">/, "дія в польоті — aria-busy на картці");
@@ -872,4 +872,26 @@ test("розділ «AGENTS.md»: нема файла, нема теки, зав
   assert.match(nfd, /У цього простору нема теки/);
   assert.doesNotMatch(nfd, /data-th="ag"/);
   assert.match(connPageHTML(view({ sec: "agents", agents: null })), /role="status"/);
+});
+
+/* ── «Перший запуск» (0.33.0): пароль превʼю видно на картці постачальника публікації ─────────────────────── */
+const PUBM = (set) => ({ id: "static-publish", name: "static-publish", roles: ["publish"], enabled: true, status: "ok",
+  settings: [{ key: "folder", type: "path", value: "{home}/x" }, { key: "password", type: "secret", set }] });
+
+test("картка модуля публікації: рядок пароля — задано · Змінити / не задано · Задати / невідомо", () => {
+  const set = mcardHTML(PUBM(true), new Map(), null, null);
+  assert.match(set, /<p class="mc-pw">[\s\S]*Пароль превʼю: задано<\/span><button type="button" data-cn="pw" data-id="static-publish">Змінити<\/button><\/p>/);
+  assert.match(mcardHTML(PUBM(false), new Map(), null, null), /<p class="mc-pw mc-pw--off">[\s\S]*не задано[\s\S]*>Задати<\/button>/);
+  const unk = mcardHTML(PUBM(null), new Map(), null, null);
+  assert.match(unk, /Пароль превʼю: невідомо/);
+  assert.doesNotMatch(unk, /data-cn="pw"/);
+  assert.doesNotMatch(mcardHTML({ ...PUBM(true), roles: ["tokens"] }, new Map(), null, null), /mc-pw/);
+});
+
+test("поле пароля в шухляді модуля публікації: підказка «Один для всіх задач простору.»", () => {
+  const e = PUBM(false);
+  const h = fieldHTML(e, e.settings[1], 1, { form: { values: {} }, errors: {}, busy: false });
+  assert.match(h, /<p class="cn-hint">Один для всіх задач простору\.<\/p>/);
+  const other = { ...e, roles: ["tokens"] };
+  assert.doesNotMatch(fieldHTML(other, other.settings[1], 1, { form: { values: {} }, errors: {}, busy: false }), /Один для всіх/);
 });

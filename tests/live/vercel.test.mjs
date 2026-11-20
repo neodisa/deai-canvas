@@ -270,7 +270,8 @@ test("a: публікація з паролем — плашка «Опублі�
   /* Дропдаун публікації: ті самі дві дії ведуть туди ж. */
   await openPubDd(page);
   assert.deepEqual(await page.$$eval("#bar .dd--right [data-act]", (els) => els.map((e) => e.dataset.act)),
-    ["togglepub", "openpreview", "copylink"], "дропдаун Vercel-публікації: пароль і Teams — лише для ЛІГА");
+    ["togglepub", "openpreview", "copylink", "modpw"],
+    "дропдаун Vercel-публікації: Teams і пароль задачі — лише для ЛІГА; «Пароль превʼю» модуля (0.33.0) — є");
   assert.deepEqual(await ddNotes(page), [], "опубліковано з паролем, пароль не змінювали");
   const popup2 = await popupOf(context, () => page.click('#bar .dd--right [data-act="openpreview"]'));
   assert.equal(new URL(popup2.url()).origin, SITE);

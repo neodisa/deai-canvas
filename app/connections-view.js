@@ -40,6 +40,7 @@ import { generalBodyHTML, keysBodyHTML, updateBodyHTML } from "./app-settings-vi
 import { confirmHTML } from "./inline-confirm.js";
 import { BADGE_CLASS, cardModel, emptyRoles, failedRole, gridEntries, sentence, toolCardModel, toolCards } from "./modules-grid.js";
 import { spaceColorToken } from "./spaces-model.js";
+import { PW_STATE_KEY, pwLine } from "./setup-model.js";
 import {
   DETAIL_MAX, builtinText, canErase, cardView, disableConsequences, isOwn, noteView, roleIcon, roleKeys, spaceJsonBad, trustLine, whyOf,
 } from "./connections-model.js";
@@ -151,9 +152,16 @@ export function mcardHTML(e, busy, ask, space) {
     const label = m.action === "check" && b === "check" ? t("cnChecking") : t(key);
     act = `<button type="button" class="ctl ctl--out" data-cn="${m.action}" data-id="${id}"${b ? " disabled" : ""}>${ico(icon)}${esc(label)}</button>`;
   }
+  /* Пароль превʼю (0.33.0): один на простір — секрет `password` постачальника публікації; посилання відкриває шухляду на полі. */
+  const pw = pwLine(e);
+  const pwHTML = pw
+    ? `<p class="mc-pw${pw.state === "unset" ? " mc-pw--off" : ""}">${ico("lock", 13)}<span>${esc(t("frPwLine"))}: ${esc(t(PW_STATE_KEY[pw.state]))}</span>`
+      + (pw.state === "unknown" ? "" : `<button type="button" data-cn="pw" data-id="${id}">${esc(t(pw.state === "set" ? "frPwChange" : "frPwAdd"))}</button>`)
+      + `</p>`
+    : "";
   /* Дія в польоті (`busy`): картка не відповідає на клік (`connAction`), і `aria-busy` каже це читачеві й тестам. */
   return `<div class="mc" data-id="${id}"${b ? ' aria-busy="true"' : ""}>${top(more, m.click !== null)}`
-    + `${why}<div class="mc-foot">${bdg}${act}</div></div>`;
+    + `${pwHTML}${why}<div class="mc-foot">${bdg}${act}</div></div>`;
 }
 
 /**
@@ -338,6 +346,7 @@ export function fieldHTML(e, f, i, d, prefix = "cn-f") {
       + `${erasable ? `<button type="button" class="ctl" data-cn-dr="erase" data-key="${esc(f.key)}" aria-pressed="${erase}"`
         + ` aria-label="${esc(t("cnEraseFor", fieldLabel(e, f)))}"${dis}>${esc(t("cnErase"))}</button>` : ""}</div>`
       + `<p class="cn-secret" id="${stateId}">${ico("lock", 13)}<span>${esc(t(secretStateKey(f.set)))} · ${esc(t("cnSecretWhere"))}</span></p>`
+      + ((f.key === "password" && Array.isArray(e?.roles) && e.roles.includes("publish")) ? `<p class="cn-hint">${esc(t("frPwHint"))}</p>` : "")
       + (erasable ? `<p class="cn-hint" id="${eraseId}" data-cn-erase-note="${esc(f.key)}"${erase ? "" : " hidden"}>${esc(t("cnEraseMarked"))}</p>` : "");
   } else {
     const hintId = f.type === "path" ? `${id}-hint` : "";

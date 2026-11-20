@@ -138,3 +138,36 @@ test("блоки файла: role=region і видимий :focus-visible на p
   assert.match(m[1], /outline:\s*2px solid var\(--sel\)/);
   assert.doesNotMatch(m[1], /#[0-9a-f]{3,8}\b|rgb|hsl|oklch/i);
 });
+
+/* ── «Перший запуск» (0.33.0): над файлом — як запустити агента й чи прочитає його Claude Code ───────────── */
+const A = (claude, o = {}) => ({ exists: true, hasBlock: true, outdated: false, newer: false, version: "0.33.0", fileVersion: "0.33.0",
+  block: "b", own: "", text: "t", path: "/Users/a/deai-work/p/AGENTS.md", claude, ...o });
+
+test("AGENTS.md: рядок «Запуск агента» з командою cd <тека> && claude і копіюванням", () => {
+  const h = agentsBodyHTML(A({ state: "ok", path: "/Users/a/deai-work/p/CLAUDE.md" }));
+  assert.match(h, /<div class="set-rows fr-run">/);
+  assert.match(h, /<code class="cn-code" id="fr-run-cmd">cd \/Users\/a\/deai-work\/p &amp;&amp; claude<\/code>/);
+  assert.match(h, /data-th="ag" data-v="runcopy"/);
+  assert.ok(h.indexOf("fr-run") < h.indexOf('class="ag"'), "рядки — над файлом");
+});
+
+test("AGENTS.md: «Claude Code» — галочка для ok; «Підключити» для missing і no-import; unreadable — без кнопки", () => {
+  const ok = agentsBodyHTML(A({ state: "ok" }));
+  assert.match(ok, /data-claude="ok"><span class="fr-ic fr-ic--ok">/);
+  assert.doesNotMatch(ok, /data-v="claude"/);
+  for (const state of ["missing", "no-import"]) {
+    assert.match(agentsBodyHTML(A({ state })), new RegExp(`data-claude="${state}"[\\s\\S]*data-v="claude"[^>]*>Підключити<`));
+  }
+  assert.match(agentsBodyHTML(A({ state: "missing" }), true), /data-v="claude" disabled/);
+  const un = agentsBodyHTML(A({ state: "unreadable" }));
+  assert.match(un, /не читається/);
+  assert.doesNotMatch(un, /data-v="claude"/);
+});
+
+test("AGENTS.md: файла ще нема — рядки є й над «Створити»; старий сервер без `claude` — лише «Запуск агента»", () => {
+  const nofile = agentsBodyHTML(A({ state: "missing" }, { exists: false, hasBlock: false, text: "", block: null }));
+  assert.match(nofile, /fr-run[\s\S]*data-v="create"/);
+  const old = agentsBodyHTML(A(undefined));
+  assert.match(old, /fr-run-cmd/);
+  assert.doesNotMatch(old, /data-claude/);
+});

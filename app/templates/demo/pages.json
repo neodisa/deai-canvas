@@ -1,0 +1,55 @@
+{
+ "pages": [
+  {
+   "id": "dashboard",
+   "name": "Home",
+   "kind": "page",
+   "published": true,
+   "children": [
+    {
+     "id": "dashboard-empty",
+     "name": "Empty",
+     "kind": "state"
+    }
+   ]
+  },
+  {
+   "id": "transactions",
+   "name": "Transactions",
+   "kind": "page",
+   "published": true,
+   "children": [
+    {
+     "id": "transactions-empty",
+     "name": "No matches",
+     "kind": "state"
+    }
+   ]
+  },
+  {
+   "id": "budgets",
+   "name": "Budgets",
+   "kind": "page",
+   "published": true
+  },
+  {
+   "id": "settings-folder",
+   "name": "Settings",
+   "kind": "folder",
+   "children": [
+    {
+     "id": "profile",
+     "name": "Profile",
+     "kind": "page",
+     "published": true
+    },
+    {
+     "id": "notifications",
+     "name": "Notifications",
+     "kind": "page",
+     "published": true
+    }
+   ]
+  }
+ ]
+}

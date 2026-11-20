@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -298,6 +299,138 @@ def _node_bin(name='npx'):
 # 4b-1: модулі (режим `cli` у `vercel-publish`) шукають `npx` так само, як ядро (див. докстрінг вище). Лише реєстрація:
 # `_node_bin` не кличеться при імпорті (login-shell повільний) — тільки коли модуль сам попросить `ctx['find_tool']`.
 deai_modules.set_tool_finder(_node_bin)
+
+
+#: «Перший запуск» (0.33.0, `GET /api/setup`): чи знімає «Огляд» на цій машині. Один `node -e` у корені установки друкує
+#: `{v: версія node, pw: чи є пакет playwright, browser: чи є файл chromium.executablePath()}`.
+_SHOTS_PROBE = ("const o={v:process.versions.node,pw:false,browser:false};"
+                "try{const p=require('playwright');o.pw=true;"
+                "try{o.browser=require('fs').existsSync(p.chromium.executablePath())}catch(e){}}catch(e){}"
+                "process.stdout.write(JSON.stringify(o))")
+_SETUP_TTL = 30
+_SETUP_TIMEOUT = 10
+_SETUP_CACHE = {}           # шлях node → (monotonic, shots)
+_SETUP_LOCK = threading.Lock()
+
+
+def _shots_node(fresh=False):
+    """Node для перевірки знімків: `DEAI_SHOTS_NODE` (абсолютний шлях до виконуваного; тести й нестандартні машини),
+    інакше `_node_bin('node')`. Не той шлях — `None` (стан `no-node`). Сам пошук кешується на `_SETUP_TTL` під ключем
+    `('node', значення DEAI_SHOTS_NODE)` (без Node `_node_bin` щоразу ганяє `zsh -lic` до 15 с); `fresh` кеш обходить."""
+    forced = os.environ.get('DEAI_SHOTS_NODE')
+    key = ('node', forced)
+    now = time.monotonic()
+    if not fresh:
+        with _SETUP_LOCK:
+            hit = _SETUP_CACHE.get(key)
+        if hit and now - hit[0] < _SETUP_TTL:
+            return hit[1]
+    if forced:
+        found = forced if os.path.isabs(forced) and os.access(forced, os.X_OK) else None
+    else:
+        found = _node_bin('node')
+    with _SETUP_LOCK:
+        _SETUP_CACHE[key] = (now, found)
+    return found
+
+
+def shots_command():
+    """Команда, що ставить знімки «Огляду» в цій установці (копіюється людиною в термінал)."""
+    return f'cd {shlex.quote(ROOT)} && npm install && npx playwright install chromium'
+
+
+def shots_setup(fresh=False):
+    """`{state, node, command}`: `ok | no-node | no-playwright | no-browser | unknown`. Кеш 30 с на шлях node; `fresh` — без
+    кешу. Збій чи тайм-аут перевірки — `unknown` (UI тоді нічого не блокує)."""
+    node = _shots_node(fresh)
+    if node is None:
+        return {'state': 'no-node', 'node': None, 'command': None}
+    now = time.monotonic()
+    with _SETUP_LOCK:
+        hit = _SETUP_CACHE.get(node)
+        if hit and not fresh and now - hit[0] < _SETUP_TTL:
+            return dict(hit[1])
+    try:
+        r = subprocess.run([node, '-e', _SHOTS_PROBE], cwd=ROOT, capture_output=True, text=True, timeout=_SETUP_TIMEOUT)
+        o = json.loads(r.stdout or '')
+        if r.returncode != 0 or not isinstance(o, dict):
+            raise ValueError('bad probe')
+    except (OSError, subprocess.SubprocessError, ValueError):
+        out = {'state': 'unknown', 'node': None, 'command': None}
+    else:
+        pw, browser = o.get('pw') is True, o.get('browser') is True
+        state = 'ok' if pw and browser else ('no-browser' if pw else 'no-playwright')
+        out = {'state': state, 'node': o['v'] if isinstance(o.get('v'), str) else None,
+               'command': None if state == 'ok' else shots_command()}
+    with _SETUP_LOCK:
+        _SETUP_CACHE[node] = (now, out)
+    return dict(out)
+
+
+def shoot_failure(err, report):
+    """Людська причина провалу зʼємки: `{'code': 'no-browser', 'command': …}` або `None`. Playwright без завантаженого
+    Chromium падає з «Executable doesn't exist» — канвас тоді каже, чого бракує, і яку команду виконати, а не дамп."""
+    raw = report.get('raw') if isinstance(report, dict) and isinstance(report.get('raw'), str) else ''
+    if "Executable doesn't exist" in f'{err or ""}\n{raw}':
+        return {'code': 'no-browser', 'command': shots_command()}
+    return None
+
+
+#: Демо-задача «Tally» (0.33.0): шаблон у репо, згенерований `node ops/demo-task.mjs`.
+DEMO_DIR = os.path.join(ROOT, 'app', 'templates', 'demo')
+DEMO_PINS = os.path.join(ROOT, 'app', 'templates', 'demo-pins.json')
+DEMO_ID = 'tally-demo'
+_HOST_RE = re.compile(r'^[A-Za-z0-9.\-\[\]:]{1,100}$')
+
+
+def demo_task_id():
+    """Вільний id демо-задачі на машині: `tally-demo`, далі `tally-demo-2`, `-3`… (`find_task` дивиться в усі простори)."""
+    n = 1
+    while True:
+        tid = DEMO_ID if n == 1 else f'{DEMO_ID}-{n}'
+        try:
+            if spaces.find_task(tid) is None:
+                return tid
+        except spaces.AmbiguousTask:
+            pass
+        n += 1
+
+
+def demo_task_in(space_id):
+    """Id найнижчої за НОМЕРОМ (не за рядком) демо-задачі, що живе рівно в просторі `space_id` і більше ніде: `tally-demo`, далі
+    `tally-demo-2`, `-3`… Нема такої чи реєстр не прочитати → `None` (тоді `reuse` створює нову, як і раніше). Шар вимкнено —
+    стара поведінка: `find_task(DEMO_ID)` проти id простору."""
+    try:
+        if not spaces.layer_on():
+            home = spaces.find_task(DEMO_ID)
+            return DEMO_ID if home is not None and home.get('id') == space_id else None
+        found = []
+        for tid, where in spaces.task_ids_by_space(spaces.load_registry()).items():
+            m = re.fullmatch(re.escape(DEMO_ID) + r'(?:-(\d+))?', tid)
+            if m and where == [space_id]:
+                found.append((int(m.group(1) or 1), tid))
+        return min(found)[1] if found else None
+    except (spaces.SpacesError, spaces.AmbiguousTask, OSError, ValueError):
+        return None
+
+
+def demo_comments(origin, pins_file=DEMO_PINS):
+    """Піни шаблону → записи локального каналу задачі (та сама форма, що пише `/api/local-comments`), з адресою `origin`."""
+    with open(pins_file, encoding='utf-8') as f:
+        data = json.load(f)
+    ts = time.strftime('%d.%m.%Y %H:%M')
+    out = []
+    for seq, p in enumerate(data.get('pins', []), 1):
+        page = p['page']
+        c = {'id': f'demo-{seq}', 'author': p.get('who') or 'Designer', 'text': p['text'], 'status': p['status'],
+             'fp': p['fp'], 'htmlSnapshot': None, 'bornV': 1, 'ts': ts,
+             'meta': {'url': f'{origin}/commented?it=it1&page={page}&ch=local', 'route': '/commented',
+                      'version': f'1/{page}', 'iteration': '1', 'viewport': {'w': 1440, 'h': 900}, 'seq': seq,
+                      'sel': p['sel']}}
+        if p['status'] == 'resolved':
+            c.update(resolvedV=1, resolveReason=p.get('reason') or '')
+        out.append(c)
+    return out
 
 
 def _file_hash(path):
@@ -3878,6 +4011,7 @@ LAYER_BUNDLE = 'comment-layer.min.js'
 #: `ext-inspect.js` (власний модуль превʼю), `shell-inspect.js`, `insp-panel.js`, `insp-model.js` — панель інспектора лише для
 #: перегляду (0.32.0). `insp-model.js` імпортує `./vendor/inspector-core.js`, тож `shell/vendor/` (`SHELL_VENDOR`) — частина
 #: того самого замикання; сам оверлей з `shell/vendor/` бере `../i18n.js` і `../esc.js` звідси.
+#: `setup-model.js` — `shotsBlock` (0.33.0): `shell-panel.js` і `shell-palette.js` беруть звідти причину «знімати нема чим».
 #: Модулі їдуть звідси байт у байт. Опція «під зовнішній режим» у спільному модулі допустима, лише коли ДЕФОЛТНИЙ вихід
 #: приколений золотими тестами (так 0.32.0 додав `readonly` панелі інспектора); гілка «а в превʼю інакше» без цього ламала б
 #: інструмент.
@@ -3886,7 +4020,8 @@ SHELL_MODULES = ('i18n.js', 'icons.js', 'shell-panel.js', 'viewport.js',
                  'styles.css', 'ask.js', 'esc.js', 'ext-shell.js', 'ext-bar.js',
                  'tree-model.js', 'clean-view.js', 'island.js',
                  'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js',
-                 'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js', 'ext-follow.js')
+                 'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js', 'ext-follow.js',
+                 'setup-model.js')
 
 #: Типова ширина кадру. МУСИТЬ дорівнювати `CANVAS_W` у app/viewport.js:
 #: саме на ній тримається правило ключа («типова ширина суфікса не додає»), і
@@ -5520,13 +5655,35 @@ def space_view(sp):
         compat = deai_modules.compat_view(sp, out['capabilities'])
         if compat:                       # ключ лише коли непорожній (Поправка 4): точні тести `describe`/`listing` не зачеплені
             out['compat'] = compat
+        pw = _publish_password(sp, out['capabilities'])
+        if pw is not _NO_PW:             # пароль превʼю (0.33.0): смуга задачі читає простір із `/api/task`, а не зі списку
+            out['publish_password'] = pw
     return out
+
+
+_NO_PW = object()
+
+
+def _publish_password(sp, caps):
+    """Пароль превʼю простору (0.33.0): `True|False|None` — задано / не задано / не прочитати (`_secret_flags`); `_NO_PW` —
+    публікації нема чи її постачальник пароля не має (поля в списку тоді нема). Тотальна: збій — `_NO_PW`, список не падає."""
+    pid = (caps or {}).get('publish')
+    if not pid:
+        return _NO_PW
+    try:
+        m = deai_modules.provider('publish', sp)
+        if m is None or m.id != pid or 'password' not in m.secret_keys():
+            return _NO_PW
+        flags, _err = _secret_flags(sp['id'], m)
+    except Exception:  # noqa: BLE001 — один простір не ламає список (як `capabilities`)
+        return _NO_PW
+    return flags.get('password')
 
 
 def spaces_listing():
     """`spaces.listing()` + `capabilities` і `tracks`/`default_track` у кожному записі. Запис реєстру відновлюється з самого запису
     списку (вдруге реєстр не читаємо — списку вистачає одного знімка). Один збій простору не ламає список:
-    `capabilities` і напрямки не кидають.
+    `capabilities` і напрямки не кидають. `publish_password` (0.33.0) — див. `_publish_password`.
 
     `tracks` (4d-1) — `[{id, label}]` напрямків простору й `default_track`; ⛔ БЕЗ `root` і `repo`: шляхи й адреси репо не їдуть у
     браузер (форма «Нова задача» вибирає напрямок за назвою, а теку й репо додає сервер). Напрямки простору — ОДНЕ `_TrackView`
@@ -5537,6 +5694,9 @@ def spaces_listing():
     for e in out['spaces']:
         sp = {'id': e['id'], 'path': e['path']}
         e['capabilities'] = deai_modules.capabilities(sp)
+        pw = _publish_password(sp, e['capabilities'])
+        if pw is not _NO_PW:
+            e['publish_password'] = pw              # пароль превʼю (0.33.0): меню «Опублікувати» показує стан
         e['tools'] = spaces.space_tools(sp)         # вимикачі інструментів («В Figma»): смуга й ⌘K читають їх зі списку
         compat = deai_modules.compat_view(sp, e['capabilities'])
         if compat:
@@ -6222,13 +6382,13 @@ class Handler(SimpleHTTPRequestHandler):
                         '/api/modules', '/api/module-ext', '/api/module-enable', '/api/module-disable',
                         '/api/module-settings', '/api/module-check', '/api/ds-tokens',
                         '/api/module-tool', '/api/module-action',
-                        '/api/module-trust', '/api/module-untrust', '/api/agents-md')
+                        '/api/module-trust', '/api/module-untrust', '/api/agents-md', '/api/demo-task')
 
     #: Маршрути МАШИНИ (оновлення, відгук): потрібні саме тоді, коли щось зламано (порожня машина, битий реєстр, нечитабельний
     #: `tasks.json`). `_take_task` для них НЕ фіксує простір і не читає задач; префіксна форма `/t/<id>/api/…` відхиляється 400.
     #: Обробники самі й тотально збирають контекст (простір, задача). Точна відповідність (шлях без query), кожен маршрут окремо.
     _MACHINE_ROUTES = ('/api/update', '/api/update-check', '/api/update-apply', '/api/update-notes',
-                       '/api/feedback', '/api/feedback-preview', '/api/claude-statuses')
+                       '/api/feedback', '/api/feedback-preview', '/api/claude-statuses', '/api/setup')
 
     def _pin_current_space(self):
         """Не названа задача: простір запиту — поточний простір машини НА ВХОДІ. Запит дочитує
@@ -6361,6 +6521,18 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.split('?')[0] == '/api/update':
             self._send_json(_updater().status())
+            return
+        if self.path.split('?')[0] == '/api/setup':
+            # Запускає `node` (перевірка знімків): чужа сторінка (`<img src=…>`) не сміє його смикати — та сама варта, що в
+            # `update-notes`. Абсолютні шляхи — лише цієї машини й лише у відповіді (як `/api/agents-md`).
+            if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin')):
+                self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+                return
+            fresh = parse_qs(urlparse(self.path).query).get('fresh', ['0'])[0] == '1'
+            self._send_json({'ok': True, 'version': updater.current_version(UPDATER_ROOT),
+                             'python': '.'.join(str(x) for x in sys.version_info[:3]), 'platform': sys.platform,
+                             'paths': {'deai': ROOT, 'setup': os.path.join(ROOT, 'SETUP.md')},
+                             'shots': shots_setup(fresh)})
             return
         if self.path.split('?')[0] == '/api/update-notes':
             # ⛔ GET, що може піти в мережу (`fetch` тега): чужа сторінка (`<img src=…>`) не сміє його смикати. `Sec-Fetch-Site` cross-/same-site
@@ -7185,6 +7357,11 @@ class Handler(SimpleHTTPRequestHandler):
         # сторінок знялась і вже лежить на диску. Той, хто малює тост, мусить
         # дивитись на `report.shot` і `report.failed` ОКРЕМО, інакше скаже «не знято
         # нічого» там, де знято сім із восьми.
+        fail = None if child.returncode == 0 else shoot_failure(err, report)
+        if fail:
+            self._send_json({'ok': False, **fail, 'error': "Chromium for Playwright is not installed",
+                             'report': report, 'stderr': (err or '')[-2000:]})
+            return
         self._send_json({'ok': child.returncode == 0, 'report': report,
                          'stderr': (err or '')[-2000:]})
 
@@ -7577,6 +7754,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._task_purge(payload)
         elif self.path == '/api/task-new':
             self._task_new(payload)
+        elif self.path == '/api/demo-task':
+            self._demo_task(payload)
         elif self.path == '/api/space-new':
             self._space_new(payload)
         elif self.path == '/api/space-update':
@@ -8586,7 +8765,7 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         return AdoptPlan(real, files, total, links)
 
-    def _task_new(self, payload):
+    def _task_new(self, payload, after=None):
         """Нова задача. Простір: `space` з тіла (є, але такого нема — 400, НЕ відкат у простір ЛІГА:
         мовчки завести «особисту» задачу в реєстр ЛІГА гірше за відмову); без `space` — простір
         із `legacy: true`, якщо він є, інакше поточний (4d-4c: ознак потоку ЛІГА більше нема —
@@ -8621,7 +8800,9 @@ class Handler(SimpleHTTPRequestHandler):
         ІГНОРУЄТЬСЯ (задача — у напрямок за замовчуванням), а `track` суворий; поля нема — `default_track`.
 
         ⚠️ Порядок: простір запиту фіксується ПЕРЕД `load_tasks()` — конфіг ЦІЛЬОВОГО простору, а не
-        поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі."""
+        поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі.
+
+        `after(out)` (0.33.0, демо-задача) перетворює відповідь успіху перед відправкою."""
         profile = payload.get('profile')
         if profile is not None and not isinstance(profile, str):
             self._space_error(400, 'bad-profile', 'profile must be a string')
@@ -8767,7 +8948,35 @@ class Handler(SimpleHTTPRequestHandler):
             # Що скопійовано НАСПРАВДІ (`adopt_copy`), а не що бачив обхід: підмінене між ними — теж у пропущених.
             out['copied'] = {'files': done['files'], 'bytes': done['bytes'],
                              'skipped_links': adopt.links + done['skipped']}
-        self._send_json(out)
+        self._send_json(after(out) if after else out)
+
+    def _demo_task(self, payload):
+        """`POST /api/demo-task {space, title?, reuse?}` → `{ok, id, space[, existed]}` (0.33.0): демо-задача «Tally» у просторі
+        `space` — той самий `_task_new` з `from` = шаблон (`DEMO_DIR`), далі два піни (`DEMO_PINS`) у локальний канал задачі з
+        адресою цього сервера. `reuse: true` (⌘K «Відкрити демо»): демо вже в цьому просторі (`demo_task_in`: найнижчий номер із
+        `tally-demo`, `tally-demo-2`… , що живе лише тут) — віддати його, нічого не створюючи. Відмови — ті самі, що в `task-new` з `from`; `space` не рядок чи порожній — 400 `bad-request`."""
+        want = payload.get('space')
+        if not isinstance(want, str) or not want:
+            self._space_error(400, 'bad-request', 'space must be a non-empty string')
+            return
+        if payload.get('reuse') is True:
+            have = demo_task_in(want)
+            if have is not None:
+                self._send_json({'ok': True, 'id': have, 'space': want, 'existed': True})
+                return
+        title = payload.get('title')
+        title = title.strip()[:200] if isinstance(title, str) and title.strip() else 'Tally — demo'
+        host = self.headers.get('Host') or ''
+        origin = f'http://{host}' if _HOST_RE.fullmatch(host) else f'http://127.0.0.1:{self.server.server_address[1]}'
+
+        def seed(out):
+            try:
+                atomic_write_json(os.path.join(out['dir'], '.dc-local-comments.json'), demo_comments(origin), indent=1)
+            except (OSError, ValueError, KeyError) as e:      # піни — додаток до задачі, не її умова
+                print(f'demo-task: pins not written: {type(e).__name__}', file=sys.stderr)
+            return {'ok': True, 'id': out['id'], 'space': out['space']}
+
+        self._task_new({'id': demo_task_id(), 'title': title, 'space': want, 'from': DEMO_DIR}, after=seed)
 
     # ---------- Простори (реєстр машини: `spaces.py`) ----------
 
@@ -8804,10 +9013,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     @staticmethod
     def _write_space_agents_md(sid):
-        """Новий простір дістає AGENTS.md одразу; збій запису НЕ валить створення простору — лише лог (stderr)."""
+        """Новий простір дістає AGENTS.md і (коли його нема) CLAUDE.md з `@AGENTS.md` одразу; збій запису НЕ валить створення простору — лише лог (stderr)."""
         try:
             sp = next(s for s in spaces.read_registry()['spaces'] if s['id'] == sid)
             agents_md.write(sp['path'], version=updater.current_version(UPDATER_ROOT))
+            agents_md.claude_ensure(sp['path'])     # CLAUDE.md з `@AGENTS.md` — лише коли його нема (0.33.0)
         except Exception as e:    # noqa: BLE001 — навмисно: AGENTS.md — додаток до простору, не його умова
             print(f'agents-md: not written for new space {sid}: {type(e).__name__}', file=sys.stderr)
 
@@ -8833,12 +9043,14 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'space': sid, 'tools': tools})
 
     def _agents_md_post(self, payload):
-        """`POST /api/agents-md {space}`: створити/оновити блок."""
-        self._agents_md(payload.get('space'), True)
+        """`POST /api/agents-md {space[, claude: true]}`: створити/оновити блок; з `claude: true` — лише підключити CLAUDE.md
+        (`agents_md.claude_connect`: дописати `@AGENTS.md` на початок чи створити файл), AGENTS.md не чіпається."""
+        self._agents_md(payload.get('space'), 'claude' if payload.get('claude') is True else True)
 
     def _agents_md(self, want, write):
         """`GET|POST /api/agents-md[?space=]` → `{ok, space, …agents_md.status, paths}`. POST створює/оновлює блок (`ValueError('newer')` →
-        409 `newer`, файл цілий). Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
+        409 `newer`, файл цілий). `claude` — стан CLAUDE.md теки простору (`agents_md.claude_status`); `write='claude'` —
+        лише підключити його. Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
         у відповіді, у файл вони не потрапляють. Версія — та сама, що `current` у `GET /api/update`."""
         sp = self._module_space(want)
         if sp is None:
@@ -8849,8 +9061,17 @@ class Handler(SimpleHTTPRequestHandler):
             return
         version = updater.current_version(UPDATER_ROOT)
         try:
-            if write:
+            if write == 'claude':
+                agents_md.claude_connect(folder)
+                st = agents_md.status(folder, version=version)
+            elif write:
+                existed = os.path.lexists(os.path.join(folder, agents_md.NAME))
                 st = agents_md.write(folder, version=version)
+                if not existed:
+                    try:
+                        agents_md.claude_ensure(folder)   # «Створити»: CLAUDE.md лише коли його нема; збій — не збій AGENTS.md
+                    except OSError:
+                        pass
             else:
                 st = agents_md.status(folder, version=version)
         except ValueError as e:
@@ -8860,7 +9081,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_error(503, 'unreadable', 'unreadable')
             return
         deai = UPDATER_ROOT
-        self._send_json({'ok': True, 'space': sp['id'], **st,
+        self._send_json({'ok': True, 'space': sp['id'], **st, 'claude': agents_md.claude_status(folder),
                          'paths': {'deai': deai, 'inbox': os.path.join(deai, 'bin', 'inbox.py'),
                                    'authoring': os.path.join(deai, 'docs', 'modules', 'authoring.md')}})
 

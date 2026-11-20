@@ -3,6 +3,32 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.33.0] — 20.11.2026
+
+First run. Deai Canvas now installs from one prompt to an agent (`SETUP.md`), and the canvas itself shows a newcomer what to
+do next: the welcome screen carries the prompt, a tour (a map of the workplace, the work cycle and a demo task), and hints
+appear exactly where something would otherwise not work — Overview screenshots, `CLAUDE.md` for Claude Code, the preview password.
+
+### Додано
+- `SETUP.md` — інструкція для агента: перевірка компʼютера, клон, знімки, значок, старт, одне питання з чотирма відповідями,
+  простір, модулі, демо, останнє повідомлення людині. Промпти для README (EN/UK) і привітання.
+- Привітання: блок «Налаштувати через агента» з промптом і «Скопіювати промпт»; «або без агента» — майстер; «Знайомство».
+- ⌘K «Знайомство з канвасом»: карта робочого місця з легендою, цикл роботи, «Відкрити демо».
+- Демо-задача «Tally» (`POST /api/demo-task`): пʼять сторінок, два стани, флоу й два піни; також у кроці 4 майстра.
+- `GET /api/setup`: версія, шляхи установки, стан знімків «Огляду» (`ok | no-node | no-playwright | no-browser | unknown`).
+- Налаштування → AGENTS.md: «Запуск агента» (`cd <тека> && claude`) і стан `CLAUDE.md` з «Підключити» (`POST /api/agents-md {space, claude: true}`).
+- Пароль превʼю видно: рядок на картці модуля публікації й пункт «Пароль превʼю» в меню «Опублікувати» (також у виді задачі).
+
+### Змінено
+- Новий простір і «Створити» AGENTS.md кладуть `CLAUDE.md` з `@AGENTS.md`, коли його нема; наявний не змінюється без згоди.
+- «Огляд» без Chromium для Playwright: замість дампу — причина, команда й вимкнена «Зняти кадри»; `/api/shoot` → `no-browser`.
+- README: розділ Install на початку; прибрано `cp tasks.example.json tasks.json`.
+
+### Known limits
+- Статус агента в острівці — лише із серцебиттям `POST /api/claude-status`; `SETUP.md` пояснює, але хуків не ставить.
+- Промпт README розрахований на `~/deai-canvas`; інша тека — назвіть її агентові.
+- Демо-задача — англійською (вміст README-знімків).
+
 ## [0.32.1] — 20.11.2026
 
 Patch for the public preview: its tools moved from the bottom island into the top-right of the bar, so nothing covers the

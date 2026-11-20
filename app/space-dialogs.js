@@ -26,6 +26,7 @@
  *   привітання       кнопки `[data-th="spacenew"]` і `[data-th="spaceopen"]` у `.th-welcome`.
  */
 import { esc } from "./esc.js";
+import { agentBlockHTML, introHTML } from "./first-run.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { LOGO_SVG } from "./logo.js";
@@ -160,19 +161,18 @@ export function tagsFormHTML({ value = "", errorKey = "" } = {}) {
  */
 export const parseTags = (s) => String(s ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 
-/**
- * Привітання — машина, на якій просторів ще нема. Малюється у вузлі екрана «Задачі»
- * (`#tasks-home`) замість списку: дорога звідси одна — створити перший простір. Фраза
- * про агента — не прикраса: агент уміє заводити простори тим самим API.
- */
-export function welcomeHTML() {
+/** Привітання (просторів ще нема). `v.setup` — відповідь `GET /api/setup` чи `null`; `v.origin` — адреса канваса. Головний
+    шлях — промпт агентові (`SETUP.md`); майстер — «або без агента». */
+export function welcomeHTML(v = {}) {
   return `<div class="th-in th-welcome">
     <div class="th-welcome-logo">${LOGO_SVG}</div>
     <h1 class="th-h">${esc(t("welcomeTitle"))}</h1>
     <p class="th-welcome-lead">${esc(t("welcomeLead"))}</p>
-    <div class="th-welcome-act"><button class="ctl ctl--pri" data-th="spacenew">${ico("plus")}${esc(t("welcomeCreate"))}</button>
+    ${agentBlockHTML(v.setup ?? null, v.origin ?? "")}
+    <p class="fr-or">${esc(t("frOr"))}</p>
+    <div class="th-welcome-act"><button class="ctl ctl--out" data-th="spacenew">${ico("plus")}${esc(t("frCreateManual"))}</button>
       <button class="ctl ctl--out" data-th="spaceopen">${ico("folder")}${esc(t("welcomeOpen"))}</button></div>
-    <p class="th-welcome-agent">${esc(t("welcomeAgent"))}</p></div>`;
+    ${introHTML()}</div>`;
 }
 
 /* ── проводка полів ──────────────────────────────────────────────────────── */

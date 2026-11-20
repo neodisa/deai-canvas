@@ -584,6 +584,24 @@ export function createWizard(deps) {
     if (mine.checking) return;
     capture(el);
     clearError(form);
+    /* Демо-задача (0.33.0): без перевірки назви й id — їх дає сервер (`tally-demo`, `-2`…). Помилка — у слот форми. */
+    if (mine.s4.source === "demo") {
+      setBusy(form, true, "wzCreating");
+      let made;
+      try {
+        made = await deps.post("/api/demo-task", { space: mine.spaceId, title: t("frDemoTaskTitle") });
+      } catch (e) {
+        if (wz !== mine) return;
+        setBusy(form, false);
+        if (e?.code === "unknown-space") { spaceGone(); return; }
+        const k = taskErrKey(e?.code);
+        showError(form, k, taskErrField(k));
+        return;
+      }
+      wz = null;
+      try { await deps.openTask(made); } catch (e) { deps.toast(t("errFailed", e?.message ?? "")); deps.exit({ back: false }); }
+      return;
+    }
     const vals = { title: mine.s4.title, id: mine.s4.id };
     mine.checking = true;
     let ids;
@@ -744,9 +762,15 @@ export function createWizard(deps) {
       paint();
     } else if (n.name === "wz-src" && n.checked) {
       wz.s4.source = n.value;
-      const box = deps.node()?.querySelector("#wz-from-f");
+      const node = deps.node();
+      const box = node?.querySelector("#wz-from-f");
       if (box) box.hidden = n.value !== "folder";
-      if (n.value === "folder") deps.node()?.querySelector("#wz-from")?.focus({ preventScroll: true });
+      /* Демо (0.33.0): назву й id дає канвас — поля вимикаються, причина зʼявляється поруч. */
+      const demo = n.value === "demo";
+      for (const sel of ["#tf-title", "#tf-id"]) { const f = node?.querySelector(sel); if (f) f.disabled = demo; }
+      const why = node?.querySelector("#wz-demo-why");
+      if (why) why.hidden = !demo;
+      if (n.value === "folder") node?.querySelector("#wz-from")?.focus({ preventScroll: true });
     }
   }
 

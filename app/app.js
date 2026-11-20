@@ -79,6 +79,8 @@ import { arrived, baseline, countNew, isNew, markSeen, newsByPage, readSeen, see
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
+import { introCardHTML } from './first-run.js';
+import { runCommand } from './setup-model.js';
 import {
   formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
   verdictText, writePayload,
@@ -236,6 +238,34 @@ let connAsk = null;
 /* Розділ «AGENTS.md» (етап Е): `data` — відповідь `GET /api/agents-md` | `{failed:{code}}` | `null` (ще не читали); `busy` — запис у польоті.
    Оголошено ТУТ (серед стану сторінки), бо `connView` читає його з першого `paintHome`. Скидається свіжим входом і зміною простору. */
 const agentsSt = { spaceId: null, data: null, busy: false, seq: 0 };
+/* «Перший запуск» (0.33.0): відповідь `GET /api/setup` — шлях SETUP.md для промпта привітання й стан знімків «Огляду».
+   `data: null` — ще не питали чи сервер не відповів: тоді нічого не блокуємо. `asked` — питали в цій сесії (повтор лише `fresh`).
+   Оголошено ТУТ з тієї ж причини, що й `agentsSt`: `paintHome` читає його з першого виклику. */
+const setupSt = { data: null, busy: null, asked: false, at: 0 };
+function ensureSetup(fresh = false) {
+  if (setupSt.busy) return setupSt.busy;
+  if (setupSt.asked && !fresh) return Promise.resolve(setupSt.data);
+  setupSt.asked = true;
+  setupSt.at = Date.now();
+  setupSt.busy = (async () => {
+    try { setupSt.data = await api(`/api/setup${fresh ? '?fresh=1' : ''}`); } catch (e) { /* лишаємо що було */ }
+    setupSt.busy = null;
+    /* Перемальовуємо лише те, що показує ці дані: панель задачі («Огляд») чи привітання. Майстер і «Налаштування» — ні:
+       фонова відповідь (повернення до вікна, `fresh`) не має чіпати набране (T7b у `tests/live/spaces-flows.test.mjs`). */
+    if (!homeOpen) renderPanel();
+    else if (homePage !== 'wiz' && needsWelcome(spacesResp)) paintHome();
+    return setupSt.data;
+  })();
+  return setupSt.busy;
+}
+const setupShots = () => (setupSt.data?.shots ? { setup: setupSt.data.shots } : {});
+const welcomeView = () => ({ setup: setupSt.data, origin: location.origin });
+/* Копіювання з кліку: `writeText` — ПЕРШИМ викликом, поки жест людини ще живий (як `agentsCopy`). */
+async function frCopy(text, doneKey) {
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); toast(t(doneKey)); }
+  catch (e) { toast(t('frCopyFailed')); }
+}
 /* Розділ сторінки «Налаштування» (`settings-model.js`): памʼятається в localStorage, як `homeUi`; типово `mods`. Шестерня веде в останній,
    ⌘K, фішка простору й кнопка «Задач» (`BAR_ACTIONS.conn`) і вхід із роллю — у `mods`. */
 let connSec = (() => { try { return readSec(localStorage.getItem(SEC_KEY)); } catch (e) { return 'mods'; } })();
@@ -247,6 +277,12 @@ function setConnSec(sec) {
 /* Роль, до картки якої веде вхід («Налаштувати…» синку → `vcs`): після першого списку фокус іде на картку її модуля, а не першу.
    Порожньо — як завжди. Знімається разом із `connFocusPending` (`loadConn`) і чиститься кожним входом без ролі (`enterConnections`). */
 let connFocusRole = '';
+/* «Пароль превʼю» з меню публікації (0.33.0): після першого списку модулів — шухляда постачальника публікації з фокусом на паролі. */
+let connPwPending = false;
+function openPublishPassword() {
+  setConnSec('mods');
+  enterConnections('publish', { pw: true });
+}
 /* Лічильник входів на «Підключення»: `enterConnections` чекає перелік просторів, і за цей час людина могла піти (`enterHome` із явною
    сторінкою — логотип, майстер; `leaveHome` — відкрила задачу) або клікнути вдруге. Оголошено ТУТ з тієї самої причини, що `cnDrawer`:
    `enterHome` читає його з першого `render()`. Зміну задачі чи простору рахує `taskSwitchGen`. */
@@ -2518,6 +2554,7 @@ const BAR_ACTIONS = {
     const wantCanvas = val === 'overview';
     if (wantCanvas === (mode === 'canvas')) return;
     mode = wantCanvas ? 'canvas' : 'single';
+    if (wantCanvas) ensureSetup();
     /* Перемикач — НЕ побічна перебудова: людина свідомо вийшла з полотна (або
        вернулась на нього) і чекає побачити все спочатку, а не кадр, у якому
        колись зумнулась. Забути світ треба саме тут: `buildCanvas` переносить
@@ -2773,6 +2810,7 @@ const BAR_ACTIONS = {
   /* «Відгук» (смуга) і «Баг / ідея» (⌘K): той самий діалог, на будь-якому екрані й без задачі (`openFeedback`). */
   /* З кнопки острівця — поповер над нею (етап В); з ⌘K якоря нема — модальна картка. */
   feedback: (val, el) => openFeedback(el?.closest?.('#hud') ? el : null),
+  intro: () => openIntro(),
   updatenotes: () => openUpdateDialog(),
   updatecheck: () => checkUpdateNow(),
 
@@ -2931,6 +2969,9 @@ const BAR_ACTIONS = {
       loadTeamsMute();
     }
   },
+
+  /* Пароль превʼю модуля (0.33.0): веде в «Налаштування → Модулі» з шухлядою на полі пароля. */
+  modpw: () => { openDd = null; openPublishPassword(); },
 
   /* Пароль превʼю (ідея 02.09.2026). Пишемо лише в tasks.json: гейт у зібраному
      превʼю міняє ПОВНА публікація (вона ж ставить його в кожну сторінку). Тому
@@ -3205,6 +3246,41 @@ async function fetchFeedbackPreview(sess) {
   const r = await jsonPost('/api/feedback-preview', sess.previewBody());
   return r && r.status === 200 && r.body && r.body.ok === true && r.body.diag && typeof r.body.diag === 'object'
     && typeof r.body.diag_hash === 'string' && Number.isInteger(r.body.ring_seq) ? r.body : null;
+}
+
+/* ⌘K «Знайомство з канвасом» (0.33.0): картка `askForm` без якоря (модальна, як решта діалогів оболонки). Esc і «Закрити»
+   закриває оболонка; клік по підкладці — тут (у загальних діалогах він навмисно НЕ закриває: там бувають руйнівні питання,
+   а тут питання нема). «Відкрити демо» — лише коли є поточний простір. */
+let introOpen = false;
+async function openIntro() {
+  if (introOpen) return;
+  introOpen = true;
+  const space = spaceNow();
+  try {
+    await askForm(() => introCardHTML({ demo: !!space }), {
+      onMount(form) {
+        const scrim = form.closest('.cv-ask-scrim');
+        scrim?.addEventListener('click', (e) => { if (e.target === scrim) form.querySelector('[data-a="cancel"]')?.click(); });
+        form.querySelector('[data-fr="demo"]')?.addEventListener('click', () => {
+          form.querySelector('[data-a="cancel"]')?.click();
+          openDemo(space.id);
+        });
+      },
+    });
+  } finally {
+    introOpen = false;
+  }
+}
+
+/* Демо-задача «Tally» (0.33.0): у просторі вже є `tally-demo` — сервер віддає її (`existed`), і ми лише перемикаємось;
+   інакше вона щойно створена й поточна — відкриваємо, як задачу з майстра. `switchTask` сам екран не міняє (його докстрінг):
+   з екрана «Задачі» виходимо тим самим `leaveHome()`, що й клік по картці (`homeOpenTask`), інакше — `render()`, як вкладка. */
+async function openDemo(spaceId) {
+  let r;
+  try { r = await post('/api/demo-task', { space: spaceId, title: t('frDemoTaskTitle'), reuse: true }); }
+  catch (e) { tellError(t('frDemoFailed'), e.message); return; }
+  const ok = await (r.existed ? switchTask(r.id) : wizOpenTask(r));
+  if (r.existed && ok) { if (homeOpen) await leaveHome(); else await render(); }
 }
 
 let feedbackDialogOpen = false;
@@ -3641,7 +3717,8 @@ function paintHome() {
      простору — це «нема де», а не «нічого не знайдено». */
   keepFocus(el, () => {
     const held = heldInNewForm();
-    el.innerHTML = needsWelcome(spacesResp) ? welcomeHTML()
+    if (needsWelcome(spacesResp)) ensureSetup();
+    el.innerHTML = needsWelcome(spacesResp) ? welcomeHTML(welcomeView())
       : homePage === 'conn' ? connPageHTML(connView()) : homeHTML(homeView(), homeData);
     mountNewForm(held);
   });
@@ -4356,6 +4433,7 @@ function wireHome(el) {
       case 'spc': pickSpaceColor(v); break;
       case 'spcopy': { const p = connSpace()?.path; if (p) agentsCopy(p, 'spPathCopied', '.sp-path span'); break; }
       case 'spacenew': openWizard(); break;
+      case 'frcopy': frCopy(homeNode()?.querySelector('#fr-prompt')?.textContent ?? '', 'frPromptCopied'); break;
       case 'spaceopen': openWizard({ folderFirst: true }); break;
       case 'status': homeEdit = { ...homeEdit, trash: false }; homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
       case 'tag': case 'designer': {
@@ -4476,7 +4554,7 @@ const repaintSettingsSec = (sec) => { if (connOpen() && connSec === sec) paintHo
  * `spacesResp` порожній тому, що новіший запит переліку (дропдаун чи палітра) відкинув нашу відповідь через `spacesSeq`, — це не збій,
  * а чужий запит у польоті: теж мовчимо.
  */
-async function enterConnections(role = '') {
+async function enterConnections(role = '', { pw = false } = {}) {
   const seq = ++connEntrySeq;
   const cold = spacesResp === null;
   if (cold) {
@@ -4489,6 +4567,7 @@ async function enterConnections(role = '') {
   }
   if (!currentSpace(spacesResp)) return;
   connFocusRole = role;
+  connPwPending = pw;                       // намір «Пароль превʼю» живе лише для цього входу: кожен інший вхід його скидає
   if (role) connFocusPending = true;
   enterHome(cold ? { page: 'conn', spaces: false } : { page: 'conn' });
 }
@@ -4552,6 +4631,12 @@ async function loadConn({ spaces = true } = {}) {
     /* Не з-під палітри чи діалогу: їм фокус належить. */
     if (!paletteOverlay && !askUp()) focusConnLanding(role);
   }
+  if (connPwPending) {
+    connPwPending = false;
+    const pid = connSpace()?.capabilities?.publish;
+    const pe = pid ? (connState.list || []).find((x) => x.id === pid) : null;
+    if (pe && !paletteOverlay && !askUp()) openCnDrawer(pe, 'edit', null, 'password');
+  }
 }
 
 /**
@@ -4602,6 +4687,24 @@ async function agentsWrite() {
   if (connSec === 'agents') focusAgents();
 }
 
+/** «Підключити» CLAUDE.md (0.33.0): `POST /api/agents-md {space, claude: true}` — дописати `@AGENTS.md` на початок чи
+    створити файл. Відповідь — той самий стан розділу (з `claude`); збій — тост і перечитування. */
+async function agentsClaude() {
+  const sid = agentsSt.spaceId;
+  if (agentsSt.busy || !sid || sid !== connState.spaceId) return;
+  agentsSt.busy = true;
+  paintHome();
+  let data = null;
+  try { data = await post('/api/agents-md', { space: sid, claude: true }); } catch (e) { data = null; }
+  agentsSt.seq += 1;
+  agentsSt.busy = false;
+  if (!connOpen() || connState.spaceId !== sid) return;
+  if (data) { agentsSt.data = data; toast(t('frClaudeConnected')); }
+  else { toast(t('frClaudeFailed')); loadAgents(); }
+  paintHome();
+  if (connSec === 'agents') focusAgents();
+}
+
 /** Кнопки розділу «AGENTS.md» (`data-th="ag"`, `data-v`). */
 function agentsAction(v) {
   const a = agentsSt.data;
@@ -4609,6 +4712,8 @@ function agentsAction(v) {
   else if (v === 'copypath' && a?.path) agentsCopy(a.path, 'agPathCopied', '.ag-bar span');
   else if (v === 'update' || v === 'create') agentsWrite();
   else if (v === 'retry') { agentsSt.data = null; paintHome(); loadAgents(); }
+  else if (v === 'runcopy') agentsCopy(runCommand(a?.path), 'frCmdCopied', '#fr-run-cmd');
+  else if (v === 'claude') agentsClaude();
 }
 
 /* Розділ «Простір»: запис `space-update` іде ЧЕРГОЮ — назва й колір летять двома запитами, а сервер пише обидва поля разом;
@@ -4680,6 +4785,7 @@ async function connAction(act, id, role, via = '') {
   if (act === 'enable') openCnDrawer(e, 'enable', via === 'catalog' ? { role } : null);
   else if (act === 'configure') openCnDrawer(e, 'edit');
   else if (act === 'disable') askConnDisable(e);
+  else if (act === 'pw') openCnDrawer(e, 'edit', null, 'password');
   else if (act === 'trust' || act === 'trustinfo') connTrust(e, act);
 }
 
@@ -5124,7 +5230,7 @@ function syncCnDrawer() {
   if (check) { check.disabled = !!cnDrawer.busy || dirty; check.title = dirty ? t('cnCheckSavedFirst') : ''; }
 }
 
-function openCnDrawer(e, mode, fromCatalog = null) {
+function openCnDrawer(e, mode, fromCatalog = null, focusKey = '') {
   const fields = formFields(e);
   const init = initialForm(fields);
   /* З каталогу: кнопка там уже сказала «Замінити {тримач}» — це й є згода (`catalogHolders`: кого вона називала); закриття шухляди
@@ -5134,7 +5240,9 @@ function openCnDrawer(e, mode, fromCatalog = null) {
     ...(fromCatalog ? { catalogHolders: roleHolders(e, connState.list) } : {}) };
   paintCnDrawer();
   const el = cnDrawerNode();
-  (el.querySelector('[data-cn-field]') ?? el.querySelector('[data-cn-dr="submit"]'))?.focus({ preventScroll: true });
+  /* `focusKey` (0.33.0, «Пароль превʼю»): шухляда відкривається одразу на потрібному полі. */
+  const want = focusKey ? el.querySelector(`[data-cn-field="${CSS.escape(focusKey)}"]`) : null;
+  (want ?? el.querySelector('[data-cn-field]') ?? el.querySelector('[data-cn-dr="submit"]'))?.focus({ preventScroll: true });
 }
 
 /** Закрити без питань. Фокус — на кнопку картки, що відкрила панель (після запису дія могла змінитись: «Підключити» →
@@ -5811,7 +5919,7 @@ function panelState() {
     crumbs: focusNode ? crumbOf(focusNode.id) : (pickedPage ? crumbOf(pickedPage) : []),
     /* `overview` — чи ми в «Огляді»: тривогу кадрів панель піднімає лише там, де
        свіжість справді міряють (`shotsView`, fb-22092026-c74093). */
-    shots: curIter() ? { ...shotsState(), overview: mode === 'canvas' } : null,
+    shots: curIter() ? { ...shotsState(), overview: mode === 'canvas', ...setupShots() } : null,
     shotsOpen,
   };
 }
@@ -5838,6 +5946,7 @@ function panelState() {
  * нарізно від решти панелі. Тепер перемальовка одна на все, і саме тому їй
  * потрібне це збереження, якого точковий патч не потребував узагалі. */
 function renderPanel() {
+  if (mode === 'canvas' && !setupSt.asked) ensureSetup();   // «Огляд» при старті
   let el = document.getElementById('pages-panel');
   if (!el) {
     el = document.createElement('div');
@@ -5920,6 +6029,7 @@ function setPanelCollapsed(v) {
 }
 
 const PANEL_ACTIONS = {
+  shotscmd: () => frCopy(setupSt.data?.shots?.command ?? '', 'frCmdCopied'),
   panel: () => setPanelCollapsed(!panelCollapsed),
 
   /* Одна дія на ДВА контроли секції кадрів — тихий рядок (розгорнути) і
@@ -7107,6 +7217,13 @@ async function refreshPanelFromDisk() {
 window.addEventListener('focus', () => { syncTuneFromDisk(); refreshPanelFromDisk(); });
 /* Свіжість локальних піни (Б2.1): Claude міг дописати їх на диск, поки вікно не мало фокуса. */
 window.addEventListener('focus', cmtRefreshLocal);
+/* «Перший запуск» (0.33.0): людина могла щойно виконати команду в терміналі — перепитати стан знімків, коли вікно знову у
+   фокусі; лише поки знімати нема чим і не частіше разу на 5 с. */
+window.addEventListener('focus', () => {
+  const st = setupSt.data?.shots?.state;
+  if (!st || st === 'ok' || st === 'unknown' || Date.now() - setupSt.at < 5000) return;
+  ensureSetup(true);
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') { syncTuneFromDisk(); refreshPanelFromDisk(); }
 });
@@ -8047,11 +8164,15 @@ async function shootWithProgress(it, { auto = false } = {}) {
   } else if (!res.ok) {
     /* Автостарт не сміє кидати модалку в обличчя: дизайнер її не просив. Ручний
        перезнім — навпаки, там `tell`, бо людина натиснула й чекає відповіді. */
-    const msg = r.failed?.length
-      ? t('errShootPartial', it, r.shot?.length ?? 0)
-        + r.failed.map((f) => t('errShootFailedItem', f.id, f.problem)).join('\n')
-      : t('errShootCrashed', it)
-        + (res.error || res.stderr || r.raw || t('errShootNoReason'));
+    /* 0.33.0: Playwright без Chromium — людська причина й команда замість дампу; блок «Кадри» теж має це побачити. */
+    if (res.code === 'no-browser') ensureSetup(true);
+    const msg = res.code === 'no-browser'
+      ? t('frShootNoBrowser', it) + (res.command || '')
+      : r.failed?.length
+        ? t('errShootPartial', it, r.shot?.length ?? 0)
+          + r.failed.map((f) => t('errShootFailedItem', f.id, f.problem)).join('\n')
+        : t('errShootCrashed', it)
+          + (res.error || res.stderr || r.raw || t('errShootNoReason'));
     if (auto) toast(r.failed?.length ? t('toastShootAutoFailedCount', r.failed.length) : t('toastShootAutoFailedGeneric'));
     else tell(msg);
   } else {
@@ -9265,7 +9386,7 @@ function paletteState() {
     pickedPage,
     ...paletteTreeTarget(),
     gl: st.gl, glBrand: vcsBrand(st.glLabel, st.space), iterLabel: st.iterLabel,
-    shots: curIter() ? shotsState() : null,
+    shots: curIter() ? { ...shotsState(), ...setupShots() } : null,
     lang: getLang(),
     canInstall: pwa.canInstall(),
     standalone: pwa.isStandalone(),

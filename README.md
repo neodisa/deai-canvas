@@ -6,6 +6,33 @@ element and tell the agent what to change, and publishes a protected preview for
 
 ![Deai Canvas: the workplace with the page tree, a mockup, pinned comments and the agent status](docs/screenshots/hero.png)
 
+## Install
+
+Paste this into Claude Code (or another agent) in a terminal — it installs what is missing, starts the canvas, creates your
+first space and modules, and asks only for the space name, where to publish and the preview password:
+
+```text
+Install Deai Canvas: clone https://github.com/neodisa/deai-canvas.git into ~/deai-canvas and follow ~/deai-canvas/SETUP.md.
+```
+
+Українською:
+
+```text
+Встанови Deai Canvas: склонуй https://github.com/neodisa/deai-canvas.git у ~/deai-canvas і зроби все за ~/deai-canvas/SETUP.md.
+```
+
+By hand:
+
+```bash
+git clone https://github.com/neodisa/deai-canvas.git ~/deai-canvas && cd ~/deai-canvas
+npm install && npx playwright install chromium   # Overview screenshots; needs Node.js 20+
+bash ops/canvas-app/install.sh                   # macOS: app icon and autostart
+./start.command                                  # then open http://localhost:8765/app/
+```
+
+The canvas opens on a welcome screen: copy the prompt from there to an agent, or create a space with the wizard.
+⌘K → "Canvas tour" shows the map of the workplace and a demo task.
+
 ## Why
 
 - **The agent rewrites, you need to compare.** Every pass is kept as an iteration: a frozen, editable copy you can rename,
@@ -67,7 +94,7 @@ The screenshots show a made-up budgeting app on demo data. `node ops/readme-shot
 
 ## Status
 
-Version 0.31.0 (20.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
+Version 0.33.0 (20.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
 cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Feature reference
@@ -101,12 +128,11 @@ the System Vercel CLI sign-in of `vercel-publish` and the in-house publishing of
 token needs no Node).
 
 ```bash
-cp tasks.example.json tasks.json      # edit paths: where your mockups live
 python3 app/serve.py                  # http://localhost:8765/app/
 ```
 
-Each task points to a folder with `iterations/it1/<page>/index.html`; `flows/demo` is a
-small example. Snapshots for the Overview:
+Tasks are created in the canvas (the wizard, or an agent following `SETUP.md`); each points to a folder with
+`iterations/it1/<page>/index.html`, and `flows/demo` is a small example. Snapshots for the Overview:
 
 ```bash
 npm install && npx playwright install chromium
@@ -335,8 +361,11 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | `POST /api/module-disable` `{space?, id}` | turn off; settings and secrets are kept |
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
 | `POST /api/space-tool` `{space, tool, on}` | switch a per-space tool (now only `figma`, «To Figma»); answers `{ok, space, tools}`; stored in `space.json` as `"tools": {"figma": false}` (a missing key is on); `tools` is also in `GET /api/modules`, in the rows of `GET /api/spaces` and in the space of `GET /api/task`; an unknown tool is `400`, an unknown space `404` |
-| `GET /api/agents-md?space=<id>` | the state of the space's `AGENTS.md`; answers `{ok, space, …status, paths: {deai, inbox, authoring}}` with the absolute paths of this installation (they never go into the file); `409 no-folder` for a space without a folder |
-| `POST /api/agents-md` `{space}` | create the file or rewrite its generated block (the text outside is kept); `409 no-folder`; `409 newer` when the block was written by a newer Deai (nothing is changed) |
+| `GET /api/agents-md?space=<id>` | the state of the space's `AGENTS.md`; answers `{ok, space, …status, claude: {state: ok\|missing\|no-import\|unreadable, path}, paths: {deai, inbox, authoring}}` — `claude` is the state of the folder's `CLAUDE.md` (does it import `@AGENTS.md`), `paths` are the absolute paths of this installation (they never go into the file); `409 no-folder` for a space without a folder |
+| `GET /api/setup[?fresh=1]` | for an agent and the welcome screen: `{ok, version, python, platform, paths: {deai, setup}, shots: {state, node, command}}`; `shots.state` is `ok \| no-node \| no-playwright \| no-browser \| unknown` (what the Overview screenshots lack; `command` is the line that fixes it, `null` when nothing is needed); cached for 30 seconds, `fresh=1` skips the cache; a foreign `Origin` or a cross-site request is refused with `403` |
+| `POST /api/demo-task` `{space, title?, reuse?}` | the made-up «Tally» task in the space → `{ok, id, space[, existed]}`; with `reuse: true` the demo that already lives in this space is returned with `existed: true` instead of a new one; refusals as in `task-new`, `400 bad-request` for an empty `space` |
+| `POST /api/agents-md` `{space}` | create the file (and `CLAUDE.md` with `@AGENTS.md` when it does not exist) or rewrite its generated block (the text outside is kept); `409 no-folder`; `409 newer` when the block was written by a newer Deai (nothing is changed) |
+| `POST /api/agents-md` `{space, claude: true}` | connect `CLAUDE.md` only: prepend `@AGENTS.md` to it (or create it); `AGENTS.md` is not touched; same answer as GET; `409 no-folder`, `503 unreadable` |
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
 | `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists); for a space's own module `GET /api/module-client/<space>/<id>/<file>`, served from its trusted snapshot |
 | `POST /api/task-new` `{id, title?, space?, from?, vcs?, …}` | create a task. `vcs` — `{repo, path?, branch?}`, the task's own repository (needs a `vcs` module in the space: `400 vcs-needs-role`; the module checks the address, branch and folder: `400 vcs-bad-target`); if `path` of that repository already holds an `index.html`, the first iteration is taken from it, and if it cannot be fetched the task starts with a blank page. `from` — an absolute path (`~` is expanded; a relative one is `from-not-found`) to a folder with an `index.html` that the server copies into the first iteration (any space; not together with `gitlab`; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. `gitlab` (clone a repository into the task) needs a space whose `vcs` record has the LIGA scheme, otherwise `400 gitlab-needs-vcs-scheme`; `from` with `gitlab` is `400 bad-request`. Without `space` the task goes to the first space marked `legacy`, otherwise to the current one. Refusals: `400 gitlab-needs-vcs-scheme\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
@@ -384,6 +413,10 @@ section shows one of four states: the file is up to date; **outdated** (the file
 plate and a dot on the navigation, «Оновити з шаблону» rewrites only the block); **newer** (written by a newer Deai: never
 downgraded, the plate asks you to update Deai); no file («Створити»); or the space has no folder. «Скопіювати» copies the
 file exactly as it is on disk.
+
+Claude Code reads `AGENTS.md` only when no `CLAUDE.md` sits above the folder. New spaces therefore also get a `CLAUDE.md`
+with the line `@AGENTS.md`; Settings → AGENTS.md shows whether Claude Code will read it and connects an existing `CLAUDE.md`
+with one click.
 
 ## Comments
 

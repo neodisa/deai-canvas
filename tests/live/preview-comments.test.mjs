@@ -516,7 +516,10 @@ test("11: імені нема — панель лише читає; «+» пит
   await add.waitFor();
   assert.equal(await mode(frame), false, "без імені панель увімкнула додавання");
   assert.equal(await add.getAttribute("aria-pressed"), "false");
-  assert.match(await page.locator("#cmt-panel .cmt-body").innerText(), /Натисніть «\+», щоб залишити коментар\./);
+  /* Підказка — після «Коментатор завантажується…»: коментатор у фреймі готовий трохи пізніше за «+» (0.33.0: оболонка вантажить
+     на модуль більше), тож чекаємо її, а не читаємо миттєво. */
+  await until(async () => /Натисніть «\+», щоб залишити коментар\./.test(await page.locator("#cmt-panel .cmt-body").innerText()),
+    "панель без імені не показала підказку «+»");
   await add.click();
   await page.locator(".cv-ask--form").waitFor();
   await page.fill('.cv-ask--form input[name="name"]', "Нова Людина");

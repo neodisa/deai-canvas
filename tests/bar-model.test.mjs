@@ -545,6 +545,16 @@ test("публікація модулем: у дропдауні лише пок
     ["togglepub", "openpreview", "copylink"], "ролі notify нема — Teams нема, хоч би дані й були");
 });
 
+test("пароль превʼю модуля (0.33.0): пункт є, коли простір несе publish_password; ЛІГА — свій pubpw", () => {
+  assert.deepEqual(pubItems({ space: CAPS("static-publish", { publish_password: false }) }), ["togglepub", "openpreview", "copylink", "modpw"]);
+  const item = barModel({ ...base, space: CAPS("static-publish", { publish_password: true }) })
+    .zone3.find((x) => x.id === "publish").items.find((x) => x.id === "modpw");
+  assert.deepEqual(item, { id: "modpw", labelKey: "frPwLine", stateKey: "frPwSet" });
+  assert.equal(barModel({ ...base, space: CAPS("static-publish", { publish_password: null }) })
+    .zone3.find((x) => x.id === "publish").items.find((x) => x.id === "modpw").stateKey, "frPwUnknown");
+  assert.ok(!pubItems({ space: LIGAISH("vercel-publish", { publish_password: true }), teams: null }).includes("modpw"));
+});
+
 test("простір без постачальника публікації (`publish: null`): ні публікації, ні GitLab — лишається «В Figma»", () => {
   assert.deepEqual(barModel({ ...base, space: CAPS(null) }).zone3.map((x) => x.id), ["figma"]);
   assert.deepEqual(barModel({ ...base, space: OUT(null) }).zone3.map((x) => x.id),

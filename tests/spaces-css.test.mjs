@@ -117,7 +117,7 @@ test("кожен клас розмітки просторів має прави�
 
 test("привітання: класи розмітки welcomeHTML мають правила, логотип великий", () => {
   assert.match(rule(".th-welcome-logo svg"), /width:76px/);
-  for (const c of ["th-welcome", "th-welcome-logo", "th-welcome-lead", "th-welcome-act", "th-welcome-agent"]) {
+  for (const c of ["th-welcome", "th-welcome-logo", "th-welcome-lead", "th-welcome-act"]) {
     assert.ok(new RegExp(`\\.${c}(?![\\w-])`).test(css), `.${c} без правила`);
   }
 });
