@@ -3176,6 +3176,9 @@ class PublishedMode(unittest.TestCase):
         self.assertEqual(lines.index(mode[0]), lines.index(next(ln for ln in lines if ln.startswith('Design Canvas v2:'))) + 1)
 
 
+_GONE = object()
+
+
 class ResealModuleBuilds(TaskFixture):
     """`ops/reseal_gate.py` ніколи не перепечатує й не деплоїть збірку модуля: вона локальна, без `comment-layer/`,
     і її гейт (пароль модуля) — не пароль ЛІГА. Рішення — за АРТЕФАКТОМ (`publish/comment-layer/`), а не за
@@ -3234,6 +3237,44 @@ class ResealModuleBuilds(TaskFixture):
         del man['build']
         with open(self._manifest_path(), 'w', encoding='utf-8') as fh:
             json.dump(man, fh, ensure_ascii=False, indent=1)
+
+    def _set_shell(self, value):
+        """Переписати `shell` у маніфесті збірки; `value is _GONE` — прибрати ключ (збірка до 0.32.0)."""
+        man = json.loads(_read(self._manifest_path()))
+        self.assertEqual(man['shell'], 2, 'контроль: збірка несе поточну оболонку')
+        if value is _GONE:
+            del man['shell']
+        else:
+            man['shell'] = value
+        with open(self._manifest_path(), 'w', encoding='utf-8') as fh:
+            json.dump(man, fh, ensure_ascii=False, indent=1)
+
+    def test_a_build_with_an_old_or_missing_shell_is_refused_and_untouched(self):
+        """Нова обгортка на старій оболонці (`shell/` reseal не оновлює) ламає превʼю: відмова ДО запису й деплою, з
+        поясненням «потрібна перепублікація». Поточна оболонка (контроль нижче) — перепечатується як було."""
+        for value in (_GONE, 1, 0, '2', None, True):
+            for args in (('fixture',), ('--build', 'fixture')):
+                with self.subTest(shell=value, args=args):
+                    task, tid, its = self._args()
+                    serve.build_preview(task, tid, its, comments=False, build='legacy',
+                                        gate_pw=serve.preview_password(task))
+                    self._set_shell(value)
+                    before = _bytes(self._wrapper())
+                    out, deployed = self._reseal(*args)
+                    self.assertIn('старою оболонкою', out)
+                    self.assertIn('перепублікація', out)
+                    self.assertNotIn('передеплоєно', out)
+                    self.assertNotIn('перезібрано', out)
+                    self.assertEqual(deployed, [])
+                    self.assertEqual(_bytes(self._wrapper()), before, 'обгортку перезаписано на старій оболонці')
+
+    def test_a_league_build_with_the_current_shell_is_resealed_as_before(self):
+        task, tid, its = self._args()
+        serve.build_preview(task, tid, its, comments=False, build='legacy', gate_pw=serve.preview_password(task))
+        self._set_shell(2)
+        out, deployed = self._reseal('fixture')
+        self.assertIn('передеплоєно', out)
+        self.assertEqual(deployed, [os.path.join(self.tmp, 'publish')])
 
     def test_a_league_build_with_module_comments_is_resealed_and_deployed(self):
         """ЛІГА + модуль коментарів: у `comment-layer/` лише шар і адаптер (бандлів ЛІГА нема), а збірка йде на Vercel, і
@@ -3308,6 +3349,12 @@ class ResealModuleBuilds(TaskFixture):
         self.assertEqual(deployed, [])
 
     def test_an_unreadable_or_unknown_mark_falls_back_to_the_bundles(self):
+        """Рішення «ЛІГА чи модуль» за складом `comment-layer/` — `build_kind` напряму. Через `main` воно з 0.32.0 недосяжне
+        для зіпсованого маніфеста: той самий маніфест несе `shell`, і без нього reseal відмовляє раніше (окремий тест)."""
+        spec = importlib.util.spec_from_file_location('reseal_gate', os.path.join(ROOT, 'ops', 'reseal_gate.py'))
+        rg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rg)
+        pub = os.path.join(self.tmp, 'publish')
         task, tid, its = self._args()
         for garbage in ('{broken', '[]', '{"build": "other"}', '{"build": null}', '{"build": 7}'):
             with self.subTest(manifest=garbage):
@@ -3315,13 +3362,11 @@ class ResealModuleBuilds(TaskFixture):
                 self._with_the_old_league_bundle()
                 with open(self._manifest_path(), 'w', encoding='utf-8') as fh:
                     fh.write(garbage)
-                out, deployed = self._reseal('fixture')
-                self.assertEqual(len(deployed), 1, out)                 # бандли ЛІГА є → ЛІГА
+                self.assertEqual(rg.build_kind(pub), ('legacy', False))     # бандли ЛІГА є → ЛІГА
                 serve.build_preview(task, tid, its, comments=False, gate_pw=None, build='module')
                 with open(self._manifest_path(), 'w', encoding='utf-8') as fh:
                     fh.write(garbage)
-                out, deployed = self._reseal('fixture')
-                self.assertEqual(deployed, [], out)                     # бандлів нема → модуль
+                self.assertEqual(rg.build_kind(pub), ('module', False))     # бандлів нема → модуль
 
     def test_a_module_build_with_module_comments_is_skipped_too(self):
         """2b-2: збірка модуля, що несе коментарі МОДУЛЯ, теж має `publish/comment-layer/` — тож саме наявності теки мало:

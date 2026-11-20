@@ -2378,14 +2378,13 @@ class PreviewGate(unittest.TestCase):
                 json.dump({'preview_password': '4242', 'tasks': {}}, f)
             self.assertEqual(serve.preview_password({}), serve.DEFAULT_PREVIEW_PW)
 
-    def test_gate_is_in_logo_palette_without_old_blue(self):
-        """Гейт превʼю — окрема сторінка без styles.css, тож палітру несуть літерали.
-        Старий синій (#2d6ae3) і сіро-блакитне тло (#eef0f2) не повертаються;
-        кнопка — темна з світлим текстом >= 4.5:1."""
-        g = serve.gate_html('t1', '1100').lower()
-        for old in ('#2d6ae3', '#eef0f2', '#d5d9dd', '#6b7280'):
+    def test_gate_is_a_dark_deai_card_without_old_palette(self):
+        """Гейт превʼю — окрема сторінка без styles.css, тому вигляд (темна картка Deai, 0.32.0) несуть літерали типового
+        простору. Стара світла палітра (білий на блідо-зеленому, синій, сіро-блакитне) не повертається; кнопка — світла
+        з темним текстом >= 4.5:1, а картка темна."""
+        g = serve.gate_html('t1', '1100').lower().replace('{{', '{').replace('}}', '}')
+        for old in ('#2d6ae3', '#eef0f2', '#d5d9dd', '#6b7280', '#e8efeb', '#fff;border:1px solid #d4dbd7'):
             self.assertNotIn(old, g, f'у гейті лишився літерал старої палітри {old}')
-        self.assertIn('#authform{width:320px', g.replace('{{', '{').replace('}}', '}'))
 
         def lum(h):
             h = h.lstrip('#')
@@ -2393,10 +2392,45 @@ class PreviewGate(unittest.TestCase):
             c = [x / 12.92 if x <= .03928 else ((x + .055) / 1.055) ** 2.4 for x in c]
             return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]
         import re
-        m = re.search(r'#authform button\{+height:44px;background:(#[0-9a-f]{6});color:(#[0-9a-f]{6})', g)
+        card = re.search(r'#authform\{width:340px[^}]*background:(#[0-9a-f]{6})', g)
+        self.assertIsNotNone(card, 'не знайшов правило картки гейта')
+        self.assertLess(lum(card.group(1)), .1, 'картка гейта не темна')
+        m = re.search(r'#authform button\{[^}]*color:(#[0-9a-f]{6});background:(#[0-9a-f]{6})', g)
         self.assertIsNotNone(m, 'не знайшов правило кнопки гейта')
         a, b = sorted((lum(m.group(1)), lum(m.group(2))), reverse=True)
         self.assertGreaterEqual((a + .05) / (b + .05), 4.5)
+        self.assertIn(':focus-visible', g, 'нема видимого фокуса')
+        self.assertIn('aria-live', g)
+
+    def test_gate_has_the_same_words_the_mark_and_no_task_title(self):
+        g = serve.gate_html('t1', '1100')
+        for word in ('Перегляд макета', 'внутрішній матеріал', 'placeholder="Пароль"', 'Невірний пароль', 'Увійти'):
+            self.assertIn(word, g)
+        self.assertNotIn('введіть пароль', g, 'старий підпис повернувся')
+        self.assertIn('<svg', g, 'нема знака Deai')
+        self.assertNotIn('{logo}', g)
+        card = g[g.index('<div id="authgate">'):g.index('<script>(function')]
+        self.assertNotIn('t1', card.replace('authform', '').replace('input', '').replace('autocomplete', ''),
+                         'у картці воріт стоїть ідентифікатор задачі')
+        self.assertEqual(serve.gate_html('t1', '1100').count('<h1>'), 1, 'у картці рівно один заголовок')
+
+    def test_gate_makes_no_external_requests(self):
+        import re
+        g = serve.gate_html('t1', '1100')
+        self.assertEqual(re.findall(r'(?:src|href|action)\s*=\s*["\']?\s*(?:https?:)?//', g), [])
+        self.assertNotIn('url(', g)
+        self.assertNotIn('@import', g)
+        self.assertNotIn('<link', g)
+        self.assertNotIn('<img', g)
+
+    def test_gate_keeps_the_hash_key_unlock(self):
+        g = serve.gate_html('t1', '7788')
+        self.assertIn("match(/(?:^#|&)k=([^&]+)/)", g)
+        self.assertIn("history.replaceState", g)
+        self.assertIn("indexOf('k=')!==0", g)
+        self.assertIn('window.__gateOpen=true', g)
+        self.assertIn('window.__onGateOpen', g)
+        self.assertIn("sessionStorage.setItem(KEY,'1')", g)
 
     def test_password_lands_in_generated_gate(self):
         g = serve.gate_html('t1', '7788')
@@ -5504,6 +5538,14 @@ class PublishManifest(unittest.TestCase):
         man = serve.publish_manifest(task, 'fixture', its, pages, frames or {}, dst)
         with open(os.path.join(dst, 'manifest.json'), encoding='utf-8') as fh:
             return man, json.load(fh)
+
+    def test_manifest_carries_the_shell_generation(self):
+        """`shell: 2` — покоління оболонки превʼю (ворота Deai, 0.32.0); за ним `ops/reseal_gate.py` відмовляє на старій."""
+        task = self._task({'it1': None})
+        man, on_disk = self._build(task, [{'id': 'it1'}])
+        self.assertIs(type(man['shell']), int)
+        self.assertEqual(man['shell'], 2)
+        self.assertEqual(on_disk['shell'], 2)
 
     def test_outline_carries_folders_and_kinds(self):
         task = self._task({'it1': [{'id': 'p', 'name': 'Картка', 'kind': 'page', 'children': [

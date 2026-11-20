@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(ROOT, "app"))
 # фільтром — копія логіки публікації, яка мовчки розійшлась би з нею.
 import spaces  # noqa: E402
 from deai_modules import ModuleError  # noqa: E402
-from serve import (BUILD_KINDS, BUNDLES, gate_html, load_meta, preview_gate_state,  # noqa: E402
+from serve import (BUILD_KINDS, BUNDLES, PREVIEW_SHELL_VERSION, gate_html, load_meta, preview_gate_state,  # noqa: E402
                    preview_index_html, preview_password, legacy_tasks_path)
 
 
@@ -94,6 +94,17 @@ def build_kind(pub_dir):
     return ("legacy" if set(BUNDLES) <= names else "module"), False
 
 
+def shell_version(pub_dir):
+    """Покоління оболонки збірки: `shell` із `manifest.json` (його пише `serve.publish_manifest`). Немає ключа, нечитабельний
+    маніфест чи не число — `0`: збірка зроблена до оболонки 0.32.0."""
+    try:
+        with open(os.path.join(pub_dir, "manifest.json"), encoding="utf-8") as f:
+            v = json.load(f).get("shell")
+    except (OSError, ValueError, AttributeError):
+        return 0
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
 def deploy(pub, task=None):
     # `--scope`, як у публікації (serve._publish): без нього передеплой з машини,
     # де інший дефолтний скоуп, створив би ДРУГИЙ проєкт із тим самим імʼям — і
@@ -128,6 +139,12 @@ def main():
                        else "мітки збірки нема, бандлів коментатора ЛІГА нема — схоже на збірку модуля")
                 print(f"·  {tid}: publish/ — збірка модуля публікації, не збірка ЛІГА ({why}) — пропуск")
                 continue
+        # ⛔ Нова обгортка на СТАРІЙ оболонці (`shell/` лежить у збірці й reseal її не оновлює) — зламане превʼю: відмовляємо
+        # ДО будь-якого запису. Ліки — перепублікація з канваса.
+        if os.path.isdir(pub_dir) and shell_version(pub_dir) < PREVIEW_SHELL_VERSION:
+            print(f"⚠ {tid}: publish/ зібрано зі старою оболонкою (shell {shell_version(pub_dir)} < {PREVIEW_SHELL_VERSION}) — "
+                  f"reseal перепечатує лише обгортку; потрібна перепублікація з канваса. Пропуск.")
+            continue
         # ⛔ Питаємо ДО перезапису обгортки (ревʼю 1.52): інакше після відмови
         # локальний publish/ уже мав би обгортку з новим паролем, а деплой — ні.
         try:

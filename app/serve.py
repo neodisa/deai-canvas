@@ -3644,12 +3644,30 @@ def _inject_gate(html, gate):
     return _insert_before_body(html, gate)
 
 
+def _gate_logo_svg():
+    """Знак Deai для воріт: той самий `LOGO_SVG` (`app/logo.js`), інлайном, без зовнішніх запитів. Ворота стоять ДО
+    `shell/styles.css`, тож токен `--logo-in` (білий прямокутник усередині) підставляємо літералом."""
+    with open(os.path.join(APP_DIR, 'logo.js'), encoding='utf-8') as fh:
+        m = re.search(r'LOGO_SVG\s*=\s*`(<svg.*?</svg>)`', fh.read(), flags=re.S)
+    return m.group(1).replace('var(--logo-in)', '#fff') if m else ''
+
+
+#: Ворота стоять до завантаження `shell/styles.css` (обгортка тягне його лише після входу), тому вигляд — самодостатній:
+#: поверхні й тексти типового простору (`--s0`, `--s2`, `--s3`, `--line2`, `--hi`, `--dim`, `--sel`) скопійовані
+#: ЛІТЕРАЛАМИ. Це Python, а не CSS: охоронець «без літералів» (`css-guards`) сюди не сягає.
 GATE_SNIPPET = """
-<style>#authgate{{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#E8EFEB;font-family:system-ui,sans-serif}}
-#authform{{width:320px;background:#fff;border:1px solid #D4DBD7;padding:32px 28px;display:flex;flex-direction:column;gap:14px}}
-#authform input{{height:40px;padding:0 12px;border:1px solid #D4DBD7;font-size:14px}}
-#authform button{{height:44px;background:#1A231E;color:#E2EAE6;border:0;font-size:14px;cursor:pointer}}
-#agerr{{display:none;font-size:12px;color:#c0362c}}</style>
+<style>#authgate{{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;background:#1a231e;color:#f3f8f5;font-family:system-ui,sans-serif}}
+#authform{{width:340px;max-width:100%;display:flex;flex-direction:column;gap:12px;margin:0;padding:28px 26px 24px;background:#323c36;border:1px solid #545e58;border-radius:10px}}
+#authform .gmark{{display:flex;align-items:center;gap:10px;color:#969F9A}}
+#authform .gmark svg{{width:28px;height:28px;flex:none}}
+#authform h1{{margin:0;font-size:18px;font-weight:650;color:#f3f8f5}}
+#authform .gsub{{margin:2px 0 4px;font-size:12px;color:#a6afaa}}
+#authform input{{width:100%;height:40px;padding:0 10px;font:inherit;font-size:14px;color:#f3f8f5;background:#29332e;border:1px solid #545e58;border-radius:6px}}
+#authform input:focus{{border-color:#e2eae6}}
+#authform input:focus-visible,#authform button:focus-visible{{outline:2px solid #e2eae6;outline-offset:2px}}
+#authform button{{width:100%;height:40px;font:inherit;font-size:14px;color:#1a231e;background:#e2eae6;border:1px solid #e2eae6;border-radius:6px;cursor:pointer}}
+#authform button:hover{{background:#f7faf8}}
+#agerr{{display:none;margin:0;font-size:12px;color:#F37373}}</style>
 <div id="authgate"><form id="authform">
   <!-- До входу назви задачі/тікета НА ЕКРАНІ не показуємо (правило 30.07.2026).
        ⚠️ Але це оверлей у браузері, а не замок: пароль вшитий у джерело цієї ж
@@ -3658,9 +3676,10 @@ GATE_SNIPPET = """
        підпис НЕ каже «захищено»: обіцянка захисту тут була б неправдою, а
        повірить у неї не глядач, а дизайнер, який відправляє посилання.
        Справжня приватність = серверний захист (Vercel Deployment Protection). -->
-  <b>Перегляд макета</b><span style="font-size:13px;color:#5D6661">внутрішній матеріал · введіть пароль</span>
-  <input id="agpass" type="password" autocomplete="current-password" placeholder="Пароль">
-  <div id="agerr">Невірний пароль</div><button type="submit">Увійти</button>
+  <div class="gmark">{logo}</div>
+  <div><h1>Перегляд макета</h1><div class="gsub">внутрішній матеріал</div></div>
+  <input id="agpass" type="password" autocomplete="current-password" placeholder="Пароль" aria-label="Пароль" aria-describedby="agerr">
+  <p id="agerr" role="alert" aria-live="polite">Невірний пароль</p><button type="submit">Увійти</button>
 </form></div>
 <script>(function(){{var KEY={key_js},P={pw_js};
 function unlock(){{var g=document.getElementById('authgate');if(g)g.remove();
@@ -3881,6 +3900,11 @@ def publish_frames(task, it_id, pages, dst_dir):
     return frames, None
 
 
+#: Покоління оболонки превʼю, що їде в `manifest.json` (`shell`). Обгортка (`PAGES_PREVIEW_PAGE`) і `shell/` змінюються
+#: РАЗОМ; `ops/reseal_gate.py` перепечатує лише обгортку, тож відмовляє на збірці зі старшою оболонкою (`shell < 2`).
+PREVIEW_SHELL_VERSION = 2
+
+
 def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None, build=None):
     """`publish/manifest.json` — ЄДИНЕ джерело правди зовнішньої оболонки.
 
@@ -3982,6 +4006,7 @@ def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None, build=N
                 row['path'] = f"{row['id']}/index.html"
             outline.append(row)
     man['outline'] = outline
+    man['shell'] = PREVIEW_SHELL_VERSION
     if build is not None:
         man['build'] = build
     with open(os.path.join(dst_dir, 'manifest.json'), 'w', encoding='utf-8') as fh:
@@ -4343,7 +4368,7 @@ def gate_html(tid, pw):
     прибирався НІЯКИМ паролем. Пароль задається руками в tasks.json, тому це
     питання часу, а не гіпотеза."""
     return GATE_SNIPPET.format(key_js=js_literal(f'{tid}_auth'),
-                               pw_js=js_literal(str(pw)))
+                               pw_js=js_literal(str(pw)), logo=_gate_logo_svg())
 
 
 #: Гейт-заглушка превʼю БЕЗ пароля: обгортка не чекає розблокування, бо розблоковувати нічого. Той самий

@@ -927,7 +927,11 @@ body.with-panel.panel-collapsed.with-cmt .cv-canvas{width:calc(100% - var(--pane
    ⛔ НЕ вішати на `.crumb--flat .txt` загалом: тоді обріжеться «Іт.3», а
    «тег не обрізається НІКОЛИ» — несучий інваріант крошки ітерації.
    Повну назву несе `title` (`app/ext-bar.js`), тож прочитати обрізане можна. */
-.crumb--task .txt{max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.crumb--task .txt{max-width:240px;overflow:hidden;text-overflow:ellipsis}
+/* 0.32.0: назва задачі у смузі ПРЕВʼЮ — до 240px (було 150: `.crumb{max-width:110px}` нижче у файлі різав крошку ще до `.txt`, і
+   «Онбординг клієнта» обрізалась). `.crumb--task` є лише в `ext-bar.js` (зовнішня оболонка); смуга інструмента не зачеплена.
+   Два класи — щоб перемагати `.crumb{max-width:110px}` незалежно від порядку. */
+.crumb.crumb--task{max-width:none}
 .crumb--iter .txt--soft{max-width:112px;min-width:2.5em}
 .crumb-marks{display:inline-flex;gap:3px;flex:none}
 /* Чужа ітерація — ВИДИМА ознака, а не лише текст у title: про межу («тут

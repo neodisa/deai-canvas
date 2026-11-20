@@ -56,6 +56,7 @@ import test, { after, before, describe } from "node:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import os from "node:os";
 
 import { chromium } from "playwright";
 
@@ -201,6 +202,49 @@ describe("зовнішня оболонка на зібраному publish/", (
     const seen = await page.evaluate(() => document.body.innerText);
     assert.ok(!seen.includes("Фікстура"), `назва задачі видна до пароля: ${seen}`);
     assert.ok(!seen.includes("Головна"), "назви сторінок видні до пароля");
+  });
+
+  /* Ворота (0.32.0): темна картка Deai, а не біла на блідо-зеленому. Міряємо ОБЧИСЛЕНИЙ фон — розмітка без CSS
+     лишила б картку білою, і перевірка на наявність елементів цього не побачила б. */
+  test("ворота: картка видна до пароля й темна", async (t) => {
+    const { ctx, page } = await fresh();
+    t.after(() => ctx.close());
+    await page.goto(base);
+    await page.locator("#authform").waitFor({ state: "visible" });
+    const card = await page.evaluate(() => {
+      const lum = (c) => { const m = c.match(/[\d.]+/g).map(Number);
+        const f = (x) => { x /= 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+        return 0.2126 * f(m[0]) + 0.7152 * f(m[1]) + 0.0722 * f(m[2]); };
+      const cs = (sel) => getComputedStyle(document.querySelector(sel));
+      const r = document.querySelector("#authform").getBoundingClientRect();
+      return { card: lum(cs("#authform").backgroundColor), page: lum(cs("#authgate").backgroundColor),
+               w: r.width, h: r.height, logo: !!document.querySelector("#authform svg"),
+               text: document.getElementById("authform").innerText,
+               ph: document.getElementById("agpass").placeholder,
+               err: cs("#agerr").display };
+    });
+    assert.ok(card.card < 0.1, `картка воріт не темна (яскравість ${card.card})`);
+    assert.ok(card.page < 0.1, `тло воріт не темне (яскравість ${card.page})`);
+    assert.ok(card.w > 200 && card.h > 150, `картки не видно: ${card.w}x${card.h}`);
+    assert.ok(card.logo, "нема знака Deai");
+    assert.ok(card.text.includes("Перегляд макета") && card.text.includes("внутрішній матеріал")
+      && card.text.includes("Увійти"), card.text);
+    assert.ok(!card.text.includes("Фікстура"), "назва задачі до пароля");
+    assert.equal(card.ph, "Пароль");
+    assert.equal(card.err, "none", "помилка видна до спроби");
+    await page.screenshot({ path: process.env.ZH_GATE_SHOT || path.join(os.tmpdir(), "zh-gate.png") });
+  });
+
+  test("ворота: невірний пароль показує помилку й не пускає", async (t) => {
+    const { ctx, page } = await fresh();
+    t.after(() => ctx.close());
+    await page.goto(base);
+    await page.fill("#agpass", "не-той");
+    await page.click("#authform button");
+    await page.locator("#agerr").waitFor({ state: "visible" });
+    assert.equal((await page.locator("#agerr").innerText()).trim(), "Невірний пароль");
+    assert.equal(await page.locator("#authgate").count(), 1, "гейт пустив з невірним паролем");
+    assert.equal(await page.locator("#bar .bar").count(), 0);
   });
 
   test("після пароля піднімається смуга, дерево й рамка", async (t) => {
@@ -914,5 +958,65 @@ describe("довга назва задачі не вилазить із крош
     await page.click("#authform button");
     await page.locator("#bar .bar").waitFor();
     assert.equal(await page.locator("#bar .crumb--task").getAttribute("title"), LONG_TITLE);
+  });
+});
+
+/**
+ * Назва задачі НЕ обрізається, коли вона звичайної довжини (0.32.0). Раніше `.crumb{max-width:110px}` різав крошку ще до
+ * `.txt{max-width:150px}`, і «Онбординг клієнта» (17 знаків) ставала «Онбординг клі…». Власна фікстура з такою назвою:
+ * у наборі вище назва «Фікстура» закоротка, щоб це зловити.
+ */
+const TITLE_PORT_BASE = 31000;
+const MID_TITLE = "Онбординг клієнта";
+
+describe("назва задачі звичайної довжини не обрізається в смузі превʼю", () => {
+  let tool;
+  let statics;
+  let browser;
+  let base;
+
+  before(async () => {
+    const { dir } = taskFixture({ html: PAGE });
+    secondIteration(dir);
+    tool = await startServer(dir, { portBase: TITLE_PORT_BASE, title: MID_TITLE, liga: true });
+    const res = await fetch(`${tool.url}/api/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ build_only: true }),
+    });
+    const built = await res.json();
+    assert.ok(built.ok, `публікація не зібралась: ${JSON.stringify(built)}`);
+    statics = await staticServer(built.dir, TITLE_PORT_BASE + 500);
+    base = statics.base;
+    browser = await chromium.launch();
+  });
+
+  after(async () => {
+    await browser?.close();
+    statics?.child.kill();
+    tool?.child.kill();
+  });
+
+  test("scrollWidth не більший за clientWidth", async (t) => {
+    const ctx = await browser.newContext({ viewport: VIEW });
+    const page = await ctx.newPage();
+    t.after(() => ctx.close());
+    await page.goto(base);
+    await page.fill("#agpass", PW);
+    await page.click("#authform button");
+    await page.locator("#bar .bar").waitFor();
+    const m = await page.evaluate(() => {
+      const el = document.querySelector("#bar .crumb--task .txt");
+      const crumb = el.closest(".crumb--task");
+      return { text: el.textContent, sw: el.scrollWidth, cw: el.clientWidth,
+               csw: crumb.scrollWidth, ccw: crumb.clientWidth,
+               over: el.getBoundingClientRect().right - crumb.getBoundingClientRect().right };
+    });
+    assert.equal(m.text, MID_TITLE);
+    assert.ok(m.cw > 0, "вузол назви без ширини — міряємо не те");
+    assert.ok(m.sw <= m.cw, `назву обрізано: ${m.sw} > ${m.cw}`);
+    /* Друга половина — КРОШКА: `.crumb{max-width:110px;overflow:hidden}` різав її зовні, а `.txt` зсередини цього не бачить. */
+    assert.ok(m.csw <= m.ccw, `крошку обрізано: ${m.csw} > ${m.ccw}`);
+    assert.ok(m.over <= 0.5, `текст виходить за крошку на ${m.over}px`);
   });
 });
