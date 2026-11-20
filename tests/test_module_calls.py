@@ -570,6 +570,45 @@ class HardeningTests(Calls):
         self.assertEqual(self.req('/api/module-check', {'id': 'acme', 'space': self.sp['id']})[0], 200)
 
 
+class ChangedTrust(Calls):
+    """Довіра «змінено»: тека правлена після довіри, а нової довіри нема. Модуль далі працює з ОСТАННЬОГО довіреного знімка —
+    список, панель і виклик; відкликання довіри прибирає всі три (ключ — відбиток довіри, а не жива тека)."""
+
+    def get(self, path):
+        c = http.client.HTTPConnection('127.0.0.1', self.port, timeout=15)
+        try:
+            c.request('GET', path)
+            r = c.getresponse()
+            return r.status, r.read()
+        finally:
+            c.close()
+
+    def ext_ids(self):
+        st, body = self.get('/api/module-ext?space=' + self.sp['id'])
+        self.assertEqual(st, 200)
+        return [t['id'] for t in json.loads(body)['tools'] if t.get('module') == 'acme']
+
+    def test_changed_module_serves_the_old_snapshot_until_trust_is_revoked(self):
+        d = self.mod()
+        panel = '/api/module-ui/%s/acme/ui/panel.html' % self.sp['id']
+        self.assertEqual(self.ext_ids(), ['board'])
+        # правка без нової довіри: і сервер, і панель — інші байти
+        with open(os.path.join(d, 'server.py'), 'a', encoding='utf-8') as fh:
+            fh.write('\n\ndef tool_echo(ctx, args):\n    return {"args": "NEW"}\n')
+        _write(os.path.join(d, 'ui', 'panel.html'), '<p>new</p>')
+        self.assertEqual(self.ext_ids(), ['board'])                       # старий знімок: інструмент не зник
+        st, body = self.get(panel)
+        self.assertEqual(st, 200)
+        self.assertIn(b'<p>hi</p>', body)
+        self.assertNotIn(b'<p>new</p>', body)
+        self.assertEqual(self.tool('tool_echo', 1), (200, {'value': {'args': 1}}))      # стара функція, не правлена
+        # відкликання довіри: нічого з цього більше не віддається
+        self.assertTrue(dm.revoke_trust(self.sp, 'acme'))
+        self.assertEqual(self.ext_ids(), [])
+        self.assertEqual(self.get(panel)[0], 404)
+        self.refused(*self.tool('tool_echo', 1), 404, 'unknown-module')
+
+
 class CspPin(unittest.TestCase):
     def test_frame_ancestors_is_pinned(self):
         csp = dict(serve.MODULE_UI_HEADERS)['Content-Security-Policy']

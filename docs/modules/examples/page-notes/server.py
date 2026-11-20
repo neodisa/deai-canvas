@@ -47,13 +47,15 @@ def _write(path, data):
 
 def _ids(ctx, args):
     """`(task, page)` from the panel's arguments. Arguments are foreign input: check types and length.
-    The ids stay dictionary keys and NEVER become part of a file path."""
+    The ids stay dictionary keys and NEVER become part of a file path.
+    A failure is raised as `module-error`: that is the code the panel sees from `deai.call` (a code of our own that Deai does
+    not know would be turned into it anyway), so the example says it straight."""
     if not isinstance(args, dict):
-        raise ctx["ModuleError"]("bad-args", "args must be an object")
+        raise ctx["ModuleError"]("module-error", "args must be an object")
     task, page = args.get("task"), args.get("page")
     for v in (task, page):
         if not isinstance(v, str) or not 0 < len(v) <= MAX_ID:
-            raise ctx["ModuleError"]("bad-args", "task and page must be non-empty strings")
+            raise ctx["ModuleError"]("module-error", "task and page must be non-empty strings")
     return task, page
 
 
@@ -80,7 +82,7 @@ def tool_save(ctx, args):
     task, page = _ids(ctx, args)
     text = args.get("text")
     if not isinstance(text, str) or len(text) > MAX_TEXT:
-        raise ctx["ModuleError"]("bad-args", "text must be a string of at most %d characters" % MAX_TEXT)
+        raise ctx["ModuleError"]("module-error", "text must be a string of at most %d characters" % MAX_TEXT)
     path = _file(ctx)
     with _LOCK:
         notes = _read(path)

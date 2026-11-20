@@ -27,7 +27,7 @@ T4, T5; T2, T6, T7 — одне спільне ревʼю; наприкінці 
 
 ## Спільні правила (для КОЖНОЇ задачі)
 
-- Робоча тека: `/Users/sergeyarkhipov/Liga Tools/deai-canvas-dev`, гілка `feat/module-tools`. Інших гілок не чіпати.
+- Робоча тека: worktree `deai-canvas-dev`, гілка `feat/module-tools`. Інших гілок не чіпати.
 - Коміт: `git add -- <нові файли>` і
   `git -c user.name=neodisa -c user.email=neodisa@users.noreply.github.com commit -m "…" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- <шляхи>`.
   Ніколи `git add -A`, `--amend`, `stash`, `reset`, `checkout` інших гілок, `rebase`. Ніколи не стейджити

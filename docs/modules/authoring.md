@@ -1,6 +1,6 @@
 # Writing your own module
 
-For Deai Canvas **0.31.0**. A module adds capabilities to a
+A module adds capabilities to a
 space: a *role* — publishing previews, design-system tokens, team comments, syncing mockups with git — and, with `api: 2`,
 its own *tools* in the island and *actions* in ⌘K and the menus. Built-in modules live in `app/modules/`; **your own modules live in the space**, in
 `<space>/modules/<id>/`, so they travel with the space through git. Their code runs on your computer only after **you**
@@ -497,8 +497,10 @@ Create the folder in a test space, open Settings → Modules, trust it, connect 
 ## 7. Tools and actions (`api: 2`)
 
 Besides a role, a module with `"api": 2` can add **tools** (a button in the island that opens a right-hand panel with the
-module's own HTML) and **actions** (items in ⌘K and in the «⋯» menus of a task or an iteration). They show only in the
-working canvas, in «Layout» mode — not in a published preview and not in the Overview. A small working example is
+module's own HTML) and **actions** (items in ⌘K and in the «⋯» menus of a task or an iteration). `api: 2` needs a Deai
+Canvas that knows it; an older one refuses the manifest. **Tools** show only in the working canvas of a task, in «Layout»
+(the island, up to 3, and ⌘K). **Actions** show in ⌘K on an open task, in «Layout» and in «Overview» alike, in the «⋯» menu of
+a task card (the task list and the home screen) and in the iteration dropdown. Neither is in a published preview. A small working example is
 `docs/modules/examples/page-notes/` («Page notes»): copy the folder to `<space>/modules/page-notes/`, trust it, enable
 it. It is also the fixture of the live test of this contract.
 
@@ -518,7 +520,7 @@ it. It is also the fixture of the live test of this contract.
 | `label` | a non-empty string of at most **40** characters (the text of the button, its tooltip and the ⌘K item) |
 | `icon` | a name from the core's icon set (`app/icons.js`); an unknown name is refused. Your own SVG is not supported yet |
 | `panel` | a relative path to an `.html` file of **2 to 4 segments** (the panel always lives in a subfolder, not next to `server.py`); a regular file of at most **256 KiB**; each segment `[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}` (no hidden names, no `..`) |
-| `key` | optional: one ASCII letter. The core's letters **C, I, H, M, P** are taken; if two tools claim the same letter, neither gets it (⌘K remains) |
+| `key` | optional: one ASCII letter, case-insensitive (it is upper-cased). A core letter (**C, I, H, M, P**) or a letter repeated by two tools of the **same** module **refuses the manifest** (`tools[i].key: 'C' is reserved by Deai` / `duplicate 'N'`). The same letter claimed by tools of **different** modules: neither gets a key (⌘K still works) |
 | `frame` | **not supported**: a manifest with this key is refused with `tools[i].frame: not supported yet` (a script inside the mockup — see section 8) |
 
 Any other key is refused (`unknown key`). The island shows the built-in tools first, then up to **3** tools of modules (in
@@ -567,10 +569,12 @@ Events: `init` (together with `ready`), `context` (the task, iteration or page c
 `theme` (`{theme, vars}`: the theme or the space colour changed), `close` (the panel is about to be closed). A change of
 the inspector selection is not an event — read `deai.selection()` when you need it.
 
-A rejected promise is an `Error` with a `code`: `too-big` (a message over **64 KiB**), `busy` (more than **4** concurrent
-`call`s from one panel), `timeout` (the shell did not answer in **60 s**; the pending request is then dropped),
-`unknown-method`, `bad-message`, `bad-args`; for `call` also the codes of the server (`module-error`, `check-timeout`,
-`module-busy`, `unknown-function`, `unknown-module`, `body-too-large`). A `call` sent before the panel was closed **still
+A rejected promise is an `Error` with a `code`. Bridge-local codes: `too-big` (a message over **64 KiB**), `busy` (more than
+**64** pending requests in the panel, or more than **4** concurrent `call`s), `timeout` (the shell did not answer in
+**60 s**; the pending request is then dropped), `unknown-method`, `bad-message`, `bad-args`. For `call`, the codes of the
+server that can reach the panel: `unknown-module` (the module is gone or trust was revoked), `unknown-function`,
+`module-busy`, `check-timeout`, `module-error`, `isolated`, `bad-request`, `body-too-large`. A `ModuleError` of the module
+with a code unknown to Deai arrives as `module-error` (only the codes of the core's own table pass as they are). A `call` sent before the panel was closed **still
 runs**, but its result is dropped.
 
 **Styles.** `kit.css` gives `dk-btn` (+ `dk-btn--primary`), `dk-field` (input, textarea, select), `dk-list` and `dk-row`,
@@ -596,7 +600,7 @@ A module with `tools` or `actions` has `check(ctx)` like any other; the rest is 
   `target` is `{"from": "palette" | "task" | "iteration", "task": {"id", "name", "dir"}, "iteration": {"id", "name"} | None}`;
   `dir` is the absolute path of the task folder, `iteration` is set only when the action was called from the iteration
   dropdown. The result is `{"ok": bool, "text"?: str, "url"?: str}`; `ok` must be a real `bool`, otherwise `module-error`.
-  The core normalizes it: `text` loses control and invisible characters and is cut to **300**; `url` must be `http(s)://`,
+  The core normalizes it: `text` loses control (Cc) and format (Cf) characters, except the newline, and is then cut to **300**; `url` must be `http(s)://`,
   at most **2048** characters, with a host, without spaces, invisible characters, `\` or `user@` (an unfit address is dropped
   silently); other keys are dropped. The shell shows a toast: the text of the reply (or «Done»), and for `ok: false`
   «Action name: text»; with a `url` the toast has an «Open» button. The timeout is the action's `timeout_s` or **15 s**;
