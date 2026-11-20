@@ -128,7 +128,7 @@ function countKeyLines(block) {
   return block
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
-    .filter((line) => new RegExp(`^${BASE_INDENT}\\w+\\s*:`).test(line))
+    .filter((line) => new RegExp(`^${BASE_INDENT}(?:\\w+|'[\\w-]+')\\s*:`).test(line))
     .length;
 }
 

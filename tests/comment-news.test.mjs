@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SEEN_MAX, arrived, baseline, isNew, markSeen, newsByPage, readSeen, seenKey, teamOf, writeSeen } from "../app/comment-news.js";
+import { SEEN_MAX, arrived, baseline, isNew, markSeen, newsByPage, countNew, newsItems, readSeen, seenKey, teamOf, writeSeen } from "../app/comment-news.js";
 
 test("seenKey: простір і задача; без простору — «-»", () => {
   assert.equal(seenKey("liga", "t1"), "dc-seen:liga:t1");
@@ -82,4 +82,33 @@ test("countNew: рахує лише нові (відкриті, не мої, н�
   assert.equal(countNew(items, new Set(["d"]), "me"), 1);
   assert.equal(countNew(items, null, "me"), 0);
   assert.equal(countNew(null, new Set(), "me"), 0);
+});
+
+test("newsItems: командні коментарі + відповіді на ВІДКРИТІ коментарі будь-якого каналу", () => {
+  const R = (id, o = {}) => ({ id, ts: "20.11.2026 10:00", author: "AI", text: "т", ...o });
+  const all = [
+    { id: "p1", _aud: "project", status: "open", author: "x", meta: { version: "3/a" }, replies: [R("rp")] },
+    { id: "l1", status: "open", author: "Я", meta: { version: "3/b" }, replies: [R("rl", { author: "Я" }), { text: "без id" }, null] },
+    { id: "l2", status: "resolved", author: "Я", replies: [R("rc")] },
+    { id: "l3", status: "open", author: "Я" },
+  ];
+  const items = newsItems(all);
+  assert.deepEqual(items.map((i) => i.id), ["p1", "rp", "rl"], "закритий і без відповідей — без відповідей; без id пропущено");
+  assert.deepEqual(items.find((i) => i.id === "rl"), { id: "rl", ts: "20.11.2026 10:00", author: "Я", status: "open", version: "3/b", parent: "l1" });
+  assert.equal(items.find((i) => i.id === "rp").parent, "p1");
+  assert.equal(items.find((i) => i.id === "rp").version, "3/a");
+  assert.equal(newsItems(null).length, 0);
+  assert.equal(newsItems([{ id: "x", status: "open", replies: [R("y")] }])[0].version, undefined, "нема meta — version undefined, без падіння");
+});
+
+test("newsItems + isNew/countNew: власна відповідь не нова; чужа — нова, доки не бачена", () => {
+  const all = [{ id: "l1", status: "open", author: "Я", replies: [
+    { id: "mine", author: "Я", ts: "t" }, { id: "ai", author: "AI", ts: "t" }] }];
+  const items = newsItems(all);
+  assert.equal(isNew(items.find((i) => i.id === "mine"), new Set(), "Я"), false);
+  assert.equal(isNew(items.find((i) => i.id === "ai"), new Set(), "Я"), true);
+  assert.equal(countNew(items, new Set(), "Я"), 1);
+  assert.equal(countNew(items, new Set(["ai"]), "Я"), 0);
+  assert.deepEqual([...baseline(items)], ["mine", "ai"]);
+  assert.deepEqual(arrived(new Set(["mine"]), items).map((i) => i.id), ["ai"]);
 });
