@@ -410,6 +410,9 @@ test("K: коментар на «Огляді» — підсвітка, клік
   await pressAt(page, cx, cy);
   assert.equal(await page.evaluate(() => document.getElementById("canvas").hidden), false, "клік відкрив кадр замість коментаря");
   assert.ok(await shadow(page, "return !!root.querySelector('.compose textarea');"), "композер не відкрився");
+  /* 0.34: форма в «Огляді» — теж у токенах і мові оболонки (`host.theme`, `host.labels`). */
+  assert.equal(await shadow(page, "return root.querySelector('.root').classList.contains('themed');"), true, "форма в «Огляді» без теми оболонки");
+  assert.equal(await shadow(page, "return root.querySelector('.compose textarea').getAttribute('placeholder');"), "Що змінити?");
   await page.keyboard.type("Правка з Огляду: заголовок третьої картки");
   const save = await shadow(page, "const r = root.querySelector('.compose .save').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };");
   await pressAt(page, save.x, save.y);

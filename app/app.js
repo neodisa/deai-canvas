@@ -6430,6 +6430,9 @@ const ovc = overviewComments({
     rightInset: () => (cmtOpen && !cmtEl.hidden ? cmtEl.getBoundingClientRect().width : 0),
     /* Скільки знизу полотна перекриває острівець: форма піна й «Кілька» лягають над ним. */
     bottomInset: () => islandInsetOver(canvasEl.getBoundingClientRect()),
+    /* Вигляд і мова форми піна — ті самі, що в рамці (0.34): токени `<body>` і підписи `t()`; провайдери — `__dcCmtTheme/__dcCmtLabels`. */
+    theme: () => window.__dcCmtTheme(),
+    labels: () => window.__dcCmtLabels(),
     /* `onReady` летить ВСЕРЕДИНІ `init()`, коли `ovc.layer` ще не присвоєно (присвоєння — після повернення з `init`):
        мікрозадача дає присвоїти, і `cmtLayer()` уже бачить шар (знімок, режим коментування при відкритій панелі). */
     onReady: () => queueMicrotask(() => onCommentsEvent('canvas', { ev: 'ready' })),
