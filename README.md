@@ -130,8 +130,8 @@ token needs no Node).
 python3 app/serve.py                  # http://localhost:8765/app/
 ```
 
-Each task points to a folder with `iterations/it1/<page>/index.html`; `flows/demo` is a
-small example. Snapshots for the Overview:
+Tasks are created in the canvas (the wizard, or an agent following `SETUP.md`); each points to a folder with
+`iterations/it1/<page>/index.html`, and `flows/demo` is a small example. Snapshots for the Overview:
 
 ```bash
 npm install && npx playwright install chromium
