@@ -647,6 +647,9 @@ class ReadParity(unittest.TestCase):
         want['body']['space']['tools'] = {'figma': True}        # 0.31.0 (етап Е): вимикачі інструментів простору; знімок 0.11.0 їх не знає
         # 0.30.0 (етап Д): новий ключ `trash` — кошик простору; знімок 0.11.0 його не знає, а в цьому просторі кошик порожній
         self.assertEqual(got['body'].pop('trash', None), [], 'новий ключ trash — порожній кошик')
+        # 0.33.0: простір задачі несе `publish_password` (чи задано пароль превʼю); у фікстурних просторах пароля нема
+        if 'publish_password' in got['body']['space']:
+            self.assertIs(got['body']['space'].pop('publish_password'), False, 'у фікстурі пароля превʼю нема')
         caps = want['body']['space']['capabilities']
         for role, now in (('comments', 'supabase-comments'), ('publish', None), ('vcs', None)):
             if caps.get(role) == 'legacy':
