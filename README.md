@@ -6,6 +6,33 @@ element and tell the agent what to change, and publishes a protected preview for
 
 ![Deai Canvas: the workplace with the page tree, a mockup, pinned comments and the agent status](docs/screenshots/hero.png)
 
+## Install
+
+Paste this into Claude Code (or another agent) in a terminal — it installs what is missing, starts the canvas, creates your
+first space and modules, and asks only for the space name, where to publish and the preview password:
+
+```text
+Install Deai Canvas: clone https://github.com/neodisa/deai-canvas.git into ~/deai-canvas and follow ~/deai-canvas/SETUP.md.
+```
+
+Українською:
+
+```text
+Встанови Deai Canvas: склонуй https://github.com/neodisa/deai-canvas.git у ~/deai-canvas і зроби все за ~/deai-canvas/SETUP.md.
+```
+
+By hand:
+
+```bash
+git clone https://github.com/neodisa/deai-canvas.git ~/deai-canvas && cd ~/deai-canvas
+npm install && npx playwright install chromium   # Overview screenshots; needs Node.js 20+
+bash ops/canvas-app/install.sh                   # macOS: app icon and autostart
+./start.command                                  # then open http://localhost:8765/app/
+```
+
+The canvas opens on a welcome screen: copy the prompt from there to an agent, or create a space with the wizard.
+⌘K → "Canvas tour" shows the map of the workplace and a demo task.
+
 ## Why
 
 - **The agent rewrites, you need to compare.** Every pass is kept as an iteration: a frozen, editable copy you can rename,
@@ -66,7 +93,7 @@ The screenshots show a made-up budgeting app on demo data. `node ops/readme-shot
 
 ## Status
 
-Version 0.31.0 (20.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
+Version 0.33.0 (20.11.2026), pre-1.0, [FSL-1.1-MIT](#license). The start script and the launcher are macOS-first; see the Roadmap for the
 cross-platform start. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Feature reference
@@ -100,7 +127,6 @@ the System Vercel CLI sign-in of `vercel-publish` and the in-house publishing of
 token needs no Node).
 
 ```bash
-cp tasks.example.json tasks.json      # edit paths: where your mockups live
 python3 app/serve.py                  # http://localhost:8765/app/
 ```
 
@@ -383,6 +409,10 @@ section shows one of four states: the file is up to date; **outdated** (the file
 plate and a dot on the navigation, «Оновити з шаблону» rewrites only the block); **newer** (written by a newer Deai: never
 downgraded, the plate asks you to update Deai); no file («Створити»); or the space has no folder. «Скопіювати» copies the
 file exactly as it is on disk.
+
+Claude Code reads `AGENTS.md` only when no `CLAUDE.md` sits above the folder. New spaces therefore also get a `CLAUDE.md`
+with the line `@AGENTS.md`; Settings → AGENTS.md shows whether Claude Code will read it and connects an existing `CLAUDE.md`
+with one click.
 
 ## Comments
 

@@ -60,6 +60,16 @@ class SetupMd(unittest.TestCase):
         self.assertIn('npx playwright install chromium', self.md)
         self.assertNotRegex(self.md, r'[а-яіїєґА-ЯІЇЄҐ]', 'SETUP.md — англійською (агент відповідає людині її мовою)')
 
+    def test_readme_has_both_install_prompts_and_no_legacy_quick_start(self):
+        with open(os.path.join(REPO, 'README.md'), encoding='utf-8') as f:
+            readme = f.read()
+        self.assertIn('Install Deai Canvas: clone https://github.com/neodisa/deai-canvas.git into ~/deai-canvas and follow '
+                      '~/deai-canvas/SETUP.md.', readme)
+        self.assertIn('Встанови Deai Canvas: склонуй https://github.com/neodisa/deai-canvas.git у ~/deai-canvas і зроби все за '
+                      '~/deai-canvas/SETUP.md.', readme)
+        self.assertNotIn('cp tasks.example.json tasks.json', readme)
+        self.assertIn('@AGENTS.md', readme)
+
 
 if __name__ == '__main__':
     unittest.main()
