@@ -1255,15 +1255,28 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
 
     /** Знімок контексту цілі в мить її вибору. `where` — з заголовком, `whereNoHead` — без (TD-36: заголовок лише для приватних). */
     _captureAt(el) {
-      let where = null, whereNoHead = null;
-      try { where = captureContext(el, this.target, { heading: true }); } catch (e) { where = null; }
-      try { whereNoHead = captureContext(el, this.target, { heading: false }); } catch (e) { whereNoHead = null; }
-      return {
-        url: location.href, route: location.pathname + location.hash, version: this.appVersion,
-        viewport: { w: window.innerWidth, h: window.innerHeight },
-        fp: fingerprint(el, this.target), outerHTML: el.outerHTML, text: el.textContent,
-        where, whereNoHead,
-      };
+      // Службові класи коментатора (підсвітка наведення, вибір multi) не мають потрапити ні у відбиток, ні в html піна:
+      // зі зняттям їх зараз `styleHash` розійшовся б із живим елементом. Знімаємо на час захвату й повертаємо як було.
+      const held = [];
+      const own = ['cl-hl', 'cl-msel'];
+      try {
+        const nodes = [el].concat(Array.from(el.querySelectorAll('.cl-hl,.cl-msel')));
+        for (const n of nodes) {
+          const had = own.filter((k) => n.classList.contains(k));
+          if (had.length) { held.push([n, had]); n.classList.remove(...had); }
+        }
+        let where = null, whereNoHead = null;
+        try { where = captureContext(el, this.target, { heading: true }); } catch (e) { where = null; }
+        try { whereNoHead = captureContext(el, this.target, { heading: false }); } catch (e) { whereNoHead = null; }
+        return {
+          url: location.href, route: location.pathname + location.hash, version: this.appVersion,
+          viewport: { w: window.innerWidth, h: window.innerHeight },
+          fp: fingerprint(el, this.target), outerHTML: el.outerHTML, text: el.textContent,
+          where, whereNoHead,
+        };
+      } finally {
+        for (const [n, had] of held) n.classList.add(...had);
+      }
     },
 
     _addComment(el, text, sel, extra, aud) {

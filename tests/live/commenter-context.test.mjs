@@ -25,14 +25,14 @@ test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
 /** `seed` — функція в сторінці (отримує `fp(sel)`), що повертає масив коментарів сховища. */
-async function boot({ withHost, version = "1", seed = null }) {
+async function boot({ withHost, version = "1", seed = null, local = false }) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const serve = (r) => r.fulfill({ contentType: "text/html", body: PAGE });
   await page.route("http://dc.test/**", serve);
   await page.route("http://example.com/**", serve);
   await page.goto("http://dc.test/app");
   await page.addScriptTag({ content: BUNDLE });
-  await page.evaluate(({ withHost, version, seed }) => {
+  await page.evaluate(({ withHost, version, seed, local }) => {
     window.__calls = [];
     window.html2canvas = (el, opts) => {
       window.__calls.push({ el, opts });
@@ -44,8 +44,8 @@ async function boot({ withHost, version = "1", seed = null }) {
     window.__ev = [];
     const store = { load: () => mem.slice(), save: (l) => { mem.length = 0; mem.push(...l); } };
     const host = withHost ? { onReady() {}, onChange: (s) => window.__ev.push(s), onSelect() {}, onMode() {} } : undefined;
-    window.CommentLayer.init({ projectId: "t", storage: store, version, user: { name: "Тест" }, host });
-  }, { withHost, version, seed: seed && seed.toString() });
+    window.CommentLayer.init({ projectId: "t", storage: store, version, user: { name: "Тест" }, host, local });
+  }, { withHost, version, seed: seed && seed.toString(), local });
   return page;
 }
 const SH = "document.querySelector('[data-comment-layer]').shadowRoot";
@@ -219,5 +219,57 @@ test("без host: пін з іншим маршрутом — картка вл
   ] });
   await page.evaluate(() => window.CommentLayer._openPanel());
   assert.equal(await page.evaluate(`!!${SH}.querySelector('.c .otherpage')`), true);
+  await page.close();
+});
+
+/** Відбиток елемента без службових класів — еталон для `fp`, знятого при виборі (з наведенням/вибором). */
+const cleanFp = (page, sel) => page.evaluate((s) => {
+  const el = document.querySelector(s);
+  el.classList.remove("cl-hl", "cl-msel");
+  return JSON.parse(JSON.stringify(window.CommentLayer._algo.fingerprint(el, document.body)));
+}, sel);
+
+test("елемент з активним наведенням: fp.styleHash і html піна — без cl-hl; клас на елементі лишається", async () => {
+  const page = await boot({ withHost: true });
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  await page.click("#p");
+  await waitCompose(page);
+  assert.equal(await page.evaluate(() => document.querySelector("#p").classList.contains("cl-hl")), true, "захват у _openCompose вже відбувся — клас має бути повернутий на елемент");
+  const c = await saveCompose(page, "наведення");
+  assert.equal(JSON.stringify(c).includes("cl-hl"), false, "cl-hl не потрапляє в пін");
+  const ref = await cleanFp(page, "#p");
+  assert.equal(c.fp.styleHash, ref.styleHash);
+  assert.deepEqual(c.fp, ref);
+  await page.close();
+});
+
+test("multi: fp першого елемента і html — без cl-msel; клас на вибраних лишається до збереження", async () => {
+  const page = await boot({ withHost: true });
+  await page.evaluate(() => window.CommentLayer.setMode("multi"));
+  await page.click("#p");
+  assert.equal(await page.evaluate(() => document.querySelector("#p").classList.contains("cl-msel")), true);
+  await page.click("#q");
+  assert.equal(await page.evaluate(() => document.querySelector("#p").classList.contains("cl-msel")), true, "клас повернуто після захвату");
+  await page.evaluate(() => {
+    const sh = document.querySelector("[data-comment-layer]").shadowRoot;
+    sh.querySelector(".mcta").value = "мульті-клас"; sh.querySelector(".mcsave").click();
+  });
+  await page.waitForFunction(() => window.__mem.some((c) => c.text === "мульті-клас"));
+  const c = await page.evaluate(() => JSON.parse(JSON.stringify(window.__mem.find((x) => x.text === "мульті-клас"))));
+  assert.equal(JSON.stringify(c).includes("cl-msel"), false);
+  const ref = await cleanFp(page, "#p");
+  assert.equal(c.fp.styleHash, ref.styleHash);
+  await page.close();
+});
+
+test("TD-36, позитив: локальний пін тримає заголовок у meta.ctx, знятий при виборі", async () => {
+  const page = await boot({ withHost: true, local: true });
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  await page.click("#p");
+  await waitCompose(page);
+  await push(page, "/other#x");
+  const c = await saveCompose(page, "локальний");
+  assert.equal(c.meta.route, "/app");
+  assert.equal(c.meta.ctx && c.meta.ctx.heading, "Заголовок");
   await page.close();
 });
