@@ -5679,6 +5679,34 @@ def module_check_verdict(space, mid):
         return {'ok': False, 'error': e.code, 'detail': e.message}
 
 
+#: Тіло `POST /api/module-tool|module-action` — не більше (байтів): панель шле короткі аргументи.
+MODULE_CALL_BODY_MAX = 64 * 1024
+
+
+def module_action_target(frm, tid, iid):
+    """`target` дії модуля: `{'from', 'task': {'id', 'name', 'dir'}, 'iteration': {'id', 'name'} | None}`. Задача — лише з реєстру
+    ЦЬОГО простору (`load_tasks()` читає файл простору запиту, його вже зафіксував `_module_space`): id — точний ключ, тека є на
+    машині (`dir` — абсолютний шлях), інакше `unknown-task`. Ітерація — `None` чи id з `iterations.json` задачі, інакше
+    `unknown-iteration`. Нечитабельний `iterations.json` — «ітерації нема»."""
+    err = deai_modules.ModuleError
+    tasks = load_tasks().get('tasks')
+    task = tasks.get(tid) if isinstance(tid, str) and isinstance(tasks, dict) else None
+    d = task.get('dir') if isinstance(task, dict) else None
+    if not isinstance(d, str) or not os.path.isdir(d):
+        raise err('unknown-task', message='unknown task')
+    task = dict(task, dir=os.path.abspath(d))
+    it = None
+    if iid is not None:
+        try:
+            found = next((i for i in task_iterations(task) if isinstance(i, dict) and isinstance(iid, str) and i.get('id') == iid), None)
+        except (OSError, ValueError, RecursionError, AttributeError):
+            found = None
+        if found is None:
+            raise err('unknown-iteration', message='unknown iteration')
+        it = {'id': iid, 'name': iteration_note(found) or iid}
+    return {'from': frm, 'task': {'id': tid, 'name': str(task.get('title') or tid), 'dir': task['dir']}, 'iteration': it}
+
+
 #: «Ключа `replace` у тілі не було» — відмінне від явного JSON `null` (той — помилка клієнта: `bad-settings`).
 _NO_REPLACE = object()
 
@@ -6193,6 +6221,7 @@ class Handler(SimpleHTTPRequestHandler):
                         '/api/space-switch',
                         '/api/modules', '/api/module-ext', '/api/module-enable', '/api/module-disable',
                         '/api/module-settings', '/api/module-check', '/api/ds-tokens',
+                        '/api/module-tool', '/api/module-action',
                         '/api/module-trust', '/api/module-untrust', '/api/agents-md')
 
     #: Маршрути МАШИНИ (оновлення, відгук): потрібні саме тоді, коли щось зламано (порожня машина, битий реєстр, нечитабельний
@@ -7443,6 +7472,9 @@ class Handler(SimpleHTTPRequestHandler):
             if length > feedback.BODY_MAX and self.path in ('/api/feedback', '/api/feedback-preview'):
                 self._space_error(413, 'body-too-large', 'feedback body is too large')       # ДО читання: пам'ять не роздуваємо
                 return
+            if length > MODULE_CALL_BODY_MAX and self.path in ('/api/module-tool', '/api/module-action'):
+                self._space_error(413, 'body-too-large', 'module call body is too large')   # так само: ДО читання
+                return
             raw_body = self.rfile.read(length) if length else b''
             self._body_read = True      # далі центральна відмова тіло вже не вичитує
             payload = json.loads(raw_body) if length else {}
@@ -7555,6 +7587,10 @@ class Handler(SimpleHTTPRequestHandler):
             self._module_settings(payload)
         elif self.path == '/api/module-check':
             self._module_check(payload)
+        elif self.path == '/api/module-tool':
+            self._module_tool(payload)
+        elif self.path == '/api/module-action':
+            self._module_action(payload)
         elif self.path == '/api/module-trust':
             self._module_trust_post(payload)
         elif self.path == '/api/module-untrust':
@@ -8930,6 +8966,26 @@ class Handler(SimpleHTTPRequestHandler):
     def _module_check(self, payload):
         self._module_post(payload, 'check')
 
+    def _module_tool(self, payload):
+        """`POST /api/module-tool {space?, module, fn, args?}` → `{value}` (`deai_modules.call_tool`: лише `tool_*` модуля з
+        інструментами, ≤ 256 КіБ JSON, стеля `TOOL_TIMEOUT`). Тіло ≤ 64 КіБ (`MODULE_CALL_BODY_MAX`, 413 до читання); відмови —
+        `ModuleError` → `_guarded` (`{ok: false, code, error}`)."""
+        sp = self._module_space(payload.get('space'))
+        if sp is None:
+            return
+        self._send_json({'value': deai_modules.call_tool(sp, payload.get('module'), payload.get('fn'), payload.get('args'))})
+
+    def _module_action(self, payload):
+        """`POST /api/module-action {space?, module, action, from, task, iteration}` → `{ok, text?, url?}`. Модуль і дію перевіряє ядро
+        (`action_module`), задачу й ітерацію — `module_action_target` (лише задачі ЦЬОГО простору)."""
+        sp = self._module_space(payload.get('space'))
+        if sp is None:
+            return
+        mid, aid, frm = payload.get('module'), payload.get('action'), payload.get('from')
+        deai_modules.action_module(sp, mid, aid)                  # 404 модуля/дії — раніше за задачу
+        target = module_action_target(frm, payload.get('task'), payload.get('iteration'))
+        self._send_json(deai_modules.run_action(sp, mid, aid, target, where=frm))
+
     def _module_post(self, payload, action):
         """`POST /api/module-enable|disable|settings|check` `{space?, id, settings?, secrets?, replace?}`:
         `{ok: true, module: <запис>[, check: <вердикт>][, replaced: [id…]]}` (порядок запису й коди — `module_write`,
@@ -9568,7 +9624,7 @@ MODULE_UI_TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text
 MODULE_UI_SEG_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}')
 MODULE_UI_HEADERS = (
     ('Content-Security-Policy', "sandbox allow-scripts allow-forms; default-src 'self' 'unsafe-inline' data:; "
-                                "connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"),
+                                "connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'"),
     ('X-Content-Type-Options', 'nosniff'),
     ('Access-Control-Allow-Origin', '*'),
     ('Referrer-Policy', 'no-referrer'),

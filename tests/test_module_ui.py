@@ -31,7 +31,7 @@ from test_modules import _write, _read  # noqa: E402
 _REAL = None
 
 CSP = ("sandbox allow-scripts allow-forms; default-src 'self' 'unsafe-inline' data:; connect-src 'none'; "
-       "frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'")
+       "frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'")
 KIT = '<link rel="stylesheet" href="/api/module-ui-kit/kit.css"><script src="/api/module-ui-kit/bridge.js"></script>'
 TOOL = {'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/panel.html'}
 SERVER = tmo.OwnToolsTest.SERVER

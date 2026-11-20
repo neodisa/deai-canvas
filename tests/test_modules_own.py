@@ -466,7 +466,10 @@ class CatalogExtraTest(OwnEnv):
 
     def test_core_codes_have_their_statuses_and_a_module_cannot_throw_them(self):
         want = {'module-untrusted': 409, 'module-changed': 409, 'module-refused': 409, 'trust-needs-ui': 403,
-                'trust-declined': 409, 'trust-no-confirm': 409, 'trust-busy': 409, 'trust-unreadable': 409}
+                'trust-declined': 409, 'trust-no-confirm': 409, 'trust-busy': 409, 'trust-unreadable': 409,
+                # виклики інструментів і дій (M1, Task 4)
+                'unknown-function': 404, 'unknown-action': 404, 'unknown-task': 404, 'unknown-iteration': 404,
+                'bad-request': 400, 'body-too-large': 413, 'isolated': 409}
         self.assertEqual(dm.CORE_STATUS, want)
         for code, status in want.items():
             self.assertEqual(dm.ModuleError(code).status, status, code)

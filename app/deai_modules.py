@@ -102,6 +102,12 @@ MAX_TOOLS = 4
 MAX_ACTIONS = 8
 ACTION_WHERE = ('palette', 'task', 'iteration')
 ACTION_TIMEOUT = 15
+#: Стеля виклику `tool_*` з панелі (`call_tool`), секунд; і розмір відповіді (серіалізований JSON), байтів.
+TOOL_TIMEOUT = 15
+MAX_TOOL_RESULT = 256 * 1024
+#: Рядки відповіді дії (`run_action`): `text` ≤ 300, `url` ≤ 2048 і лише http(s).
+ACTION_TEXT_MAX = 300
+ACTION_URL_MAX = 2048
 #: Клавіші, зайняті самим Deai (інструмент модуля їх не бере).
 RESERVED_KEYS = frozenset('CIHMP')
 #: Шлях панелі інструмента: 2..4 сегменти (панель — завжди в підтеці, не поряд із `server.py`), останній — `.html`.
@@ -177,7 +183,9 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
 
 #: Коди ЯДРА для своїх модулів і довіри (етап 3c). Окремо від `STATUS`: `_run` пропускає як є лише коди `STATUS`, тож
 #: модуль не кине «module-untrusted» від свого імені.
-CORE_STATUS = {'module-untrusted': 409, 'module-changed': 409, 'module-refused': 409, 'trust-needs-ui': 403,
+CORE_STATUS = {'unknown-function': 404, 'unknown-action': 404, 'unknown-task': 404, 'unknown-iteration': 404,
+               'bad-request': 400, 'body-too-large': 413, 'isolated': 409,     # виклики інструментів і дій (M1, Task 4)
+               'module-untrusted': 409, 'module-changed': 409, 'module-refused': 409, 'trust-needs-ui': 403,
                'trust-declined': 409, 'trust-no-confirm': 409, 'trust-busy': 409, 'trust-unreadable': 409}
 #: Своїх модулів у просторі — не більше (за абеткою); решта — примітки `too-many-modules`.
 MAX_OWN_MODULES = 32
@@ -1129,6 +1137,77 @@ def ext_module(space, mid):
     """`Module` з непорожніми `tools`, що проходить ті самі умови, що й `extensions` (справний, api 2, явно увімкнений), або `None`.
     З нього роздаються панелі (`/api/module-ui/…`); незнайомий чи вимкнений модуль — `None`."""
     return next((m for i, m in _ext_modules(space) if i == mid and m.tools), None)
+
+
+def _check_isolation(space, mid):
+    """⛔ Закон ізоляції (як `serve.module_check_verdict`): запис із `shared_state` в ізольованому прогоні (`DC_TASKS_FILE`/
+    `DC_NO_OVERVIEW`) не кличеться — ні секрети справжнього дому, ні код модуля. Відмова `isolated` (409)."""
+    if isolation.isolated() and shared_state(space, mid):
+        raise ModuleError('isolated', message='calling a shared-state module is refused in an isolated run')
+
+
+def call_tool(space, mid, fn, args):
+    """`POST /api/module-tool` без HTTP: `tool_*` модуля `mid` (`ext_module`: справний, api 2, явно увімкнений, з інструментами).
+    `fn` — лише рядок за `TOOL_FN_RE`, що є серед функцій модуля: `check`, `action_*`, `__init__`, ролі недосяжні (`unknown-function`).
+    Результат — JSON (`allow_nan=False`) ≤ `MAX_TOOL_RESULT`, інакше `module-error`. Помилки модуля — `call` (текст без секретів)."""
+    m = ext_module(space, mid) if isinstance(mid, str) else None
+    if m is None:
+        raise ModuleError('unknown-module', message='unknown module')
+    if not isinstance(fn, str) or not TOOL_FN_RE.fullmatch(fn) or m.fn(fn) is None:
+        raise ModuleError('unknown-function', message='unknown function')
+    _check_isolation(space, mid)
+    val = call(m, fn, module_ctx(space, m), args, timeout=TOOL_TIMEOUT)
+    try:
+        text = json.dumps(val, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        raise ModuleError('module-error', message='result is not JSON') from None
+    if len(text.encode('utf-8')) > MAX_TOOL_RESULT:
+        raise ModuleError('module-error', message='result is too big')
+    return val
+
+
+def action_module(space, mid, aid):
+    """`(Module, опис дії)` для дії `aid` модуля `mid` (справний, api 2, явно увімкнений — `tools` НЕ потрібні) або `ModuleError`
+    `unknown-module`/`unknown-action`."""
+    m = next((m for i, m in _ext_modules(space) if i == mid), None) if isinstance(mid, str) else None
+    if m is None:
+        raise ModuleError('unknown-module', message='unknown module')
+    act = next((a for a in m.actions if a['id'] == aid), None) if isinstance(aid, str) else None
+    if act is None:
+        raise ModuleError('unknown-action', message='unknown action')
+    return m, act
+
+
+def _clean_url(v):
+    """`v`, коли це рядок ≤ `ACTION_URL_MAX` зі схемою http/https (без урахування регістру) без пробілів і керівних; інакше `None`."""
+    if not isinstance(v, str) or not 0 < len(v) <= ACTION_URL_MAX:
+        return None
+    if not re.match(r'(?i)https?://', v) or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in v):
+        return None
+    return v
+
+
+def run_action(space, mid, aid, target, where=None):
+    """`POST /api/module-action` без HTTP: `action_<id>` модуля з `target` (`{'from', 'task', 'iteration'}`, його збирає викликач).
+    `where` — звідки викликано: мусить бути в `where` дії (інакше `bad-request`). Відповідь — `{'ok', 'text'?, 'url'?}`: `ok` — лише
+    `bool` (інакше `module-error`), `text` — лише рядок ≤ 300, `url` — лише безпечний (`_clean_url`), решта відкидається мовчки."""
+    m, act = action_module(space, mid, aid)
+    if where is None:
+        where = target.get('from') if isinstance(target, dict) else None
+    if not isinstance(where, str) or where not in act['where']:
+        raise ModuleError('bad-request', message='the action is not available from there')
+    _check_isolation(space, mid)
+    val = call(m, 'action_' + act['id'].replace('-', '_'), module_ctx(space, m), target,
+               timeout=act['timeout_s'] or ACTION_TIMEOUT)
+    if not isinstance(val, dict) or type(val.get('ok')) is not bool:
+        raise ModuleError('module-error', message='action result must be {"ok": bool, ...}')
+    out = {'ok': val['ok']}
+    if isinstance(val.get('text'), str):
+        out['text'] = val['text'][:ACTION_TEXT_MAX]
+    url = _clean_url(val.get('url'))
+    if url is not None:
+        out['url'] = url
+    return out
 
 
 def extensions(space):
