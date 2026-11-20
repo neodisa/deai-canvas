@@ -2,15 +2,35 @@
 посилається, існує; правила про секрети й системне ПЗ на місці."""
 import os
 import re
+import sys
+import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+import spaces_guard  # noqa: E402
+
+
+def setUpModule():
+    global _REAL
+    _REAL = spaces_guard.snapshot()
+
+
+def tearDownModule():
+    spaces_guard.assert_untouched(_REAL)
 
 
 class SetupMd(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Тест лише читає файли, але в ньому названо маршрути просторів: охоронець `test_serve` вимагає явний `DEAI_HOME`.
+        tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(tmp.cleanup)
+        patcher = mock.patch.dict(os.environ, {'DEAI_HOME': tmp.name})
+        patcher.start()
+        cls.addClassCleanup(patcher.stop)
         with open(os.path.join(REPO, 'SETUP.md'), encoding='utf-8') as f:
             cls.md = f.read()
         with open(os.path.join(REPO, 'app', 'serve.py'), encoding='utf-8') as f:
