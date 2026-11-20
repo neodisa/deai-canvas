@@ -11,7 +11,8 @@ updates: do not edit it, write your own notes above or below it.
 
 The canvas runs on this computer, by default at `http://127.0.0.1:8765` (the interface is at `/app/`). If it is not
 running, start it with `python3 <deai>/app/serve.py`; `<deai>` is the folder of the Deai Canvas installation, so ask
-the designer where Deai Canvas is installed.
+the designer where Deai Canvas is installed. If the canvas runs on another port, use the address shown in the designer's
+browser instead of `8765` in every URL below.
 
 When the canvas is running, ask it where it is installed:
 

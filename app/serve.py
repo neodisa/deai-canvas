@@ -8552,7 +8552,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     #: Код відмови валідації простору → HTTP-статус; усе інше (`InputError`) — 400. Конфлікти зі
     #: СТАНОМ — 409, файл задач, що не читається, — 503 (як центральний `space-unavailable`).
-    _SPACE_STATUS = {'path-registered': 409, 'task-id-collision': 409, 'space-unavailable': 503}
+    _SPACE_STATUS = {'path-registered': 409, 'task-id-collision': 409, 'space-unavailable': 503,
+                     'space-json-unreadable': 409}
 
     def _space_failed(self, e):
         """Спільне відображення відмов `space-new|update|switch` ЗА ТИПОМ і АТРИБУТОМ (не за
@@ -8632,7 +8633,10 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 st = agents_md.status(folder, version=version)
         except ValueError as e:
-            self._space_error(409 if str(e) == 'newer' else 503, str(e), str(e))
+            self._space_error(409 if str(e) in ('newer', 'changed') else 503, str(e), str(e))
+            return
+        except OSError:       # права, тека чи симлінк замість файла: JSON-відповідь, а не обрив зʼєднання
+            self._space_error(503, 'unreadable', 'unreadable')
             return
         deai = UPDATER_ROOT
         self._send_json({'ok': True, 'space': sp['id'], **st,

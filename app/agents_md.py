@@ -3,6 +3,7 @@
 Блок НЕ залежить від компʼютера (тека простору спільна через git): жодних абсолютних шляхів, імені користувача й імені
 простору; єдина підстановка шаблону — `{version}` у маркері begin. Шляхи установки віддає лише відповідь API (`paths`).
 Текст користувача (до й після блоку) зберігається байт-у-байт: читання/запис без перекладу рядків, `surrogateescape`.
+Нечитний файл (права, тека замість файла, симлінк) — `OSError` із `status`/`write`; запис ще раз звіряє файл перед заміною (`ValueError('changed')`).
 Файл із НОВІШОЇ версії Deai ніколи не «понижується» (`write` → `ValueError('newer')`). Запис атомарний.
 """
 import os
@@ -61,8 +62,13 @@ def _path(space_dir):
 
 
 def _read(space_dir):
+    """Текст файла чи `None` (файла нема). Симлінк і не-звичайний файл — `OSError` (як і будь-яка інша відмова читання):
+    такий AGENTS.md ми не читаємо й не замінюємо (заміна розірвала б симлінк)."""
+    p = _path(space_dir)
+    if os.path.islink(p) or (os.path.exists(p) and not os.path.isfile(p)):
+        raise OSError(f'{NAME}: not a regular file')
     try:
-        with open(_path(space_dir), **_ENC) as f:
+        with open(p, **_ENC) as f:
             return f.read()
     except FileNotFoundError:
         return None
@@ -94,10 +100,11 @@ def write(space_dir, *, version):
     if not st['exists']:
         text = new
     else:
-        old = _read(space_dir)
+        old = st['text']
         before, block, after, _ = _parts(old)
         text = before + new + after if block is not None else new + '\n' + old
     path = _path(space_dir)
+    old = st['text'] if st['exists'] else None
     if st['exists'] and text == old:
         return st
     mode = None
@@ -112,6 +119,8 @@ def write(space_dir, *, version):
             tmp.flush()
             os.fsync(tmp.fileno())
         os.chmod(tmp.name, 0o644 if mode is None else mode)
+        if _read(space_dir) != old:      # файл змінили між читанням і заміною: чужу правку не губимо
+            raise ValueError('changed')
         os.replace(tmp.name, path)
     except BaseException:
         try:

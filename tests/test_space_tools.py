@@ -120,6 +120,18 @@ class SpaceTools(base.Fixture):
         self.assertEqual(spaces.space_tools({'path': self.p_path}), {'figma': True})
         self.assertEqual(spaces.space_tools({'path': ''}), {'figma': True})        # неявний простір — без диска
 
+    def test_a_corrupt_space_json_is_refused_and_left_byte_identical(self):
+        junk = b'<<<<<<< HEAD\n{"name": "x", "modules": {"publish": {}}}\n=======\n{}\n>>>>>>> other\n'
+        with open(self.space_json, 'wb') as f:
+            f.write(junk)
+        st, body = self.post('/api/space-tool', {'space': self.p_id, 'tool': 'figma', 'on': False})
+        self.assertEqual((st, body['ok'], body['code']), (409, False, 'space-json-unreadable'))
+        self.assertEqual(self.get_bytes(), junk)
+        with self.assertRaises(spaces.InputError) as cm:
+            spaces.set_space_tool(self.p_id, 'figma', False)
+        self.assertEqual(cm.exception.code, 'space-json-unreadable')
+        self.assertEqual(self.get_bytes(), junk)
+
     def get_bytes(self):
         with open(self.space_json, 'rb') as f:
             return f.read()

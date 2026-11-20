@@ -225,6 +225,52 @@ class Write(Tmp):
         self.assertTrue(_get(self.file).endswith(b'\n' + old))
 
 
+class WriteGuards(Tmp):
+    def test_a_file_changed_between_read_and_replace_is_not_overwritten(self):
+        _put(self.file, b'mine\n')
+        real = os.fsync
+
+        def sneaky(fd):
+            real(fd)
+            _put(self.file, b'someone else edited this\n')       # чужа правка між читанням і заміною
+        with mock.patch('agents_md.os.fsync', side_effect=sneaky):
+            with self.assertRaises(ValueError) as cm:
+                agents_md.write(self.dir, version=V)
+        self.assertEqual(str(cm.exception), 'changed')
+        self.assertEqual(_get(self.file), b'someone else edited this\n')
+        self.assertEqual(os.listdir(self.dir), ['AGENTS.md'])           # тимчасовий файл прибрано
+
+    def test_a_file_created_meanwhile_is_not_overwritten(self):
+        real = os.fsync
+
+        def sneaky(fd):
+            real(fd)
+            _put(self.file, b'appeared\n')
+        with mock.patch('agents_md.os.fsync', side_effect=sneaky):
+            with self.assertRaises(ValueError):
+                agents_md.write(self.dir, version=V)
+        self.assertEqual(_get(self.file), b'appeared\n')
+
+    def test_a_directory_instead_of_the_file_is_unreadable(self):
+        os.mkdir(self.file)
+        with self.assertRaises(OSError):
+            agents_md.status(self.dir, version=V)
+        with self.assertRaises(OSError):
+            agents_md.write(self.dir, version=V)
+
+    def test_a_symlink_is_unreadable_and_never_replaced(self):
+        target = os.path.join(self.dir, 'real.md')
+        _put(target, b'real\n')
+        os.symlink(target, self.file)
+        with self.assertRaises(OSError):
+            agents_md.status(self.dir, version=V)
+        with self.assertRaises(OSError):
+            agents_md.write(self.dir, version=V)
+        self.assertTrue(os.path.islink(self.file))
+        self.assertEqual(_get(target), b'real\n')
+        self.assertEqual(sorted(os.listdir(self.dir)), ['AGENTS.md', 'real.md'])
+
+
 class TemplateIsReal(unittest.TestCase):
     """Кожна команда й кожен ендпоінт у шаблоні існує."""
 
@@ -288,6 +334,9 @@ class TemplateIsReal(unittest.TestCase):
             with self.subTest(header=h):
                 self.assertIn(h, self.serve_src)
 
+    def test_the_template_mentions_another_port(self):
+        self.assertIn("address shown in the designer's", self.tpl)
+
     def test_no_team_policy_in_the_template(self):
         """Шаблон — довідник продукту: коли форкати ітерацію, вирішує кожна команда сама."""
         for line in ('Ask the designer before creating', 'Do not edit an old iteration', 'latest iteration',
@@ -306,8 +355,14 @@ class Routes(base.Fixture):
     def setUp(self):
         super().setUp()
         self.agents = os.path.join(self.p_path, 'AGENTS.md')
-        self.addCleanup(lambda: os.path.exists(self.agents) and os.remove(self.agents))
-        if os.path.exists(self.agents):
+        self.addCleanup(self._clear_agents)
+        self._clear_agents()
+
+    def _clear_agents(self):
+        if os.path.isdir(self.agents) and not os.path.islink(self.agents):
+            os.rmdir(self.agents)
+        elif os.path.lexists(self.agents):
+            os.chmod(self.agents, 0o644) if not os.path.islink(self.agents) else None
             os.remove(self.agents)
 
     def test_get_reports_status_paths_and_the_update_version(self):
@@ -345,6 +400,48 @@ class Routes(base.Fixture):
         self.assertEqual((st, body['code'], body['ok']), (409, 'newer', False))
         self.assertEqual(_get(self.agents), old)
         self.assertTrue(self.jget(f'/api/agents-md?space={self.p_id}')[1]['newer'])
+
+    def test_a_directory_instead_of_the_file_gives_503_unreadable_json(self):
+        os.mkdir(self.agents)
+        self.addCleanup(lambda: os.path.isdir(self.agents) and os.rmdir(self.agents))
+        st, body = self.jget(f'/api/agents-md?space={self.p_id}')
+        self.assertEqual((st, body['ok'], body['code'], body['error']), (503, False, 'unreadable', 'unreadable'))
+        st, body = self.post('/api/agents-md', {'space': self.p_id})
+        self.assertEqual((st, body['code']), (503, 'unreadable'))
+        self.assertTrue(os.path.isdir(self.agents))
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root reads anything')
+    def test_a_permission_error_gives_503_unreadable_json(self):
+        _put(self.agents, b'mine\n')
+        os.chmod(self.agents, 0)
+        self.addCleanup(os.chmod, self.agents, 0o644)
+        st, body = self.jget(f'/api/agents-md?space={self.p_id}')
+        self.assertEqual((st, body['code']), (503, 'unreadable'))
+        st, body = self.post('/api/agents-md', {'space': self.p_id})
+        self.assertEqual((st, body['code']), (503, 'unreadable'))
+
+    def test_a_symlinked_file_is_unreadable_and_post_writes_nothing(self):
+        target = os.path.join(self.p_path, 'elsewhere.md')
+        _put(target, b'real\n')
+        self.addCleanup(os.remove, target)
+        os.symlink(target, self.agents)
+        self.assertEqual(self.jget(f'/api/agents-md?space={self.p_id}')[1]['code'], 'unreadable')
+        st, body = self.post('/api/agents-md', {'space': self.p_id})
+        self.assertEqual((st, body['code']), (503, 'unreadable'))
+        self.assertEqual(_get(target), b'real\n')
+        self.assertTrue(os.path.islink(self.agents))
+
+    def test_a_concurrent_edit_gives_409_changed(self):
+        _put(self.agents, b'mine\n')
+        real = os.fsync
+
+        def sneaky(fd):
+            real(fd)
+            _put(self.agents, b'theirs\n')
+        with mock.patch('agents_md.os.fsync', side_effect=sneaky):
+            st, body = self.post('/api/agents-md', {'space': self.p_id})
+        self.assertEqual((st, body['code']), (409, 'changed'))
+        self.assertEqual(_get(self.agents), b'theirs\n')
 
     def test_unknown_space_404(self):
         self.assertEqual(self.jget('/api/agents-md?space=nope')[0], 404)

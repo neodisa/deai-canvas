@@ -909,8 +909,10 @@ def set_space_tool(sid, tool, on):
     with WRITE_LOCK:
         try:
             old = _read_json(path)
-        except (OSError, ValueError):
+        except FileNotFoundError:
             old = None
+        except (OSError, ValueError) as e:      # зіпсований space.json (напр. маркери конфлікту git) НЕ перезаписуємо: загубилися б модулі
+            raise InputError('space-json-unreadable', path, path=path) from e
         out = dict(old) if isinstance(old, dict) else {}
         tools = dict(out['tools']) if isinstance(out.get('tools'), dict) else {}
         if on:
