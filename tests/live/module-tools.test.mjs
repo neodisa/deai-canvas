@@ -36,9 +36,10 @@ def tool_echo(ctx, args):
     return args
 `;
 const PANEL = `<!doctype html><html><head><meta charset="utf-8"><title>Probe panel</title></head><body class="dk-panel">
-<h2 id="title">…</h2><div id="ls">…</div><div id="fetch">…</div><div id="echo">…</div><div id="ctx">…</div><div id="ev">…</div>
+<h2 id="title">…</h2><div id="ls">…</div><div id="fetch">…</div><div id="echo">…</div><div id="ctx">…</div><div id="ev">…</div><button id="nav" type="button">nav</button>
 <script>
 const $ = (id) => document.getElementById(id);
+$("nav").onclick = () => { location.href = "/api/module-ui/studio/probe-mod/panel/index.html?x=1"; };
 deai.on("context", (c) => { $("ev").textContent = "context:" + (c.page ? c.page.title : "none"); });
 (async () => {
   const init = await deai.ready;
@@ -216,6 +217,26 @@ test("B+C: панель-пісочниця, міст, права панель о
   // хрестик
   await page.click("#mod-panel [data-act='modclose']");
   await page.waitForFunction(() => document.getElementById("mod-panel").hidden);
+
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.act), "modtool", "після × фокус не на кнопці інструмента");
+
+  // скрипт панелі перейшов на іншу адресу — інструмент закривається (міст не слухає чужу сторінку)
+  await page.click(BTN);
+  await page.waitForFunction(() => !document.getElementById("mod-panel").hidden);
+  await panel().locator("#echo").filter({ hasText: "echo:" }).waitFor({ timeout: 15000 });
+  await panel().locator("#nav").click();
+  await page.waitForFunction(() => document.getElementById("mod-panel").hidden, null, { timeout: 10000 });
+
+  // чистий перегляд: літера модуля не відкриває панель
+  await page.keyboard.press("ControlOrMeta+Shift+Backslash");
+  await page.waitForSelector("#cv-unclean");
+  await page.evaluate(() => { window.__dp = null; window.addEventListener("keydown", (e) => { window.__dp = e.defaultPrevented; }); });
+  await page.keyboard.press("j");
+  await page.waitForTimeout(300);
+  assert.equal(await modVisible(page), false, "літера модуля відкрила панель у чистому перегляді");
+  assert.equal(await page.evaluate(() => window.__dp), false, "літера в чистому перегляді проковтнута (preventDefault)");
+  await page.keyboard.press("ControlOrMeta+Shift+Backslash");
+  await page.waitForSelector("#bar .bar");
 
   // «Огляд» і «Задачі» закривають
   await page.click(BTN);

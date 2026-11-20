@@ -1326,7 +1326,7 @@ async function render({ keepFrame = false } = {}) {
   applyMode(task, { keepFrame });
   renderPanel();
   /* Інструменти модулів — на вході в простір чи задачу (після змін модулів — `afterModulesChange`). Не чекаємо: збій тут нічого не ламає. */
-  if (`${spaceNow()?.id ?? ''}|${currentTaskId ?? ''}` !== modExtKey) loadModExt();
+  if ((spaceNow()?.id ?? '') !== modExtKey) loadModExt();
 }
 
 /* ===== Смуга (Task 3 Плану B): дії й одна делегація замість десятка
@@ -2053,14 +2053,22 @@ function modExtNow() {
   return modExt.spaceId === (spaceNow()?.id ?? null) ? modExt : { tools: [], actions: [] };
 }
 
-/** `GET /api/module-ext`: збій — інструментів нема, без помилки в смузі. Відповідь, що спізнилась, відкидається. */
+/** `GET /api/module-ext` — список залежить лише від простору. Збій НЕ стирає список того ж простору й не закриває панель
+ *  (ключ скидається — наступний `render()` спробує знову); закриває лише УСПІШНА відповідь, у якій інструмента вже нема.
+ *  Відповідь, що спізнилась, відкидається. */
 async function loadModExt() {
   const spaceId = spaceNow()?.id ?? null;
-  modExtKey = `${spaceId ?? ''}|${currentTaskId ?? ''}`;
+  modExtKey = spaceId ?? '';
   const seq = ++modExtSeq;
-  let r = null;
-  if (spaceId) { try { r = await api(`/api/module-ext?space=${encodeURIComponent(spaceId)}`); } catch (e) { r = null; } }
+  let r = null, failed = false;
+  if (spaceId) { try { r = await api(`/api/module-ext?space=${encodeURIComponent(spaceId)}`); } catch (e) { failed = true; } }
   if (seq !== modExtSeq) return;
+  if (failed) {
+    modExtKey = '';
+    if (modExt.spaceId !== spaceId) modExt = { spaceId, tools: [], actions: [] };
+    paintIsland();
+    return;
+  }
   modExt = { spaceId, tools: Array.isArray(r?.tools) ? r.tools : [], actions: Array.isArray(r?.actions) ? r.actions : [] };
   if (modOpen && !modExt.tools.some((x) => modToolKey(x) === modOpen.key)) closeModTool();
   paintIsland();
@@ -2068,7 +2076,7 @@ async function loadModExt() {
 
 /** Літера інструмента модуля з події клавіші (за `code`, щоб працювала й українська розкладка) або `null`. */
 function modKeyOf(ev) {
-  if (homeOpen || mode === 'canvas') return null;
+  if (homeOpen || cleanView || mode === 'canvas') return null;
   const m = /^Key([A-Z])$/.exec(ev.code || '');
   const L = m ? m[1] : (/^[a-z]$/i.test(ev.key || '') ? ev.key.toUpperCase() : null);
   if (!L) return null;
@@ -2076,7 +2084,7 @@ function modKeyOf(ev) {
   return Object.hasOwn(map, L) ? map[L] : null;
 }
 
-const modPageKey = () => `${currentTaskId}|${tunePage()}`;
+const modPageKey = () => `${currentTaskId}|${picked}|${tunePage()}`;
 const MOD_SEL_PROPS = ['color', 'background-color', 'font-size', 'font-family', 'font-weight', 'line-height'];
 /** Вибір інспектора для панелі: ланцюжок крихт, тег і шість стилів (обчислені значення зі звіту). */
 function modSelectionOf(rep) {
@@ -2148,10 +2156,14 @@ function openModTool(key) {
     + `<div class="mod-body"><iframe class="mod-frame" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer"`
     + ` title="${label}" src="${esc(url)}"></iframe></div>`;
   modFrame = modEl.querySelector('iframe');
+  /* Перший `load` — сама панель; будь-який наступний (скрипт панелі перейшов кудись) закриває інструмент: `ev.source` лишився б
+     тим самим вікном, і чужа сторінка далі отримувала б контекст. Власний `about:blank` при закритті сюди не потрапляє (`modOpen` уже `null`). */
+  let loads = 0;
+  modFrame.addEventListener('load', () => { loads += 1; if (loads > 1 && modOpen === bound) closeModTool(); });
   modEl.hidden = false;
   document.body.classList.add('with-mod');
   modCtxSent = JSON.stringify(modContext());
-  modThemeSent = JSON.stringify({ theme: modTheme(), vars: modVars() });
+  modThemeSent = `${modTheme()}|${document.documentElement.dataset.spaceColor ?? ''}`;
   paintBar();
 }
 
@@ -2174,10 +2186,12 @@ function closeModTool() {
 function modSync() {
   if (!modOpen) return;
   if (homeOpen || mode === 'canvas' || modOpen.spaceId !== (spaceNow()?.id ?? null)) { closeModTool(); return; }
-  const ctx = JSON.stringify(modContext());
-  if (ctx !== modCtxSent) { modCtxSent = ctx; modPost(modOpen.host.event('context', JSON.parse(ctx))); }
-  const th = JSON.stringify({ theme: modTheme(), vars: modVars() });
-  if (th !== modThemeSent) { modThemeSent = th; modPost(modOpen.host.event('theme', JSON.parse(th))); }
+  const c = modContext();
+  const ctx = JSON.stringify(c);
+  if (ctx !== modCtxSent) { modCtxSent = ctx; modPost(modOpen.host.event('context', c)); }
+  /* `vars` (getComputedStyle) — лише коли змінилась тема чи колір простору, а не на кожну перемальовку смуги. */
+  const th = `${modTheme()}|${document.documentElement.dataset.spaceColor ?? ''}`;
+  if (th !== modThemeSent) { modThemeSent = th; modPost(modOpen.host.event('theme', { theme: modTheme(), vars: modVars() })); }
 }
 
 /* Міст: приймаємо ЛИШЕ від вікна рамки відкритого інструмента (`ev.source`): походження непрозоре (`'null'`), на нього
@@ -2442,7 +2456,12 @@ const BAR_ACTIONS = {
   clean: () => toggleClean(),
   /* Інструмент модуля (api 2): кнопка острівця, пункт ⌘K, літера — перемикач; `modclose` — хрестик панелі. */
   modtool: (key) => { if (modOpen?.key === key) closeModTool(); else openModTool(key); },
-  modclose: () => closeModTool(),
+  modclose: () => {
+    const key = modOpen?.key;
+    closeModTool();
+    /* Кнопка × зникла разом із панеллю: фокус — на кнопку інструмента в острівці, інакше на першу кнопку острівця. */
+    (islTools.querySelector(`[data-act="modtool"][data-val="${CSS.escape(key ?? '')}"]`) || islTools.querySelector('button'))?.focus({ preventScroll: true });
+  },
 
   /* Простори (Deai 1.0, етап 1). `space` — рядок дропдауна фішки (`data-val` = id) і
      пункт ⌘K; `spacenew`/`spaceedit` — його ж футер і привітання. Розкриває дропдаун

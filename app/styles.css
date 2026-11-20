@@ -173,7 +173,7 @@ body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);
 /* Чистий перегляд макета (fb-01102026-7f7b6d): лише макет, без оболонки й пінів.
    !important — бо розкладку сцени ставлять правила `body.with-panel…` вищої
    специфічності; чистий режим мусить перекрити їх усі разом. */
-html.cv-clean #tabs,html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean #cmt-panel,html.cv-clean .cv-notice,
+html.cv-clean #tabs,html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean #cmt-panel,html.cv-clean #mod-panel,html.cv-clean .cv-notice,
 html.cv-clean .errbar,html.cv-clean .cv-zoom,html.cv-clean .cv-canvas-hint,html.cv-clean .cv-hud,
 html.cv-clean [data-comment-layer],html.cv-clean .cn-drawer{display:none!important}
 html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!important;width:100%!important}
