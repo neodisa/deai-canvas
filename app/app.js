@@ -78,6 +78,7 @@ import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
 import { introCardHTML } from './first-run.js';
+import { runCommand } from './setup-model.js';
 import {
   formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
   verdictText, writePayload,
@@ -4425,6 +4426,24 @@ async function agentsWrite() {
   if (connSec === 'agents') focusAgents();
 }
 
+/** «Підключити» CLAUDE.md (0.33.0): `POST /api/agents-md {space, claude: true}` — дописати `@AGENTS.md` на початок чи
+    створити файл. Відповідь — той самий стан розділу (з `claude`); збій — тост і перечитування. */
+async function agentsClaude() {
+  const sid = agentsSt.spaceId;
+  if (agentsSt.busy || !sid || sid !== connState.spaceId) return;
+  agentsSt.busy = true;
+  paintHome();
+  let data = null;
+  try { data = await post('/api/agents-md', { space: sid, claude: true }); } catch (e) { data = null; }
+  agentsSt.seq += 1;
+  agentsSt.busy = false;
+  if (!connOpen() || connState.spaceId !== sid) return;
+  if (data) { agentsSt.data = data; toast(t('frClaudeConnected')); }
+  else { toast(t('frClaudeFailed')); loadAgents(); }
+  paintHome();
+  if (connSec === 'agents') focusAgents();
+}
+
 /** Кнопки розділу «AGENTS.md» (`data-th="ag"`, `data-v`). */
 function agentsAction(v) {
   const a = agentsSt.data;
@@ -4432,6 +4451,8 @@ function agentsAction(v) {
   else if (v === 'copypath' && a?.path) agentsCopy(a.path, 'agPathCopied', '.ag-bar span');
   else if (v === 'update' || v === 'create') agentsWrite();
   else if (v === 'retry') { agentsSt.data = null; paintHome(); loadAgents(); }
+  else if (v === 'runcopy') agentsCopy(runCommand(a?.path), 'frCmdCopied', '#fr-run-cmd');
+  else if (v === 'claude') agentsClaude();
 }
 
 /* Розділ «Простір»: запис `space-update` іде ЧЕРГОЮ — назва й колір летять двома запитами, а сервер пише обидва поля разом;
