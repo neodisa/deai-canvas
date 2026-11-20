@@ -281,8 +281,11 @@ describe("зовнішня оболонка на зібраному publish/", (
       assert.equal(await page.locator(`#pages-panel [data-act="${act}"]`).count(), 0,
         `«${act}» у статичному превʼю нікуди не веде`);
     }
-    // ⛔ Інспектора в зовнішньому превʼю немає — межа, яку тримає publish.
-    assert.equal(await page.locator('[data-act="inspector"]').count(), 0);
+    // 0.32.0: інспектор у превʼю є — але лише для перегляду, і кнопка живе в ОСТРІВЦІ (не в смузі). Деталі — `preview-inspector.test.mjs`.
+    // Межа, яку тримає publish, лишилась: жодного сервера (`/api/…`) і жодного тюнера.
+    await page.locator('#hud [data-act="inspector"]').waitFor();
+    assert.equal(await page.locator('#bar [data-act="inspector"]').count(), 0, "кнопка інспектора в смузі");
+    assert.equal(await page.locator('[data-act="insptune"], [data-act="insptunecolor"], .insp-foot').count(), 0, "у превʼю є тюнер");
   });
 
   test("кожен видимий контрол смуги щось робить на клік", async (t) => {
@@ -341,19 +344,21 @@ describe("зовнішня оболонка на зібраному publish/", (
   }, sel);
   const cleanOn = (page) => page.evaluate(() => document.documentElement.classList.contains("cv-clean"));
 
-  test("острівець: по центру внизу, одна кнопка «Сховати інтерфейс», без «баг» і AI", async (t) => {
+  test("острівець: по центру внизу, «Інспектор» і «Сховати інтерфейс», без «баг» і AI", async (t) => {
     const { ctx, page } = await fresh();
     t.after(() => ctx.close());
     await page.goto(`${base}/${IT1}`);
     await unlock(page);
     const isl = page.locator("#hud .island");
     await isl.waitFor();
+    await page.locator('#hud [data-act="inspector"]').waitFor();      // зʼявляється, коли в рамці піднявся оверлей
     const box = await isl.boundingBox();
     assert.ok(Math.abs(box.x + box.width / 2 - VIEW.width / 2) <= 2, `острівець не по центру: ${JSON.stringify(box)}`);
     assert.ok(VIEW.height - (box.y + box.height) < 40 && box.y + box.height <= VIEW.height, `острівець не внизу: ${JSON.stringify(box)}`);
     const acts = await page.evaluate(() => [...document.querySelectorAll("#hud [data-act]")].map((b) => b.dataset.act));
-    assert.deepEqual(acts, ["clean"]);
-    assert.equal(await page.locator('#hud [data-act="feedback"], #hud #claude-hud, #hud .isl-claude, #hud .isl-sep').count(), 0);
+    assert.deepEqual(acts, ["inspector", "clean"]);       // коментарів у цій збірці нема (manifest.comments)
+    assert.equal(await page.locator('#hud [data-act="feedback"], #hud #claude-hud, #hud .isl-claude').count(), 0);
+    assert.equal(await page.locator("#hud .isl-sep").count(), 1, "роздільник лише між інспектором і «Сховати»");
     const btn = page.locator('#hud [data-act="clean"]');
     assert.equal(await btn.getAttribute("aria-label"), "Сховати інтерфейс");
     assert.match(await btn.getAttribute("title"), /⇧⌘\\/);
@@ -366,15 +371,20 @@ describe("зовнішня оболонка на зібраному publish/", (
     t.after(() => ctx.close());
     await page.goto(base);
     await unlock(page);
+    await page.locator('#hud [data-act="inspector"]').waitFor();
     const acts = await page.evaluate(() => [...document.querySelectorAll("#hud [data-act]")]
       .filter((el) => el.offsetParent !== null && !el.disabled).map((el) => el.dataset.act));
-    assert.ok(acts.length >= 1, "острівець порожній");
+    assert.ok(acts.length >= 2, "в острівці мають бути «Інспектор» і «Сховати інтерфейс»");
+    // знімок «що на екрані»: клас `<html>`, клас `<body>` (панель справа), сам острівець (натиснута кнопка) і оверлей `ask()`
+    const snap = () => page.evaluate(() => document.documentElement.className + "|" + document.body.className + "|"
+      + document.getElementById("hud").innerHTML + "|" + !!document.querySelector(".cv-ask-scrim"));
     for (const act of acts) {
-      const before = await page.evaluate(() => document.documentElement.className + !!document.querySelector(".cv-ask-scrim"));
+      const before = await snap();
       await page.locator(`#hud [data-act="${act}"]`).first().click();
       try {
-        await page.waitForFunction((b) => document.documentElement.className + !!document.querySelector(".cv-ask-scrim") !== b,
-          before, { timeout: 4000 });
+        await page.waitForFunction(([b]) => (document.documentElement.className + "|" + document.body.className + "|"
+          + document.getElementById("hud").innerHTML + "|" + !!document.querySelector(".cv-ask-scrim")) !== b,
+        [before], { timeout: 4000 });
       } catch (e) {
         assert.fail(`клік по «${act}» на острівці не змінив нічого — забутий рядок у EXT_ACTIONS`);
       }
@@ -733,6 +743,23 @@ describe("«Огляд» на зібраному publish/ з кадрами", ()
        ні краю світу за межами полотна. */
     const scale = await scaleOf(page);
     assert.ok(scale > 0 && scale <= 1, `масштаб ${scale} поза межами «вписати все»`);
+  });
+
+  test("«Інспектор» лише в «Макеті»: в «Огляді» кнопки нема, а відкритий оверлей гаситься (кадри — знімки, живого DOM нема)", async (t) => {
+    const { ctx, page } = await open();
+    t.after(() => ctx.close());
+    const btn = page.locator('#hud [data-act="inspector"]');
+    await btn.waitFor();
+    await btn.click();
+    await page.waitForFunction(() => document.getElementById("frame").contentWindow.CanvasInspector.on === true, null, { timeout: 5000 });
+    assert.equal(await page.evaluate(() => !document.getElementById("insp-panel").hidden), true, "панель не відкрилась");
+    await overview(page);
+    assert.equal(await page.locator('#hud [data-act="inspector"]').count(), 0, "кнопка інспектора в «Огляді»");
+    assert.equal(await page.evaluate(() => document.getElementById("insp-panel").hidden), true, "панель лишилась в «Огляді»");
+    assert.equal(await page.evaluate(() => document.getElementById("frame").contentWindow.CanvasInspector.on), false,
+      "оверлей лишився ввімкненим під полотном");
+    await page.click('#bar [data-act="mode"][data-val="layout"]');
+    await page.locator('#hud [data-act="inspector"]').waitFor();
   });
 
   test("колесо змінює масштаб полотна", async (t) => {

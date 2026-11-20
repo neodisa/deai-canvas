@@ -2824,16 +2824,60 @@ def inspector_ds_arg(ds, sp=None):
     Id перевіряється так само, як напрямок (`SPACE_ID_RE`): реєстр і так не пропустить іншого, але
     розмітка не повинна триматись на тому, що хтось колись не забув перевірити.
 
-    ⛔ ПУБЛІКАЦІЯ сюди не доходить і не мусить: `build_preview` кличе `inject_module_comment_layer` без
-    `inspector`, `profile` (назва аргумента лишилась від 0.14.0 — це `ds`) і `space` — опублікована сторінка (Vercel, тека) до
-    `/api/ds-tokens` не дістанеться. Збірка ЛІГА від цього не міняється: опубліковані сторінки, обгортка й `comment-layer/`
-    байт-у-байт такі, як були; `shell/i18n.js` міняється лише новими ключами словника."""
+    ⛔ ПУБЛІКАЦІЯ сюди не доходить і не мусить: `/api/ds-tokens` на статиці нема. З 0.32.0 превʼю везе власний тег оверлея —
+    `preview_inspector_tag` (відносний шлях, токени знімком-файлом збірки), а `sp` без `tok` у сторінку превʼю не потрапляє
+    ніколи: це був би запит до `/api/…` у глядача."""
     p = (ds or '').strip()
     out = f'?ds={p}' if tracks.ID_RE.fullmatch(p) else ''
     d = spaces.describe(sp)
     if d is not None and spaces.SPACE_ID_RE.fullmatch(str(d['id'])):
         out += ('&' if out else '?') + f'sp={d["id"]}'
     return out
+
+
+#: Файли оверлея інспектора, що їдуть у превʼю (0.32.0): `publish/shell/vendor/`. Імпорти `../i18n.js` та `../esc.js` оверлея
+#: ведуть у `publish/shell/` — туди ж їде оболонка (`SHELL_MODULES`), тож другої копії словника нема. Замкнутість по `./` і `../`
+#: рахує тест (`ShellModulesList`): забутий лист — 404 і мертва кнопка «Інспектор» у глядача.
+SHELL_VENDOR = ('inspector.js', 'inspector-dom.js', 'inspector-core.js', 'inspector-measure.js', 'inspector-nav.js',
+                'insp-report.js', 'ds-tokens.js')
+#: Знімок токенів простору: `publish/shell/ds-snapshot.json`. Тег оверлея несе його відносним шляхом від самого оверлея.
+PREVIEW_TOKENS_FILE = 'ds-snapshot.json'
+#: Поле `profile` відповіді `/api/ds-tokens` (`space:<id>`) — НЕ застаріле поле задачі `profile` (4d-4a, `tests/test_no_adapter.py`):
+#: ключ винесено в константу, щоб охоронець «читання `profile` лише на межі» не плутав дві різні речі.
+_TOKENS_PROFILE = 'profile'
+
+
+def preview_tokens_snapshot(space):
+    """Знімок токенів простору для превʼю (0.32.0): те, що віддає `GET /api/ds-tokens?space=<id>` (`ds_tokens_view`), —
+    `{profile, tokens, source}` — або `None`, коли токенів нема (шар просторів вимкнено, простір неявний, нема постачальника ролі
+    `tokens`, модуль впав, мапа порожня): тоді файла не буде, а оверлей покаже значення без чипів.
+
+    ⛔ Превʼю ПУБЛІЧНЕ: `source` зводиться до імені файла (власний модуль міг віддати шлях із домашньою текою людини), а імена й
+    значення токенів їдуть як є — це зміст дизайн-системи, заради якого знімок і береться. Модуль виконує свій код
+    (`CHECK_TIMEOUT`): НЕ кликати під замками публікації й `spaces.WRITE_LOCK` — викликач бере знімок ДО них."""
+    d = spaces.describe(space)
+    if d is None or not spaces.SPACE_ID_RE.fullmatch(str(d['id'])):
+        return None
+    view = ds_tokens_view(space)
+    if not isinstance(view, dict) or not view.get(_TOKENS_PROFILE) or not view.get('tokens'):
+        return None
+    src = view.get('source')
+    src = re.split(r'[\\/]', src)[-1] if isinstance(src, str) else ''
+    return {_TOKENS_PROFILE: view[_TOKENS_PROFILE], 'tokens': view['tokens'], 'source': src}
+
+
+def preview_inspector_tag(depth_up, ds, tokens):
+    """Тег оверлея інспектора для сторінки превʼю на глибині `depth_up` (`'../'` × глибина): ВІДНОСНИЙ шлях у
+    `shell/vendor/`. `ds` — вже ДС напрямку задачі (`task_ds`), `?ds=` першим, як у Deai. `tokens` — знімок
+    (`preview_tokens_snapshot`) чи `None`: лише з ним тег несе `&sp=<id>&tok=../ds-snapshot.json` (відносно самого оверлея);
+    без знімка `sp` НЕ їде — він змусив би оверлей питати `/api/ds-tokens`, якого на статиці нема."""
+    p = (ds or '').strip()
+    arg = f'?ds={p}' if tracks.ID_RE.fullmatch(p) else ''
+    if tokens and str(tokens.get(_TOKENS_PROFILE, '')).startswith('space:'):
+        sid = tokens[_TOKENS_PROFILE][len('space:'):]
+        if spaces.SPACE_ID_RE.fullmatch(sid):
+            arg += ('&' if arg else '?') + f'sp={sid}&tok=../{PREVIEW_TOKENS_FILE}'
+    return INSPECTOR_TAG.format(assets=f'{depth_up}shell/vendor', ds=arg)
 
 
 # Вкладки аудиторій — аргументом `init`, і теж за ПРАПОРЦЕМ на виклику.
@@ -3103,20 +3147,23 @@ def module_client_urls(prov, space=None):
 
 
 def inject_module_comment_layer(html, assets_base, client_urls, config, version='',
-                                inspector=False, audiences=False, profile='', space=None, host=False):
+                                inspector=False, audiences=False, profile='', space=None, host=False, inspector_tag=None):
     """Канал коментарів МОДУЛЯ (`host=True` — колбеки оболонки, `host_arg`): шар коментатора (`<assets_base>/comment-layer.min.js`), файли адаптера (`client_urls`, по
     порядку), `window.__deaiCommentsCfg = config` і завантажувач із `storage: DeaiComments.create(…)`.
 
     `config` — вже ПЕРЕВІРЕНА публічна конфігурація з `channel` (див. `deai_modules.comments_client`/`channel_for`): тут вона
     лише екранується як JS-літерал для `<script>` (`js_literal`: `<`, `>`, `&`, U+2028/9). Решта аргументів:
     `inspector`/`audiences` лише для робочого місця дизайнера (у publish обидві межі лишаються), `space` — для `sp=` в
-    інспектора (`inspector_ds_arg`); без `inspector` він розмітку не міняє зовсім."""
+    інспектора (`inspector_ds_arg`); без `inspector` він розмітку не міняє зовсім.
+
+    `inspector_tag` (0.32.0, превʼю) — ГОТОВИЙ тег оверлея з відносним шляхом (`preview_inspector_tag`): стає на те саме
+    місце, що й тег Deai, — після скриптів коментарів. Він сильніший за `inspector`: превʼю шляху `/app/vendor` не має."""
     assets = html_escape(assets_base, quote=True)         # `origin` береться із заголовка `Host`: в атрибут — лише екранованим
     snippet = MODULE_COMMENT_SNIPPET.format(
         assets=assets,
         client_tags=''.join(MODULE_CLIENT_TAG.format(src=html_escape(u, quote=True)) for u in client_urls),
-        inspector=INSPECTOR_TAG.format(
-            assets=assets, ds=inspector_ds_arg(profile, space)) if inspector else '',
+        inspector=inspector_tag if inspector_tag else (INSPECTOR_TAG.format(
+            assets=assets, ds=inspector_ds_arg(profile, space)) if inspector else ''),
         cfg_js=js_literal(config), version_js=js_literal(version),
         audiences=audiences_arg('project' if audiences else None), host=host_arg(host))
     return _insert_before_body(html, snippet)
@@ -3759,6 +3806,8 @@ PAGES_PREVIEW_PAGE = """<!DOCTYPE html><html lang="uk"><head><meta charset="utf-
 <div id="hud" class="cv-hud"></div>
 <!-- Панель коментарів (0.32.0): порожня точка монтування справа; наповнює її `ext-shell.js` лише в збірці з командними коментарями. -->
 <div id="cmt-panel" class="insp cmt" hidden></div>
+<!-- Панель інспектора (0.32.0): та сама точка справа, лише для перегляду; наповнює її `ext-shell.js`, стара оболонка її не чіпає. -->
+<div id="insp-panel" class="insp" hidden></div>
 <!-- Пароль — рівно для «Копіювати посилання» (`#k=…`, безшовний вхід колеги).
      У маніфест він НЕ їде: той файл читає оболонка, і пароль задачі їй знати
      нізащо, а лежить він і так у тексті гейта поруч. -->
@@ -3802,13 +3851,17 @@ LAYER_BUNDLE = 'comment-layer.min.js'
 #: `tree-model.js` — правила дерева сторінок: від нього залежать `rows-model.js`
 #: і `ext-shell.js` (обидва беруть лише `kindOf`), тож без нього оболонка превʼю
 #: ловить 404 на імпорті (A7).
+#: `ext-inspect.js` (власний модуль превʼю), `shell-inspect.js`, `insp-panel.js`, `insp-model.js` — панель інспектора лише для
+#: перегляду (0.32.0). `insp-model.js` імпортує `./vendor/inspector-core.js`, тож `shell/vendor/` (`SHELL_VENDOR`) — частина
+#: того самого замикання; сам оверлей з `shell/vendor/` бере `../i18n.js` і `../esc.js` звідси.
 #: Правки в спільних модулях «під зовнішній режим» заборонені свідомо — вони
 #: їдуть звідси байт у байт, і гілка «а в превʼю інакше» ламала б інструмент.
 SHELL_MODULES = ('i18n.js', 'icons.js', 'shell-panel.js', 'viewport.js',
                  'camera.js', 'canvas-geom.js', 'layout.js', 'rows-model.js',
                  'styles.css', 'ask.js', 'esc.js', 'ext-shell.js', 'ext-bar.js',
                  'tree-model.js', 'clean-view.js', 'island.js',
-                 'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js')
+                 'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js',
+                 'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js')
 
 #: Типова ширина кадру. МУСИТЬ дорівнювати `CANVAS_W` у app/viewport.js:
 #: саме на ній тримається правило ключа («типова ширина суфікса не додає»), і
@@ -4515,7 +4568,7 @@ def publish_comments(space, task, tid, *, module_publish=False):
         return False, e.code
 
 
-def build_preview(task, tid, its, *, comments, gate_pw, build):
+def build_preview(task, tid, its, *, comments, gate_pw, build, space=None, tokens=None):
     """Зібрати `publish/` з ОПУБЛІКОВАНИХ ітерацій `its`: сторінки, спільні файли ітерацій, оболонка,
     кадри, маніфест, обгортка. ЄДИНА збірка превʼю: нею користуються і ЛІГА (`Handler._publish`, далі
     vercel deploy), і модулі публікації (статика в локальну теку) — друга копія збірки розійшлась би з
@@ -4542,6 +4595,11 @@ def build_preview(task, tid, its, *, comments, gate_pw, build):
     Склад `publish/comment-layer/` для цього рішення не годиться: збірка ЛІГА з коментарями модуля несе там лише шар
     і файли адаптера, а ЛІГА без коментарів (`comments_unavailable`) — нічого, і обидві не відрізнити від локальної
     збірки модуля. Інше значення — `ValueError` ДО змін на диску.
+
+    `space` і `tokens` (0.32.0) — для ІНСПЕКТОРА превʼю: `space` — запис простору публікації (напрямок задачі `task_ds(task,
+    space)` → `?ds=` у тезі оверлея), `tokens` — знімок токенів простору (`preview_tokens_snapshot(space)`), який викликач
+    бере РАНІШЕ за замки публікації (модуль виконує свій код). `tokens` → файл `shell/ds-snapshot.json` і `&sp=…&tok=…` у тезі;
+    `None` — файла нема, оверлей без чипів. Оверлей їде в КОЖНУ сторінку превʼю (`SHELL_VENDOR`), з відносним шляхом.
 
     `gate_pw` — пароль гейта, ОБОВʼЯЗКОВИЙ іменований аргумент (забути його не вдасться). `None` — превʼю
     БЕЗ гейта: сторінки не чіпаємо взагалі (`_inject_gate` ще й переписує `<title>`), а обгортка
@@ -4586,6 +4644,16 @@ def build_preview(task, tid, its, *, comments, gate_pw, build):
     os.makedirs(shell)
     for m in SHELL_MODULES:
         shutil.copy2(os.path.join(ROOT, 'app', m), os.path.join(shell, m))
+    # Оверлей інспектора й його залежності (0.32.0): `shell/vendor/`, байт у байт. Знімок токенів — поруч із оболонкою, куди
+    # ведуть `../i18n.js`/`../esc.js` оверлея: `shell/ds-snapshot.json` (тег несе його як `tok=../ds-snapshot.json`).
+    os.makedirs(os.path.join(shell, 'vendor'))
+    for m in SHELL_VENDOR:
+        shutil.copy2(os.path.join(ROOT, 'app', 'vendor', m), os.path.join(shell, 'vendor', m))
+    snapshot = tokens if (tokens and tokens.get('tokens')) else None
+    if snapshot:
+        with open(os.path.join(shell, PREVIEW_TOKENS_FILE), 'w', encoding='utf-8') as fh:
+            json.dump(snapshot, fh, ensure_ascii=False)
+    ds_task = task_ds(task, space)
     gated = gate_pw is not None       # ЄДИНЕ рішення «з гейтом чи без»: далі — лише `gated`
     gate = gate_html(tid, gate_pw) if gated else None
     # ОДИН знімок дерев на всю збірку: сторінки, спільні файли й `outline`
@@ -4606,14 +4674,17 @@ def build_preview(task, tid, its, *, comments, gate_pw, build):
         page_file = os.path.join(dst, 'index.html')
         with open(page_file, encoding='utf-8') as fh:
             html = fh.read()
+        depth_up = '../' * (p['out_rel'].count('/') + 1)
+        insp_tag = preview_inspector_tag(depth_up, ds_task, snapshot)
         if adapter is not None:
-            depth_up = '../' * (p['out_rel'].count('/') + 1)
             html = inject_module_comment_layer(
                 html, f'{depth_up}comment-layer',
                 [f'{depth_up}comment-layer/{name}' for name, _data in adapter.files],
                 {**adapter.config, 'channel': adapter.channel},
                 version=pm.page_version_tag(p['it'], p['page']), inspector=False, audiences=False,
-                host='preview')
+                host='preview', inspector_tag=insp_tag)
+        else:
+            html = _insert_before_body(html, insp_tag)      # без коментарів — лише оверлей, після всього, що було
         if gated:
             # ⛔ Гейт і на ВНУТРІШНІЙ сторінці, не лише в обгортці. До 03.08.2026
             # пряме посилання на неї минало пароль: перевірено живцем —
@@ -4825,13 +4896,14 @@ def publish_with_module(h, prov, payload):
     # модуля (до `CHECK_TIMEOUT` = 5 с) і нічого не пише, тож тримати під ним замок збірки задачі — зайве очікування
     # для другого кліку (його `publish-busy` приходить тепер лише коли справді йде збірка чи копіювання).
     comments, comments_warn = publish_comments(space, task, tid, module_publish=True)
+    tokens = preview_tokens_snapshot(space)          # знімок токенів для інспектора превʼю: теж виконує код модуля — поза замками
     with _try_publish_locks(task['dir'], folder, tid) as got:
         if not got:
             h._send_json({'ok': False, 'code': 'publish-busy',
                           'error': 'ця задача вже публікується — зачекайте завершення і повторіть'},
                          status=409)
             return
-        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw, build='module')
+        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw, build='module', space=space, tokens=tokens)
         if payload.get('build_only'):
             result = {'ok': True, **built}
         else:
@@ -5038,13 +5110,14 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
     ctx = deai_modules.module_ctx(space, prov)
     gate_pw = ctx['secrets'].get('password') or None
     comments, comments_warn = publish_comments(space, task, tid, module_publish=True)   # поза замком: див. `publish_with_module`
+    tokens = preview_tokens_snapshot(space)          # так само поза замком
     with _try_task_dir_lock(task['dir']) as got:
         if not got:
             h._send_json({'ok': False, 'code': 'publish-busy',
                           'error': 'ця задача вже публікується — зачекайте завершення і повторіть'},
                          status=409)
             return
-        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw, build='module')
+        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw, build='module', space=space, tokens=tokens)
         if payload.get('build_only'):
             result = {'ok': True, **built}
         else:
@@ -8898,7 +8971,8 @@ class Handler(SimpleHTTPRequestHandler):
         # відмова (в т.ч. `comments-unconfigured`) → без коментарів узагалі + `comments_unavailable` у відповіді (див.
         # `publish_comments`).
         comments, comments_warn = publish_comments(space, task, tid)
-        built = build_preview(task, tid, its, comments=comments, gate_pw=pw, build='legacy')
+        tokens = preview_tokens_snapshot(space)      # знімок токенів для інспектора превʼю (`space` — `None`, коли простору запиту нема: тоді без знімка)
+        built = build_preview(task, tid, its, comments=comments, gate_pw=pw, build='legacy', space=space, tokens=tokens)
         # ⛔ `pub` потрібен ДАЛІ — деплою (`_publish_legacy_call(…, pub, …)` — модуль запускає `vercel` у цій теці); його
         # читає лише гілка без `build_only`, тож вилучення збірки без цього рядка ламає тільки справжній
         # деплой (`NameError` посеред відповіді), а `build_only`-тести лишаються зеленими.

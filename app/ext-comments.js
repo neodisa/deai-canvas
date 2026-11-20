@@ -117,10 +117,11 @@ function nameFormHTML() {
 
 /**
  * Контролер панелі. `frame` — iframe з макетом; `mount` — `#cmt-panel`; `channel` — канал збірки (ключ «моїх»);
- * `onChange()` — оболонка перемальовує острівець (число відкритих, натиснута кнопка). Усе сховище — через функції:
+ * `onChange()` — оболонка перемальовує острівець (число відкритих, натиснута кнопка); `onOpen()` — панель ЩОЙНО відкрилась (кнопка,
+ * C, чи вибір піна в макеті) — оболонка вимикає інспектор: вони взаємно виключні. Усе сховище — через функції:
  * `storage()` (за замовчуванням `localStorage`).
  */
-export function createExtComments({ frame, mount, channel, onChange = () => {}, storage = () => localStorage, canToggle = () => true }) {
+export function createExtComments({ frame, mount, channel, onChange = () => {}, storage = () => localStorage, canToggle = () => true, onOpen = () => {} }) {
   const own = ownStore(storage, `${OWN_PREFIX}${channel || location.pathname}`);
   const st = {
     open: false, active: true, adding: false, ready: false, readyDoc: null, snap: null, sel: null, query: "",
@@ -189,6 +190,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     on = !!on;
     if (st.open === on) return;
     st.open = on;
+    if (on) onOpen();
     if (!on) {
       reset();
       if (st.adding) { try { layer()?.setCommentMode(false); } catch (e) { /* рамка пішла */ } }
@@ -328,7 +330,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       if (m.snapshot && Array.isArray(m.snapshot.comments)) { st.snap = m.snapshot; paint(); }
     } else if (m.ev === "select") {
       st.sel = typeof m.id === "string" ? m.id : null;
-      if (!st.open) st.open = true;
+      if (!st.open) { st.open = true; onOpen(); }
       paint();
     } else if (m.ev === "mode") {
       st.adding = !!m.on;

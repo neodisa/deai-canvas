@@ -20,6 +20,9 @@
  *   tuneMissing: [{selector, prop}] — правки, які на ЦЬОМУ документі макета не лежать. Окремо від пакета: пакет —
  *     НАМІР дизайнера, «лягло чи ні» — факт про рамку, що на екрані, і в файл йому не можна.
  *
+ *   readonly: boolean — 0.32.0, превʼю: панель лише для перегляду (`panelHTML(model, { readonly: true })`), без підвалу тюнера
+ *     (`tune*` ігноруються). Без прапорця вихід — байт у байт той, що був (`tests/insp-panel-default.test.mjs`).
+ *
  * Повертає `''`, коли панелі не місце (не «Макет», або інспектор вимкнений): `app.js` (`paintInsp`) читає його ж,
  * щоб вирішити, чи прибирати контейнер із розкладки — одне рішення, а не два.
  */
@@ -167,10 +170,11 @@ export function inspectHTML(state) {
   /* Одна панель, без вкладок: «Лінійки» немає (відстані — Alt у рамці), «Тюнер» давно переїхав у підвал. `model` —
      готова модель (`buildModel`, `insp-model.js`); панель її лише малює. Порожній стан (нічого не вибрано) — лише
      шапка й порожнє тіло: підписів-пояснень немає (правило власника), клавіші названо в `title` кнопки острівця. */
-  const foot = tuneFootHTML(state.tune, Number(state.tuneOther) || 0,
+  const ro = state.readonly === true;
+  const foot = ro ? "" : tuneFootHTML(state.tune, Number(state.tuneOther) || 0,
     Array.isArray(state.tuneMissing) ? state.tuneMissing : []);
   return `<div class="insp-top">${ico("inspect", 16)}
       <span class="panel-title">${esc(t("inspector"))}</span>
       <button class="icob" data-act="inspector" title="${esc(t("kEsc"))}">${ico("x")}</button></div>
-    <div class="insp-body">${panelHTML(state.model)}</div>${foot ? `<div class="insp-foot">${foot}</div>` : ""}`;
+    <div class="insp-body">${ro ? panelHTML(state.model, { readonly: true }) : panelHTML(state.model)}</div>${foot ? `<div class="insp-foot">${foot}</div>` : ""}`;
 }

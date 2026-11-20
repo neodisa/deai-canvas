@@ -426,12 +426,12 @@ class BuildPreview(TaskFixture):
         self.assertTrue(self._mentions(pub, b'supabase'),
                         'контроль: з коментарями supabase у дереві МАЄ бути')
 
-    def test_published_pages_never_carry_the_space_or_the_inspector(self):
+    def test_published_pages_never_carry_the_workplace_inspector_or_the_space(self):
         """Етап 2а, Task 7: `sp=<id простору>` іде в URL інспектора ЛИШЕ на робочому місці дизайнера
-        (`/commented`). Опублікована сторінка (Vercel чи тека) до `/api/ds-tokens` дістатись не може, а
-        збірка ЛІГА мусить лишитись байт-у-байт такою, як була: `build_preview` кличе
-        `inject_module_comment_layer` без `inspector`, `profile` і `space`. Простір ТУТ підставлено справжній
-        (інакше шар вимкнено, `describe` дає `None`, і тест не бачив би витоку, навіть якби він був)."""
+        (`/commented`). Опублікована сторінка (Vercel чи тека) до `/api/ds-tokens` дістатись не може: `build_preview` кличе
+        `inject_module_comment_layer` без `inspector`, `profile` і `space`. З 0.32.0 сторінка превʼю везе ВЛАСНИЙ оверлей лише для
+        перегляду — готовим тегом `inspector_tag` із відносним шляхом (`shell/vendor/`), без `sp` (знімка токенів тут нема).
+        Простір ТУТ підставлено справжній (інакше шар вимкнено, `describe` дає `None`, і тест не бачив би витоку)."""
         real = {'id': 'design-1', 'path': self.tmp, 'legacy': False, 'integrations': False}
         self.assertIsNotNone(serve.spaces.describe(real), 'контроль: цей простір для describe реальний')
         calls = []
@@ -447,14 +447,17 @@ class BuildPreview(TaskFixture):
             pub = serve.build_preview(task, tid, its, comments=comments, gate_pw='x', build='legacy')['dir']
         self.assertEqual(len(calls), len(SOURCE_PAGES), 'кожна сторінка пройшла через інʼєкцію')
         for kw in calls:
-            self.assertEqual(set(kw) - {'version', 'inspector', 'audiences', 'host'}, set(), f'публікація передала зайве: {sorted(kw)}')
+            self.assertEqual(set(kw) - {'version', 'inspector', 'audiences', 'host', 'inspector_tag'}, set(), f'публікація передала зайве: {sorted(kw)}')
+            self.assertIn('shell/vendor/inspector.js', kw['inspector_tag'])
             self.assertEqual((kw.get('inspector'), kw.get('audiences')), (False, False))
             self.assertEqual(kw.get('host'), 'preview', 'публікація — хост превʼю (0.32.0), а не Deai')
         for rel in self._inner_pages(pub) + ['index.html']:
             html = _read(os.path.join(pub, rel))
             self.assertNotIn('sp=', html, rel)
-            self.assertNotIn('inspector', html, rel)
+            self.assertNotIn('/app/vendor', html, rel)
+            self.assertNotIn('/api/', html, rel)
             self.assertNotIn('ds-tokens', html, rel)
+            self.assertEqual('inspector' in html, rel != 'index.html', f'{rel}: оверлей — у сторінках макета, не в обгортці')
 
     def test_comments_off_leaves_no_supabase_no_layer_folder_no_injection(self):
         for gate_pw in ('x', None):
@@ -586,6 +589,9 @@ class BuildPreview(TaskFixture):
                 self.assertEqual(bp.call_count, 1)
                 args, kwargs = bp.call_args
                 comments = kwargs.pop('comments')
+                # 0.32.0: простір публікації й знімок токенів для інспектора превʼю (без модуля токенів — `None`)
+                space, tokens = kwargs.pop('space'), kwargs.pop('tokens')
+                self.assertEqual((space['id'], tokens), ('liga', None))
                 self.assertEqual(kwargs, {'gate_pw': want, 'build': 'legacy'})
                 self.assertEqual((comments['module'].id, comments['channel']), ('supabase-comments', 'dc/fixture'))
                 self.assertEqual((args[1], [i['id'] for i in args[2]]), ('fixture', ['it1', 'it2']))
@@ -4381,6 +4387,169 @@ def _page_cfg(html):
     return json.loads(m.group(1))
 
 
+class PreviewInspectorBuild(TaskFixture):
+    """0.32.0 (Task 4): інспектор лише для перегляду в збірці — оверлей у `shell/vendor/`, тег із ВІДНОСНИМ шляхом у кожній сторінці,
+    знімок токенів простору файлом `shell/ds-snapshot.json`. Простір — із `setUp` фікстури (ЛІГА), модуль `css-tokens` — справжній,
+    на CSS у тимчасовій теці; де потрібен «поганий» модуль, `ds_tokens_view` підмінюється."""
+
+    SNAP = {'profile': 'space:liga', 'tokens': {'--c-primary': ['#123456'], '--gap': ['4px']}, 'source': 'ds.css'}
+
+    def _enable_tokens(self, css=':root{--c-primary:#123456;--gap:4px}'):
+        path = os.path.join(self.home, 'ds.css')
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(css)
+        sj = os.path.join(self.league_path, 'space.json')
+        with open(sj, encoding='utf-8') as fh:
+            doc = json.load(fh)
+        doc['modules']['css-tokens'] = {'enabled': True, 'settings': {'file': path}}
+        with open(sj, 'w', encoding='utf-8') as fh:
+            json.dump(doc, fh)
+        dm.reset_caches()
+        return path
+
+    def _space(self):
+        with spaces.request_space('liga'):
+            return spaces.active_space()
+
+    def _pages(self, pub):
+        return [p['path'] for p in json.loads(_read(os.path.join(pub, 'manifest.json')))['pages']]
+
+    def _tag(self, html):
+        m = re.findall(r'<script type="module" src="([^"]*shell/vendor/inspector\.js[^"]*)"></script>', html)
+        self.assertEqual(len(m), 1, 'рівно один тег оверлея на сторінку')
+        return m[0]
+
+    # ---- оверлей у кожній сторінці, відносним шляхом ------------------------------------------
+
+    def test_every_page_carries_the_overlay_by_a_path_relative_to_its_own_depth(self):
+        for label, comments in (('без коментарів', False), ('з коментарями', self._league())):
+            with self.subTest(comments=label):
+                pub = self._build(comments=comments, gate_pw=None, space=self._space(), tokens=self.SNAP)['dir']
+                pages = self._pages(pub)
+                self.assertEqual(sorted({p.count('/') for p in pages}), [1, 2], 'фікстура мусить мати сторінки різної глибини')
+                for rel in pages:
+                    html = _read(os.path.join(pub, rel))
+                    src = self._tag(html).split('?')[0]
+                    self.assertEqual(src, '../' * rel.count('/') + 'shell/vendor/inspector.js')
+                    self.assertTrue(os.path.isfile(os.path.normpath(os.path.join(pub, os.path.dirname(rel), src))),
+                                    f'{rel}: тег веде в нікуди')
+
+    def test_the_tag_stands_after_the_comment_scripts_when_there_are_comments(self):
+        pub = self._build(comments=self._league(), gate_pw=None, space=self._space(), tokens=None)['dir']
+        html = _read(os.path.join(pub, 'it2', 'index.html'))
+        at = html.index('shell/vendor/inspector.js')
+        self.assertLess(html.index('window.__clDown = function'), at, 'банер — першим тегом')
+        self.assertGreater(at, html.rindex('<script src='), 'після класичних скриптів коментарів')
+        self.assertLess(at, html.index('window.__deaiCommentsCfg'))
+
+    def test_the_task_direction_rides_as_ds_like_deai(self):
+        with mock.patch.object(serve, 'task_ds', return_value='united'):
+            pub = self._build(comments=False, gate_pw=None, space=self._space(), tokens=self.SNAP)['dir']
+        for rel in self._pages(pub):
+            self.assertIn('inspector.js?ds=united&sp=liga&tok=../ds-snapshot.json"', _read(os.path.join(pub, rel)))
+
+    def test_the_overlay_and_its_imports_ship_byte_for_byte_into_shell_vendor(self):
+        pub = self._build(comments=False, gate_pw=None)['dir']
+        vend = os.path.join(pub, 'shell', 'vendor')
+        self.assertEqual(sorted(os.listdir(vend)), sorted(serve.SHELL_VENDOR))
+        for name in serve.SHELL_VENDOR:
+            self.assertEqual(_bytes(os.path.join(vend, name)), _bytes(os.path.join(ROOT, 'app', 'vendor', name)), name)
+        # `../i18n.js` і `../esc.js` оверлея — це `shell/`, куди їде оболонка: другої копії словника нема
+        for name in ('i18n.js', 'esc.js', 'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js'):
+            self.assertTrue(os.path.isfile(os.path.join(pub, 'shell', name)), name)
+
+    # ---- жодного запиту до сервера -------------------------------------------------------------
+
+    def test_nothing_in_the_build_asks_the_server_api(self):
+        """Сторінки, обгортка, маніфест і знімок не мають `/api/`; тег з `sp` без `tok` (запит `/api/ds-tokens`) — ніколи."""
+        for snap in (self.SNAP, None):
+            with self.subTest(snapshot=bool(snap)):
+                pub = self._build(comments=self._league(), gate_pw='x', space=self._space(), tokens=snap)['dir']
+                self.assertFalse(BuildPreview._mentions(pub, b'/api/', skip_top=('shell', 'comment-layer')), 'у збірці є /api/')
+                for rel in self._pages(pub):
+                    tag = self._tag(_read(os.path.join(pub, rel)))
+                    if 'sp=' in tag:
+                        self.assertIn('&tok=', tag, f'{rel}: `sp` без `tok` змусив би оверлей питати сервер')
+                snap_file = os.path.join(pub, 'shell', serve.PREVIEW_TOKENS_FILE)
+                if snap:
+                    self.assertNotIn('/api/', _read(snap_file))
+
+    # ---- знімок токенів ------------------------------------------------------------------------
+
+    def test_a_space_with_a_tokens_module_gets_the_snapshot_exactly_as_the_api_serves_it(self):
+        self._enable_tokens()
+        space = self._space()
+        tokens = serve.preview_tokens_snapshot(space)
+        self.assertEqual(tokens, {'profile': 'space:liga', 'tokens': {'--c-primary': ['#123456'], '--gap': ['4px']},
+                                  'source': 'ds.css'})
+        self.assertEqual(tokens, serve.ds_tokens_view(space), 'те саме, що віддає /api/ds-tokens')
+        pub = self._build(comments=False, gate_pw=None, space=space, tokens=tokens)['dir']
+        path = os.path.join(pub, 'shell', serve.PREVIEW_TOKENS_FILE)
+        self.assertEqual(json.loads(_read(path)), tokens)
+        for rel in self._pages(pub):
+            tag = self._tag(_read(os.path.join(pub, rel)))
+            self.assertIn('sp=liga&tok=../ds-snapshot.json', tag)
+            vend = os.path.join(pub, 'shell', 'vendor')
+            self.assertEqual(os.path.normpath(os.path.join(vend, '../ds-snapshot.json')), path, 'тег веде саме в знімок')
+
+    def test_a_space_without_a_tokens_module_has_no_snapshot_file_and_no_sp_or_tok(self):
+        space = self._space()
+        tokens = serve.preview_tokens_snapshot(space)
+        self.assertIsNone(tokens)
+        pub = self._build(comments=False, gate_pw=None, space=space, tokens=tokens)['dir']
+        self.assertFalse(os.path.exists(os.path.join(pub, 'shell', serve.PREVIEW_TOKENS_FILE)))
+        for rel in self._pages(pub):
+            tag = self._tag(_read(os.path.join(pub, rel)))
+            self.assertNotIn('sp=', tag)
+            self.assertNotIn('tok=', tag)
+
+    def test_no_snapshot_when_the_view_is_profile_null_or_the_space_is_implicit(self):
+        space = self._space()
+        for view in ({'profile': None}, {'profile': None, 'error': 'module-error'}, {'profile': 'space:liga', 'tokens': {}}, None, []):
+            with self.subTest(view=view), mock.patch.object(serve, 'ds_tokens_view', return_value=view):
+                self.assertIsNone(serve.preview_tokens_snapshot(space))
+        with mock.patch.object(serve, 'ds_tokens_view', return_value=self.SNAP) as spy:
+            self.assertIsNone(serve.preview_tokens_snapshot(None), 'простору нема — знімка нема')
+            self.assertIsNone(serve.preview_tokens_snapshot(dict(spaces.IMPLICIT)), 'неявний простір — теж')
+            spy.assert_not_called()
+
+    def test_the_snapshot_never_carries_an_absolute_path_user_or_host(self):
+        """⛔ Превʼю ПУБЛІЧНЕ: `source` — лише імʼя файла, навіть коли власний модуль віддав шлях (POSIX чи Windows)."""
+        space = self._space()
+        for source in ('/Users/nadia/Liga Tools/ds/tokens.css', 'C:\\Users\\nadia\\ds\\tokens.css', f'{self.home}/ds.css', 'ds.css'):
+            view = dict(self.SNAP, source=source)
+            with self.subTest(source=source), mock.patch.object(serve, 'ds_tokens_view', return_value=view):
+                snap = serve.preview_tokens_snapshot(space)
+                self.assertEqual(snap['source'], source.replace('\\', '/').split('/')[-1])
+                pub = self._build(comments=False, gate_pw=None, space=space, tokens=snap)['dir']
+                text = _read(os.path.join(pub, 'shell', serve.PREVIEW_TOKENS_FILE))
+                for bad in ('/Users', 'nadia', 'C:', self.home, self.tmp, os.path.expanduser('~'), 'localhost', '127.0.0.1'):
+                    self.assertNotIn(bad, text, bad)
+        with mock.patch.object(serve, 'ds_tokens_view', return_value=dict(self.SNAP, source=None)):
+            self.assertEqual(serve.preview_tokens_snapshot(space)['source'], '')
+
+    def test_the_overlay_never_asks_for_a_snapshot_outside_the_build_folder(self):
+        """Оверлей читає `tok` лише відносним шляхом без схеми й початкового `/` (захист у `inspector.js`)."""
+        src = _read(os.path.join(ROOT, 'app', 'vendor', 'inspector.js'))
+        m = re.search(r'const TOK_REL = /(.+)/;', src)
+        self.assertTrue(m, 'у оверлея нема перевірки `tok`')
+        rx = re.compile(m.group(1))
+        for ok in ('../ds-snapshot.json', './ds-snapshot.json', 'ds-snapshot.json', '../../x/y.json'):
+            self.assertTrue(rx.match(ok), ok)
+        for bad in ('/api/ds-tokens', '//evil.example/x.json', 'https://evil.example/x.json', 'data:text/plain,1', '..\\x', '../x?y', ''):
+            self.assertFalse(rx.match(bad), bad)
+
+    def test_the_publish_route_builds_the_snapshot_from_the_space_tokens_module(self):
+        """Наскрізно: `/api/publish` (шлях ЛІГА, `build_only`) бере знімок простору й кладе його в збірку."""
+        self._enable_tokens()
+        base = self._server()
+        body = json.load(_post(base + '/api/publish', {'build_only': True}))
+        self.assertTrue(body['ok'], body)
+        snap = json.loads(_read(os.path.join(body['dir'], 'shell', serve.PREVIEW_TOKENS_FILE)))
+        self.assertEqual(snap['profile'], 'space:liga')
+        self.assertEqual(snap['tokens']['--c-primary'], ['#123456'])
+
+
 class CommentsBuild(TaskFixture):
     """`build_preview(comments={'module': Module, 'config': {…}, 'channel': '…'})` напряму: що кладе збірка в `publish/`."""
 
@@ -4443,8 +4612,10 @@ class CommentsBuild(TaskFixture):
                     self.assertRegex(src, r'^(\.\./)+comment-layer/[a-z.-]+\.js$', src)
                 self.assertNotIn('/app/vendor', html)
                 self.assertNotIn('/api/module-client/', html)
-                # у публікації нема ні інспектора, ні вкладок аудиторій, ні простору в URL, ні CDN Supabase
-                for gone in ('inspector', 'audiences', 'onAudience', 'sp=', 'ds-tokens', 'supabase', 'jsdelivr', 'dc/fixture'):
+                # у публікації нема ні інспектора робочого місця (лише оверлей превʼю з відносним шляхом), ні вкладок аудиторій,
+                # ні простору в URL, ні CDN Supabase
+                self.assertEqual(re.findall(r'<script type="module" src="([^"]*)"', html), [f'{up}shell/vendor/inspector.js'])
+                for gone in ('audiences', 'onAudience', 'sp=', 'ds-tokens', 'supabase', 'jsdelivr', 'dc/fixture'):
                     self.assertNotIn(gone, html.lower() if gone == 'supabase' else html, gone)
 
     def test_the_page_config_is_the_public_config_plus_the_core_channel_and_the_version(self):

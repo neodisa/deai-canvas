@@ -431,8 +431,11 @@ class LegacyPagesTest(tcr.PagesEnv):
         self.assertEqual(cfg['channel'], self.before['page_publish']['channel'])
         self.assertEqual(cfg['shotsBucket'], 'overview-thumbs')
         f = self.facts(html)
-        self.assertEqual((f['audiences'], f['inspector']),
-                         (self.before['page_publish']['audiences'], self.before['page_publish']['inspector']))
+        # 0.32.0: інспектора РОБОЧОГО МІСЦЯ в публікації як не було, так нема; але сторінка превʼю везе власний оверлей лише для
+        # перегляду з відносним шляхом (`shell/vendor/`), тож `'/inspector.js' in html` істинне саме через нього
+        self.assertEqual(f['audiences'], self.before['page_publish']['audiences'])
+        self.assertNotIn('/app/vendor/inspector.js', html)
+        self.assertEqual(html.count('src="../shell/vendor/inspector.js'), 1)
         self.assertEqual(f['version'], serve.pm.page_version_tag('it1', {'id': serve.pm.IMPLICIT_ID}))
         for name in ('supabase.min.js', 'adapter.js', 'comment-layer.min.js'):
             self.assertEqual(html.count(f'src="../comment-layer/{name}"'), 1, name)

@@ -9,6 +9,11 @@
  *
  * ⚠️ Класи — ПОВНІ літерали в кожній гілці, стан — `data-*`: охоронець css-guards читає атрибут class регекспом по сирцю.
  *
+ * ⚠️ `readonly` (0.32.0, превʼю): другий аргумент `panelHTML(m, { readonly: true })` — та сама розмітка, але значення текстом
+ * (`.insp-ro`), чип токена лишається, а редагування немає ні в якому вигляді: ні полів вводу/списків (`input`/`select`),
+ * ні `data-act` на значеннях, скрабу (`data-scrub`), «до токена», «+» заливки/обведення й перемикача сторін; вирівнювання
+ * й напрям — вимкнені кнопки без `data-act`. Без опції вихід — байт у байт той, що був (`tests/insp-panel-default.test.mjs`).
+ *
  * Адреса поля для всіх, хто дивиться ззовні: `data-prop` (ПЕРША властивість) і `data-props` (усі, через пробіл) —
  * і на обгортці `.insp-f`, і на `input`. Ключ відновлення фокуса в `paintInsp` — пара `data-act` + `data-prop`.
  */
@@ -37,8 +42,9 @@ const ARROW = {
 };
 
 /** Підпис поля: іконка або літера. Тягнеться вліво-вправо («скраб») — `data-scrub` = властивості. */
-function labelHTML(f) {
+function labelHTML(f, ro) {
   const inner = f.lab && f.lab.i && GLYPH[f.lab.i] ? GLYPH[f.lab.i] : esc((f.lab && f.lab.t) || "");
+  if (ro) return `<span class="insp-fl" title="${esc(f.name)}">${inner}</span>`;
   return `<span class="insp-fl" data-scrub="${esc(f.props.join(" "))}" title="${esc(f.name)}">${inner}</span>`;
 }
 
@@ -46,14 +52,14 @@ function labelHTML(f) {
 const short = (name) => String(name || "").replace(/^--/, "");
 
 /** Хвіст поля: чип токена (за вироком) і кнопка «до ДС». Таблиця — у спеці, розділ «Поле». */
-function tailHTML(f) {
+function tailHTML(f, ro) {
   let chip = "";
   if (f.token && (f.verdict === "off-ds" || f.verdict === "overridden")) {
     chip = `<span class="insp-tok" data-off title="${esc(f.token)}">${esc(f.token)}</span>`;
   } else if (f.token && f.verdict === "token") {
     chip = `<span class="insp-tok" title="${esc(f.token)}">${esc(f.token)}</span>`;
   }
-  const snap = f.snap && f.snap.token && f.snap.value != null
+  const snap = !ro && f.snap && f.snap.token && f.snap.value != null
     ? `<button type="button" class="insp-snap" data-act="inspsnap" data-prop="${esc(f.props[0])}"`
       + ` data-props="${esc(f.props.join(" "))}" data-token="${esc(f.snap.token)}" data-val="${esc(f.snap.value)}"`
       + ` title="${esc(t("inspSnapTo", f.snap.token))}" aria-label="${esc(t("inspSnapTo", f.snap.token))}"`
@@ -62,8 +68,23 @@ function tailHTML(f) {
   return chip + snap;
 }
 
+/** Поле в режимі «лише перегляд»: підпис без скрабу, значення текстом, чип токена. Список (`weight`) — підпис вибраного пункту. */
+function readonlyFieldHTML(f, wrap, title) {
+  let text = f.value;
+  if (f.kind === "weight") {
+    const o = (f.options || []).find((x) => String(x.value) === String(f.value));
+    text = o ? o.label : f.value;
+  } else if (f.mixed && !String(f.value || "")) {
+    text = t("inspMixed");
+  }
+  const head = f.kind === "color"
+    ? `<span class="insp-sw"${HEX6.test(f.swatch || "") ? ` style="background:${f.swatch}"` : ""}></span>`
+    : (f.kind === "ro" || f.kind === "weight" ? "" : labelHTML(f, true));
+  return `<div class="insp-f" ${wrap} data-ro${title}>${head}<span class="insp-ro">${esc(text)}</span>${tailHTML(f, true)}</div>`;
+}
+
 /** Одне поле. Стан — атрибутами обгортки (`data-off`, `data-tuned`, `data-miss`, `data-mixed`, `data-verdict`). */
-function fieldHTML(f) {
+function fieldHTML(f, ro = false) {
   if (!f) return "";
   const first = esc(f.props[0]);
   const all = esc(f.props.join(" "));
@@ -73,6 +94,7 @@ function fieldHTML(f) {
   if (f.miss) wrap += " data-miss";
   if (f.mixed) wrap += " data-mixed";
   const title = f.title ? ` title="${esc(f.title)}"` : "";
+  if (ro) return readonlyFieldHTML(f, wrap, title);
   if (f.kind === "ro") {
     return `<div class="insp-f" ${wrap} data-ro${title}><span class="insp-ro">${esc(f.value)}</span></div>`;
   }
@@ -99,8 +121,8 @@ function fieldHTML(f) {
     + `${tailHTML(f)}</div>`;
 }
 
-const row = (...fields) => `<div class="insp-row">${fields.map(fieldHTML).join("")}</div>`;
-const row1 = (field) => `<div class="insp-row insp-row--1">${fieldHTML(field)}</div>`;
+const row = (ro, ...fields) => `<div class="insp-row">${fields.map((f) => fieldHTML(f, ro)).join("")}</div>`;
+const row1 = (ro, field) => `<div class="insp-row insp-row--1">${fieldHTML(field, ro)}</div>`;
 
 /** Розділ. `extra` — кнопка в шапці (`+`, перемикач сторін). Порожнє тіло — розділ лише з шапкою (заливка без поля). */
 function sec(key, head, body, extra = "") {
@@ -129,33 +151,33 @@ function edgesSec(m) {
     + `<span class="insp-e-r">${esc(e.right)}</span><span class="insp-e-b">${esc(e.bottom)}</span></div>`);
 }
 
-function layoutSec(m) {
+function layoutSec(m, ro) {
   const l = m.layout;
   if (!l) return "";
-  if (l.kind === "grid") return sec("layout", t("inspPAuto"), row1(l.gap));
+  if (l.kind === "grid") return sec("layout", t("inspPAuto"), row1(ro, l.gap));
   const names = [[t("inspAlLeft"), t("inspAlCenter"), t("inspAlRight")], [t("inspAlTop"), t("inspAlMiddle"), t("inspAlBottom")]];
   let cells = "";
   for (let r = 0; r < 3; r += 1) {
     for (let c = 0; c < 3; c += 1) {
-      cells += `<button type="button" class="insp-cell" data-act="inspalign" data-val="${c},${r}"`
+      cells += `<button type="button" class="insp-cell"${ro ? " disabled" : ` data-act="inspalign" data-val="${c},${r}"`}`
         + ` data-dir="${esc(l.dir)}" aria-pressed="${c === l.ax && r === l.ay}"`
         + ` aria-label="${esc(t("inspAlignCell", names[0][c], names[1][r]))}"></button>`;
     }
   }
-  const dir = (id, label) => `<button type="button" class="insp-dir" data-act="inspdir" data-val="${id}"`
+  const dir = (id, label) => `<button type="button" class="insp-dir"${ro ? " disabled" : ` data-act="inspdir" data-val="${id}"`}`
     + ` aria-pressed="${l.dir === id}" aria-label="${esc(label)}">${ARROW[id]}</button>`;
   return sec("layout", t("inspPAuto"), `<div class="insp-al"><div class="insp-align">${cells}</div>`
     + `<div class="insp-al-side"><div class="insp-dirs">${dir("row", t("inspDirRow"))}${dir("column", t("inspDirCol"))}</div>`
-    + `${fieldHTML(l.gap)}</div></div>`);
+    + `${fieldHTML(l.gap, ro)}</div></div>`);
 }
 
-function spacingSec(m) {
+function spacingSec(m, ro) {
   const s = m.spacing;
-  const toggle = `<button type="button" class="insp-ib" data-act="inspsides" aria-pressed="${!!s.sides}"`
+  const toggle = ro ? "" : `<button type="button" class="insp-ib" data-act="inspsides" aria-pressed="${!!s.sides}"`
     + `${s.forced ? " disabled" : ""} aria-label="${esc(t("inspSides"))}" title="${esc(t("inspSides"))}">${GLYPH.sides}</button>`;
   const body = s.sides && s.pad && s.mar
-    ? row(s.pad.top, s.pad.right) + row(s.pad.bottom, s.pad.left) + row(s.mar.top, s.mar.right) + row(s.mar.bottom, s.mar.left)
-    : row(s.padX, s.padY) + row(s.marX, s.marY);
+    ? row(ro, s.pad.top, s.pad.right) + row(ro, s.pad.bottom, s.pad.left) + row(ro, s.mar.top, s.mar.right) + row(ro, s.mar.bottom, s.mar.left)
+    : row(ro, s.padX, s.padY) + row(ro, s.marX, s.marY);
   return sec("spacing", t("inspPSpacing"), body, toggle);
 }
 
@@ -163,31 +185,32 @@ const addBtn = (kind, add, label) => `<button type="button" class="insp-ib" data
   + ` data-color="${esc(add.value)}" data-token="${esc(add.token)}" aria-label="${esc(label)}" title="${esc(label)}">`
   + `${ico("plus", 14)}</button>`;
 
-function fillSec(m) {
+function fillSec(m, ro) {
   return m.fill
-    ? sec("fill", t("inspPFill"), row1(m.fill))
-    : sec("fill", t("inspPFill"), "", addBtn("fill", m.fillAdd, t("inspAddFill")));
+    ? sec("fill", t("inspPFill"), row1(ro, m.fill))
+    : sec("fill", t("inspPFill"), "", ro ? "" : addBtn("fill", m.fillAdd, t("inspAddFill")));
 }
 
-function strokeSec(m) {
-  const add = m.stroke ? "" : addBtn("stroke", m.strokeAdd, t("inspAddStroke"));
-  const body = (m.stroke ? row1(m.stroke.color) : "")
-    + row(...(m.stroke ? [m.stroke.width] : []), m.radius);
+function strokeSec(m, ro) {
+  const add = m.stroke || ro ? "" : addBtn("stroke", m.strokeAdd, t("inspAddStroke"));
+  const body = (m.stroke ? row1(ro, m.stroke.color) : "")
+    + row(ro, ...(m.stroke ? [m.stroke.width] : []), m.radius);
   return sec("stroke", t("inspPStroke"), body, add);
 }
 
-function textSec(m) {
+function textSec(m, ro) {
   const x = m.text;
   if (!x) return "";
   const family = `<div class="insp-row insp-row--1"><div class="insp-f" data-prop="font-family" data-props="font-family"`
     + ` data-ro title="${esc(x.family)}"><span class="insp-ro">${esc(x.family)}</span></div></div>`;
-  return sec("text", t("inspPText"), family + row(x.weight, x.size) + row(x.lh, x.ls) + (x.color ? row1(x.color) : ""));
+  return sec("text", t("inspPText"), family + row(ro, x.weight, x.size) + row(ro, x.lh, x.ls) + (x.color ? row1(ro, x.color) : ""));
 }
 
 /** Модель → HTML тіла панелі (шлях, елемент, розділи). Немає моделі — `''`: шапку й підвал додає `inspectHTML`. */
-export function panelHTML(m) {
+export function panelHTML(m, { readonly = false } = {}) {
   if (!m) return "";
+  const ro = !!readonly;
   return pathHTML(m) + elHTML(m)
-    + sec("size", t("inspPSize"), row(m.size.w, m.size.h))
-    + edgesSec(m) + layoutSec(m) + spacingSec(m) + fillSec(m) + strokeSec(m) + textSec(m);
+    + sec("size", t("inspPSize"), row(ro, m.size.w, m.size.h))
+    + edgesSec(m) + layoutSec(m, ro) + spacingSec(m, ro) + fillSec(m, ro) + strokeSec(m, ro) + textSec(m, ro);
 }

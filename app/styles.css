@@ -1419,6 +1419,10 @@ select.insp-fi option{background:var(--s1)}
 .insp-cell:hover::after{background:var(--mid)}
 .insp-cell[aria-pressed="true"]::after{width:12px;height:4px;border-radius:2px;background:var(--pick)}
 .insp-ps{color:var(--dim);padding:0 1px}
+/* Лише перегляд (превʼю, 0.32.0): підпис без скрабу, вирівнювання й напрям — вимкнені кнопки, без наведення «живої» дії. */
+.insp-fl:not([data-scrub]){cursor:default}
+.insp-cell:disabled,.insp-dir:disabled{cursor:default}
+.insp-cell:disabled:not([aria-pressed="true"]):hover::after{background:var(--lo)}
 .insp-pb:focus-visible,.insp-ib:focus-visible,.insp-cell:focus-visible,.insp-dir:focus-visible,
 .insp-snap:focus-visible,.insp-off:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
 /* ── Підвал панелі (T-39, `tuneFootHTML` у shell-inspect.js) ──────────────

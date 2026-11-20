@@ -208,10 +208,11 @@ class ServeTest(unittest.TestCase):
         pub = body['dir']
         wrapper = open(os.path.join(pub, 'index.html')).read()
         self.assertIn('authgate', wrapper)
-        # ⛔ Інспектор — ЛИШЕ локальний канал. Асерти вище стережуть роут
-        # /commented, але вимогу спеки «інспектора немає в publish» досі
-        # ніхто не перевіряв на самому АРТЕФАКТІ. Сторож саме тут.
+        # ⛔ Інспектор робочого місця (`/app/vendor/…`, `/api/ds-tokens`) у публікацію не їде. З 0.32.0 превʼю везе ВЛАСНИЙ
+        # оверлей лише для перегляду (`shell/vendor/`, відносний шлях): обгортка його не несе (його тягнуть сторінки макета й
+        # оболонка), а сервера в превʼю нема взагалі. Сторож саме на АРТЕФАКТІ, а не на сигнатурі функції.
         self.assertNotIn('inspector', wrapper)
+        self.assertNotIn('/api/', wrapper)
         # Назви сторінок переїхали з обгортки в `manifest.json` (02.09.2026):
         # обгортка стала тонким каркасом, і назва тепер мусить бути РІВНО в
         # одному місці. Перевіряємо обидва боки — щоб «переїхало» не стало
@@ -224,7 +225,9 @@ class ServeTest(unittest.TestCase):
         # `<превʼю>.vercel.app/` пароль просив, а `/it4/` віддавав макет. Цикл,
         # який вставляє гейт, переписаний 04.08.2026 — сторож саме тут.
         self.assertIn('authgate', it_page)
-        self.assertNotIn('inspector', it_page)        # і у ВНУТРІШНІЙ сторінці теж
+        self.assertIn('<script type="module" src="../shell/vendor/inspector.js', it_page)   # оверлей превʼю: відносний шлях
+        self.assertNotIn('/app/vendor', it_page)      # не робочого місця
+        self.assertNotIn('/api/', it_page)            # і жодного запиту до сервера, якого в превʼю нема
         # ⛔ Вкладки аудиторій — теж лише робоче місце. Сторож стоїть на самому
         # АРТЕФАКТІ, а не на сигнатурі `inject_module_comment_layer`: `audiences` там
         # прапорець із дефолтом `False`, тож тест функції зеленів би і після
@@ -3183,6 +3186,17 @@ class PreviewWrapper(unittest.TestCase):
         self.assertIn('class="insp cmt"', m.group(1))
         self.assertEqual(m.group(2), '', 'точка мусить бути порожньою')
 
+    def test_inspector_panel_mount_is_an_empty_hidden_inert_point(self):
+        """0.32.0 (Task 4): панель інспектора лише для перегляду — `#insp-panel` (справа, `.insp`, ті самі відступи, що в Deai). Точка
+        схована й порожня; оверлея й знімка токенів обгортка НЕ несе: їх тягнуть сторінки макета (`shell/vendor/`)."""
+        import re
+        m = re.search(r'<div id="insp-panel"([^>]*)>(.*?)</div>', self._html(), re.S)
+        self.assertIsNotNone(m, 'нема точки монтування панелі інспектора')
+        self.assertIn('hidden', m.group(1))
+        self.assertIn('class="insp"', m.group(1))
+        self.assertEqual(m.group(2), '')
+        self.assertNotIn('shell/vendor', self._html(), 'оверлей — у сторінках макета, не в обгортці')
+
     def test_styles_come_from_the_shared_copy(self):
         """`shell/styles.css`, а не свій CSS у шаблоні: єдине, що робить зовнішню
         оболонку схожою на внутрішню, — ТОЙ САМИЙ файл, а не схожі правила."""
@@ -3499,9 +3513,46 @@ class InspectorPerAudience(unittest.TestCase):
             version='1')
         self.assertIn(self.TAG, html)
 
-    def test_external_preview_has_no_inspector(self):
-        """Виклик БЕЗ прапорця — це рівно те, що робить `_publish`."""
-        self.assertNotIn('inspector', self._project(False))
+    def test_external_preview_has_no_workplace_inspector(self):
+        """Виклик БЕЗ прапорця й без `inspector_tag` — це рівно те, що робить збірка без оверлея: ні тега, ні `ds-tokens`.
+        (Було `test_external_preview_has_no_inspector`: з 0.32.0 превʼю везе власний оверлей лише для перегляду, але
+        намір лишився — жодного запиту до сервера, якого в превʼю нема.)"""
+        code = self._project(False)
+        self.assertNotIn('inspector', code)
+        self.assertNotIn('ds-tokens', code, 'жодного запиту токенів до сервера')
+
+    def test_preview_inspector_tag_is_relative_and_never_asks_the_server(self):
+        tag = serve.preview_inspector_tag('../../', 'united', None)
+        self.assertEqual(tag, '\n<script type="module" src="../../shell/vendor/inspector.js?ds=united"></script>')
+        snap = {'profile': 'space:ds-1', 'tokens': {'--a': ['1px']}, 'source': 'ds.css'}
+        tag = serve.preview_inspector_tag('../', 'united', snap)
+        self.assertIn('src="../shell/vendor/inspector.js?ds=united&sp=ds-1&tok=../ds-snapshot.json"', tag)
+        for t in (tag, serve.preview_inspector_tag('../', '', snap), serve.preview_inspector_tag('../', 'x', None)):
+            self.assertNotIn('/api/', t)
+            self.assertNotIn('src="/', t, 'шлях відносний')
+            self.assertNotIn('onerror', t)
+        # без знімка `sp` не їде НІКОЛИ: він змусив би оверлей питати `/api/ds-tokens`
+        self.assertNotIn('sp=', serve.preview_inspector_tag('../', 'united', None))
+        self.assertNotIn('sp=', serve.preview_inspector_tag('../', 'united', {'profile': None}))
+        # `?ds=` — першим; не схоже на імʼя — нема зовсім
+        self.assertIn('?ds=united&sp=', tag)
+        self.assertEqual(serve.preview_inspector_tag('../', '"><x', None),
+                         '\n<script type="module" src="../shell/vendor/inspector.js"></script>')
+        self.assertIn('?sp=ds-1&tok=', serve.preview_inspector_tag('../', '', snap))
+        # профіль, що не схожий на простір, до тега не потрапляє
+        self.assertNotIn('sp=', serve.preview_inspector_tag('../', 'united', {'profile': 'space:../x', 'tokens': {'a': ['1']}}))
+
+    def test_module_layer_places_the_given_inspector_tag_after_the_comment_scripts(self):
+        tag = serve.preview_inspector_tag('../', 'united', None)
+        code = serve.inject_module_comment_layer('<html><body></body></html>', '../comment-layer', [],
+                                                 {'channel': 'c'}, version='1', host='preview', inspector_tag=tag)
+        self.assertEqual(code.count('inspector.js'), 1)
+        self.assertLess(code.index('window.__clDown = function'), code.index('inspector.js'), 'банер — першим')
+        self.assertGreater(code.index('inspector.js'), code.rindex('<script src='), 'тег — після скриптів коментарів')
+        self.assertLess(code.index('inspector.js'), code.index('window.__deaiCommentsCfg'))
+        plain = serve.inject_module_comment_layer('<html><body></body></html>', '../comment-layer', [],
+                                                  {'channel': 'c'}, version='1', host='preview')
+        self.assertNotIn('inspector', plain, 'без тега сторінка така, як була')
 
     def test_inspector_does_not_lie_about_comments(self):
         """Тег інспектора — без `onerror="window.__clDown(…)"`.
@@ -5266,9 +5317,11 @@ class ShellModulesList(unittest.TestCase):
     #: викинь `ext-shell.js`, і залишок усе одно замкнутий, тобто мутація
     #: «прибрати корінь» пройшла б зеленою. А ціна саме цього кореня —
     #: оболонка, що не піднялась узагалі: обгортка вантажить рівно один модуль.
-    EXT_OWN = ('ext-shell.js', 'ext-bar.js', 'island.js', 'ext-comments.js')
+    EXT_OWN = ('ext-shell.js', 'ext-bar.js', 'island.js', 'ext-comments.js', 'ext-inspect.js')
 
     IMPORT_RE = re.compile(r"""from\s+["']\./([\w.-]+)["']""")
+    #: Усі відносні імпорти: `./x`, `./vendor/x`, `../x`.
+    ANY_IMPORT_RE = re.compile(r"""from\s+["'](\.{1,2}/(?:[\w.-]+/)*[\w.-]+)["']""")
 
     def test_spec_modules_are_all_in_the_constant(self):
         missing = [m for m in self.SPEC_SHARED if m not in serve.SHELL_MODULES]
@@ -5282,17 +5335,37 @@ class ShellModulesList(unittest.TestCase):
         for name in serve.SHELL_MODULES:
             self.assertTrue(os.path.isfile(os.path.join(ROOT, 'app', name)),
                             f'{name} у переліку є, а файла немає')
+        for name in serve.SHELL_VENDOR:
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, 'app', 'vendor', name)),
+                            f'{name} у переліку оверлея є, а файла немає')
 
     def test_list_is_closed_under_imports(self):
-        """Забутий лист = 404 у глядача. Замикання рахуємо, а не переписуємо."""
-        for name in serve.SHELL_MODULES:
-            if not name.endswith('.js'):
+        """Забутий лист = 404 у глядача. Замикання рахуємо, а не переписуємо — по `./`, `./vendor/` і `../`.
+
+        Розкладка в збірці: `shell/<модуль>`, `shell/vendor/<оверлей>`. Тож: `./x` з `shell/` — `shell/x`; `./vendor/x` з
+        `shell/` — `shell/vendor/x`; `./x` із `shell/vendor/` — `shell/vendor/x`; `../x` із `shell/vendor/` — `shell/x`.
+        Імпорт, що виходить за `shell/`, — окрема помилка."""
+        shipped = {m for m in serve.SHELL_MODULES} | {f'vendor/{m}' for m in serve.SHELL_VENDOR}
+        for rel in sorted(shipped):
+            if not rel.endswith('.js'):
                 continue
-            with open(os.path.join(ROOT, 'app', name), encoding='utf-8') as fh:
+            src = os.path.join(ROOT, 'app', rel)       # у `app/` розкладка та сама: `app/x`, `app/vendor/x`
+            with open(src, encoding='utf-8') as fh:
                 body = fh.read()
-            for dep in self.IMPORT_RE.findall(body):
-                self.assertIn(dep, serve.SHELL_MODULES,
-                              f'{name} імпортує {dep}, а везти його не збираємось')
+            here = os.path.dirname(rel)                # '' чи 'vendor'
+            for imp in self.ANY_IMPORT_RE.findall(body):
+                target = os.path.normpath(os.path.join(here, imp))
+                self.assertFalse(target.startswith('..'), f'{rel} імпортує {imp} за межі shell/')
+                self.assertIn(target, shipped, f'{rel} імпортує {imp} ({target}), а везти його не збираємось')
+
+    def test_closure_check_sees_the_vendor_and_parent_imports(self):
+        """Свідок, що перевірка вище не порожня: оверлей справді тягне `../i18n.js`, а `insp-model.js` — `./vendor/…`."""
+        with open(os.path.join(ROOT, 'app', 'vendor', 'inspector.js'), encoding='utf-8') as fh:
+            self.assertIn('../i18n.js', self.ANY_IMPORT_RE.findall(fh.read()))
+        with open(os.path.join(ROOT, 'app', 'insp-model.js'), encoding='utf-8') as fh:
+            self.assertIn('./vendor/inspector-core.js', self.ANY_IMPORT_RE.findall(fh.read()))
+        self.assertIn('inspector-core.js', serve.SHELL_VENDOR)
+        self.assertIn('i18n.js', serve.SHELL_MODULES)
 
 
 class PreviewHostArg(unittest.TestCase):

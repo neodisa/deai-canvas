@@ -58,11 +58,22 @@ try {
    Адресу будуємо від URL САМОГО МОДУЛЯ, а не від документа: макет живе під
    `<base>` підстановки ассетів, а модуль завантажено рівно з того origin, де
    стоїть API. */
+/* Опубліковане превʼю (0.32.0) — статика без сервера: знімок токенів лежить файлом збірки, і тег несе до нього ВІДНОСНИЙ
+   шлях параметром `tok` (від самого модуля: `shell/vendor/inspector.js?…&tok=../ds-snapshot.json`). Відповідь проходить ту саму
+   перевірку (`spaceTokensFrom` у `loadSpaceTokens`), що й відповідь `/api/ds-tokens`. Лише відносний шлях без схеми й без
+   початкового `/`: чужа адреса в параметрі не змусила б оверлей ходити нікуди, крім теки збірки. Без `tok` — як було. */
+const TOK_REL = /^(?:\.\.?\/)*[\w.-]+(?:\/[\w.-]+)*$/;
 let SPACE = null;
 try {
   const selfUrl = new URL(import.meta.url);
   const id = selfUrl.searchParams.get('sp');
-  if (id) SPACE = { id, url: new URL(`/api/ds-tokens?space=${encodeURIComponent(id)}`, selfUrl).href };
+  const tok = selfUrl.searchParams.get('tok');
+  if (id) {
+    const rel = tok !== null && TOK_REL.test(tok) ? tok : null;
+    if (tok === null || rel) {
+      SPACE = { id, url: new URL(rel || `/api/ds-tokens?space=${encodeURIComponent(id)}`, selfUrl).href };
+    }
+  }
 } catch (e) {
   SPACE = null;
 }

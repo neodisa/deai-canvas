@@ -51,6 +51,7 @@ import { fitBox, focusBox, quantScale, zoomAt } from "./camera.js";
 import { GAP, HEAD, ROW_TITLE_TOP } from "./canvas-geom.js";
 import { CMT_ACTS, CMT_EVENTS, createExtComments } from "./ext-comments.js";
 import { extBarHTML } from "./ext-bar.js";
+import { createExtInspect } from "./ext-inspect.js";
 import { islandToolsHTML } from "./island.js";
 import { LANG_KEY, readStoredLang, setLang, t } from "./i18n.js";
 import { SPRITE, ico } from "./icons.js";
@@ -519,30 +520,33 @@ let man = null;
 let copyTimer = null;
 
 /**
- * Модель острівця превʼю (0.32.0). «Коментарі» зʼявляються лише коли збірка має командні коментарі (Task 3), «Інспектор» —
- * коли оболонка вміє його показати (Task 4): ці прапорці перемикають ті задачі, а «Сховати інтерфейс» є завжди.
+ * Модель острівця превʼю (0.32.0). «Коментарі» зʼявляються лише коли збірка має командні коментарі (Task 3); «Інспектор» — коли
+ * в документі рамки є оверлей (`insp.has()`, Task 4) і вид живий; «Сховати інтерфейс» є завжди.
  */
-const island = { comments: false, inspector: false, last: null };
+const island = { comments: false, last: null };
 
 /** Панель командних коментарів (Task 3): створюється в `open()`, лише коли збірка їх має (`manifest.comments`). */
 let cmt = null;
+
+/** Інспектор лише для перегляду (Task 4): панель `#insp-panel` + оверлей рамки; створюється в `open()` завжди. */
+let insp = null;
 
 /** Набір кнопок острівця за прапорцями; порядок і роздільники — у `islandToolsHTML`. «Коментарі» — лише там, де є живий макет
  *  (в «Огляді» кадри — знімки, коментатора в них нема). */
 function islandTools() {
   const live = effMode(man, ui) !== "overview";
-  return [island.comments && live && "cmt", island.inspector && "insp", "clean"].filter(Boolean);
+  return [island.comments && live && "cmt", live && insp?.has() && "insp", "clean"].filter(Boolean);
 }
 
-/** Закрити бічні панелі превʼю (коментарі, інспектор): «Сховати інтерфейс» їх закриває; інспектор докладе Task 4. */
-function closeSidePanels() { cmt?.setOpen(false); }
+/** Закрити бічні панелі превʼю (коментарі, інспектор): «Сховати інтерфейс» їх закриває. */
+function closeSidePanels() { cmt?.setOpen(false); insp?.setOn(false); }
 
 /** Острівець унизу по центру: монтується в `#hud` обгортки (у старої обгортки точки нема — тоді нічого й не малюємо). */
 function paintIsland() {
   const hud = el("hud");
   if (!hud) return;
   const html = `<div class="island" role="group" aria-label="${t("islandNav")}"><div class="isl-tools">`
-    + `${islandToolsHTML({ tools: islandTools(), commentsOn: !!cmt?.isOpen(), commentsCount: cmt ? cmt.count() : 0 })}</div></div>`;
+    + `${islandToolsHTML({ tools: islandTools(), commentsOn: !!cmt?.isOpen(), commentsCount: cmt ? cmt.count() : 0, inspectorOn: !!insp?.isOn() })}</div></div>`;
   if (html === island.last) return;
   island.last = html;
   hud.innerHTML = html;
@@ -568,6 +572,7 @@ function paint() {
   node.className = `panel${ui.collapsed ? " panel--rail" : ""}`;
   node.innerHTML = panelHTML(extPanelState(man, ui));
   cmt?.setActive(effMode(man, ui) !== "overview");
+  insp?.setActive(effMode(man, ui) !== "overview");
   paintIsland();
   document.body.classList.add("with-panel");
   document.body.classList.toggle("panel-collapsed", ui.collapsed);
@@ -1055,6 +1060,8 @@ const EXT_ACTIONS = {
 /* Дії панелі коментарів — через ТОЙ САМИЙ реєстр і ту саму делегацію. Закрити/відкрити знову/доручити тут нема взагалі:
    дії, якої немає в реєстрі, не викличе й підроблена розмітка. */
 for (const act of CMT_ACTS) EXT_ACTIONS[act] = (val, node, ev) => cmt?.actions[act]?.(val, node, ev);
+/* Дії інспектора (кнопка острівця й закриття панелі — одна `inspector`; крихта; «N поза ДС»). Редагувань у реєстрі нема. */
+for (const act of ["inspector", "inspcrumb", "inspnextoff"]) EXT_ACTIONS[act] = (val, node, ev) => insp?.actions[act]?.(val, node, ev);
 
 function wire() {
   document.addEventListener("click", (ev) => {
@@ -1082,16 +1089,21 @@ function wire() {
       ev.preventDefault();
       cmt.toggle();
     }
+    /* I, Alt, Esc/↵, ← → — інспектор, коли фокус в оболонці (у рамці ці клавіші слухає сам оверлей). */
+    insp?.shellKey(ev);
     /* ⇧⌘\\ — чистий перегляд макета, як у канвасі (fb-01102026-7f7b6d). */
     if ((ev.metaKey || ev.ctrlKey) && ev.shiftKey && !ev.altKey && ev.code === "Backslash") {
       ev.preventDefault();
       toggleClean();
     }
   });
+  document.addEventListener("keyup", (ev) => { if (ev.key === "Alt") insp?.altOff(); });
+  window.addEventListener("blur", () => insp?.altOff());
   /* Новий документ рамки — свій слухач акорду і сховані піни, якщо режим увімкнено. */
   el("frame")?.addEventListener("load", () => {
     syncFrame(el("frame"), clean, () => toggleClean());
     cmt?.onFrameLoad();
+    insp?.onFrameLoad();
   });
   /* Посилки коментатора з рамки (режим хоста превʼю). Джерело й origin перевіряє сам контролер. */
   window.addEventListener("message", (ev) => {
@@ -1144,10 +1156,22 @@ async function open() {
       document.body.appendChild(mount);
     }
     cmt = createExtComments({ frame: el("frame"), mount, channel: String(man.comments.channel || ""), onChange: paintIsland,
-      canToggle: () => !clean && effMode(man, ui) !== "overview" });
+      canToggle: () => !clean && effMode(man, ui) !== "overview", onOpen: () => insp?.setOn(false) });
     island.comments = true;
     paintIsland();
   }
+  /* Інспектор — завжди (оверлей їде в кожну сторінку превʼю); панель — на тій самій точці справа, що й коментарі. */
+  let inspMount = el("insp-panel");
+  if (!inspMount) {        // обгортка до 0.32.0 точки не має — створюємо сами
+    inspMount = document.createElement("div");
+    inspMount.id = "insp-panel";
+    inspMount.className = "insp";
+    inspMount.hidden = true;
+    document.body.appendChild(inspMount);
+  }
+  insp = createExtInspect({ frame: el("frame"), mount: inspMount, onChange: paintIsland,
+    /* Коментарі й інспектор — взаємно виключні: обидва ділять праву панель і обидва ловлять клік по макету. */
+    onOn: () => cmt?.setOpen(false), canUse: () => !clean });
   applyVp();
   const first = startPage(man, location.hash);
   if (first) goto(first);
