@@ -129,3 +129,83 @@ def write(space_dir, *, version):
             pass
         raise
     return status(space_dir, version=version)
+
+
+# ----------------------------------------------------------------------------------- CLAUDE.md (0.33.0)
+# Claude Code (перевірено 20.11.2026 на 2.1.322) не читає AGENTS.md, коли вище по теках є будь-який CLAUDE.md; CLAUDE.md у теці
+# простору з рядком `@AGENTS.md` це лагодить. Наявний CLAUDE.md змінює ЛИШЕ `claude_connect` (кнопка «Підключити» = згода людини).
+
+CLAUDE_NAME = 'CLAUDE.md'
+_IMPORT_RE = re.compile(r'^[ \t]*@(?:\./)?AGENTS\.md[ \t]*\r?$', re.M)
+_IMPORT_LINE = '@AGENTS.md\n'
+
+
+def _claude_path(space_dir):
+    return os.path.join(space_dir, CLAUDE_NAME)
+
+
+def _claude_read(space_dir):
+    """Текст CLAUDE.md чи `None` (файла нема). Симлінк, не-звичайний файл, відмова читання — `OSError` (як `_read`)."""
+    p = _claude_path(space_dir)
+    if os.path.islink(p) or (os.path.lexists(p) and not os.path.isfile(p)):
+        raise OSError(f'{CLAUDE_NAME}: not a regular file')
+    try:
+        with open(p, **_ENC) as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def claude_status(space_dir):
+    """`{state, path}`: `ok` (є рядок `@AGENTS.md` чи `@./AGENTS.md`), `missing`, `no-import`, `unreadable`. Не кидає."""
+    p = _claude_path(space_dir)
+    try:
+        text = _claude_read(space_dir)
+    except (OSError, ValueError):
+        return {'state': 'unreadable', 'path': p}
+    if text is None:
+        return {'state': 'missing', 'path': p}
+    return {'state': 'ok' if _IMPORT_RE.search(text) else 'no-import', 'path': p}
+
+
+def claude_ensure(space_dir):
+    """Новий простір і «Створити» AGENTS.md: CLAUDE.md з `@AGENTS.md` ЛИШЕ коли його нема (`O_EXCL`); наявний не чіпаємо.
+    `True` — створено."""
+    try:
+        with open(_claude_path(space_dir), 'x', **_ENC) as f:
+            f.write(_IMPORT_LINE)
+        return True
+    except FileExistsError:
+        return False
+
+
+def claude_connect(space_dir):
+    """«Підключити»: нема файла — створити з `@AGENTS.md`; є без імпорту — дописати `@AGENTS.md` і порожній рядок НА ПОЧАТОК
+    (решта байт у байт, права ті самі, запис атомарний); уже підключено — нічого. Нечитний — `OSError`; файл змінили між читанням
+    і заміною — `ValueError('changed')`. Повертає `claude_status` після запису."""
+    text = _claude_read(space_dir)
+    if text is None:
+        if not claude_ensure(space_dir):
+            raise ValueError('changed')          # файл зʼявився між читанням і створенням
+        return claude_status(space_dir)
+    if _IMPORT_RE.search(text):
+        return claude_status(space_dir)
+    path = _claude_path(space_dir)
+    mode = os.stat(path).st_mode & 0o777
+    tmp = tempfile.NamedTemporaryFile('w', dir=space_dir, prefix='.CLAUDE.', suffix='.tmp', delete=False, **_ENC)
+    try:
+        with tmp:
+            tmp.write(_IMPORT_LINE + '\n' + text)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.chmod(tmp.name, mode)
+        if _claude_read(space_dir) != text:      # чужу правку не губимо
+            raise ValueError('changed')
+        os.replace(tmp.name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+    return claude_status(space_dir)
