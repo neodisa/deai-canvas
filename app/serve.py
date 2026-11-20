@@ -355,6 +355,15 @@ def shots_setup(fresh=False):
     return dict(out)
 
 
+def shoot_failure(err, report):
+    """Людська причина провалу зʼємки: `{'code': 'no-browser', 'command': …}` або `None`. Playwright без завантаженого
+    Chromium падає з «Executable doesn't exist» — канвас тоді каже, чого бракує, і яку команду виконати, а не дамп."""
+    raw = report.get('raw') if isinstance(report, dict) and isinstance(report.get('raw'), str) else ''
+    if "Executable doesn't exist" in f'{err or ""}\n{raw}':
+        return {'code': 'no-browser', 'command': shots_command()}
+    return None
+
+
 def _file_hash(path):
     import hashlib
     try:
@@ -7220,6 +7229,11 @@ class Handler(SimpleHTTPRequestHandler):
         # сторінок знялась і вже лежить на диску. Той, хто малює тост, мусить
         # дивитись на `report.shot` і `report.failed` ОКРЕМО, інакше скаже «не знято
         # нічого» там, де знято сім із восьми.
+        fail = None if child.returncode == 0 else shoot_failure(err, report)
+        if fail:
+            self._send_json({'ok': False, **fail, 'error': "Chromium for Playwright is not installed",
+                             'report': report, 'stderr': (err or '')[-2000:]})
+            return
         self._send_json({'ok': child.returncode == 0, 'report': report,
                          'stderr': (err or '')[-2000:]})
 

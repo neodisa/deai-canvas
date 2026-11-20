@@ -110,5 +110,26 @@ class SetupApi(base.Fixture):
         self.assertEqual(self.calls(), 0)
 
 
+class ShootFailure(unittest.TestCase):
+    """Playwright без завантаженого Chromium падає з «Executable doesn't exist» — `/api/shoot` каже `no-browser` і команду."""
+
+    DUMP = ("browserType.launch: Executable doesn't exist at /x/ms-playwright/chromium-1/chrome\n"
+            "Looks like Playwright was just installed or updated.")
+
+    def test_stderr_or_raw_report_gives_no_browser(self):
+        for err, report in ((self.DUMP, {}), ('', {'raw': self.DUMP}), (self.DUMP, None)):
+            with self.subTest(err=bool(err)):
+                self.assertEqual(serve.shoot_failure(err, report), {'code': 'no-browser', 'command': serve.shots_command()})
+
+    def test_other_failures_stay_as_they_are(self):
+        self.assertIsNone(serve.shoot_failure('Error: page crashed', {'failed': [{'id': 'p', 'problem': 'x'}]}))
+        self.assertIsNone(serve.shoot_failure('', {}))
+
+    def test_the_shoot_route_uses_it(self):
+        import inspect
+        src = inspect.getsource(serve)
+        self.assertIn('shoot_failure(err, report)', src)
+
+
 if __name__ == '__main__':
     unittest.main()
