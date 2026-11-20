@@ -85,6 +85,13 @@ class DemoTask(base.Fixture):
         with unittest.mock.patch.object(serve.spaces, 'find_task', side_effect=lambda t: {} if t in taken else None):
             self.assertEqual(serve.demo_task_id(), 'tally-demo-3')
 
+    def test_registry_route_ignores_task_header(self):
+        """`/api/demo-task` — реєстровий маршрут: невідомий `X-Canvas-Task` його не зупиняє (заголовок тут не діє)."""
+        st, body = self.post('/api/demo-task', {'space': self.p_id}, headers={'X-Canvas-Task': 'nope-task'})
+        self.assertEqual(st, 200, body)
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['space'], self.p_id)
+
 
 if __name__ == '__main__':
     unittest.main()
