@@ -1234,14 +1234,18 @@ _BAD_CATEGORIES = ('Cc', 'Cf', 'Zs', 'Zl', 'Zp')
 
 def _clean_url(v):
     """`v`, коли це рядок ≤ `ACTION_URL_MAX` зі схемою http/https (без урахування регістру), НЕПОРОЖНІМ хостом і без символів категорій
-    Cc/Cf/Zs/Zl/Zp (керівні, невидимі, пробіли, bidi); інакше `None`. Адреса лишається як є."""
+    Cc/Cf/Zs/Zl/Zp (керівні, невидимі, пробіли, bidi), без `\\` і без userinfo (`@` в authority); інакше `None`. Адреса лишається як є."""
     if not isinstance(v, str) or not 0 < len(v) <= ACTION_URL_MAX:
         return None
     if any(unicodedata.category(c) in _BAD_CATEGORIES for c in v):
         return None
+    if '\\' in v:                       # браузер читає `\` як `/`: `https://evil\@good` веде на evil
+        return None
     try:
         sp = urlsplit(v)
         host = sp.hostname
+        if '@' in sp.netloc or sp.username is not None or sp.password is not None:   # userinfo — маскування хоста
+            return None
     except ValueError:
         return None
     if sp.scheme.lower() not in ('http', 'https') or not v.lower().startswith(sp.scheme.lower() + '://') or not host:

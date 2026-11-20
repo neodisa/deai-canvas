@@ -1,7 +1,7 @@
 /* Логіка оболонки для інструментів модулів (app/module-host.js): острівець, клавіші, міст-хост. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CORE_KEYS, MAX_ISLAND_TOOLS, createBridgeHost, islandModTools, modKeyMap, modToolKey, paletteModTools } from "../app/module-host.js";
+import { CORE_KEYS, MAX_ISLAND_TOOLS, actionItems, createBridgeHost, islandModTools, modKeyMap, modToolKey, paletteModTools } from "../app/module-host.js";
 import { KEYS } from "../app/shell-palette.js";
 
 const tool = (i, o = {}) => ({ module: "m1", module_name: "M1", id: `t${i}`, label: `Tool ${i}`, icon: "puzzle", key: null, panel: `/api/module-ui/s/m1/p${i}.html`, ...o });
@@ -158,4 +158,23 @@ test("хост: event — повідомлення для панелі", () => {
   assert.deepEqual(Object.keys(init).sort(), ["context", "theme", "vars"]);
   assert.equal(init.theme, "dark");
   assert.equal(init.vars["--s1"], "#111");
+});
+
+const act = (m, id, where, label = id) => ({ module: m, module_name: `${m} name`, id, label, where });
+const AEXT = { tools: [], actions: [act("m1", "a", ["palette", "task"], "A <b>"), act("m2", "b", ["iteration"]), act("m1", "c", ["palette", "task", "iteration"], 'C "q"')] };
+
+test("actionItems: фільтр за where, порядок ext, сирі підписи", () => {
+  assert.deepEqual(actionItems(AEXT, "palette").map((x) => x.key), ["m1/a", "m1/c"]);
+  assert.deepEqual(actionItems(AEXT, "task").map((x) => x.key), ["m1/a", "m1/c"]);
+  assert.deepEqual(actionItems(AEXT, "iteration").map((x) => x.key), ["m2/b", "m1/c"]);
+  assert.deepEqual(actionItems(AEXT, "palette")[0], { key: "m1/a", label: "A <b>", module: "m1", id: "a", moduleName: "m1 name" });
+  assert.equal(actionItems(AEXT, "palette")[1].label, 'C "q"');
+});
+
+test("actionItems: порожнє й чуже", () => {
+  assert.deepEqual(actionItems(AEXT, "nowhere"), []);
+  assert.deepEqual(actionItems(null, "palette"), []);
+  assert.deepEqual(actionItems({}, "palette"), []);
+  assert.deepEqual(actionItems({ actions: "x" }, "palette"), []);
+  assert.deepEqual(actionItems({ actions: [{ module: "m", id: "i", label: "L" }] }, "palette"), []);
 });

@@ -290,6 +290,12 @@ export function paletteActions(state) {
         kbd: x.letter || undefined, act: "modtool", val: x.key });
     }
   }
+  /* Дії модулів (api 2): над відкритою задачею, у будь-якому режимі; ціль — задача й ітерація з `app.js` (`execPaletteAction`). */
+  if (s.hasTask && Array.isArray(s.modActs)) {
+    for (const x of s.modActs) {
+      out.push({ id: `modact:${x.key}`, group: "modules", label: String(x.label ?? ""), icon: "puzzle", act: "modact", val: x.key });
+    }
+  }
 
   /* ── gIter: існує лише разом з ітерацією — ОМІТ, а не «вимкнено», той
      самий вибір, що для крихти ітерації в смузі (не «є, вимкнена», а немає

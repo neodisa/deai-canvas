@@ -58,7 +58,7 @@ import {
   filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from './shell-palette.js';
 import { initPwa } from './pwa.js';
-import { CORE_KEYS, createBridgeHost, islandModTools, modKeyMap, modToolKey, paletteModTools } from './module-host.js';
+import { CORE_KEYS, actionItems, createBridgeHost, islandModTools, modKeyMap, modToolKey, paletteModTools } from './module-host.js';
 import { KIT_VARS } from './module-kit/kit-vars.js';
 import { connMenuHTML, connPageHTML, drawerHTML, modName, roleTitle, toolMenuHTML } from './connections-view.js';
 import { toolCards } from './modules-grid.js';
@@ -1076,6 +1076,8 @@ function barState() {
     tasksErr,
     tasksErrKey,
     openDd, iterDelAsk,
+    /* Дії модулів у дропдауні ітерації (ціль — відкрита задача й ітерація `picked`). */
+    modActs: actionItems(modExtNow(), 'iteration'),
     homeOpen,
     /* Сторінка оверлею (`tasks`/`conn`/`wiz`) — для крихти смуги й пункту ⌘K; поза оверлеєм — `null`. */
     homePage: homeOpen ? homePage : null,
@@ -2074,6 +2076,33 @@ async function loadModExt() {
   paintIsland();
 }
 
+/** Дії модулів, що зараз виконуються (за ключем «модуль/дія»): повторний виклик, поки перший летить, ігноруємо. */
+const modActBusy = new Set();
+
+/** Виконати дію модуля (`POST /api/module-action`) і показати результат тостом. `from` — звідки викликано
+ *  (`palette`/`task`/`iteration`), `iterationId` — `null` для картки задачі. Сервер перевіряє все ще раз. */
+async function runModuleAction(key, from, taskId, iterationId) {
+  const i = String(key).indexOf('/');
+  if (i < 1 || !taskId || modActBusy.has(key)) return;
+  const module = key.slice(0, i), action = key.slice(i + 1);
+  const label = String(modExtNow().actions.find((x) => x.module === module && x.id === action)?.label ?? action);
+  modActBusy.add(key);
+  try {
+    const r = await post('/api/module-action', { module, action, from, task: taskId, iteration: iterationId ?? null, space: spaceNow()?.id });
+    if (r?.ok === true) {
+      const url = typeof r.url === 'string' && /^https?:\/\/[^\s\\]+$/i.test(r.url) ? r.url : null;
+      toast(typeof r.text === 'string' && r.text ? r.text : t('modActDone'),
+        url ? { action: { label: t('modActOpen'), run: () => window.open(url, '_blank', 'noopener,noreferrer') } } : {});
+    } else {
+      toast(t('modActFail', label, (typeof r?.text === 'string' && r.text) || '—'));
+    }
+  } catch (e) {
+    toast(t('modActFail', label, e?.message || String(e?.code ?? '')));
+  } finally {
+    modActBusy.delete(key);
+  }
+}
+
 /** Літера інструмента модуля з події клавіші (за `code`, щоб працювала й українська розкладка) або `null`. */
 function modKeyOf(ev) {
   if (homeOpen || cleanView || mode === 'canvas') return null;
@@ -2456,6 +2485,8 @@ const BAR_ACTIONS = {
   clean: () => toggleClean(),
   /* Інструмент модуля (api 2): кнопка острівця, пункт ⌘K, літера — перемикач; `modclose` — хрестик панелі. */
   modtool: (key) => { if (modOpen?.key === key) closeModTool(); else openModTool(key); },
+  /* Дія модуля з дропдауна ітерації: ціль — відкрита задача й поточна (`picked`) ітерація. */
+  modact: (key) => runModuleAction(key, 'iteration', currentTaskId, picked),
   modclose: () => {
     const key = modOpen?.key;
     closeModTool();
@@ -3664,7 +3695,7 @@ function openTaskMenu(id, { trash = false, at = null } = {}) {
   const x = ((trash ? homeData?.trash : homeData?.mine) || []).find((y) => y.id === id);
   if (!home || !x) return;
   const tpl = document.createElement('template');
-  tpl.innerHTML = taskMenuHTML(x, { trash }).trim();
+  tpl.innerHTML = taskMenuHTML(x, { trash, actions: trash ? [] : actionItems(modExtNow(), 'task') }).trim();
   const m = tpl.content.firstChild;
   m.style.position = 'fixed';
   home.appendChild(m);
@@ -4014,6 +4045,8 @@ async function loadHome(refresh = false, { spaces = true } = {}) {
       if (healed) { await resetSpaceState({ reload: false }); if (homeOpen) enterHome({ spaces: false }); return; }
     }
     paintBar();
+    /* Дії модулів для меню карток: список залежить лише від простору (той самий ключ, що в `render()`). */
+    if ((spaceNow()?.id ?? '') !== modExtKey) loadModExt();
     if (needsWelcome(spacesResp)) {
       homeData = { current: null, mine: [], team: null, space: null };
       paintHome();
@@ -4306,6 +4339,8 @@ function wireHome(el) {
       case 'newtask': openNewTaskCard(); break;
       /* «Мітки…» — пункт меню картки; фокус після діалогу вертається на «⋯» (`editTaskTags.focusBack`). */
       case 'tags': editTaskTags(b.dataset.id); break;
+      /* Дія модуля з меню картки: ціль — ЦЯ задача, ітерації нема. */
+      case 'modact': runModuleAction(v, 'task', b.dataset.id, null); break;
       case 'conn': setConnSec('mods'); enterConnections(); break;
       /* Розділ «Налаштувань» (ліва навігація): перемальовка без перезапиту модулів. */
       case 'csec': if (readSec(v) !== connSec) { setConnSec(v); paintHome(); if (connSec === 'agents') loadAgents(); if (connSec === 'upd') pollUpdate(); } break;
@@ -9241,6 +9276,7 @@ function paletteState() {
     update: st.update,
     hasTask: !!st.taskId,
     modTools: paletteModTools(modExtNow()),
+    modActs: actionItems(modExtNow(), 'palette'),
   };
 }
 
@@ -9360,6 +9396,8 @@ function execPaletteAction(a) {
   /* Встановлення — теж дія самого застосунку (як мова): викликається прямо з
      жесту (клік/Enter у палітрі), без якого Chrome відхилить `prompt()`. */
   if (a.act === 'pwainstall') { pwa.install(); return; }
+  /* Дія модуля з ⌘K: ціль — відкрита задача й поточна ітерація (`picked`, може бути `null`). */
+  if (a.act === 'modact') { runModuleAction(a.val, 'palette', currentTaskId, picked); return; }
   (BAR_ACTIONS[a.act] || PANEL_ACTIONS[a.act])?.(a.val);
 }
 

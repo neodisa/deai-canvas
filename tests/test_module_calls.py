@@ -38,6 +38,8 @@ URL_CASES = {
     'edge': 'https://x.example/' + 'a' * (2048 - len('https://x.example/')), 'over': 'https://x.example/' + 'a' * (2049 - len('https://x.example/')),
     'nohost': 'https://', 'nohost2': 'https:///path', 'zwsp': 'https://x\u200by', 'bidi': 'https://x\u202ey', 'c1': 'https://x\x9bz',
     'nbsp': 'https://x\u00a0y', 'backslash': 'https:\\\\evil', 'ipv6': 'https://[::1', 'num': 5, 'ftp': 'ftp://x.example/',
+    'bs-userinfo': 'https://evil.example\\@good.example', 'userinfo': 'https://u:p@h.example/', 'user-only': 'https://u@h.example/',
+    'bs-path': 'https://h.example/a\\b', 'at-path': 'https://h.example/a@b',
 }
 SERVER = tmo.OWN_SERVER + '''
 import json
@@ -432,7 +434,7 @@ class ActionTests(Calls):
             self.assertEqual(self.act('shape'), (200, {'ok': False}))
 
     def test_url_filter(self):
-        keep = {'good', 'upper', 'plain', 'edge'}   # решта — відкинуто
+        keep = {'good', 'upper', 'plain', 'edge', 'at-path'}   # решта — відкинуто
         for k, v in URL_CASES.items():
             with self.subTest(case=k), mock.patch.dict(os.environ, {'URL_CASE': k}):
                 st, body = self.act('url')

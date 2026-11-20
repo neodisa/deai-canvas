@@ -34,3 +34,19 @@ test("розмітка меню кошика: «Повернути» і «Вид
   assert.match(h, /class="danger"[^>]*data-th="purge"/);
   assert.ok(!h.includes('data-th="preview"'));
 });
+
+const GOLDEN_PLAIN = "<div id=\"th-menu\" class=\"cv-ctx th-menu\" role=\"menu\" aria-label=\"Дії задачі t1\"><button type=\"button\" role=\"menuitem\" tabindex=\"-1\" data-th=\"rename\" data-id=\"t1\"><svg class=\"ico\" width=\"15\" height=\"15\" aria-hidden=\"true\"><use href=\"#i-pencil\"/></svg><span>Перейменувати</span><kbd>F2</kbd></button><button type=\"button\" role=\"menuitem\" tabindex=\"-1\" data-th=\"tags\" data-id=\"t1\"><svg class=\"ico\" width=\"15\" height=\"15\" aria-hidden=\"true\"><use href=\"#i-sliders\"/></svg><span>Мітки…</span></button><hr role=\"separator\"><button type=\"button\" role=\"menuitem\" tabindex=\"-1\" class=\"danger\" data-th=\"delete\" data-id=\"t1\"><svg class=\"ico\" width=\"15\" height=\"15\" aria-hidden=\"true\"><use href=\"#i-trash\"/></svg><span>Видалити</span><kbd>⌫</kbd></button></div>";
+
+test("золотий: без дій модулів розмітка байт у байт як раніше", () => {
+  assert.equal(taskMenuHTML({ id: "t1" }), GOLDEN_PLAIN);
+  assert.equal(taskMenuHTML({ id: "t1" }, { actions: [] }), GOLDEN_PLAIN);
+});
+
+test("дії модулів: перед «Видалити», роздільник, data-th=modact + data-v, підпис екранований; у кошику їх нема", () => {
+  const actions = [{ key: "m/a", label: 'P"<b>', module: "m", id: "a", moduleName: "M" }];
+  const h = taskMenuHTML({ id: "t1" }, { actions });
+  assert.match(h, /data-th="modact" data-id="t1" data-v="m\/a"/);
+  assert.ok(h.includes("<span>P&quot;&lt;b&gt;</span>") && !h.includes("<b>"));
+  assert.ok(h.indexOf('data-th="tags"') < h.indexOf('data-th="modact"') && h.indexOf('data-th="modact"') < h.indexOf('data-th="delete"'));
+  assert.equal(taskMenuHTML({ id: "t1" }, { trash: true, actions }), taskMenuHTML({ id: "t1" }, { trash: true }));
+});

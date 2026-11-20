@@ -162,7 +162,7 @@ export function mark(text, q) {
    смаком): сегмент у смузі коштував ~180px там, де на 1440 бракує одного
    пікселя; меню «⋯» робило контрол недосяжним на будь-якій ширині понад
    1060px, бо CSS ховає «⋯» — знайдено живим тестом, не оком. */
-function crumbIter(model, openDd, iterDelAsk = false) {
+function crumbIter(model, openDd, iterDelAsk = false, modActs = []) {
   const it = model.zone1.find((x) => x.id === "iter");
   if (!it) return "";
   const open = openDd === "iter";
@@ -194,11 +194,14 @@ function crumbIter(model, openDd, iterDelAsk = false) {
   const curId = (it.items || []).find((x) => x.on)?.id ?? "";
   const ask = `<div class="dd dd--confirm">${confirmHTML({ title: t("cfmDelIter", it.label),
     yes: t("menuDeleteYes"), no: t("cfmNo"), yesAttrs: `data-act="delit" data-val="confirmed:${esc(curId)}"`, noAttrs: 'data-act="delitno"' })}</div>`;
+  /* Дії модулів — над поточною ітерацією (як «Перейменувати»/«Дублювати»); підпис сирий, `ddItem` його екранує. */
+  const mods = modActs.length
+    ? `<div class="dd-sep"></div>\n    ${modActs.map((x) => ddItem({ act: "modact", val: x.key, icon: "puzzle", title: x.label })).join("")}` : "";
   const dd = iterDelAsk ? ask : `<div class="dd">
     ${list}${list ? '<div class="dd-sep"></div>' : ""}
     ${ddItem({ act: "newit", icon: "plus", title: t("newIteration"), sub: t("newIterationSub") })}
     ${ddItem({ act: "renit", icon: "pencil", title: t("renameIteration") })}
-    ${ddItem({ act: "dupit", icon: "copy", title: t("dupIteration") })}
+    ${ddItem({ act: "dupit", icon: "copy", title: t("dupIteration") })}${mods}
     <div class="dd-sep"></div>
     ${ddItem({ act: "delitask", icon: "trash", title: t("delIteration"), danger: true })}</div>`;
   /* Імені автора в крошці нема (власник: лише ітерація та її назва); чужа ітерація — видимий клас `crumb--foreign`
@@ -437,7 +440,7 @@ export function barHTML(model, state) {
   const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
   const zone1 = home
     ? `${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
-    : `<div class="crumbs">${crumbIter(model, openDd, !!state?.iterDelAsk)}${crumbTitle(model)}</div>`;
+    : `<div class="crumbs">${crumbIter(model, openDd, !!state?.iterDelAsk, Array.isArray(state?.modActs) ? state.modActs : [])}${crumbTitle(model)}</div>`;
   /* Зони 2 і 3 екрана «Задачі» порожні в МОДЕЛІ — не малюємо їхніх контролів,
      але самі вузли лишаються (грид смуги на них тримається). */
   const zone2 = home ? "" : zone2HTML(model, state, openDd);

@@ -878,3 +878,15 @@ test("дропдаун ітерації: iterDelAsk — лише питання,
 test("питання лише при відкритому дропдауні ітерації", () => {
   assert.doesNotMatch(html({ openDd: null, iterDelAsk: true }), /class="cfm"/);
 });
+
+test("дропдаун ітерації: дії модулів перед «Видалити», сирий підпис екранується; без дій розмітка та сама", () => {
+  const base = S({ openDd: "iter", iterList: [], iterId: "it1" });
+  const plain = barHTML(barModel(base), base);
+  assert.equal(barHTML(barModel(base), { ...base, modActs: [] }), plain);
+  const st = { ...base, modActs: [{ key: "m/a", label: 'P"<b>', module: "m", id: "a", moduleName: "M" }] };
+  const h = barHTML(barModel(st), st);
+  assert.match(h, /data-act="modact" data-val="m\/a"/);
+  assert.ok(h.includes("P&quot;&lt;b&gt;") && !h.includes("<b>"));
+  assert.ok(h.indexOf('data-act="dupit"') < h.indexOf('data-act="modact"') && h.indexOf('data-act="modact"') < h.indexOf('data-act="delitask"'));
+  assert.equal(h.replace(/<div class="dd-sep"><\/div>\s*<button class="dd-item"[^>]*data-act="modact"[\s\S]*?<\/button>/, ""), plain);
+});

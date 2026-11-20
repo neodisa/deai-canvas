@@ -6,6 +6,7 @@
  *   A острівець: кнопка лише в «Макеті»; без модуля розмітка та сама, що з модулем мінус його кнопка;
  *   B клік → панель із назвою, `sandbox` без `allow-same-origin`; `init` довіз контекст (назва сторінки);
  *      у панелі `localStorage` кидає, `fetch` відхилено, `deai.call` повертає значення; зміна сторінки → подія `context`;
+ *   D дії модулів: ⌘K, «⋯» картки, дропдаун ітерації → тост із текстом відповіді й кнопкою «Відкрити» (window.open підмінено); збій → «Підпис: текст».
  *   C права панель одна: коментарі закривають інструмент, `J` перемикає (і з рамки), ⌘K показує пункт, інспектор закриває.
  * Знімки для людини — у `SHOTS` (`DEAI_SHOTS`), якщо задано.
  */
@@ -34,6 +35,20 @@ const SERVER_PY = `def check(ctx):
 
 def tool_echo(ctx, args):
     return args
+
+
+def action_ping(ctx, target):
+    return {"ok": True, "text": "pong " + target["from"], "url": "https://example.com/x"}
+
+
+def action_slow(ctx, target):
+    import time
+    time.sleep(1.2)
+    return {"ok": True, "text": "slow done"}
+
+
+def action_fail(ctx, target):
+    return {"ok": False, "text": "nope"}
 `;
 const PANEL = `<!doctype html><html><head><meta charset="utf-8"><title>Probe panel</title></head><body class="dk-panel">
 <h2 id="title">…</h2><div id="ls">…</div><div id="fetch">…</div><div id="echo">…</div><div id="ctx">…</div><div id="ev">…</div><button id="nav" type="button">nav</button>
@@ -56,7 +71,8 @@ function writeProbe(spacePath) {
   const d = path.join(spacePath, "modules", "probe-mod");
   mkdirSync(path.join(d, "panel"), { recursive: true });
   writeFileSync(path.join(d, "module.json"), JSON.stringify({ api: 2, id: "probe-mod", name: "Probe module (test)", version: "1.0.0", roles: [],
-    tools: [{ id: "probe", label: "Probe", icon: "task", panel: "panel/index.html", key: "J" }] }));
+    tools: [{ id: "probe", label: "Probe", icon: "task", panel: "panel/index.html", key: "J" }],
+    actions: [{ id: "ping", label: "Ping", where: ["palette", "task", "iteration"] }, { id: "fail", label: "Fail", where: ["palette"] }, { id: "slow", label: "Slow", where: ["palette"] }] }));
   writeFileSync(path.join(d, "server.py"), SERVER_PY);
   writeFileSync(path.join(d, "panel", "index.html"), PANEL);
 }
@@ -249,5 +265,78 @@ test("B+C: панель-пісочниця, міст, права панель о
   await page.waitForFunction(() => !document.getElementById("mod-panel").hidden);
   await page.click('#tabs [data-act="home"]');
   await page.waitForFunction(() => document.getElementById("mod-panel").hidden);
+  assert.deepEqual(s.errors, []);
+});
+
+const toastText = (page) => page.evaluate(() => document.getElementById("cv-toast")?.textContent ?? "");
+const waitToast = (page, re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById("cv-toast")?.textContent ?? ""), re.source, { timeout: 15000 });
+
+test("D: дії модулів — ⌘K, меню картки задачі, дропдаун ітерації; тост із «Відкрити»; збій", async (t) => {
+  const s = await boot(t);
+  const { page } = s;
+  await page.waitForSelector(BTN, { timeout: 15000 });
+  /* Жодної мережі: `window.open` підмінено ДО будь-якого кліку «Відкрити». */
+  await page.evaluate(() => { window.__opened = []; window.open = (...a) => { window.__opened.push(a); return null; }; });
+
+  // ⌘K
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.waitForSelector(".pal");
+  await page.fill("#palq", "Ping");
+  assert.equal(await page.locator(".pal-it", { hasText: "Ping" }).count(), 1);
+  await page.keyboard.press("Enter");
+  await waitToast(page, /pong palette/);
+  const open = page.locator('#cv-toast button[data-act="undo"]');
+  assert.equal((await open.textContent()).trim(), "Відкрити");
+  await open.click();
+  assert.deepEqual(await page.evaluate(() => window.__opened[0]), ["https://example.com/x", "_blank", "noopener,noreferrer"]);
+
+  // збій: ok=false → «Fail: nope»
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.waitForSelector(".pal");
+  await page.fill("#palq", "Fail");
+  assert.equal(await page.locator(".pal-it", { hasText: "Fail" }).count(), 1);
+  await page.keyboard.press("Enter");
+  await waitToast(page, /^Fail: nope$/);
+
+  // повторний запуск, поки перший летить, ігнорується (один запит)
+  let posts = 0;
+  page.on("request", (r) => { if (r.url().endsWith("/api/module-action")) posts += 1; });
+  for (let i = 0; i < 2; i += 1) {
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.waitForSelector(".pal");
+    await page.fill("#palq", "Slow");
+    await page.keyboard.press("Enter");
+  }
+  await waitToast(page, /slow done/);
+  assert.equal(posts, 1, "повторний виклик, поки перший летить, пішов окремим запитом");
+
+  // клієнтська перевірка адреси (запас до серверної): небезпечна адреса з відповіді не дає кнопки «Відкрити»
+  for (const bad of ["javascript:alert(1)", "https://evil.example\\@good.example"]) {
+    await page.route("**/api/module-action", (r) => r.fulfill({ json: { ok: true, text: "bad-url", url: bad } }));
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.waitForSelector(".pal");
+    await page.fill("#palq", "Ping");
+    await page.keyboard.press("Enter");
+    await waitToast(page, /bad-url/);
+    assert.equal(await page.locator('#cv-toast button[data-act="undo"]').count(), 0, `кнопка «Відкрити» для ${bad}`);
+    await page.unroute("**/api/module-action");
+  }
+  assert.equal(await page.evaluate(() => window.__opened.length), 1);
+
+  // дропдаун ітерації
+  await page.click('[data-dd="iter"]');
+  await page.locator('.dd-item[data-act="modact"]').click();
+  await waitToast(page, /pong iteration/);
+
+  // меню картки на екрані «Задачі»
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector('#tasks-home .th-more[data-id="t1"]', { timeout: 15000 });
+  await page.click('#tasks-home .th-more[data-id="t1"]');
+  await page.waitForSelector("#th-menu");
+  assert.equal(await page.locator('#th-menu [data-th="modact"]').count(), 1);
+  assert.equal(await page.locator("#th-menu [role=menuitem]").last().getAttribute("data-th"), "delete");
+  await page.locator('#th-menu [data-th="modact"]').click();
+  await waitToast(page, /pong task/);
+  assert.equal(await page.evaluate(() => window.__opened.length), 1, "«Відкрити» без кліку не мало б викликатись");
   assert.deepEqual(s.errors, []);
 });

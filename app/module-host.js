@@ -44,6 +44,13 @@ export function modKeyMap(ext, coreKeys = CORE_KEYS) {
   return out;
 }
 
+/** Дії модулів для місця `where` (`palette`/`task`/`iteration`): у порядку ext, підпис сирий (екранує той, хто малює). */
+export function actionItems(ext, where) {
+  const list = ext && Array.isArray(ext.actions) ? ext.actions : [];
+  return list.filter((x) => x && Array.isArray(x.where) && x.where.includes(where))
+    .map((x) => ({ key: `${x.module}/${x.id}`, label: x.label, module: x.module, id: x.id, moduleName: x.module_name }));
+}
+
 const METHODS = ["hello", "context", "selection", "call", "toast", "close"];
 const MAX_MSG = 65536;
 const MAX_CALLS = 4;

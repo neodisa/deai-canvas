@@ -1120,3 +1120,15 @@ test("«В Figma» вимкнено в просторі — пункту в ⌘K
   assert.equal(has({ id: "p" }), true);
   assert.equal(has(null), true);
 });
+
+test("дії модулів у ⌘K: лише на екрані задачі, в обох режимах, сирий підпис, act/val для modact", () => {
+  const acts = [{ key: "m/a", label: "Ping <i>", module: "m", id: "a", moduleName: "M" }];
+  const want = [{ id: "modact:m/a", group: "modules", label: "Ping <i>", icon: "puzzle", act: "modact", val: "m/a" }];
+  const pick = (o) => paletteActions(S({ hasTask: true, modActs: acts, ...o })).filter((a) => a.id.startsWith("modact:"));
+  assert.deepEqual(pick({}), want);
+  assert.deepEqual(pick({ mode: "overview" }), want);
+  assert.deepEqual(pick({ homeOpen: true }), []);
+  assert.deepEqual(pick({ hasTask: false }), []);
+  assert.deepEqual(pick({ modActs: [] }), []);
+  assert.deepEqual(paletteActions(S({ hasTask: true })).filter((a) => a.id.startsWith("modact:")), []);
+});
