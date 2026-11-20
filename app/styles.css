@@ -2095,3 +2095,67 @@ h2.sub{margin:26px 0 10px;font-size:12px;font-weight:600;letter-spacing:.05em;te
   .ag-part{grid-template-columns:1fr}
   .ag-g{border-right:0;border-bottom:1px solid var(--line);padding:6px 12px}
 }
+
+/* ── «Перший запуск» (0.33.0) ─────────────────────────────────────────────────────────────────────────────────
+   Привітання з промптом агентові, знайомство (карта · легенда · цикл), картка ⌘K «Знайомство з канвасом» (та сама
+   оболонка `.cv-ask--form`, лише ширша), кадри без Chromium, рядки «Запуск агента» / «Claude Code» розділу AGENTS.md, пароль
+   превʼю на картці модуля. Джерело — погоджений прототип 20.11.2026. */
+.fr-agent{display:flex;flex-direction:column;gap:10px;max-width:560px;margin:0 auto 18px;padding:14px 16px;text-align:left;
+  border:1px solid var(--line);border-radius:var(--r-lg);background:var(--s2)}
+.fr-agent-h{display:flex;flex-direction:column;gap:3px}
+.fr-agent-h b{color:var(--hi);font-weight:600}
+.fr-agent-h span{color:var(--mid);font-size:12.5px;line-height:1.5}
+.fr-agent .prompt{background:var(--s1)}
+.fr-agent-f{display:flex;justify-content:flex-end;gap:8px}
+.fr-or{margin:0 0 10px;font-size:12px;color:var(--dim)}
+.fr-cmd{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px}
+.fr-cmd .cn-code{margin:0}
+.fr-intro{max-width:960px;margin:44px auto 0;padding-top:26px;border-top:1px solid var(--line);text-align:left}
+.fr-h2{margin:0 0 14px;font-size:14px;font-weight:600;color:var(--hi)}
+.fr-h3{margin:26px 0 12px;font-size:12.5px;font-weight:600;color:var(--hi)}
+.fr-tour{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:900px){.fr-tour{grid-template-columns:1fr}}
+.fr-map{position:relative;aspect-ratio:16/10;max-width:100%;border:1px solid var(--line2);border-radius:var(--r-lg);background:var(--s0);overflow:hidden}
+.fr-m-tabs{position:absolute;left:0;right:0;top:0;height:9%;display:flex;align-items:center;gap:6px;padding:0 3%;border-bottom:1px solid var(--line)}
+.fr-m-tab{width:13%;height:52%;border-radius:4px;background:var(--s2)}
+.fr-m-tab--on{background:var(--s3)}
+.fr-m-bar{position:absolute;left:0;right:0;top:9%;height:11%;display:flex;align-items:center;gap:3%;padding:0 3%;border-bottom:1px solid var(--line);background:var(--s1)}
+.fr-m-chip{height:46%;border-radius:4px;background:var(--s3)}
+.fr-m-pub{margin-left:auto;width:16%;height:52%;border-radius:4px;background:var(--sel)}
+.fr-m-tree{position:absolute;left:0;top:20%;bottom:0;width:20%;padding:3% 2%;display:flex;flex-direction:column;gap:6%;background:var(--s2);border-right:1px solid var(--line)}
+.fr-m-tree i{display:block;height:5%;border-radius:3px;background:var(--s3)}
+.fr-m-stage{position:absolute;left:20%;right:0;top:20%;bottom:0;background:var(--g100)}
+.fr-m-page{position:absolute;left:12%;right:12%;top:8%;bottom:0;border-radius:4px 4px 0 0;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+.fr-m-page i{position:absolute;left:8%;height:5%;border-radius:3px;background:var(--g200)}
+.fr-m-pin{position:absolute;width:16px;height:16px;border-radius:50% 50% 50% 2px;background:var(--open);box-shadow:0 0 0 2px #fff}
+.fr-m-isl{position:absolute;left:50%;bottom:5%;transform:translateX(-50%);display:flex;gap:6px;padding:5px 8px;border-radius:999px;background:var(--s0);box-shadow:0 2px 8px rgba(0,0,0,.35)}
+.fr-m-isl i{display:block;width:14px;height:14px;border-radius:50%;background:var(--s3)}
+.fr-n{position:absolute;z-index:2;display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--hi);color:var(--s0);font:600 11px/1 system-ui,sans-serif;box-shadow:0 0 0 3px var(--s0)}
+.fr-legend{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px;counter-reset:fr}
+.fr-legend li{display:grid;grid-template-columns:20px minmax(0,1fr);gap:10px;align-items:start;font-size:12.5px;line-height:1.45;color:var(--mid)}
+.fr-legend li::before{counter-increment:fr;content:counter(fr);display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--s3);color:var(--hi);font-size:11px;font-weight:600}
+.fr-legend b{color:var(--hi);font-weight:500}
+.fr-legend kbd,.fr-cycle kbd{padding:0 5px;border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;background:var(--s3);font:inherit;font-size:11px;color:var(--hi)}
+.fr-cycle{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}
+@media (max-width:900px){.fr-cycle{grid-template-columns:1fr}}
+.fr-cycle li{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--s2);font-size:12px;line-height:1.45;color:var(--mid)}
+.fr-cycle li b{color:var(--hi);font-weight:500;font-size:12.5px}
+.fr-cycle li .who{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.fr-demo{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:14px;padding:12px 14px;border:1px dashed var(--line2);border-radius:var(--r-lg);background:var(--s1)}
+.fr-demo .set-row-l{min-width:220px}
+.fr-ic{display:grid;place-items:center;flex:none;width:30px;height:30px;border-radius:var(--r);background:var(--s3);color:var(--hi)}
+.fr-ic--ok{color:var(--ok)}
+.fr-ic--warn{color:var(--open)}
+.cv-ask--form:has(> form.fr-card){width:min(940px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto}
+.fr-card{display:flex;flex-direction:column;gap:14px}
+.fr-card-h{display:flex;align-items:center;gap:8px}
+.fr-card-h .cv-ask-title{flex:1}
+.fr-card .fr-demo{margin-top:0}
+.fr-card .fr-h3{margin-top:4px}
+.shots-cmd{display:flex;align-items:flex-start;gap:4px;margin:0 0 8px}
+.shots-cmd .cn-code{flex:1;min-width:0;margin:0;font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+.mc-pw{display:flex;align-items:center;gap:6px;margin:0;font-size:12px;color:var(--mid)}
+.mc-pw .ico{color:var(--dim)}
+.mc-pw button{position:relative;z-index:1;margin:0 0 0 2px;padding:0;border:0;background:none;color:var(--hi);font:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.mc-pw--off .ico{color:var(--open)}
+.fr-run{margin-bottom:16px}
