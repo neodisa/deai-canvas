@@ -79,7 +79,8 @@ and two pins — to try Overview, comments and the inspector without an agent.
 
 ### 11. Open the canvas
 
-If the icon is installed: `open -a "Design Canvas"`. Otherwise: `open <api>/app/`.
+If the icon is installed: `open -a "Design Canvas"`. Otherwise: `open http://localhost:8765/app/` — or `<api>/app/` when the
+prompt named another address (the icon opens `localhost` too, so the browser keeps one set of preferences).
 
 ### 12. The last message
 
