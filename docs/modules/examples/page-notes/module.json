@@ -1,0 +1,13 @@
+{
+  "api": 2,
+  "id": "page-notes",
+  "name": "Нотатки сторінок",
+  "version": "1.0.0",
+  "roles": [],
+  "tools": [
+    {"id": "notes", "label": "Нотатки", "icon": "doc", "panel": "panel/index.html", "key": "N"}
+  ],
+  "actions": [
+    {"id": "summary", "label": "Нотатки задачі", "where": ["palette", "task"]}
+  ]
+}

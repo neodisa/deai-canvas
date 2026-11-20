@@ -41,7 +41,8 @@ element and tell the agent what to change, and publishes a protected preview for
 - **Spaces, wizard and Settings**: several projects on one machine; the Settings page holds the space, its modules, `AGENTS.md`
   and the app's own options (language, window, updates, hotkeys).
 - **Modules**: built-in ones for publishing, tokens, team comments, git, dashboard, tracker and Teams notifications; your
-  own in `<space>/modules/`, run only after you trust them.
+  own in `<space>/modules/`, run only after you trust them. A module can also add tools to the island (a sandboxed
+  panel) and actions to ⌘K and the menus; see `docs/modules/authoring.md` and the example `docs/modules/examples/page-notes/`.
 - **To Figma**: copies the live mockup to the clipboard for pasting into Figma.
 - **App**: installable as a PWA; ⌘K palette; English and Ukrainian UI.
 
