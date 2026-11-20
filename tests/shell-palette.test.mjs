@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { DICT, setLang, t } from "../app/i18n.js";
 import { ico } from "../app/icons.js";
+import { CORE_KEYS, modKeyMap, paletteModTools } from "../app/module-host.js";
 import {
   KEYS, filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from "../app/shell-palette.js";
@@ -449,6 +450,38 @@ test("кожна kbd-підказка (довідка + реєстр) має о�
   assert.deepEqual(orphans, [],
     "підказка клавіші без обробника — рівно та брехня, від якої застерігає "
     + `докстрінг keysHTML():\n${orphans.join("\n")}`);
+});
+
+/* Підказки пунктів модулів (`kbd` = літера з маніфесту) обслуговує `modKeyMap` — не `app.js` буквально: літера — дані. Тож тест
+   звіряє два кінці: кожна показана літера є в `modKeyMap` (ядро її не відібрало й дубль не поглинув), а обидва обробники
+   клавіш в `app.js` справді його кличуть. Літера ядра (C) — не підказка: її пункту не дають. */
+test("kbd пунктів модулів: кожна показана літера — у modKeyMap; обидва обробники app.js кличуть modKeyMap", () => {
+  const mk = (i, key) => ({ module: "m", module_name: "M", id: `t${i}`, label: `Tool ${i}`, icon: "puzzle", key, panel: "/p" });
+  const ext = { tools: [mk(1, "J"), mk(2, "C"), mk(3, "J"), mk(4, null), mk(5, "K")], actions: [] };
+  const items = paletteActions(S({ modTools: paletteModTools(ext) })).filter((a) => a.group === "modules");
+  assert.equal(items.length, 5);
+  const map = modKeyMap(ext, CORE_KEYS);
+  const shown = items.filter((a) => a.kbd);
+  assert.deepEqual(shown.map((a) => a.kbd), ["J", "J", "K"], "літера ядра C не показується");
+  for (const a of shown) assert.ok(Object.hasOwn(map, a.kbd), `kbd «${a.kbd}» без запису в modKeyMap`);
+  const appSrc = src("app.js");
+  assert.ok(/function modKeyOf\(ev\)[\s\S]*?modKeyMap\(/.test(appSrc), "modKeyOf мусить брати літеру з modKeyMap");
+  assert.ok((appSrc.match(/modKeyOf\(ev\)/g) || []).length >= 2, "документний і рамковий обробники мусять кликати modKeyOf");
+});
+
+test("пункти модулів: лише «Макет», сирий підпис, група «Модулі», act/val для BAR_ACTIONS.modtool", () => {
+  const mods = [{ key: "m/t", label: "A <i>x</i>", icon: "puzzle", letter: "J" }];
+  const lay = paletteActions(S({ modTools: mods })).filter((a) => a.group === "modules");
+  assert.deepEqual(lay, [{ id: "modtool:m/t", group: "modules", label: "A <i>x</i>", icon: "puzzle", kbd: "J", act: "modtool", val: "m/t" }]);
+  assert.equal(paletteActions(S({ mode: "overview", modTools: mods })).some((a) => a.group === "modules"), false);
+  assert.equal(paletteActions(S({ homeOpen: true, modTools: mods })).some((a) => a.group === "modules"), false);
+  assert.equal(paletteActions(S()).some((a) => a.group === "modules"), false);
+  const html = paletteListHTML(lay, "", 0);
+  assert.match(html, /<div class="pal-grp">Модулі<\/div>/);
+  assert.ok(html.includes("A &lt;i&gt;x&lt;/i&gt;") && !html.includes("<i>x</i>"));
+  assert.equal(filterActions(lay, "<i>").length, 1);
+  setLang("en");
+  assert.match(paletteListHTML(lay, "", 0), /<div class="pal-grp">Modules<\/div>/);
 });
 
 /* ── гейти станів (той самий принцип, що bar-model.js) ───────────────────── */

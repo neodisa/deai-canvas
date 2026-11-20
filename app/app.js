@@ -24,7 +24,7 @@ import {
 import { LANG_KEY, getLang, readStoredLang, setLang, t } from './i18n.js';
 import { reloadStep, shouldPollStamp } from './live-reload.js';
 import { applyClean, syncFrame } from './clean-view.js';
-import { SPRITE, ico } from './icons.js';
+import { ICONS, SPRITE, ico } from './icons.js';
 import { overviewComments } from './overview-comments.js';
 import { esc } from './esc.js';
 import { apiProblem } from './api-guard.js';
@@ -58,6 +58,8 @@ import {
   filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from './shell-palette.js';
 import { initPwa } from './pwa.js';
+import { CORE_KEYS, createBridgeHost, islandModTools, modKeyMap, modToolKey, paletteModTools } from './module-host.js';
+import { KIT_VARS } from './module-kit/kit-vars.js';
 import { connMenuHTML, connPageHTML, drawerHTML, modName, roleTitle, toolMenuHTML } from './connections-view.js';
 import { toolCards } from './modules-grid.js';
 import { cardModel } from './modules-grid.js';
@@ -133,6 +135,16 @@ const inspEl = document.getElementById('insp-panel');
 /* Панель «Коментарі» (0.26.0). Відкрита панель = увімкнений режим коментування (як у Figma). Знімок — від
    коментатора поточного виду (рамка в «Макеті», полотно в «Огляді»); сховища панель не читає (спека Б-Р4). */
 const cmtEl = document.getElementById('cmt-panel');
+/* Інструменти модулів (api 2): права панель-пісочниця `#mod-panel` (одна з трьох правих панелей — інспектор, коментарі, ця).
+   `modExt` — `GET /api/module-ext` для простору `spaceId`; `modOpen` — відкритий зараз інструмент (`{key, module, label,
+   icon, spaceId, url, host}`), `modFrame` — його iframe. `modSel` — останній вибір інспектора ({key сторінки, значення}).
+   Оголошено ТУТ, нагорі: `paintIsland`/`paintBar` читають їх із першого ж рендера (TDZ). */
+const modEl = document.getElementById('mod-panel');
+let modExt = { spaceId: null, tools: [], actions: [] };
+let modExtKey = '';
+let modExtSeq = 0;
+let modOpen = null, modFrame = null, modSel = null;
+let modCtxSent = '', modThemeSent = '';
 let lastFrameSrc = null;   // адреса рамки на момент попереднього `applyMode`: змінилась — вибір/редагування панелі коментарів старого документа скидаються
 let cmtTool = null;   // `CommentLayer.tool()` поточного виду для острівця (режими коментування, поправка 19)
 let cmtDelAsk = null;   // id картки, де показано питання «Видалити назавжди?» (етап В)
@@ -1172,9 +1184,12 @@ function paintTabs() {
 /** Інструменти острівця (інспектор лише в «Макеті», баг/ідея скрізь); сегмент Claude веде `paintClaude`. */
 function paintIsland() {
   islandEl.setAttribute('aria-label', t('islandNav'));
-  const html = islandToolsHTML({ screen: homeOpen ? 'home' : 'task', mode: mode === 'canvas' ? 'overview' : 'layout',
+  const screen = homeOpen ? 'home' : 'task';
+  const vmode = mode === 'canvas' ? 'overview' : 'layout';
+  const html = islandToolsHTML({ screen, mode: vmode,
     inspectorOn: !!inspectorApi()?.on, commentsOn: cmtOpen, commentsCount: openCount(cmtSnap), commentsNew: cmtNewsN,
-    commentTool: cmtTool });
+    commentTool: cmtTool,
+    modTools: islandModTools(modExtNow(), { screen, mode: vmode }).map((x) => ({ ...x, on: modOpen?.key === x.key })) });
   if (writeKeepFocus(islTools, html, islHtmlLast)) islHtmlLast = html;
 }
 /** Відкрита задача — вкладка; задачі поточного простору, яких вже нема, — геть (чистка лише в межах простору, що його
@@ -1232,6 +1247,7 @@ function paintBar() {
   paintTabs();
   paintIsland();
   paintInsp();
+  modSync();
   if (openDd === 'space') {
     /* Щойно відкрили — фокус на ПОТОЧНИЙ рядок (там людина й так хоче почати); інакше —
        на той самий рядок, де стояв. Клавіатура далі йде по `.dd--spaces .dd-item`. */
@@ -1309,6 +1325,8 @@ async function render({ keepFrame = false } = {}) {
   paintBar();
   applyMode(task, { keepFrame });
   renderPanel();
+  /* Інструменти модулів — на вході в простір чи задачу (після змін модулів — `afterModulesChange`). Не чекаємо: збій тут нічого не ламає. */
+  if (`${spaceNow()?.id ?? ''}|${currentTaskId ?? ''}` !== modExtKey) loadModExt();
 }
 
 /* ===== Смуга (Task 3 Плану B): дії й одна делегація замість десятка
@@ -1432,6 +1450,7 @@ async function resetPerTaskState() {
 async function resetSpaceState({ reload = true } = {}) {
   homeQueued = null;                     // вибір на «Задачах» іншого простору
   await resetPerTaskState();
+  closeModTool();   // інструмент модуля належить простору, якого вже нема
   curTask = null; curTaskList = null; homeData = null; currentTaskId = null;
   taskSwitchGen += 1; homeSeq += 1;
   glCache = null; teamsMute = null;
@@ -2004,6 +2023,7 @@ function newsToast(came) {
 }
 function setCommentsOpen(on) {
   on = !!on;
+  if (on) closeModTool();   // права панель одна: коментарі витісняють інструмент модуля
   /* Інспектор і коментарі — взаємно виключні: обидва ділять праву панель і обидва ловлять клік по макету. */
   if (on) { const api = inspectorApi(); if (api?.on) { api.set(false); paintBar(); } }
   cmtOpen = on;
@@ -2023,6 +2043,161 @@ function setCommentsOpen(on) {
   if (L && !!L.commentMode !== on) L.setCommentMode(on);
   paintComments();
 }
+/* ===== Інструменти модулів (api 2): права панель-пісочниця й міст =====
+   Панель — iframe `sandbox="allow-scripts allow-forms"` без `allow-same-origin`: непрозоре походження, жодного доступу до
+   оболонки, сховищ і мережі. Говорить лише через `postMessage` (`module-kit/bridge.js` у панелі ↔ `createBridgeHost` тут).
+   Модуль виклику хост бере з ВІДКРИТОГО інструмента (`modOpen.module`), а не з повідомлення панелі. */
+
+/** Інструменти поточного простору (а не чужого, що лишився після його зміни). */
+function modExtNow() {
+  return modExt.spaceId === (spaceNow()?.id ?? null) ? modExt : { tools: [], actions: [] };
+}
+
+/** `GET /api/module-ext`: збій — інструментів нема, без помилки в смузі. Відповідь, що спізнилась, відкидається. */
+async function loadModExt() {
+  const spaceId = spaceNow()?.id ?? null;
+  modExtKey = `${spaceId ?? ''}|${currentTaskId ?? ''}`;
+  const seq = ++modExtSeq;
+  let r = null;
+  if (spaceId) { try { r = await api(`/api/module-ext?space=${encodeURIComponent(spaceId)}`); } catch (e) { r = null; } }
+  if (seq !== modExtSeq) return;
+  modExt = { spaceId, tools: Array.isArray(r?.tools) ? r.tools : [], actions: Array.isArray(r?.actions) ? r.actions : [] };
+  if (modOpen && !modExt.tools.some((x) => modToolKey(x) === modOpen.key)) closeModTool();
+  paintIsland();
+}
+
+/** Літера інструмента модуля з події клавіші (за `code`, щоб працювала й українська розкладка) або `null`. */
+function modKeyOf(ev) {
+  if (homeOpen || mode === 'canvas') return null;
+  const m = /^Key([A-Z])$/.exec(ev.code || '');
+  const L = m ? m[1] : (/^[a-z]$/i.test(ev.key || '') ? ev.key.toUpperCase() : null);
+  if (!L) return null;
+  const map = modKeyMap(modExtNow(), CORE_KEYS);
+  return Object.hasOwn(map, L) ? map[L] : null;
+}
+
+const modPageKey = () => `${currentTaskId}|${tunePage()}`;
+const MOD_SEL_PROPS = ['color', 'background-color', 'font-size', 'font-family', 'font-weight', 'line-height'];
+/** Вибір інспектора для панелі: ланцюжок крихт, тег і шість стилів (обчислені значення зі звіту). */
+function modSelectionOf(rep) {
+  const crumbs = Array.isArray(rep.crumbs) ? rep.crumbs : [];
+  const styles = {};
+  for (const p of MOD_SEL_PROPS) { const d = inspDecls.get(p); if (d && typeof d.computed === 'string') styles[p] = d.computed; }
+  const tag = /^[a-z][a-z0-9-]*/i.exec(crumbs[crumbs.length - 1] || '');
+  return { selector: crumbs.join(' > '), tag: tag ? tag[0].toLowerCase() : '', styles };
+}
+
+/** Світла/темна тема оболонки для панелі: оболонка лише темна, тож `dark`, якщо документ не каже іншого. */
+const modTheme = () => {
+  const v = document.documentElement.dataset.theme;
+  return typeof v === 'string' && /^[a-z-]{1,20}$/.test(v) ? v : 'dark';
+};
+function modVars() {
+  const cs = getComputedStyle(document.documentElement);
+  const out = {};
+  for (const name of KIT_VARS) out[name] = cs.getPropertyValue(name).trim();
+  return out;
+}
+function modContext() {
+  const sp = spaceNow();
+  const it = curIter();
+  const pg = pickedPage ? (flattenPages(panelPages).find((f) => f.page.id === pickedPage)?.page ?? null) : null;
+  return {
+    space: { id: sp?.id ?? '', name: sp?.name ?? '' },
+    task: { id: currentTaskId ?? '', name: curTask ? cleanTitle(curTask) : '' },
+    iteration: it ? { id: it.id, name: it.label_text || it.id } : null,
+    page: pg ? { id: pg.id, title: pg.name ?? '' } : null,
+    lang: getLang(), theme: modTheme(),
+  };
+}
+
+function modPost(msg) {
+  try { modFrame?.contentWindow?.postMessage(msg, '*'); } catch (e) { /* рамка вже пішла */ }
+}
+
+/** Хост мосту для ОДНОГО відкритого інструмента: `bound` — його модуль і простір, панель обрати інший не може. */
+function modHostFor(bound) {
+  return createBridgeHost({
+    getContext: modContext,
+    getSelection: () => (modSel && modSel.key === modPageKey() ? modSel.value : null),
+    getVars: modVars,
+    getTheme: modTheme,
+    callTool: async (fn, args) => (await post('/api/module-tool', { module: bound.module, fn, args, space: bound.spaceId }))?.value,
+    toast: (text) => toast(`${bound.label}: ${text}`),
+    close: () => { if (modOpen === bound) closeModTool(); },
+  });
+}
+
+function openModTool(key) {
+  if (homeOpen || cleanView || mode === 'canvas') return;
+  const x = modExtNow().tools.find((y) => modToolKey(y) === key);
+  const url = typeof x?.panel === 'string' && x.panel.startsWith('/api/module-ui/') ? x.panel : null;
+  if (!x || !url) return;
+  closeModTool();
+  if (cmtOpen) setCommentsOpen(false);                       // права панель одна
+  const api = inspectorApi();
+  if (api?.on) api.set(false);
+  const bound = { key, module: x.module, label: String(x.label ?? ''), icon: x.icon, spaceId: spaceNow()?.id ?? null, url };
+  bound.host = modHostFor(bound);
+  modOpen = bound;
+  const label = esc(bound.label);
+  const icon = typeof x.icon === 'string' && Object.hasOwn(ICONS, x.icon) ? x.icon : 'puzzle';
+  /* Шапка — та сама розмітка й класи, що в панелі коментарів (`comments-view.js`): назва, хрестик. */
+  modEl.innerHTML = `<div class="insp-top cmt-top">${ico(icon, 16)}<span class="panel-title">${label}</span>`
+    + `<button type="button" class="icob" data-act="modclose" aria-label="${esc(t('modClose'))}" title="${esc(t('modClose'))}">${ico('x')}</button></div>`
+    + `<div class="mod-body"><iframe class="mod-frame" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer"`
+    + ` title="${label}" src="${esc(url)}"></iframe></div>`;
+  modFrame = modEl.querySelector('iframe');
+  modEl.hidden = false;
+  document.body.classList.add('with-mod');
+  modCtxSent = JSON.stringify(modContext());
+  modThemeSent = JSON.stringify({ theme: modTheme(), vars: modVars() });
+  paintBar();
+}
+
+/** Закрити інструмент: подія `close` у панель, тоді `src="about:blank"` (скрипт панелі гине), сховати, перемалювати острівець. */
+function closeModTool() {
+  if (!modOpen) return;
+  const bound = modOpen;
+  modPost(bound.host.event('close', null));
+  const fr = modFrame;
+  modOpen = null; modFrame = null;
+  if (fr) fr.src = 'about:blank';
+  modEl.hidden = true;
+  modEl.innerHTML = '';
+  document.body.classList.remove('with-mod');
+  modCtxSent = ''; modThemeSent = '';
+  paintIsland();
+}
+
+/** Узгодження з оболонкою: панель не живе поза «Макетом» і поза своїм простором; зміна задачі/ітерації/сторінки й теми — подія. */
+function modSync() {
+  if (!modOpen) return;
+  if (homeOpen || mode === 'canvas' || modOpen.spaceId !== (spaceNow()?.id ?? null)) { closeModTool(); return; }
+  const ctx = JSON.stringify(modContext());
+  if (ctx !== modCtxSent) { modCtxSent = ctx; modPost(modOpen.host.event('context', JSON.parse(ctx))); }
+  const th = JSON.stringify({ theme: modTheme(), vars: modVars() });
+  if (th !== modThemeSent) { modThemeSent = th; modPost(modOpen.host.event('theme', JSON.parse(th))); }
+}
+
+/* Міст: приймаємо ЛИШЕ від вікна рамки відкритого інструмента (`ev.source`): походження непрозоре (`'null'`), на нього
+   покладатись не можна. Відповідь не доставляємо, якщо інструмент тим часом закрили чи замінили. */
+window.addEventListener('message', (ev) => {
+  const bound = modOpen;
+  if (!bound || !modFrame || !ev.source || ev.source !== modFrame.contentWindow) return;
+  const msg = ev.data;
+  bound.host.handle(msg).then((rep) => {
+    if (modOpen !== bound) return;
+    if (rep) modPost(rep);
+    else if (msg && msg.method === 'hello' && bound.host.check(msg) === null) modPost(bound.host.event('init', bound.host.initData()));
+  });
+});
+modEl.addEventListener('click', (ev) => {
+  const el = ev.target.closest('[data-act]');
+  if (!el || el.disabled) return;
+  BAR_ACTIONS[el.dataset.act]?.(el.dataset.val, el, ev);
+});
+
 /** Вид (Макет ↔ Огляд) змінився: панель показує коментатора НОВОГО виду — знімок, вибране, редагування й чернетка старого
  *  не про нього (дії йшли б у чужий шар із чужими id). Коментатор рамки на «Огляді» мовчить (режим вимкнено), а на
  *  поверненні перезвімкнеться, якщо панель відкрита. Той самий вид (повторний `render`) — нічого не скидає. */
@@ -2114,6 +2289,10 @@ function frameCmtKey(ev) {
   const k = (ev.key || '').toLowerCase();
   if (k === 'c' || ev.code === 'KeyC') { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.comments(); }
   else if ((k === 'h' || ev.code === 'KeyH') && cmtOpen) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.cmtpins(); }
+  else {
+    const mk = modKeyOf(ev);
+    if (mk) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.modtool(mk); }
+  }
 }
 let frameHash = null;   // одноразовий `{it, page, hash}` для наступного `frame.src` (посилання всередині макета)
 /* Запобіжник спрацював — ключ «задача|ітерація», де саме: інша задача чи ітерація ходить за посиланнями як звичайно. */
@@ -2165,6 +2344,7 @@ function toggleClean(on = !cleanView) {
   cleanView = on;
   if (on) { const api = inspectorApi(); if (api?.on) api.set(false); }
   if (on && cmtOpen) setCommentsOpen(false);   // панель коментарів — теж інтерфейс, як і інспектор
+  if (on) closeModTool();                      // і панель інструмента модуля
   applyClean(document, frame, on, { label: t('cleanExit'), title: t('cleanExitTitle'),
     onExit: () => toggleClean(false), onChord: () => toggleClean() });
 }
@@ -2260,6 +2440,9 @@ const BAR_ACTIONS = {
     enterConnections();
   },
   clean: () => toggleClean(),
+  /* Інструмент модуля (api 2): кнопка острівця, пункт ⌘K, літера — перемикач; `modclose` — хрестик панелі. */
+  modtool: (key) => { if (modOpen?.key === key) closeModTool(); else openModTool(key); },
+  modclose: () => closeModTool(),
 
   /* Простори (Deai 1.0, етап 1). `space` — рядок дропдауна фішки (`data-val` = id) і
      пункт ⌘K; `spacenew`/`spaceedit` — його ж футер і привітання. Розкриває дропдаун
@@ -2304,6 +2487,7 @@ const BAR_ACTIONS = {
        кадру, але вернутись лише сюди), тому другого місця з `camWorld = null` не
        треба: воно було б тим самим дублем, який щойно прибрано з `saveNodePos`. */
     camWorld = null;
+    if (mode === 'canvas') closeModTool();   // «Огляд» — знімки, не живий макет: інструмент модуля там не живе
     if (mode === 'canvas') { await freshen(); maybeAutoShoot(); }
     render();
   },
@@ -3861,6 +4045,7 @@ async function loadHome(refresh = false, { spaces = true } = {}) {
 function enterHome({ spaces = true, page } = {}) {
   homeQueued = null;                     // клік, зроблений ДО повернення на екран (другий клік пари), — не вибір на ньому
   if (cmtOpen) setCommentsOpen(false);   // екран «Задачі» не про макет: панель і режим коментування закриваємо
+  closeModTool();                        // так само й панель інструмента модуля
   /* Явна сторінка — це навігація людини: вхід на «Підключення», що ще чекає перелік просторів, відступає (`enterConnections`). */
   if (page !== undefined) connEntrySeq += 1;
   /* Пішли із задачі на екран «Задачі»: відкладений повтор статусу синку не мусить опитувати й малювати смугу під оверлеєм
@@ -4661,6 +4846,7 @@ async function afterModulesChange() {
      вимкнений — із застарілою зоною). Роль зникла — `refreshGitlab` скидає `glCache`. */
   await refreshGitlab();
   paintBar();
+  await loadModExt();
   if (connOpen() && connState.seq === seq) await loadConn({ spaces: false });
 }
 
@@ -7377,6 +7563,9 @@ frame.addEventListener('load', () => {
 function paintInsp() {
   /* Під час скрабу панель не перемальовується: оновлюється лише значення в самому полі (слухачі нижче). */
   const api = inspectorApi();
+  /* Єдине місце, де видно «інспектор увімкнено» з обох шляхів (кнопка/⌘K і клавіша `I` у рамці → `onChange` → `paintBar`):
+     права панель одна, тож увімкнений інспектор закриває інструмент модуля. */
+  if (api && api.on && modOpen) closeModTool();
   /* Скраб, якому не прийшов pointerup (Esc вимкнув інспектор, вікно втратило фокус), не сміє заморозити панель до
      перезавантаження: коли інспектор вимкнено чи панелі вже немає — жест кинуто, а те, що встигли накрутити, мусить
      лягти в пакет одним записом. */
@@ -7415,6 +7604,8 @@ function paintInsp() {
      (десятки), а `report()` поруч — `getComputedStyle` по пʼятьох групах
      (6.2мс на важкому лендингу). */
   const tunePkg = packageJSON(tuneState, tunePage());
+  /* Для моста модулів (`selection`): останній вибір на цій сторінці; інспектор вимкнено — вибір лишається (сторінка та сама). */
+  if (rep) modSel = { key: modPageKey(), value: modSelectionOf(rep) };
   const pinKey = rep ? rep.crumbs.join('>') : '';
   if (pinKey !== inspPinKey) { inspPinKey = pinKey; inspOffAt = -1; }
   const st = {
@@ -9030,6 +9221,7 @@ function paletteState() {
     space: st.space ? { id: st.space.id, capabilities: st.space.capabilities, compat: st.space.compat, tools: st.space.tools } : null,
     update: st.update,
     hasTask: !!st.taskId,
+    modTools: paletteModTools(modExtNow()),
   };
 }
 
@@ -9215,6 +9407,11 @@ document.addEventListener('keydown', (ev) => {
   /* Esc при питанні «Видалити назавжди?» (етап В) знімає лише питання — панель лишається. */
   if (cmtFree && cmtOpen && cmtDelAsk && ev.key === 'Escape') { ev.preventDefault(); closeDelAsk(true); return; }
   if (cmtFree && cmtOpen && ev.key === 'Escape') { setCommentsOpen(false); return; }
+  /* Літера інструмента модуля — ПІСЛЯ літер ядра (`modKeyMap` їх не віддає), лише «Макет»: той самий перемикач, що кнопка. */
+  if (cmtFree && !meta && !ev.altKey && !ev.shiftKey) {
+    const mk = modKeyOf(ev);
+    if (mk) { ev.preventDefault(); BAR_ACTIONS.modtool(mk); return; }
+  }
 
   /* ⌥M (режим) і ⌘\ (панель шарів) — акорди із ЗАТВЕРДЖЕНОГО прототипу
    * (`docs/proto/shell.html`, обробник клавіш: `ev.altKey && k === 'm'` і

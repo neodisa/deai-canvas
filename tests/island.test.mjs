@@ -150,3 +150,34 @@ test("превʼю: невідомі імена в `tools` ігноруютьс�
 test("превʼю: без `clean` роздільника нема (нічого після нього — хвостового роздільника не буває)", () => {
   assert.equal(islandToolsHTML({ tools: ["cmt", "insp"] }), CMT_BTN(false, 0) + INSP_BTN(false));
 });
+
+/* ---- Інструменти модулів (api 2) ---- */
+const MT = [
+  { key: "m1/probe", label: "Probe <b>", icon: "puzzle", letter: "J", on: true },
+  { key: "m1/other", label: "Other", icon: "no-such-icon", letter: null, on: false },
+];
+
+test("modTools: кнопки одразу після інспектора, aria-pressed, назва екранована, літера в підказці", () => {
+  const h = islandToolsHTML({ screen: "task", mode: "layout", modTools: MT });
+  assert.deepEqual(acts(h), ["comments", "inspector", "modtool", "modtool", "feedback"]);
+  assert.ok(h.indexOf('data-act="inspector"') < h.indexOf('data-act="modtool"'));
+  assert.match(h, /data-act="modtool" data-val="m1\/probe" aria-pressed="true" aria-label="Probe &lt;b&gt;" title="Probe &lt;b&gt; \(J\)"/);
+  assert.match(h, /data-act="modtool" data-val="m1\/other" aria-pressed="false" aria-label="Other" title="Other"/);
+  assert.equal(h.includes("Probe <b>"), false);
+  assert.match(h, /class="isl-btn isl-btn--on" data-act="modtool"/);
+});
+
+test("modTools: невідома іконка → puzzle, без винятку; «Огляд» і «Задачі» без модульних кнопок", () => {
+  const h = islandToolsHTML({ screen: "task", mode: "layout", modTools: [{ key: "a/b", label: "X", icon: "constructor" }, { key: "c/d", label: "Y" }] });
+  assert.equal((h.match(/#i-puzzle/g) || []).length, 2);
+  assert.equal(islandToolsHTML({ screen: "task", mode: "overview", modTools: MT }).includes("modtool"), false);
+  assert.equal(islandToolsHTML({ screen: "home", mode: "layout", modTools: MT }).includes("modtool"), false);
+});
+
+test("modTools порожній/відсутній — розмітка байт у байт як без нього", () => {
+  const base = { screen: "task", mode: "layout", inspectorOn: true, commentsCount: 2 };
+  const plain = islandToolsHTML(base);
+  assert.equal(islandToolsHTML({ ...base, modTools: [] }), plain);
+  assert.equal(islandToolsHTML({ ...base, modTools: null }), plain);
+  assert.equal(islandToolsHTML({ ...base, modTools: undefined }), plain);
+});

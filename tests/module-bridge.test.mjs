@@ -18,15 +18,18 @@ function load() {
   const parent = { postMessage: (msg, target) => sent.push({ msg, target }) };
   const style = { props: {}, setProperty(k, v) { this.props[k] = v; } };
   const documentElement = { dataset: {}, style };
+  const timers = [];
   const win = {
     parent,
+    setTimeout: (fn, ms) => { timers.push({ fn, ms, cleared: false }); return timers.length - 1; },
+    clearTimeout: (h) => { if (timers[h]) timers[h].cleared = true; },
     document: { documentElement },
     addEventListener: (type, fn) => { if (type === "message") listeners.push(fn); },
   };
   win.window = win;
   vm.runInNewContext(SRC, win);
   const dispatch = (data, source = parent) => listeners.forEach((fn) => fn({ data, source }));
-  return { win, sent, dispatch, parent, documentElement, style };
+  return { win, sent, dispatch, parent, documentElement, style, timers };
 }
 
 test("hello is sent on load", () => {
@@ -151,4 +154,46 @@ test("ready resolves on init with its data", async () => {
 test("no module syntax: a classic script", () => {
   assert.doesNotMatch(SRC, /^\s*(import|export)\s/m);
   assert.match(SRC, /"use strict"/);
+});
+
+test("імена-пастки (__proto__, constructor…) не чіпають прототип: ні в re, ні в подіях", () => {
+  const { win, dispatch } = load();
+  const got = [];
+  win.deai.on("__proto__", (d) => got.push(["proto", d]));
+  win.deai.on("constructor", (d) => got.push(["ctor", d]));
+  for (const re of ["__proto__", "constructor", "hasOwnProperty", "toString"]) {
+    dispatch({ deai: 1, re, ok: true, value: 1 });
+  }
+  for (const event of ["push", "length", "hasOwnProperty", "toString", "valueOf"]) {
+    dispatch({ deai: 1, event, data: 1 });
+  }
+  dispatch({ deai: 1, event: "__proto__", data: "p" });
+  dispatch({ deai: 1, event: "constructor", data: "c" });
+  assert.deepEqual(plain(got), [["proto", "p"], ["ctor", "c"]]);
+  assert.equal(Object.getPrototypeOf({}), Object.prototype);
+});
+
+test("понад 64 запитів у польоті — миттєва відмова busy, без відправки", async () => {
+  const { win, sent } = load();
+  const open = [];
+  for (let i = 0; i < 64; i++) open.push(win.deai.context());
+  const before = sent.length;
+  await assert.rejects(win.deai.context(), (e) => e.code === "busy");
+  assert.equal(sent.length, before);
+  open.forEach((p) => p.catch(() => {}));
+});
+
+test("запит без відповіді спливає за 60 с (timeout), відповідь знімає таймер й звільняє місце", async () => {
+  const { win, sent, dispatch, timers } = load();
+  const a = win.deai.context();
+  const b = win.deai.context();
+  assert.equal(timers[1].ms, 60000);   // [0] — таймер hello
+  dispatch({ deai: 1, re: sent[1].msg.id, ok: true, value: 1 });
+  assert.equal(await a, 1);
+  assert.equal(timers[1].cleared, true);
+  timers[2].fn();
+  await assert.rejects(b, (e) => e.code === "timeout");
+  dispatch({ deai: 1, re: sent[2].msg.id, ok: true, value: 2 });   // пізня відповідь — тиша
+  for (let i = 0; i < 64; i++) win.deai.context().catch(() => {});
+  await assert.rejects(win.deai.context(), (e) => e.code === "busy");
 });

@@ -781,6 +781,11 @@ body.with-panel.with-cmt .cv-stage,
 body.with-panel.with-cmt .cv-canvas{width:calc(100% - var(--panel-w) - var(--insp-w))}
 body.with-panel.panel-collapsed.with-cmt .cv-stage,
 body.with-panel.panel-collapsed.with-cmt .cv-canvas{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
+body.with-mod .cv-stage,body.with-mod .cv-canvas{width:calc(100% - var(--insp-w))}
+body.with-panel.with-mod .cv-stage,
+body.with-panel.with-mod .cv-canvas{width:calc(100% - var(--panel-w) - var(--insp-w))}
+body.with-panel.panel-collapsed.with-mod .cv-stage,
+body.with-panel.panel-collapsed.with-mod .cv-canvas{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
 /* `.pages-panel`/`.pp-*` нижче — розмітка старої панелі (План B Task 4 її
    замінив на `.panel`/`.panel--rail`/`.row*`/`.shots*`, кінець файла).
    Лишені НЕ вживаними свідомо, тим самим рядком думки, що вже стоїть для
@@ -1357,6 +1362,9 @@ body.with-panel.panel-collapsed.with-cmt .cv-canvas{width:calc(100% - var(--pane
   border-bottom:1px solid var(--line);flex:none}
 .insp-top .panel-title{padding-left:0}
 .insp-body{flex:1;min-height:0;overflow:auto;padding:10px}
+/* Панель інструмента модуля (api 2): рамка-пісочниця на всю висоту під шапкою, без своєї рамки й фону — малює сама панель. */
+.mod-body{flex:1;min-height:0;display:flex}
+.mod-frame{flex:1;min-width:0;border:0;background:transparent;color-scheme:dark}
 .insp-hint{margin:0;font-size:12px;color:var(--dim);line-height:1.5}
 /* ── Панель властивостей (0.29.0, етап Г) ─────────────────────────────────
    Вигляд — затверджений прототип. ⛔ Висота поля СТАЛА (`--h-sm`): нічого не переноситься, довге усікається — те саме

@@ -6,8 +6,11 @@
   "use strict";
   var win = window;
   var nextId = 1;
-  var pending = {};
-  var subs = {};
+  /* Map, а не {}: імена подій і `re` приходять ззовні — `__proto__`/`constructor` не мають чіпати Object.prototype. */
+  var pending = new Map();
+  var subs = new Map();
+  var MAX_PENDING = 64;
+  var PENDING_MS = 60000;
   var readyResolve;
   var ready = new Promise(function (resolve) { readyResolve = resolve; });
 
@@ -17,8 +20,20 @@
 
   function request(method, args) {
     return new Promise(function (resolve, reject) {
+      if (pending.size >= MAX_PENDING) {
+        var busy = new Error("too many pending requests");
+        busy.code = "busy";
+        reject(busy);
+        return;
+      }
       var id = nextId++;
-      pending[id] = { resolve: resolve, reject: reject };
+      var timer = win.setTimeout(function () {
+        if (!pending.delete(id)) return;
+        var err = new Error("no reply from the shell");
+        err.code = "timeout";
+        reject(err);
+      }, PENDING_MS);
+      pending.set(id, { resolve: resolve, reject: reject, timer: timer });
       post(id, method, args);
     });
   }
@@ -44,7 +59,7 @@
   function emit(event, data) {
     if (event === "init" || event === "theme") applyTheme(data);
     if (event === "init") readyResolve(data);
-    var list = subs[event];
+    var list = subs.get(event);
     if (!list) return;
     list.slice().forEach(function (fn) {
       try { fn(data); } catch (e) { /* a throwing subscriber must not break the others */ }
@@ -56,9 +71,10 @@
     var d = e.data;
     if (!d || d.deai !== 1) return;
     if (typeof d.re === "number" || typeof d.re === "string") {
-      var p = pending[d.re];
+      var p = pending.get(d.re);
       if (!p) return;
-      delete pending[d.re];
+      pending.delete(d.re);
+      win.clearTimeout(p.timer);
       if (d.ok === true) {
         p.resolve(d.value);
       } else {
@@ -81,9 +97,11 @@
     close: function () { post(nextId++, "close", []); },
     on: function (event, fn) {
       if (typeof fn !== "function") return function () {};
-      (subs[event] = subs[event] || []).push(fn);
+      var cur = subs.get(event);
+      if (!cur) { cur = []; subs.set(event, cur); }
+      cur.push(fn);
       return function () {
-        var list = subs[event] || [];
+        var list = subs.get(event) || [];
         var i = list.indexOf(fn);
         if (i >= 0) list.splice(i, 1);
       };
