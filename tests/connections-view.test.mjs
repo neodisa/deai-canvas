@@ -719,6 +719,22 @@ test("каркас: лічильник довіри на «Модулі» — л
   assert.doesNotMatch(navBtn(connPageHTML(view({ sec: "space" })), "agents")[1], /set-dotb/, "крапки AGENTS.md поки нема");
 });
 
+test("a11y: значок у навігації не лише `title` — його зміст у імені кнопки (aria-label), uk і en", () => {
+  const own = { id: "own-x", name: "X", roles: ["publish"], enabled: false, status: "unchecked", settings: [],
+    custom: true, runs: false, trust: "untrusted" };
+  const open = (h, id) => new RegExp(`<button class="nav-i" data-th="csec" data-v="${id}"[^>]*>`).exec(h)[0];
+  const mods = (list) => open(connPageHTML(view({ sec: "space", list })), "mods");
+  assert.match(mods([...LIST, own]), / aria-label="Модулі, 1 чекає довіри"/);
+  assert.match(mods([...LIST, own, { ...own, id: "own-y" }]), /aria-label="Модулі, 2 чекає довіри"/);
+  assert.doesNotMatch(mods(LIST), /aria-label/, "без значка — імʼя лишається видимим текстом");
+  const ag = open(connPageHTML(view({ sec: "mods", agents: AGF })), "agents");
+  assert.match(ag, /aria-label="AGENTS\.md, застарілий"/);
+  assert.doesNotMatch(open(connPageHTML(view({ sec: "mods", agents: { ...AGF, outdated: false } })), "agents"), /aria-label/);
+  setLang("en");
+  assert.match(open(connPageHTML(view({ sec: "mods", agents: AGF })), "agents"), /aria-label="AGENTS\.md, outdated"/);
+  assert.match(mods([...LIST, own]), /aria-label="Modules, 1 awaiting trust"/);
+});
+
 test("каркас: назва простору в навігації екранується; ворожий колір не виходить з токена", () => {
   const h = connPageHTML(view({ space: { ...SP, name: '<i>"x', color: '"><b>' }, sec: "space" }));
   assert.doesNotMatch(h, /<i>|<b>/);

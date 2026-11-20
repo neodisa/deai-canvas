@@ -17,6 +17,7 @@
  *                                 перемальовка на `beforeinstallprompt` — слухач біля `initPwa`.
  *  10 (Оновлення)              — `case 'up'`: «Перевірити зараз» → `checkUpdateNow` (`POST /api/update-check`, фокус назад), «Оновити до» →
  *                                 `openUpdateDialog`; `repaintSettingsSec('upd')` на зміну стану.
+ *  12 (назва під перемальовку) — `holdSpName`/`restoreSpName` у `paintHome` (`app.js`): без них фонова перемальовка повертає збережену назву.
  *  11 (Гарячі клавіші)         — `keysBodyHTML` читає `KEYS`, як і `keysHTML()` (аркуш `?`).
  */
 import assert from "node:assert/strict";
@@ -177,6 +178,28 @@ test("8: колір простору — «Фіолетовий» фарбує �
   await page.waitForFunction(() => document.documentElement.dataset.spaceColor === "space-1", null, { timeout: 15000 });
   assert.equal(await page.locator("#bar").evaluate((n) => getComputedStyle(n).backgroundColor), initialBg, "«Зелений» повернув початковий фон");
   assert.equal(await page.locator('meta[name="theme-color"]').getAttribute("content"), initialMeta);
+  assert.deepEqual(errors, []);
+});
+
+test("12: набрана, але не збережена назва простору переживає фонову перемальовку (значення, курсор, фокус); Enter зберігає", async (t) => {
+  const { page, errors } = await boot(t, { color: "space-1" });
+  await gear(page);
+  await page.click('.set-nav [data-v="space"]');
+  await page.waitForSelector("#set-sp-name", { timeout: 15000 });
+  const inp = page.locator("#set-sp-name");
+  await inp.focus();
+  await inp.fill("Studio — чернетка");
+  await page.evaluate(() => { const i = document.getElementById("set-sp-name"); i.setSelectionRange(3, 6); window.__oldInp = i; });
+  /* Справжня фонова перемальовка: повернення в вікно перечитує модулі (`refreshHomeOnReturn` → `loadConn` → `paintHome`). */
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForFunction(() => document.getElementById("set-sp-name") !== window.__oldInp, null, { timeout: 15000 });
+  const now = await page.evaluate(() => { const i = document.getElementById("set-sp-name");
+    return { v: i.value, a: i.selectionStart, b: i.selectionEnd, focused: document.activeElement === i }; });
+  assert.deepEqual(now, { v: "Studio — чернетка", a: 3, b: 6, focused: true }, "набране, виділення й фокус пережили перемальовку");
+  assert.match(await page.locator(".set-nav h6").first().textContent(), /Простір · Studio$/, "збережена назва ще стара: нічого не збережено");
+  await page.press("#set-sp-name", "Enter");
+  await page.waitForFunction(() => /Простір · Studio — чернетка/.test(document.querySelector(".set-nav h6")?.textContent ?? ""), null, { timeout: 15000 });
+  assert.equal(await page.locator("#set-sp-name").inputValue(), "Studio — чернетка");
   assert.deepEqual(errors, []);
 });
 

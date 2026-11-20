@@ -39,8 +39,8 @@ test("актуальний: «Скопіювати» активна, «Онов�
   assert.doesNotMatch(h, /class="note"/);
   assert.match(h, /<div class="ag-bar">[^]*?<span>\/u\/space\/AGENTS\.md<\/span>/);
   assert.ok(btn(h, "copypath"), "копіювати шлях");
-  assert.match(h, /<div class="ag-part"><div class="ag-g">З шаблону · Deai 0\.31\.0<\/div><pre>/);
-  assert.match(h, /<div class="ag-part ag-own"><div class="ag-g">Ваше · не чіпається<\/div><pre>\n## Team/);
+  assert.match(h, /<div class="ag-part"><div class="ag-g">З шаблону · Deai 0\.31\.0<\/div><pre tabindex="0" aria-label="З шаблону · Deai 0\.31\.0">/);
+  assert.match(h, /<div class="ag-part ag-own"><div class="ag-g">Ваше · не чіпається<\/div><pre tabindex="0" aria-label="Ваше · не чіпається">\n## Team/);
 });
 
 test("застарілий: плашка з версіями й кнопкою, «Оновити» в голові активна", () => {
@@ -116,4 +116,16 @@ test("en: ті самі стани англійською", () => {
   const h = agentsBodyHTML({ ...FILE, outdated: true, fileVersion: "0.30.0" });
   assert.match(h, /Deai template 0\.31\.0 is newer than this file \(0\.30\.0\)\./);
   assert.match(agentsBodyHTML({ exists: false }), /AGENTS\.md doesn.t exist yet/);
+});
+
+test("a11y: прокручувані частини файла фокусовні й мають імʼя; код «unreadable» — стан помилки з «Спробувати ще»", () => {
+  const h = agentsBodyHTML(FILE);
+  assert.match(h, /<pre tabindex="0" aria-label="З шаблону · Deai 0\.31\.0">/);
+  assert.match(h, /<pre tabindex="0" aria-label="Ваше · не чіпається">/);
+  setLang("en");
+  assert.match(agentsBodyHTML(FILE), /<pre tabindex="0" aria-label="From template · Deai 0\.31\.0">/);
+  setLang("uk");
+  assert.equal(agentsKind({ failed: { code: "unreadable" } }), "error");
+  assert.ok(btn(agentsBodyHTML({ failed: { code: "unreadable" } }), "retry"));
+  assert.match(agentsBodyHTML({ failed: { code: "unreadable" } }), /role="alert"/);
 });

@@ -1,6 +1,6 @@
 # Writing your own module
 
-For Deai Canvas **0.12.0**. A module adds one capability — a *role* — to a space: publishing previews, design-system
+For Deai Canvas **0.31.0**. A module adds one capability — a *role* — to a space: publishing previews, design-system
 tokens, team comments, syncing mockups with git. Built-in modules live in `app/modules/`; **your own modules live in the space**, in
 `<space>/modules/<id>/`, so they travel with the space through git. Their code runs on your computer only after **you**
 trust it.

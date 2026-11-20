@@ -31,9 +31,9 @@ const plate = (text, btn) => `<div class="note" role="status">${ico("warn", 16)}
 function viewerHTML(a) {
   const own = typeof a.own === "string" ? a.own : "";
   const tpl = a.hasBlock
-    ? `<div class="ag-part"><div class="ag-g">${esc(t("agPartTpl", a.fileVersion ?? a.version))}</div><pre>${esc(a.block ?? "")}</pre></div>` : "";
+    ? `<div class="ag-part"><div class="ag-g">${esc(t("agPartTpl", a.fileVersion ?? a.version))}</div><pre tabindex="0" aria-label="${esc(t("agPartTpl", a.fileVersion ?? a.version))}">${esc(a.block ?? "")}</pre></div>` : "";
   const mine = own.trim() === ""
-    ? "" : `<div class="ag-part ag-own"><div class="ag-g">${esc(t("agPartOwn"))}</div><pre>${esc(own)}</pre></div>`;
+    ? "" : `<div class="ag-part ag-own"><div class="ag-g">${esc(t("agPartOwn"))}</div><pre tabindex="0" aria-label="${esc(t("agPartOwn"))}">${esc(own)}</pre></div>`;
   return `<div class="ag"><div class="ag-bar">${ico("doc", 14)}<span>${esc(a.path ?? "")}</span>`
     + `<button type="button" class="icob" data-th="ag" data-v="copypath" aria-label="${esc(t("agCopyPath"))}" title="${esc(t("agCopyPath"))}">${ico("copy", 15)}</button></div>`
     + `<div class="ag-body">${tpl}${mine}</div></div>`;

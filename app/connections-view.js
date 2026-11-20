@@ -239,7 +239,9 @@ function setNavHTML(sp, sec, list, agentsOutdated = false) {
     const bdg = !it.badge ? ""
       : it.badge.kind === "count" ? `<span class="set-cnt" title="${esc(t("setTrustWaiting"))}">${it.badge.n}</span>`
       : `<span class="set-dotb" title="${esc(t("setAgentsOutdated"))}"></span>`;
-    out += `<button class="nav-i" data-th="csec" data-v="${it.id}"${cur}>${ico(it.icon)}<span>${esc(t(it.labelKey))}</span>${bdg}</button>`;
+    const label = it.badge ? (it.badge.kind === "count" ? t("setNavCnt", t(it.labelKey), it.badge.n) : t("setNavDot", t(it.labelKey))) : "";
+    const aria = label ? ` aria-label="${esc(label)}"` : "";    // значок — лише title, тож зміст значка іде в імʼя кнопки
+    out += `<button class="nav-i" data-th="csec" data-v="${it.id}"${cur}${aria}>${ico(it.icon)}<span>${esc(t(it.labelKey))}</span>${bdg}</button>`;
   }
   return `<nav class="set-nav" aria-label="${esc(t("settings"))}">${out}</nav>`;
 }

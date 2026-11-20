@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { tokenRgb, tokenText, toHex, oklchToRgb } from "./_oklch.mjs";
+import { tokenRgb, tokenText, toHex, oklchToRgb, oklchToRgbRaw } from "./_oklch.mjs";
 
 /* Рендерери звіту — СПРАВЖНІ, не копія їхньої розмітки: розділ E питає, що
    документ малює НАСПРАВДІ, і другий опис тієї самої розмітки тут розійшовся б
@@ -971,6 +971,26 @@ test("Е: кожен space-N має правило відтінку, рівно�
       assert.match(body, /--sp-k:\s*[\d.]+/, `${sel}: нема множника хроми`);
     }
   }
+});
+
+test("Е: у кожному space-N усі поверхні й тексти лишаються в гамуті sRGB (канал 0..255 до обрізання, допуск 1)", () => {
+  const css = stripComments(readCss());
+  const bad = [];
+  for (let n = 1; n <= 6; n++) {
+    const i = css.indexOf(`:root[data-space-color="space-${n}"]`);
+    assert.ok(i >= 0, `нема правила space-${n}`);
+    const body = css.slice(css.indexOf("{", i) + 1, css.indexOf("}", i));
+    const h = Number(body.match(/--sp-h:\s*([\d.]+)/)?.[1]);
+    const k = Number(body.match(/--sp-k:\s*([\d.]+)/)?.[1]);
+    assert.ok(Number.isFinite(h) && Number.isFinite(k), `space-${n}: нема --sp-h/--sp-k`);
+    for (const name of [...Object.keys(OLD_SURFACES), "sel-hover", "sel-text"]) {
+      const m = tokenText(css, name)?.match(/^oklch\(\s*([\d.]+)\s+calc\(\s*([\d.]+)\s*\*\s*var\(--sp-k\)\s*\)\s+var\(--sp-h\)\s*\)$/);
+      assert.ok(m, `--${name}: не oklch від --sp-h/--sp-k`);
+      const raw = oklchToRgbRaw(Number(m[1]), Number(m[2]) * k, h);
+      raw.forEach((c, ch) => { if (c < -1 || c > 256) bad.push(`space-${n} --${name} канал ${"rgb"[ch]} = ${c.toFixed(1)}`); });
+    }
+  }
+  assert.deepEqual(bad, [], `токени поза гамутом sRGB:\n${bad.join("\n")}`);
 });
 
 test("Е: перерахунок oklch→sRGB — справжній (білий/чорний; відтінок міняє колір)", () => {

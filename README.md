@@ -229,7 +229,7 @@ default) needs only a token — no `vercel login`, no CLI, no Node on the machin
 - *Token.* In Vercel: Account Settings → Tokens → create a token. If you publish into a team,
   scope the token to that team and set the `team` setting (a slug such as `<slug>`, or an id
   `team_…`); empty means your personal account.
-- *Enable it* on the Settings screen (Publishing → Vercel → «Connect»: the token and,
+- *Enable it* on the Settings screen (Settings → Modules → «Add module» → Vercel → «Connect»: the token and,
   for a team, its slug). A space has one publisher and a space without integrations publishes
   with `static-publish` by default, so the screen asks «Publishing is currently handled by …
   Connect “Vercel” instead?» and swaps them in one step. Over the API, pass `replace: true`:
@@ -282,7 +282,7 @@ default) needs only a token — no `vercel login`, no CLI, no Node on the machin
 - With a `comments` module enabled in the space, the preview carries the comment layer and
   talks to that module's service (see *Comments*); without one it has no comments.
 
-**System Vercel CLI.** Choose «System Vercel CLI» in the setting `auth` (labelled «Вхід у Vercel»; Settings → Vercel, or the wizard);
+**System Vercel CLI.** Choose «System Vercel CLI» in the setting `auth` (labelled «Вхід у Vercel»; Settings → Modules → the Vercel card → «Configure», or the wizard);
 the token field is then ignored, and `team` is the `--scope` of the CLI (empty: your personal account). Run
 `npx vercel login` once in a terminal; «Check» asks `vercel whoami` and says `no Node.js` or `not logged in` in plain
 words. A publish runs `link` and `deploy --prod` in the built folder, takes the shortest `*.vercel.app` address and
@@ -391,7 +391,7 @@ notes are in [the module README](app/modules/supabase-comments/README.md):
 3. Take the project URL (`https://<ref>.supabase.co`) and the **public** key (`anon` or
    `publishable`) from Project Settings → API — never the `service_role` / `secret` key (the
    module refuses it: this key goes into every page).
-4. Enable the module on the Settings screen (Team comments → Supabase → «Connect»: the
+4. Enable the module on the Settings screen (Settings → Modules → «Add module» → Supabase comments → «Connect»: the
    project URL and the public key), or over the API:
 
    ```bash
@@ -536,7 +536,7 @@ returns: what a card is, and when to send it, is decided by the core (`app/dashb
 3. Take the project URL and a **non-public** key from Project Settings → API (`service_role`, or the key of a role of your own
    with explicit grants and policies on the table). The module refuses a public (anon / publishable) key: that one is inside
    every published preview.
-4. Settings → «Team dashboard» → «Supabase dashboard» → «Connect» (or the same step of the new-space wizard). The key is
+4. Settings → Modules → «Add module» (or «Add» on the dashed «No module» card of the team dashboard) → Supabase dashboard → «Connect» (or the same step of the new-space wizard). The key is
    kept in `~/.deai/secrets.json` (owner only) and never goes into a page.
 
 **When the cards are sent.** After a publish, after a git sync that pushed and after an autosync that changed something —
@@ -556,7 +556,7 @@ the badge; without the module the screen shows no status from a tracker, and sta
 that also has the dashboard sends the same statuses on its cards. The module only reads: it creates and changes nothing in
 Jira. Jira Cloud only; Jira Server / Data Center is a separate module later.
 
-**Connect it:** Settings → «Issue tracker» → «Jira Cloud» → «Connect» (or the same step of the new-space wizard) with the
+**Connect it:** Settings → Modules → «Add module» (or «Add» on the dashed «No module» card of the issue tracker) → Jira Cloud → «Connect» (or the same step of the new-space wizard) with the
 site address (`https://<site>.atlassian.net`), the e-mail of your Atlassian account and an **API token** (create it in the
 security settings of the Atlassian account; the key is kept in `~/.deai/secrets.json`, owner only, and never goes into a page).
 «Check» says «connected», or «Jira rejected the email or token» for a wrong pair. The details and the network calls are in
@@ -590,7 +590,7 @@ cards nor the switch, and the Teams item of the menu is not shown.
    `select vault.create_secret('<webhook address>', 'teams_webhook_url');`
 3. Create the receiving side in Teams — usually a Power Automate flow «When a Teams webhook request is received» that posts
    the Adaptive Card it gets as it is.
-4. Settings → «Teams notifications» → «Supabase Teams» → «Connect» (or the same step of the new-space wizard) with the project
+4. Settings → Modules → «Add module» (or «Add» on the dashed «No module» card of Teams notifications) → Supabase Teams → «Connect» (or the same step of the new-space wizard) with the project
    address and a **non-public** key (`service_role` or the key of a role of your own; kept in `~/.deai/secrets.json`, never put
    into a page — a public key is refused, because the public key goes into every published preview).
 
@@ -610,7 +610,7 @@ so a colleague gets your mockup and you get theirs. It works in any space. It is
 to take what arrives (a new iteration, a fork from a colleague's one) is the core's job, the same for every provider of
 the role.
 
-**Connect it.** Settings → «Git sync» → «Git» → «Connect»: the repository (the default for the tasks of the space; it
+**Connect it.** Settings → Modules → «Add module» (or «Add» on the dashed «No module» card of git sync) → Git → «Connect»: the repository (the default for the tasks of the space; it
 may stay empty and be given per task), the branch (`main`), the folder in the repository (`mockup/{task}` — `{task}` is the
 task id), and, optionally, an SSH key and a server IP (for a VPN where the server's name does not resolve; only for
 scp-style addresses, `[user@]host:path` — not for `ssh://`, `https://`, `file://` or a local path). «Check» asks the repository for the branch (`git ls-remote`, 4 seconds). The same section is

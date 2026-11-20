@@ -408,3 +408,23 @@ test("figmaOff: лише справжній `tools.figma === false` вимика
     assert.equal(figmaOff(sp), false, JSON.stringify(sp));
   }
 });
+
+/* --- canvasHex: відхилений колір не робить смугу чорною --- */
+function fakeCtx({ accept = (v) => /^#[0-9a-f]{6}$/i.test(v) || v === "oklch(0.2 0.02 250)", px = [18, 20, 30, 255] } = {}) {
+  let fill = "#000000";
+  return { get fillStyle() { return fill; }, set fillStyle(v) { if (accept(v)) fill = v.toLowerCase(); },
+    fillRect() {}, getImageData: () => ({ data: px }) };
+}
+test("canvasHex: прийнятий колір → hex із пікселя", async () => {
+  const { canvasHex } = await import("../app/spaces-model.js");
+  assert.equal(canvasHex(fakeCtx(), "oklch(0.2 0.02 250)"), "#12141e");
+});
+test("canvasHex: відхилений колір → null, а не #000000", async () => {
+  const { canvasHex } = await import("../app/spaces-model.js");
+  assert.equal(canvasHex(fakeCtx({ px: [0, 0, 0, 0] }), "var(--nope)"), null);
+  assert.equal(canvasHex(fakeCtx({ px: [0, 0, 0, 0] }), ""), null);
+});
+test("canvasHex: значення, що збігається зі сторожем, не вважається відхиленим", async () => {
+  const { canvasHex } = await import("../app/spaces-model.js");
+  assert.equal(canvasHex(fakeCtx({ px: [1, 2, 3, 255] }), "#010203"), "#010203");
+});

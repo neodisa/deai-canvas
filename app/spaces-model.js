@@ -45,6 +45,22 @@ export function spaceColorToken(color) {
 }
 
 /**
+ * CSS-колір → `#rrggbb` через 2D-контекст canvas (`ctx`: `fillStyle`, `fillRect`, `getImageData`) або `null`, коли canvas його
+ * відхилив. Відхилений рядок мовчки лишає попередній `fillStyle`, а порожній піксель читається як `#000000` — смуга заголовка
+ * стала б чорною. Тому спершу сторожовий колір, і лише зміна `fillStyle` після присвоєння доводить, що значення прийняли.
+ */
+export function canvasHex(ctx, css) {
+  const sentinel = "#010203";
+  ctx.fillStyle = sentinel;
+  const before = ctx.fillStyle;
+  ctx.fillStyle = css;
+  if (ctx.fillStyle === before && String(css).trim().toLowerCase() !== before) return null;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
  * ASCII-слаг: без діакритики (`Café` → `cafe`), нижній регістр, усе, що не
  * `[a-z0-9]`, — один дефіс, краї без дефісів. Кирилиця не транслітерується —
  * вона випадає, і слаг може вийти порожнім (тоді викликач бере запасний).

@@ -41,7 +41,7 @@ import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, hasNotify, hasTeamComments, healTarget,
   cleanupWarning, commentsUnavailableCode, copyLinkRefused, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwUnreadable, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
-  colorStep, spaceColorToken, spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
+  canvasHex, colorStep, spaceColorToken, spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
 } from './spaces-model.js';
 import {
   parseTags, spaceDialogHTML, tagsFormHTML, taskFormHTML, taskNameFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
@@ -1678,11 +1678,8 @@ function paintSpaceColor() {
   root.dataset.spaceColor = color;
   try {
     const px = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-    px.fillStyle = getComputedStyle(root).getPropertyValue('--s0').trim();
-    px.fillRect(0, 0, 1, 1);
-    const [r, g, b] = px.getImageData(0, 0, 1, 1).data;
-    const hex = `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', hex);
+    const hex = canvasHex(px, getComputedStyle(root).getPropertyValue('--s0').trim());
+    if (hex) document.querySelector('meta[name="theme-color"]')?.setAttribute('content', hex);
   } catch (e) { /* без canvas — лишається попередній колір смуги заголовка */ }
 }
 
@@ -3401,6 +3398,7 @@ function paintHome() {
   const top = el.scrollTop;
   const menuFor = dropTaskMenu();
   const ren = holdRen();
+  const spn = holdSpName();
   /* Просторів на машині нема зовсім — замість списку привітання (дорога звідси одна:
      створити перший простір). Рішає `spacesResp`, а не `homeData`: порожній `mine` без
      простору — це «нема де», а не «нічого не знайдено». */
@@ -3412,6 +3410,7 @@ function paintHome() {
   });
   el.scrollTop = top;
   restoreRen(ren);
+  restoreSpName(spn);
   refocusMore(menuFor);
 }
 /** Лише чіпи й сітка — поле пошуку лишається тим самим вузлом. */
@@ -3501,6 +3500,19 @@ function holdRen() {
 }
 function restoreRen(h) {
   const i = h && document.getElementById('th-ren');
+  if (!i) return;
+  i.value = h.v;
+  try { i.setSelectionRange(h.a, h.b); } catch (e) {}
+}
+/** Поле назви простору (`#set-sp-name`, розділ «Простір»): так само, як `#th-ren` — набране, але не збережене, переживає
+ *  перемальовку (дочитались підключення чи агенти, вимикач інструмента, збереження кольору). Брудне = значення відрізняється
+ *  від збереженої назви, з якою поле намальовано (`defaultValue`). Не брудне — лишається свіжа назва з розмітки. */
+function holdSpName() {
+  const i = document.getElementById('set-sp-name');
+  return i && i.value !== i.defaultValue ? { v: i.value, a: i.selectionStart, b: i.selectionEnd } : null;
+}
+function restoreSpName(h) {
+  const i = h && document.getElementById('set-sp-name');
   if (!i) return;
   i.value = h.v;
   try { i.setSelectionRange(h.a, h.b); } catch (e) {}
