@@ -543,6 +543,25 @@ export function paletteHTML(actions, query, cursor) {
 }
 
 /**
+ * Гарячі клавіші — ЄДИНЕ джерело для аркуша `?` (`keysHTML()`) і розділу «Гарячі клавіші» в Налаштуваннях
+ * (`app-settings-view.js`): `[{group, labelKey, kbd}]`, `group` — `general` | `layout`. Інваріант «кожна `kbd` має обробника» див.
+ * докстрінг `keysHTML()`; `tests/shell-palette.test.mjs` читає саме цей масив.
+ */
+export const KEYS = [
+  { group: "general", labelKey: "kPalette", kbd: "⌘K" },
+  { group: "general", labelKey: "kKeys", kbd: "?" },
+  { group: "general", labelKey: "kMode", kbd: "⌥M" },
+  { group: "general", labelKey: "kPanel", kbd: "⌘\\" },
+  { group: "general", labelKey: "kClean", kbd: "⇧⌘\\" },
+  { group: "general", labelKey: "kEsc", kbd: "Esc" },
+  { group: "layout", labelKey: "kInspector", kbd: "I" },
+  { group: "layout", labelKey: "inspKeyAlt", kbd: "Alt" },
+  { group: "layout", labelKey: "inspKeyChild", kbd: "↵" },
+  { group: "layout", labelKey: "cmtTitle", kbd: "C" },
+  { group: "layout", labelKey: "cmtPins", kbd: "H" },
+];
+
+/**
  * Довідка клавіш (`?`). Джерело — прототипний `renderKeys()`, але вже НЕ
  * дослівно, і межа тут коштувала релізу, тому записана повністю.
  *
@@ -577,16 +596,13 @@ export function paletteHTML(actions, query, cursor) {
  * зеленою при вже порушеному інваріанті.
  */
 export function keysHTML() {
-  const row = (label, kbd) => `<dt>${esc(label)}</dt><dd><kbd>${esc(kbd)}</kbd></dd>`;
+  const col = (group, titleKey) => `<div><h6>${esc(t(titleKey))}</h6><dl>${KEYS.filter((k) => k.group === group)
+    .map((k) => `<dt>${esc(t(k.labelKey))}</dt><dd><kbd>${esc(k.kbd)}</kbd></dd>`).join("")}</dl></div>`;
   return `<div class="scrim" data-act="closeoverlay"><div class="keysheet" data-stop="1">
     <h3>${esc(t("keysTitle"))}</h3>
     <div class="keysheet-grid">
-      <div><h6>${esc(t("keysGeneral"))}</h6><dl>
-        ${row(t("kPalette"), "⌘K")}${row(t("kKeys"), "?")}${row(t("kMode"), "⌥M")}
-        ${row(t("kPanel"), "⌘\\")}${row(t("kClean"), "⇧⌘\\")}${row(t("kEsc"), "Esc")}</dl></div>
-      <div><h6>${esc(t("keysLayout"))}</h6><dl>
-        ${row(t("kInspector"), "I")}${row(t("inspKeyAlt"), "Alt")}${row(t("inspKeyChild"), "↵")}
-        ${row(t("cmtTitle"), "C")}${row(t("cmtPins"), "H")}</dl></div>
+      ${col("general", "keysGeneral")}
+      ${col("layout", "keysLayout")}
     </div>
   </div></div>`;
 }

@@ -99,7 +99,9 @@ try { setLang(readStoredLang(localStorage.getItem(LANG_KEY))); } catch (e) {}
    встановлення для пункту ⌘K. ЛИШЕ локальний інструмент — оболонка превʼю цього
    модуля не імпортує. Тост `appinstalled` кличе `t()` у момент події, тож мова
    вже прочитана вище. */
-const pwa = initPwa({ onInstalled: () => toast(t('pwaInstalled')) });
+const pwa = initPwa({ onInstalled: () => { toast(t('pwaInstalled')); repaintSettingsSec('app'); } });
+/* `initPwa` слухає ту саму подію першим і вже запамʼятав її: тут лише перемальовка розділу, якщо він відкритий. */
+window.addEventListener('beforeinstallprompt', () => repaintSettingsSec('app'));
 
 /* Розмір кадру мусить бути ЧИСЛОМ, і перевіряємо це ми: `manifest.json` лежить
    у теці ітерації, а тека приїжджає з GitLab із чужої машини — «там справді
@@ -2793,6 +2795,7 @@ async function pollUpdate() {
   updateInfo = st.info;
   tellRestartOnce(next);
   if (changed && barSeeded) paintBar();
+  if (changed) repaintSettingsSec('upd');
   return next;
 }
 
@@ -2801,6 +2804,7 @@ let updateChecking = false;
 async function checkUpdateNow() {
   if (updateChecking) return;
   updateChecking = true;
+  repaintSettingsSec('upd');
   toast(t('upChecking'));
   try {
     const r = await api('/api/update-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
@@ -2811,6 +2815,11 @@ async function checkUpdateNow() {
     toast(t('upCheckFailed'));
   } finally {
     updateChecking = false;
+    /* Кнопка «Перевірити зараз» на час запиту була вимкнена, тож фокус ішов з неї: повертаємо, якщо людина лишилась у розділі. */
+    if (connOpen() && connSec === 'upd') {
+      paintHome();
+      homeNode()?.querySelector('[data-th="up"][data-v="check"]')?.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -4082,8 +4091,13 @@ function wireHome(el) {
       case 'tags': editTaskTags(b.dataset.id); break;
       case 'conn': setConnSec('mods'); enterConnections(); break;
       /* Розділ «Налаштувань» (ліва навігація): перемальовка без перезапиту модулів. */
-      case 'csec': if (readSec(v) !== connSec) { setConnSec(v); paintHome(); if (connSec === 'agents') loadAgents(); } break;
+      case 'csec': if (readSec(v) !== connSec) { setConnSec(v); paintHome(); if (connSec === 'agents') loadAgents(); if (connSec === 'upd') pollUpdate(); } break;
       case 'ag': agentsAction(v); break;
+      /* «Застосунок»: мова (як ⌘K), «Встановити» (жест кліку → `prompt()`), оновлення (перевірка / діалог). Фокус після перемальовки — на
+         тому, що людина щойно натиснула (кнопка «Перевірити зараз» на час запиту вимкнена й фокус повертає `checkUpdateNow`). */
+      case 'lang': switchLang(v); homeNode()?.querySelector('.seg [aria-checked="true"]')?.focus({ preventScroll: true }); break;
+      case 'pwa': pwa.install().then(() => repaintSettingsSec('app')); break;
+      case 'up': if (v === 'check') checkUpdateNow(); else openUpdateDialog(); break;
       case 'spc': pickSpaceColor(v); break;
       case 'spcopy': { const p = connSpace()?.path; if (p) agentsCopy(p, 'spPathCopied', '.sp-path span'); break; }
       case 'spacenew': openWizard(); break;
@@ -4112,6 +4126,13 @@ function wireHome(el) {
   el.addEventListener('keydown', (ev) => {
     if (homePage !== 'conn') return;
     if (ev.target.id === 'set-sp-name' && ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); commitSpaceName(ev.target); return; }
+    /* Мова — радіогрупа з двох: будь-яка стрілка переходить на іншу й одразу вибирає (як кольори нижче). */
+    if (ev.target.closest?.('.seg[role="radiogroup"]') && ev.key.startsWith('Arrow')) {
+      ev.preventDefault();
+      switchLang(getLang() === 'uk' ? 'en' : 'uk');
+      homeNode()?.querySelector('.seg [aria-checked="true"]')?.focus({ preventScroll: true });
+      return;
+    }
     const group = ev.target.closest?.('.sw-grid');
     if (!group) return;
     const cur = group.querySelector('.sw[aria-checked="true"]')?.dataset.val;
@@ -4175,7 +4196,11 @@ const connOpen = () => homeOpen && homePage === 'conn';
 const connSpace = () => (connState.spaceId == null
   ? currentSpace(spacesResp)
   : (Array.isArray(spacesResp?.spaces) ? spacesResp.spaces : []).find((x) => x.id === connState.spaceId) ?? null);
-const connView = () => ({ space: connSpace(), list: connState.list, tools: connState.tools, notes: connState.notes, failed: connState.failed, busy: connState.busy, sec: connSec, ask: connAsk, agents: agentsSt.data, agentsBusy: agentsSt.busy });
+const connView = () => ({ space: connSpace(), list: connState.list, tools: connState.tools, notes: connState.notes, failed: connState.failed, busy: connState.busy, sec: connSec, ask: connAsk, agents: agentsSt.data, agentsBusy: agentsSt.busy,
+  general: { lang: getLang(), canInstall: pwa.canInstall(), standalone: pwa.isStandalone() }, update: updateInfo, updChecking: updateChecking });
+
+/* Перемальовка «Налаштувань», коли подія прийшла ззовні розділу (стан оновлення, подія встановлення): лише коли відкрито саме він. */
+const repaintSettingsSec = (sec) => { if (connOpen() && connSec === sec) paintHome(); };
 
 /**
  * Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). `role` — вести до картки модуля

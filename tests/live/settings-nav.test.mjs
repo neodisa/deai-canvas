@@ -13,8 +13,15 @@
  *   6 (вузько → рядок)         — медіазапит `max-width:759px` у `styles.css`.
  *   8 (колір простору)         — `paintSpaceColor` (`data-space-color` на `<html>`) і правила `:root[data-space-color]`; запис — `spaceSave`;
  *                                 стрілки радіогрупи — `keydown` у `wireHome`; назва — Enter/`focusout` (`commitSpaceName`).
+ *   9 (Загальне)               — `case 'lang'` + `switchLang` у `wireHome`; рядок «Окреме вікно» — `generalBodyHTML` за `pwa.canInstall()`;
+ *                                 перемальовка на `beforeinstallprompt` — слухач біля `initPwa`.
+ *  10 (Оновлення)              — `case 'up'`: «Перевірити зараз» → `checkUpdateNow` (`POST /api/update-check`, фокус назад), «Оновити до» →
+ *                                 `openUpdateDialog`; `repaintSettingsSec('upd')` на зміну стану.
+ *  11 (Гарячі клавіші)         — `keysBodyHTML` читає `KEYS`, як і `keysHTML()` (аркуш `?`).
  */
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import { VIEW, guardRealDeai, stop, waitBarReady, goTasks } from "./_spaces-kit.mjs";
@@ -170,6 +177,78 @@ test("8: колір простору — «Фіолетовий» фарбує �
   await page.waitForFunction(() => document.documentElement.dataset.spaceColor === "space-1", null, { timeout: 15000 });
   assert.equal(await page.locator("#bar").evaluate((n) => getComputedStyle(n).backgroundColor), initialBg, "«Зелений» повернув початковий фон");
   assert.equal(await page.locator('meta[name="theme-color"]').getAttribute("content"), initialMeta);
+  assert.deepEqual(errors, []);
+});
+
+const sec = async (page, id) => {
+  await page.click(`.set-nav [data-v="${id}"]`);
+  await page.waitForFunction((v) => document.querySelector('.set-nav .nav-i[aria-current="page"]')?.dataset.v === v, id, { timeout: 15000 });
+};
+
+test("9: «Загальне» — English перемикає інтерфейс і назад; «Окреме вікно» зʼявляється з подією встановлення", async (t) => {
+  const { page, errors } = await boot(t);
+  await gear(page);
+  await sec(page, "app");
+  assert.equal(await h1(page), "Загальне");
+  assert.equal(await page.locator('.seg [aria-checked="true"]').textContent(), "Українська");
+  assert.equal(await page.locator('.seg [role="radio"][tabindex="0"]').count(), 1);
+  assert.equal(await page.locator(".set-row", { hasText: "Окреме вікно" }).count(), 0, "без можливості встановити рядка нема");
+
+  await page.click('.seg [data-v="en"]');
+  await page.waitForFunction(() => document.querySelector("#cn-title")?.textContent === "General", null, { timeout: 15000 });
+  assert.equal(await page.locator('.set-nav .nav-i[data-v="keys"]').textContent(), "Keyboard shortcuts");
+  assert.equal(await page.locator('.seg [aria-checked="true"]').textContent(), "English");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.v), "en", "фокус лишився на вибраному");
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForFunction(() => document.querySelector("#cn-title")?.textContent === "Загальне", null, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.v), "uk", "стрілка вибирає й несе фокус");
+
+  await page.evaluate(() => window.dispatchEvent(new Event("beforeinstallprompt")));
+  await page.locator(".set-row", { hasText: "Окреме вікно" }).waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('[data-th="pwa"]').textContent(), "Встановити");
+  await page.click('[data-th="pwa"]');          // `prompt()` на підробній події не існує → `error`, подію витрачено → рядок зникає
+  await page.waitForFunction(() => !document.querySelector('[data-th="pwa"]'), null, { timeout: 5000 });
+  assert.deepEqual(errors, []);
+});
+
+test("10: «Оновлення» — назва з версією, стан, «Перевірити зараз» шле POST, «Оновити до» відкриває діалог", async (t) => {
+  const { page, errors, deaiHome, url } = await boot(t);
+  writeFileSync(path.join(deaiHome, "update.json"), JSON.stringify({ checked_at: Math.floor(Date.now() / 1000) - 7200, latest: "99.0.0", state: "ok", reason: "" }));
+  await page.reload();
+  await waitBarReady(page, 15000);
+  await gear(page);
+  await sec(page, "upd");
+  const cur = (await (await fetch(`${url}/api/update`)).json()).current;
+  await page.locator(".set-row", { hasText: `Deai Canvas ${cur}` }).waitFor({ timeout: 10000 });
+  assert.match(await page.locator(".set-row-s").textContent(), /остання перевірка 2 год тому/);
+
+  await page.click('[data-th="up"][data-v="open"]');
+  await page.locator(".cv-form.up").waitFor({ timeout: 10000 });
+  assert.match(await page.locator(".up-ver").textContent(), /99\.0\.0/);
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector(".cv-form.up"), null, { timeout: 5000 });
+
+  const req = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/api/update-check"), { timeout: 10000 });
+  await page.click('[data-th="up"][data-v="check"]');
+  await req;
+  await page.waitForFunction(() => /вимкнено/.test(document.querySelector(".set-row-s")?.textContent ?? ""), null, { timeout: 15000 });
+  await page.waitForFunction(() => !document.querySelector('[data-th="up"][data-v="check"]').disabled, null, { timeout: 5000 });
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.v), "check", "фокус повернувся на кнопку");
+  assert.equal(await page.locator('[data-th="up"][data-v="check"]').textContent(), "Перевірити зараз");
+  assert.deepEqual(errors, []);
+});
+
+test("11: «Гарячі клавіші» — ті самі рядки, що аркуш «?»", async (t) => {
+  const { page, errors } = await boot(t);
+  await gear(page);
+  await sec(page, "keys");
+  const pairs = (rows) => rows.map((r) => r.replace(/\s+/g, " ").trim());
+  const fromSection = await page.locator(".set-row").evaluateAll((n) => n.map((r) => `${r.querySelector(".set-row-t").textContent}|${r.querySelector("kbd").textContent}`));
+  assert.ok(fromSection.some((x) => x.endsWith("|⌘K")), "⌘K є в розділі");
+  await page.keyboard.press("?");
+  await page.locator(".keysheet").waitFor({ timeout: 5000 });
+  const fromSheet = await page.locator(".keysheet dt").evaluateAll((n) => n.map((d) => `${d.textContent}|${d.nextElementSibling.textContent}`));
+  assert.deepEqual(pairs(fromSection), pairs(fromSheet));
   assert.deepEqual(errors, []);
 });
 

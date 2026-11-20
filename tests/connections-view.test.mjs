@@ -695,10 +695,13 @@ test("каркас: шість кнопок навігації, дві груп�
   assert.match(connPageHTML(view()), /data-v="mods" aria-current="page"/, "без sec — «Модулі»");
 });
 
-test("каркас: інші розділи малюють лише h1; «Модулі» — наявний вміст", () => {
+test("каркас: розділи «Застосунку» малюють свій вміст під h1; «Модулі» — наявний вміст", () => {
   const keys = connPageHTML(view({ sec: "keys" }));
-  assert.match(keys, /<h1 class="th-h" id="cn-title">Гарячі клавіші<\/h1><\/div><\/div><\/div>$/);
+  assert.match(keys, /<h1 class="th-h" id="cn-title">Гарячі клавіші<\/h1>/);
+  assert.match(keys, /<kbd>⌘K<\/kbd>/);
   assert.doesNotMatch(keys, /class="mc/);
+  assert.match(connPageHTML(view({ sec: "app", general: { lang: "uk" } })), /data-th="lang" data-v="en"/);
+  assert.match(connPageHTML(view({ sec: "upd", update: null })), /data-th="up" data-v="check"/);
   assert.match(connPageHTML(view({ sec: "agents" })), /id="cn-title">AGENTS\.md</);
   assert.match(connPageHTML(view({ sec: "mods" })), /data-cn="check" data-id="static-publish"/);
   setLang("en");

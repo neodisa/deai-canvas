@@ -62,7 +62,7 @@ export function updateNotesHTML({ sections = null, reason = null } = {}) {
     + `${blocksHTML(s.blocks)}</section>`).join("");
 }
 
-const STATE_KEYS = { offline: "upSt_offline", error: "upSt_error", disabled: "upSt_disabled", "no-git": "upSt_no_git" };
+export const STATE_KEYS = { offline: "upSt_offline", error: "upSt_error", disabled: "upSt_disabled", "no-git": "upSt_no_git" };
 
 /**
  * Діалог оновлення. `d = {current, latest, blocked, state, reason, sections, notesReason, applying, error, restartFailed}` — `blocked`

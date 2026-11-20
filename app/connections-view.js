@@ -36,6 +36,7 @@ import { t } from "./i18n.js";
 import { navItems, readSec, trustWaitingOf } from "./settings-model.js";
 import { agentsActsHTML, agentsBodyHTML } from "./agents-view.js";
 import { spaceBodyHTML } from "./space-view.js";
+import { generalBodyHTML, keysBodyHTML, updateBodyHTML } from "./app-settings-view.js";
 import { confirmHTML } from "./inline-confirm.js";
 import { BADGE_CLASS, cardModel, emptyRoles, failedRole, gridEntries, sentence, toolCardModel, toolCards } from "./modules-grid.js";
 import { spaceColorToken } from "./spaces-model.js";
@@ -254,6 +255,9 @@ export function connPageHTML(v) {
   const wrap = (inner, head = "") => `<div class="set">${setNavHTML(sp, sec, v.list, v.agents?.outdated === true)}<div class="set-main"><div class="set-in cn-in">${head ? `<div class="th-head">${h1}${head}</div>` : h1}${inner}</div></div></div>`;
   if (sec === "space") return wrap(spaceBodyHTML(sp));
   if (sec === "agents") return wrap(agentsBodyHTML(v.agents, v.agentsBusy === true), agentsActsHTML(v.agents, v.agentsBusy === true));
+  if (sec === "app") return wrap(generalBodyHTML(v.general));
+  if (sec === "upd") return wrap(updateBodyHTML(v.update, v.updChecking === true));
+  if (sec === "keys") return wrap(keysBodyHTML());
   if (sec !== "mods") return wrap("");
   /* space.json не читається — двома шляхами: сервер сказав `capabilities.error === "space-json-unreadable"` або відмовив
      списку модулів (`409 space-json-unreadable`). В обох випадках решта `capabilities` нічого не варта, картки не малюємо.

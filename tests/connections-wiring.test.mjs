@@ -490,10 +490,12 @@ test("етап Е: розділ «Налаштувань» — памʼятає�
   assert.match(src, /let connSec = \(\(\) => \{ try \{ return readSec\(localStorage\.getItem\(SEC_KEY\)\); \}/);
   assert.match(fnc("setConnSec"), /connAsk = null;\s*connSec = readSec\(sec\);\s*try \{ localStorage\.setItem\(SEC_KEY, connSec\); \} catch/);
   assert.match(fnc("enterHome"), /if \(connFocusRole\) setConnSec\('mods'\);\s*paintHome\(\);\s*loadConn/, "вхід із роллю → «Модулі»");
-  assert.match(fnc("wireHome"), /case 'csec': if \(readSec\(v\) !== connSec\) \{ setConnSec\(v\); paintHome\(\); if \(connSec === 'agents'\) loadAgents\(\); \} break;/);
+  assert.match(fnc("wireHome"), /case 'csec': if \(readSec\(v\) !== connSec\) \{ setConnSec\(v\); paintHome\(\); if \(connSec === 'agents'\) loadAgents\(\); if \(connSec === 'upd'\) pollUpdate\(\); \} break;/);
   const settings = /\n  settings: async \(\) => \{[\s\S]*?\n  \},/.exec(src)[0];
   assert.doesNotMatch(settings, /setConnSec/, "шестерня веде в ОСТАННІЙ розділ, не скидає його");
-  assert.match(src, /sec: connSec, ask: connAsk, agents: agentsSt\.data, agentsBusy: agentsSt\.busy \}\);/, "connView несе розділ, питання «Вимкнути?» і стан AGENTS.md у розмітку");
+  assert.match(src, /sec: connSec, ask: connAsk, agents: agentsSt\.data, agentsBusy: agentsSt\.busy,/, "connView несе розділ, питання «Вимкнути?» і стан AGENTS.md у розмітку");
+  assert.match(src, /general: \{ lang: getLang\(\), canInstall: pwa\.canInstall\(\), standalone: pwa\.isStandalone\(\) \}, update: updateInfo, updChecking: updateChecking \}\);/,
+    "connView несе мову, стан встановлення й оновлення для групи «Застосунок»");
 });
 
 /* ── «Налаштування → Модулі» (етап Е, Task 2): меню «⋯», клавіатура картки, питання «Вимкнути?» ── */
@@ -604,4 +606,18 @@ test("AGENTS.md: запис — POST з явним простором, тост 
   assert.match(c, /navigator\.clipboard\.writeText\(text\)\.then\(\(\) => toast\(t\(doneKey\)\), sel\)/);
   assert.match(c, /selectAllChildren/, "відмова буфера — виділяємо текст");
   assert.doesNotMatch(fnc("agentsAction"), /await/, "writeText — у тому ж такті, що й клік");
+});
+
+/* ── «Налаштування → Застосунок» (етап Е, Task 8): проводка мови, встановлення й оновлення ── */
+
+test("етап Е, «Застосунок»: мова — той самий switchLang, що ⌘K; встановлення — pwa.install; оновлення — наявні checkUpdateNow/openUpdateDialog", () => {
+  const w = fnc("wireHome");
+  assert.match(w, /case 'lang': switchLang\(v\);/);
+  assert.match(w, /case 'pwa': pwa\.install\(\)\.then\(\(\) => repaintSettingsSec\('app'\)\);/);
+  assert.match(w, /case 'up': if \(v === 'check'\) checkUpdateNow\(\); else openUpdateDialog\(\);/);
+  assert.match(src, /act === 'lang'\) \{ switchLang\(a\.val\); return; \}/, "⌘K і розділ ділять один шлях мови");
+  assert.match(src, /window\.addEventListener\('beforeinstallprompt', \(\) => repaintSettingsSec\('app'\)\);/);
+  const c = fnc("checkUpdateNow");
+  assert.match(c, /updateChecking = true;\s*repaintSettingsSec\('upd'\);/, "кнопка зайнята ще до запиту");
+  assert.match(c, /finally \{\s*updateChecking = false;[\s\S]*data-th="up"\]\[data-v="check"\]'\)\?\.focus/, "фокус вертається на кнопку");
 });

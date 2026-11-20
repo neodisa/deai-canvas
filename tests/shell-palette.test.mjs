@@ -7,7 +7,7 @@ import path from "node:path";
 import { DICT, setLang, t } from "../app/i18n.js";
 import { ico } from "../app/icons.js";
 import {
-  filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
+  KEYS, filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from "../app/shell-palette.js";
 
 test.beforeEach(() => setLang("uk"));
@@ -232,6 +232,15 @@ test("keysHTML: підкладка, довідка і клавіші I/Alt/Esc/�
   assert.match(html, /<kbd>Alt<\/kbd>/);
 });
 
+test("KEYS ↔ аркуш `?`: аркуш малює рівно рядки KEYS, у порядку й групах", () => {
+  assert.ok(KEYS.length >= 8, "KEYS порожній чи обрізаний");
+  const html = keysHTML();
+  const rows = [...html.matchAll(/<dt>([^<]*)<\/dt><dd><kbd>([^<]*)<\/kbd><\/dd>/g)].map((m) => [m[1], m[2]]);
+  const order = [...KEYS.filter((k) => k.group === "general"), ...KEYS.filter((k) => k.group === "layout")];
+  assert.deepEqual(rows, order.map((k) => [t(k.labelKey), k.kbd]));
+  assert.ok(KEYS.every((k) => k.group === "general" || k.group === "layout"));
+});
+
 /* ── кожна підказка клавіші має обробник ─────────────────────────────────
  *
  * ⚠️ Тут раніше стояла перевірка, прибита до ДВОХ ГЛІФІВ: `doesNotMatch(⌥↓)`
@@ -395,10 +404,8 @@ const sameMods = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
 /** Усі підказки, які взагалі показує оболонка: довідка `?` + колонка реєстру. */
 function allHints() {
   const out = [];
-  // `row()` у `keysHTML` малює рівно `<dt>підпис</dt><dd><kbd>клавіша</kbd></dd>`
-  for (const m of keysHTML().matchAll(/<dt>([^<]*)<\/dt><dd><kbd>([^<]*)<\/kbd><\/dd>/g)) {
-    out.push({ from: `довідка «${m[1].trim()}»`, ...parseHint(m[2]) });
-  }
+  // `KEYS` — єдине джерело довідки `?` і розділу «Гарячі клавіші»; що аркуш малює рівно його, стереже тест «KEYS ↔ аркуш».
+  for (const k of KEYS) out.push({ from: `довідка «${t(k.labelKey)}»`, ...parseHint(k.kbd) });
   /* Реєстр — на кількох станах: частина дій існує лише в своїй гілці
      (`inspector` тільки в макеті, `newit` тільки з ітерацією), і на одному
      стані їхні підказки просто не з'явились би. */
