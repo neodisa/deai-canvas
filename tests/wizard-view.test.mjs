@@ -458,8 +458,8 @@ test("поля, що описують себе підказками: #sp-path (�
   assert.match(e, /id="sp-path"[^>]*readonly aria-describedby="wz-s1-hint"/);
   const t4 = wizardHTML(V({ step: 4 }));
   assert.match(t4, /id="wz-from"[^>]*aria-describedby="wz-from-hint wz-err"/);
-  assert.match(t4, /id="tf-title"[^>]*aria-describedby="wz-err"/);
-  assert.match(t4, /id="tf-id"[^>]*aria-describedby="wz-err"/);
+  assert.match(t4, /id="tf-title"[^>]*aria-describedby="wz-demo-why wz-err"/);
+  assert.match(t4, /id="tf-id"[^>]*aria-describedby="wz-demo-why wz-err"/);
   assert.match(t4, /<p class="cn-hint" id="wz-from-hint">/);
 });
 
@@ -549,4 +549,17 @@ test("словник: тексти за спекою — «Простір біл
   assert.equal(DICT.en.wzSpaceGone, "The space is no longer available.");
   assert.equal(DICT.uk.wzDiscardAsk, "Відкинути незбережені налаштування?");
   assert.equal(DICT.en.wzDiscardAsk, "Discard unsaved settings?");
+});
+
+test("крок 4: третій варіант «Демо-задача (Tally)»; вибраний — назва й id вимкнені, причина поруч", () => {
+  const empty = wizardHTML(V({ step: 4 }));
+  assert.match(empty, /<input type="radio" name="wz-src" value="demo"> Демо-задача \(Tally\)<\/label>/);
+  assert.match(empty, /<p class="cn-hint" id="wz-demo-why" hidden>/);
+  assert.doesNotMatch(empty, /id="tf-title"[^>]*disabled/);
+  const demo = wizardHTML(V({ step: 4, s4: { title: "", id: "", source: "demo", from: "", spaceName: "X", tasks: 0 } }));
+  assert.match(demo, /value="demo" checked>/);
+  assert.match(demo, /id="tf-title"[^>]*aria-describedby="wz-demo-why wz-err" disabled>/);
+  assert.match(demo, /id="tf-id"[^>]*aria-describedby="wz-demo-why wz-err" disabled>/);
+  assert.match(demo, /<p class="cn-hint" id="wz-demo-why">Назву й ідентифікатор демо-задачі канвас дасть сам\.<\/p>/);
+  assert.doesNotMatch(demo, /value="empty" checked/);
 });
