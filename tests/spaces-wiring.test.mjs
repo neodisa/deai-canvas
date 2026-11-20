@@ -229,7 +229,7 @@ test("лікування висячого current — лише з render()/loadH
 
 test("екран «Задачі»: привітання за spacesResp, простори — першими в loadHome, помилка простору — смугою", () => {
   /* Привітання — першим і за `spacesResp` на ОБОХ сторінках оверлею; далі «Підключення» чи список задач. */
-  assert.match(fn("paintHome"), /needsWelcome\(spacesResp\) \? welcomeHTML\(\)\s*: homePage === 'conn' \? connPageHTML\(connView\(\)\) : homeHTML\(homeView\(\), homeData\)/);
+  assert.match(fn("paintHome"), /needsWelcome\(spacesResp\) \? welcomeHTML\(welcomeView\(\)\)\s*: homePage === 'conn' \? connPageHTML\(connView\(\)\) : homeHTML\(homeView\(\), homeData\)/);
   const lh = fn("loadHome");
   const iSpaces = lh.indexOf("await loadSpaces({ heal: true })");
   assert.ok(iSpaces >= 0, "loadHome не питає простори взагалі");

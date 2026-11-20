@@ -1664,7 +1664,6 @@ body.home-open .cv-notice{display:none!important}
 .th-welcome .th-h{margin-bottom:10px;font-size:24px}
 .th-welcome-lead{max-width:540px;margin:0 auto 22px;color:var(--mid);font-size:14px;line-height:1.55}
 .th-welcome-act{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
-.th-welcome-agent{margin:22px 0 0;color:var(--dim);font-size:12px}
 .th-note{padding:60px 20px;text-align:center;color:var(--dim)}
 .th-banner{display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:14px;
   border-radius:var(--r);background:color-mix(in srgb,var(--bad) 10%,transparent);
@@ -2127,7 +2126,7 @@ h2.sub{margin:26px 0 10px;font-size:12px;font-weight:600;letter-spacing:.05em;te
 .fr-m-stage{position:absolute;left:20%;right:0;top:20%;bottom:0;background:var(--g100)}
 .fr-m-page{position:absolute;left:12%;right:12%;top:8%;bottom:0;border-radius:4px 4px 0 0;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.12)}
 .fr-m-page i{position:absolute;left:8%;height:5%;border-radius:3px;background:var(--g200)}
-.fr-m-pin{position:absolute;width:16px;height:16px;border-radius:50% 50% 50% 2px;background:var(--open);box-shadow:0 0 0 2px #fff}
+.fr-m-spot{position:absolute;width:16px;height:16px;border-radius:50% 50% 50% 2px;background:var(--open);box-shadow:0 0 0 2px #fff}
 .fr-m-isl{position:absolute;left:50%;bottom:5%;transform:translateX(-50%);display:flex;gap:6px;padding:5px 8px;border-radius:999px;background:var(--s0);box-shadow:0 2px 8px rgba(0,0,0,.35)}
 .fr-m-isl i{display:block;width:14px;height:14px;border-radius:50%;background:var(--s3)}
 .fr-n{position:absolute;z-index:2;display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--hi);color:var(--s0);font:600 11px/1 system-ui,sans-serif;box-shadow:0 0 0 3px var(--s0)}

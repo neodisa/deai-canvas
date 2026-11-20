@@ -1288,7 +1288,6 @@ const UK = {
   spaceEmptyAgent: (name) => `Створи першу або попроси агента: «створи задачу в просторі ${name}».`,
   welcomeTitle: 'Вітаю в Deai Canvas',
   welcomeLead: 'Робоче місце для макетів, які робить AI: ітерації, огляд усіх екранів, флоу, інспектор і коментарі прямо для агента. Почни з простору — компанія, клієнт чи власні проєкти. Кожен має свої задачі.',
-  welcomeCreate: 'Створити простір',
   personalName: 'Особисте',
   tasksErrSpaceUnavailable: 'Файл задач цього простору не читається — перевір теку простору.',
   tasksErrSpaces: 'spaces.json не читається — перевір файл реєстру просторів у теці Deai.',
@@ -1308,7 +1307,6 @@ const UK = {
   taskCreatedBg: (title) => `Задачу «${title}» створено`,
   taskCreateWait: 'Перший клон репозиторію може тривати кілька хвилин',
   formTimeout: 'Сервер не відповів вчасно. Запит міг устигнути виконатись — перевір, чи простір чи задача вже є, і спробуй ще раз.',
-  welcomeAgent: 'Або скажи агенту: «створи простір Клієнт X у ~/deai-work/client-x».',
   // update-view.js, shell-bar.js, shell-palette.js — оновлення інструмента (0.23.0): пігулка в смузі, діалог «Що нового», ⌘K.
   // Ключі `upCode_<код>` — по одному на кожен код відмови сервера (`update-model.js`, `KNOWN_CODES`; дефіс у коді → `_`).
   upPill: (v) => `Оновлення ${v}`,
@@ -2589,7 +2587,6 @@ const EN = {
   spaceEmptyAgent: (name) => `Create the first one or ask the agent: “create a task in the space ${name}”.`,
   welcomeTitle: 'Welcome to Deai Canvas',
   welcomeLead: 'A workplace for mockups made by AI: iterations, an overview of every screen, flows, an inspector and comments written straight for the agent. Start with a space — a company, a client or your own projects. Each has its own tasks.',
-  welcomeCreate: 'Create a space',
   personalName: 'Personal',
   tasksErrSpaceUnavailable: 'This space’s task file cannot be read — check the space folder.',
   tasksErrSpaces: 'spaces.json cannot be read — check the spaces registry file in the Deai folder.',
@@ -2609,7 +2606,6 @@ const EN = {
   taskCreatedBg: (title) => `Task “${title}” created`,
   taskCreateWait: 'The first clone of the repository may take a few minutes',
   formTimeout: 'The server did not answer in time. The request may have gone through — check whether the space or task already exists, then try again.',
-  welcomeAgent: 'Or tell the agent: “create a space Client X in ~/deai-work/client-x”.',
   // update-view.js, shell-bar.js, shell-palette.js — tool update (0.23.0): bar pill, “What’s new” dialog, ⌘K.
   upPill: (v) => `Update ${v}`,
   upPillRestart: 'Restart needed',

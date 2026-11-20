@@ -224,6 +224,30 @@ let connAsk = null;
 /* Розділ «AGENTS.md» (етап Е): `data` — відповідь `GET /api/agents-md` | `{failed:{code}}` | `null` (ще не читали); `busy` — запис у польоті.
    Оголошено ТУТ (серед стану сторінки), бо `connView` читає його з першого `paintHome`. Скидається свіжим входом і зміною простору. */
 const agentsSt = { spaceId: null, data: null, busy: false, seq: 0 };
+/* «Перший запуск» (0.33.0): відповідь `GET /api/setup` — шлях SETUP.md для промпта привітання й стан знімків «Огляду».
+   `data: null` — ще не питали чи сервер не відповів: тоді нічого не блокуємо. `asked` — питали в цій сесії (повтор лише `fresh`).
+   Оголошено ТУТ з тієї ж причини, що й `agentsSt`: `paintHome` читає його з першого виклику. */
+const setupSt = { data: null, busy: null, asked: false, at: 0 };
+function ensureSetup(fresh = false) {
+  if (setupSt.busy) return setupSt.busy;
+  if (setupSt.asked && !fresh) return Promise.resolve(setupSt.data);
+  setupSt.asked = true;
+  setupSt.at = Date.now();
+  setupSt.busy = (async () => {
+    try { setupSt.data = await api(`/api/setup${fresh ? '?fresh=1' : ''}`); } catch (e) { /* лишаємо що було */ }
+    setupSt.busy = null;
+    if (homeOpen) paintHome(); else renderPanel();
+    return setupSt.data;
+  })();
+  return setupSt.busy;
+}
+const welcomeView = () => ({ setup: setupSt.data, origin: location.origin });
+/* Копіювання з кліку: `writeText` — ПЕРШИМ викликом, поки жест людини ще живий (як `agentsCopy`). */
+async function frCopy(text, doneKey) {
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); toast(t(doneKey)); }
+  catch (e) { toast(t('frCopyFailed')); }
+}
 /* Розділ сторінки «Налаштування» (`settings-model.js`): памʼятається в localStorage, як `homeUi`; типово `mods`. Шестерня веде в останній,
    ⌘K, фішка простору й кнопка «Задач» (`BAR_ACTIONS.conn`) і вхід із роллю — у `mods`. */
 let connSec = (() => { try { return readSec(localStorage.getItem(SEC_KEY)); } catch (e) { return 'mods'; } })();
@@ -3404,7 +3428,8 @@ function paintHome() {
      простору — це «нема де», а не «нічого не знайдено». */
   keepFocus(el, () => {
     const held = heldInNewForm();
-    el.innerHTML = needsWelcome(spacesResp) ? welcomeHTML()
+    if (needsWelcome(spacesResp)) ensureSetup();
+    el.innerHTML = needsWelcome(spacesResp) ? welcomeHTML(welcomeView())
       : homePage === 'conn' ? connPageHTML(connView()) : homeHTML(homeView(), homeData);
     mountNewForm(held);
   });
@@ -4114,6 +4139,7 @@ function wireHome(el) {
       case 'spc': pickSpaceColor(v); break;
       case 'spcopy': { const p = connSpace()?.path; if (p) agentsCopy(p, 'spPathCopied', '.sp-path span'); break; }
       case 'spacenew': openWizard(); break;
+      case 'frcopy': frCopy(homeNode()?.querySelector('#fr-prompt')?.textContent ?? '', 'frPromptCopied'); break;
       case 'spaceopen': openWizard({ folderFirst: true }); break;
       case 'status': homeEdit = { ...homeEdit, trash: false }; homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
       case 'tag': case 'designer': {
