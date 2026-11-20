@@ -1647,3 +1647,45 @@ class TrustCoreTest(OwnEnv):
         self.assertIsNotNone(dm.last_check(self.sp['id'], 'acme'))
         self.assertTrue(dm.revoke_trust(self.sp, 'acme'))
         self.assertIsNone(dm.last_check(self.sp['id'], 'acme'))
+
+
+class OwnToolsTest(OwnEnv):
+    SERVER = OWN_SERVER + """
+
+def action_go(ctx):
+    return {}
+
+
+def tool_ping(ctx, args):
+    return {}
+"""
+
+    def test_own_module_with_tool_is_trusted_and_loaded_from_snapshot(self):
+        d = self.own('acme', server=self.SERVER, extra={
+            'api': 2, 'tools': [{'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/panel.html', 'key': 'q'}],
+            'actions': [{'id': 'go', 'label': 'Go', 'where': ['palette']}]})
+        _write(os.path.join(d, 'ui', 'panel.html'), '<p>hi</p>')
+        h = self.trust('acme')
+        snap = mt.snapshot_dir(h)
+        self.assertTrue(os.path.isfile(os.path.join(snap, 'ui', 'panel.html')))
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual((m.status, m.trust, m.api), ('ok', 'trusted', 2), m.error)
+        self.assertEqual(m.dir, snap)
+        self.assertEqual(m.tools[0]['key'], 'Q')
+        self.assertEqual(m.actions[0]['where'], ('palette',))
+        self.assertTrue(callable(m.fn('tool_ping')) and callable(m.fn('action_go')))
+
+    def test_untrusted_own_module_still_carries_manifest_lists(self):
+        d = self.own('acme', server=self.SERVER, extra={
+            'api': 2, 'tools': [{'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/panel.html'}]})
+        _write(os.path.join(d, 'ui', 'panel.html'), '<p>hi</p>')
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual((m.status, m.api, len(m.tools)), ('untrusted', 2, 1))
+        self.assertIsNone(m.fn('tool_ping'))
+
+    def test_own_module_with_bad_panel_is_bad_manifest(self):
+        self.own('acme', server=self.SERVER, extra={
+            'api': 2, 'tools': [{'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/missing.html'}]})
+        self.trust('acme')
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual((m.status, m.error_code), ('error', 'bad-manifest'))

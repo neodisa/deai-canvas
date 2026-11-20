@@ -94,7 +94,23 @@ from atomic_io import atomic_write_json
 
 APP = os.path.dirname(os.path.abspath(__file__))
 
-API_VERSION = 1
+#: Версії API маніфесту, які розуміє ядро; `API_VERSION` — найновіша. `api: 2` додає `tools` і `actions`.
+API_VERSIONS = (1, 2)
+API_VERSION = 2
+#: Інструменти (`tools`) і дії (`actions`) модуля api 2: скільки їх буває, куди дії можна повісити, типовий тайм-аут дії.
+MAX_TOOLS = 4
+MAX_ACTIONS = 8
+ACTION_WHERE = ('palette', 'task', 'iteration')
+ACTION_TIMEOUT = 15
+#: Клавіші, зайняті самим Deai (інструмент модуля їх не бере).
+RESERVED_KEYS = frozenset('CIHMP')
+#: Шлях панелі інструмента: 2..4 сегменти (панель — завжди в підтеці, не поряд із `server.py`), останній — `.html`.
+UI_PATH_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}(?:/[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}){0,2}/'
+                        r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.html')
+MAX_PANEL_BYTES = 256 * 1024
+#: Функції `server.py`, що їх модуль із `tools` віддає панелям: усі викликані верхньорівневі `tool_*`.
+TOOL_FN_RE = re.compile(r'tool_[a-z0-9_]{1,40}')
+_ICON_LINE = re.compile(r'^  ([a-z][a-zA-Z0-9]*): `', re.M)
 ROLES_CALLED = ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker', 'notify')
 #: Зарезервованих імен ролей не лишилось (4c-3: `notify` — остання — стала викликаною). Порожній кортеж лишено, щоб
 #: `ROLES_CALLED + ROLES_RESERVED` у перевірці маніфесту й `space.json` працювало без змін; невідома роль, як і раніше,
@@ -208,11 +224,12 @@ class Module:
     Свій модуль простору (`origin='space'`) без робочого знімка — `status='untrusted'` чи `'error'` (`refused`) з
     `error_code='module-untrusted'`: функцій нема, ролі й налаштування — з маніфесту теки."""
     __slots__ = ('id', 'name', 'version', 'api', 'roles', 'settings', 'publish_target', 'client', 'status', 'error',
-                 'error_code', 'dir', '_fns', 'origin', 'trust', 'record', 'source', 'trust_error', 'check_timeout_s')
+                 'error_code', 'dir', '_fns', 'origin', 'trust', 'record', 'source', 'trust_error', 'check_timeout_s', 'tools', 'actions')
 
     def __init__(self, mid, *, name=None, version='', api=None, roles=(), settings=(), status='ok',
                  error=None, error_code=None, dir='', fns=None, publish_target='folder', client=(),
-                 origin='builtin', trust=None, record=False, source='', trust_error=None, check_timeout_s=None):
+                 origin='builtin', trust=None, record=False, source='', trust_error=None, check_timeout_s=None,
+                 tools=(), actions=()):
         self.id = mid
         self.name = name if isinstance(name, str) and name.strip() else mid
         self.version = version if isinstance(version, str) else ''
@@ -223,6 +240,8 @@ class Module:
         # `None` — ключа в маніфесті нема: `check` бере `CHECK_TIMEOUT` у момент виклику (тести його підміняють)
         self.check_timeout_s = check_timeout_s if type(check_timeout_s) is int else None
         self.client = tuple(client)
+        self.tools = tuple(dict(t) for t in tools)          # api 2: `{id, label, icon, panel, key}`
+        self.actions = tuple(dict(a) for a in actions)      # api 2: `{id, label, where: tuple, timeout_s}`
         self.status = status
         self.error = error
         self.error_code = error_code
@@ -279,7 +298,24 @@ def reset_caches():
         _LAST_CHECK.clear()
         _CAPS.clear()
         _FOLDER_INPUTS.clear()
+        _ICONS[0] = None
     module_trust.reset_cache()
+
+
+_ICONS = [None]
+
+
+def core_icons():
+    """Імена іконок ядра з `app/icons.js` (кеш процесу). Файл не читається — порожня множина: кожна іконка невідома
+    (відмова, а не тихий пропуск)."""
+    with _STATE_LOCK:
+        if _ICONS[0] is None:
+            try:
+                with open(os.path.join(APP, 'icons.js'), encoding='utf-8') as f:
+                    _ICONS[0] = frozenset(_ICON_LINE.findall(f.read()))
+            except (OSError, ValueError):
+                return frozenset()
+        return _ICONS[0]
 
 
 def _sig(path):
@@ -464,14 +500,135 @@ def _check_client(man, roles, d):
     return tuple(names), None
 
 
+def _panel_ok(rel, d):
+    """Причина (без префікса) чи `None`: панель `rel` (уже за `UI_PATH_RE`) — звичайний файл у теці `d`; кожна тека шляху —
+    справжня тека (не посилання), кожне імʼя — РІВНО як у `listdir` батька (ФС без урахування регістру)."""
+    parts = rel.split('/')
+    cur = d
+    for i, n in enumerate(parts):
+        try:
+            if n not in os.listdir(cur):
+                return f'{n} is not in the module folder'
+            st = os.lstat(os.path.join(cur, n))
+        except OSError:
+            return f'{n} is not in the module folder'
+        last = i == len(parts) - 1
+        if not last:
+            if not stat.S_ISDIR(st.st_mode):
+                return f'{n} must be a real folder (no symlink)'
+            cur = os.path.join(cur, n)
+            continue
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return f'{n} must be a regular file (no symlink, no hard link)'
+        if st.st_size > MAX_PANEL_BYTES:
+            return f'{n} is bigger than {MAX_PANEL_BYTES} bytes'
+    return None
+
+
+def _check_tools(man, api, d):
+    """`tools` маніфесту: `(кортеж словників, None)` чи `(None, причина)`. Лише для api 2; 1..`MAX_TOOLS` елементів."""
+    if 'tools' not in man:
+        return (), None
+    if api < 2:
+        return None, 'tools: requires api 2'
+    raw = man['tools']
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_TOOLS:
+        return None, f'tools: must be a list of 1 to {MAX_TOOLS} objects'
+    out, ids, keys = [], set(), set()
+    icons = None
+    for i, t in enumerate(raw):
+        at = f'tools[{i}]'
+        if not isinstance(t, dict):
+            return None, f'{at}: must be an object'
+        for k in t:
+            if k == 'frame':
+                return None, f'{at}.frame: not supported yet'
+            if k not in ('id', 'label', 'icon', 'panel', 'key'):
+                return None, f'{at}: unknown key {str(k)[:40]!r}'
+        tid = t.get('id')
+        if not isinstance(tid, str) or not ID_RE.fullmatch(tid):
+            return None, f'{at}.id: must match [a-z0-9][a-z0-9-]{{0,39}}'
+        if tid in ids:
+            return None, f'{at}.id: duplicate {tid!r}'
+        ids.add(tid)
+        label = t.get('label')
+        if not isinstance(label, str) or not label.strip() or len(label.strip()) > 40:
+            return None, f'{at}.label: must be a non-empty string of at most 40 characters'
+        icon = t.get('icon')
+        if icons is None:
+            icons = core_icons()
+        if not isinstance(icon, str) or icon not in icons:
+            return None, f'{at}.icon: unknown icon {str(icon)[:40]!r}'
+        panel = t.get('panel')
+        if not isinstance(panel, str) or not UI_PATH_RE.fullmatch(panel):
+            return None, f'{at}.panel: must be a relative path of 2 to 4 segments ending in .html'
+        why = _panel_ok(panel, d)
+        if why:
+            return None, f'{at}.panel: {why}'
+        key = None
+        if 'key' in t:
+            key = t['key']
+            if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z]', key):
+                return None, f'{at}.key: must be one ASCII letter'
+            key = key.upper()
+            if key in RESERVED_KEYS:
+                return None, f'{at}.key: {key!r} is reserved by Deai'
+            if key in keys:
+                return None, f'{at}.key: duplicate {key!r}'
+            keys.add(key)
+        out.append({'id': tid, 'label': label.strip(), 'icon': icon, 'panel': panel, 'key': key})
+    return tuple(out), None
+
+
+def _check_actions(man, api):
+    """`actions` маніфесту: `(кортеж словників, None)` чи `(None, причина)`. Лише для api 2; 1..`MAX_ACTIONS` елементів."""
+    if 'actions' not in man:
+        return (), None
+    if api < 2:
+        return None, 'actions: requires api 2'
+    raw = man['actions']
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_ACTIONS:
+        return None, f'actions: must be a list of 1 to {MAX_ACTIONS} objects'
+    out, ids = [], set()
+    for i, a in enumerate(raw):
+        at = f'actions[{i}]'
+        if not isinstance(a, dict):
+            return None, f'{at}: must be an object'
+        for k in a:
+            if k not in ('id', 'label', 'where', 'timeout_s'):
+                return None, f'{at}: unknown key {str(k)[:40]!r}'
+        aid = a.get('id')
+        if not isinstance(aid, str) or not ID_RE.fullmatch(aid):
+            return None, f'{at}.id: must match [a-z0-9][a-z0-9-]{{0,39}}'
+        if aid in ids:
+            return None, f'{at}.id: duplicate {aid!r}'
+        ids.add(aid)
+        label = a.get('label')
+        if not isinstance(label, str) or not label.strip() or len(label.strip()) > 60:
+            return None, f'{at}.label: must be a non-empty string of at most 60 characters'
+        where = a.get('where')
+        if not isinstance(where, list) or not where:
+            return None, f'{at}.where: must be a non-empty list'
+        for w in where:
+            if not isinstance(w, str) or w not in ACTION_WHERE:
+                return None, f'{at}.where: items must be one of {", ".join(ACTION_WHERE)}'
+        if len(set(where)) != len(where):
+            return None, f'{at}.where: listed twice'
+        ts = a.get('timeout_s')
+        if 'timeout_s' in a and (type(ts) is not int or not 1 <= ts <= MAX_CHECK_TIMEOUT):
+            return None, f'{at}.timeout_s: must be an integer 1..{MAX_CHECK_TIMEOUT}'
+        out.append({'id': aid, 'label': label.strip(), 'where': tuple(where), 'timeout_s': ts if 'timeout_s' in a else None})
+    return tuple(out), None
+
+
 def _check_manifest(man, folder, d):
     """(метадані, None) або (None, причина) — перевірка маніфесту (і файлів `client` у теці `d`) без виконання
     `server.py`."""
     if not isinstance(man, dict):
         return None, 'module.json: not an object'
     api = man.get('api')
-    if type(api) is not int or api != API_VERSION:
-        return None, f'api: must be {API_VERSION}'
+    if type(api) is not int or api not in API_VERSIONS:
+        return None, f'api: must be one of {", ".join(map(str, API_VERSIONS))}'
     mid = man.get('id')
     if not isinstance(mid, str) or not ID_RE.fullmatch(mid):
         return None, 'id: must match [a-z0-9][a-z0-9-]{0,39}'
@@ -508,17 +665,25 @@ def _check_manifest(man, folder, d):
     client, why = _check_client(man, roles, d)
     if why:
         return None, why
-    return {'name': name, 'version': version, 'roles': roles,
+    tools, why = _check_tools(man, api, d)
+    if why:
+        return None, why
+    actions, why = _check_actions(man, api)
+    if why:
+        return None, why
+    return {'name': name, 'version': version, 'api': api, 'roles': roles,
             'settings': settings, 'publish_target': target, 'client': client,
+            'tools': tools, 'actions': actions,
             'check_timeout_s': cts if 'check_timeout_s' in man else None}, None
 
 
 def _failed(folder, d, code, text, man=None, meta=None):
     base = dict(status='error', error=str(text)[:MAX_MESSAGE], error_code=code, dir=d)
     if meta:
-        return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
+        return Module(folder, name=meta['name'], version=meta['version'], api=meta['api'],
                       roles=meta['roles'], settings=meta['settings'],
                       publish_target=meta['publish_target'], check_timeout_s=meta['check_timeout_s'],
+                      tools=meta['tools'], actions=meta['actions'],
                       **base)           # `client` не передаємо: помилковий модуль нічого не віддає
     man = man if isinstance(man, dict) else {}
     api = man.get('api')
@@ -564,9 +729,20 @@ def _build(d, folder):
         f = ns.__dict__.get(opt)
         if callable(f):                                 # необовʼязкова: немає чи не функція — не помилка, `fn()` дасть `None`
             fns[opt] = f
-    return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
+    for a in meta['actions']:
+        need = 'action_' + a['id'].replace('-', '_')
+        f = ns.__dict__.get(need)
+        if not callable(f):
+            return _failed(folder, d, 'bad-manifest', f'server.py: no callable {need}()', meta=meta)
+        fns[need] = f
+    if meta['tools']:
+        for n, f in list(ns.__dict__.items()):
+            if TOOL_FN_RE.fullmatch(n) and callable(f):
+                fns[n] = f
+    return Module(folder, name=meta['name'], version=meta['version'], api=meta['api'],
                   roles=meta['roles'], settings=meta['settings'], publish_target=meta['publish_target'],
-                  check_timeout_s=meta['check_timeout_s'], client=meta['client'], status='ok', dir=d, fns=fns)
+                  check_timeout_s=meta['check_timeout_s'], client=meta['client'],
+                  tools=meta['tools'], actions=meta['actions'], status='ok', dir=d, fns=fns)
 
 
 def _client_sig(d):
@@ -617,6 +793,8 @@ def _clone(m, **kw):
         setattr(c, s, getattr(m, s))
     c.roles = list(m.roles)
     c.settings = [dict(s) for s in m.settings]
+    c.tools = tuple(dict(t) for t in m.tools)
+    c.actions = tuple(dict(a) for a in m.actions)
     for k, v in kw.items():
         setattr(c, k, v)
     return c
@@ -652,9 +830,9 @@ def _manifest_from_bytes(raw, folder, d):
 def _meta_kw(meta):
     if not meta:
         return {}
-    return dict(name=meta['name'], version=meta['version'], api=API_VERSION, roles=meta['roles'],
+    return dict(name=meta['name'], version=meta['version'], api=meta['api'], roles=meta['roles'],
                 settings=meta['settings'], publish_target=meta['publish_target'],
-                check_timeout_s=meta['check_timeout_s'])
+                check_timeout_s=meta['check_timeout_s'], tools=meta['tools'], actions=meta['actions'])
 
 
 def _own_base(space):
