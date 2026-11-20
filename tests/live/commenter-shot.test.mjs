@@ -108,7 +108,7 @@ test("ignoreElements лишає предків, піддерево, head/сти�
   await page.close();
 });
 
-test("ціль із понад 1500 нащадків: html2canvas не викликається, коментар без meta.shot", async () => {
+test("ціль із понад 1500 нащадків: html2canvas не викликається, коментар без meta.shot, але з meta.shotMiss too-big", async () => {
   const page = await boot();
   await page.evaluate(() => {
     const big = document.querySelector("#big");
@@ -119,17 +119,27 @@ test("ціль із понад 1500 нащадків: html2canvas не викл�
   assert.equal(await page.evaluate(() => window.__calls.length), 0, "html2canvas не мав викликатись");
   const c = await page.evaluate(() => window.__mem.find((x) => x.text === "без знімка"));
   assert.equal(c.meta && c.meta.shot, undefined);
+  assert.equal(c.meta.shotMiss, "too-big");
   await page.close();
 });
 
-test("ціль із понад 300 SVG-вузлами (але <1500 елементів): знімка нема", async () => {
+test("ціль із понад 300 SVG-вузлами (але <1500 елементів): знімок є, нащадки порожнього svg відсікаються, сам svg лишається", async () => {
   const page = await boot();
   await page.evaluate(() => {
     const big = document.querySelector("#big");
     big.style.padding = "30px";
-    big.innerHTML = '<svg width="10" height="10">' + "<circle r=\"1\"/>".repeat(400) + "</svg>";
+    big.innerHTML = '<svg id="bs" width="10" height="10">' + "<path d=\"M0 0h1v1z\"/>".repeat(400) + "</svg>";
   });
   await addComment(page, "#big", "svg-важкий", { x: 5, y: 5 });
-  assert.equal(await page.evaluate(() => window.__calls.length), 0);
+  assert.equal(await page.evaluate(() => window.__calls.length), 1, "html2canvas мав викликатись (обрізка замість відмови)");
+  const r = await page.evaluate(() => {
+    const ig = window.__calls[0].opts.ignoreElements;
+    return { svg: ig(document.querySelector("#bs")), path: ig(document.querySelector("#bs path")),
+      wrap: ig(document.querySelector("#big")) };
+  });
+  assert.deepEqual(r, { svg: false, path: true, wrap: false });
+  const c = await page.evaluate(() => window.__mem.find((x) => x.text === "svg-важкий"));
+  assert.ok(c.meta.shot, "знімок мав бути");
+  assert.equal(c.meta.shotMiss, undefined);
   await page.close();
 });

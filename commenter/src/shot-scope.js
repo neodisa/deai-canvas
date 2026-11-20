@@ -28,18 +28,30 @@ function refIds(el) {
   return ids;
 }
 
-export function shotScope(target) {
+export function shotScope(target, blankRoots) {
   const doc = target.ownerDocument;
+  // «Порожні» корені SVG (обрізка понад бюджет): їхні нащадки в знімок не йдуть, сам корінь клонується й тримає бокс.
+  const blankDesc = new Set();
+  if (blankRoots) for (const b of blankRoots) for (const d of b.getElementsByTagName('*')) blankDesc.add(d);
   const anchors = [target];
   const seen = new Set([target]);
   const all = [target, ...target.getElementsByTagName('*')];
   for (const el of all) {
+    if (blankDesc.has(el)) continue;   // посилання з відсічених вузлів нікому не потрібні
     for (const id of refIds(el)) {
       const ref = doc.getElementById(id);
-      if (ref && !seen.has(ref)) { seen.add(ref); anchors.push(ref); }
+      if (ref && !seen.has(ref)) {
+        seen.add(ref); anchors.push(ref);
+        if (blankDesc.size && blankDesc.has(ref)) {   // але на вузол усередині порожнього кореня вказує живий — лишаємо його, нащадків і предків до кореня
+          blankDesc.delete(ref);
+          for (const d of ref.getElementsByTagName('*')) blankDesc.delete(d);
+          for (let p = ref.parentElement; p && blankDesc.has(p); p = p.parentElement) blankDesc.delete(p);
+        }
+      }
     }
   }
   return function ignoreElements(node) {
+    if (blankDesc.size && blankDesc.has(node)) return true;
     if (node.closest && node.closest('head')) return false;
     const tag = node.tagName;
     if (tag === 'STYLE' || tag === 'LINK') return false;

@@ -1208,17 +1208,21 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         const en = await this._withTimeout(t._enrich, 8000);
         if (c() && en) { if (en.fp) c().fp = en.fp; if (en.htmlSnapshot) c().htmlSnapshot = en.htmlSnapshot; }
       } catch (e) { /* fail-soft */ }
+      let miss = null;
       try {
-        const shot = typeof this.anchors.shot === 'function' ? await this._withTimeout(this.anchors.shot(t), 8000) : null;
-        if (c() && shot) {
-          c().meta.shot = shot;
-          if (this.store && typeof this.store.uploadShot === 'function') {
+        if (typeof this.anchors.shot === 'function') {
+          const shot = await raceTimeout(this.anchors.shot(t), 8000);
+          if (shot === SHOT_TIMEOUT) miss = 'timeout';
+          else if (!shot) miss = 'render';
+          else if (c()) {
+            c().meta.shot = shot;
             // Третій аргумент — пін: комбіноване сховище за `_aud` вирішує, чи слати знімок у командний кошик (поправка 5 плану Б2).
-            const url = await this._withTimeout(this.store.uploadShot(id, shot, c()), 8000);
-            if (url) c().meta.shotUrl = url;
+            const up = await this._uploadShot(id, shot, c());
+            if (up.failed) miss = 'upload'; else if (up.url) c().meta.shotUrl = up.url;
           }
         }
-      } catch (e) { /* fail-soft */ }
+      } catch (e) { miss = miss || 'render'; }
+      if (miss && c()) { c().meta = c().meta || {}; c().meta.shotMiss = miss; }   // ДО першого persist
       this._persist(); this._render(); this._placePins();
     },
 
@@ -1341,48 +1345,76 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     // Захват скриншота → (за наявності) заливка в Storage → перший persist. Fail-soft:
     // таймаут/помилка захвату або заливки → зберігаємо коментар без скриншота.
     async _finishComment(id, shotTarget) {
+      let miss = null;
       try {
-        const shot = await this._withTimeout(this._captureShot(shotTarget), 8000);
+        const r = await this._captureShot(shotTarget);
         const c = this.comments.find((x) => x.id === id);
-        if (c && shot) {
-          c.meta = c.meta || {}; c.meta.shot = shot;
-          if (this.store && typeof this.store.uploadShot === 'function') {
-            const url = await this._withTimeout(this.store.uploadShot(id, shot, c), 8000);   // `c` — для комбінованого сховища (поправка 5 плану Б2)
-            if (url) c.meta.shotUrl = url;
+        if (r && r.shot) {
+          if (c) {
+            c.meta = c.meta || {}; c.meta.shot = r.shot;
+            const up = await this._uploadShot(id, r.shot, c);   // `c` — для комбінованого сховища (поправка 5 плану Б2)
+            if (up.failed) miss = 'upload'; else if (up.url) c.meta.shotUrl = up.url;
           }
-        }
-      } catch (e) { /* fail-soft */ }
+        } else miss = (r && r.miss) || 'render';
+      } catch (e) { miss = miss || 'render'; }
+      const c2 = this.comments.find((x) => x.id === id);
+      if (miss && c2) { c2.meta = c2.meta || {}; c2.meta.shotMiss = miss; }   // ДО першого persist (він — INSERT із тригером Teams)
       this._persist(); this._render(); this._placePins();
+    },
+
+    // Заливка знімка: одна повторна спроба через 500 мс. `failed` — сховище є, а URL так і нема (null/таймаут/виняток).
+    async _uploadShot(id, shot, c) {
+      if (!this.store || typeof this.store.uploadShot !== 'function') return { url: null, failed: false };
+      for (let i = 0; i < 2; i++) {
+        if (i) await new Promise((res) => setTimeout(res, 500));
+        try {
+          const url = await raceTimeout(this.store.uploadShot(id, shot, c), 8000);
+          if (url && url !== SHOT_TIMEOUT) return { url, failed: false };
+        } catch (e) { /* повтор */ }
+      }
+      return { url: null, failed: true };
     },
 
     // target = an element. Element renders are the only html2canvas path that
     // stays faithful across pages; coordinate-cropped document renders drift.
+    // Повертає `{ shot }` або `{ miss: код }` (too-big | no-lib | timeout | render | detached).
     async _captureShot(target) {
       try {
-        if (target && target.nodeType === 1 && (target.getElementsByTagName('*').length > SHOT_MAX_NODES
-          || target.getElementsByTagNameNS('http://www.w3.org/2000/svg', '*').length > SHOT_MAX_SVG)) return null;
-        const h2c = await loadShotLib();
+        if (!target || target.nodeType !== 1 || !target.isConnected) return { miss: 'detached' };
+        const trim = svgTrim(target);
+        if (target.getElementsByTagName('*').length - trim.dropped > SHOT_MAX_NODES) return { miss: 'too-big' };
+        const libSrc = shotLibSrc(this.opts && this.opts.shotLib);
+        let h2c;
+        try {
+          const lib = await raceTimeout(loadShotLib(libSrc), 8000);   // свій бюджет 8 с — не їсть бюджет рендеру
+          if (lib === SHOT_TIMEOUT) { dropShotLib(libSrc); return { miss: 'no-lib' }; }
+          h2c = lib;
+        } catch (e) { return { miss: 'no-lib' }; }
+        if (typeof h2c !== 'function') return { miss: 'no-lib' };
+        if (!target.isConnected) return { miss: 'detached' };   // поки вантажилась бібліотека, ціль могли прибрати
         const base = { backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false };
+        target.classList.remove('cl-hl');            // don't bake the hover outline into the shot
+        // Без сусідів розкладка цілі в клоні може попливти (flex:1, grid, space-between) — фіксуємо її бокс.
+        const r = target.getBoundingClientRect();
+        const onclone = (doc, el) => {
+          if (!el || !el.style) return;
+          const set = (n, v) => el.style.setProperty(n, v, 'important');
+          set('width', r.width + 'px'); set('height', r.height + 'px'); set('box-sizing', 'border-box');
+          set('flex', '0 0 auto'); set('max-width', 'none'); set('min-width', '0'); set('max-height', 'none');
+        };
         let canvas;
-        if (target && target.nodeType === 1) {
-          target.classList.remove('cl-hl');            // don't bake the hover outline into the shot
-          // Без сусідів розкладка цілі в клоні може попливти (flex:1, grid, space-between) — фіксуємо її бокс.
-          const r = target.getBoundingClientRect();
-          const onclone = (doc, el) => {
-            if (!el || !el.style) return;
-            const set = (n, v) => el.style.setProperty(n, v, 'important');
-            set('width', r.width + 'px'); set('height', r.height + 'px'); set('box-sizing', 'border-box');
-            set('flex', '0 0 auto'); set('max-width', 'none'); set('min-width', '0'); set('max-height', 'none');
-          };
-          canvas = await h2c(target, { ...base, ignoreElements: shotScope(target), onclone });
-        } else { return null; }
+        try {
+          canvas = await raceTimeout(h2c(target, { ...base, ignoreElements: shotScope(target, trim.roots), onclone }), 8000);
+        } catch (e) { return { miss: 'render' }; }
+        if (canvas === SHOT_TIMEOUT) return { miss: 'timeout' };
+        if (!canvas) return { miss: 'render' };
         const maxW = 360, k = Math.min(1, maxW / (canvas.width || maxW)) || 1;
         const out = document.createElement('canvas');
         out.width = Math.max(1, Math.round(canvas.width * k));
         out.height = Math.max(1, Math.round(canvas.height * k));
         out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
-        return out.toDataURL('image/jpeg', 0.6);      // small; stored inline in the comment meta
-      } catch (e) { return null; }
+        return { shot: out.toDataURL('image/jpeg', 0.6) };      // small; stored inline in the comment meta
+      } catch (e) { return { miss: 'render' }; }
     },
 
     // The core loop: call after the UI is regenerated.
@@ -2137,18 +2169,65 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   const SHOT_MAX_NODES = 1500;
   // SVG-вузли найдорожчі для клонування html2canvas (~10 мс кожен) — окремий ліміт.
   const SHOT_MAX_SVG = 300;
-  let _shotLibPromise = null;
-  function loadShotLib() {
+  const SHOT_CDN = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+  const SHOT_TIMEOUT = {};   // відрізняє таймаут від порожнього результату
+  function raceTimeout(p, ms) {
+    let t;
+    return Promise.race([Promise.resolve(p), new Promise((res) => { t = setTimeout(() => res(SHOT_TIMEOUT), ms); })])
+      .finally(() => clearTimeout(t));
+  }
+  // Опція `shotLib`: лише http(s):, протокол-відносна чи відносна адреса; javascript:/data: тощо ігноруються (→ CDN).
+  function shotLibSrc(v) {
+    if (typeof v !== 'string') return null;
+    const s = v.trim();
+    if (!s || /[\u0000-\u0020\u007f]/.test(s)) return null;
+    const m = /^([a-z][a-z0-9+.\-]*):/i.exec(s);
+    if (m) return /^https?$/i.test(m[1]) ? s : null;
+    return s;
+  }
+  // Кеш за адресою; відхилений (чи не встиглий) проміс не залишається — наступний пін пробує знову.
+  const _shotLibs = new Map();
+  function dropShotLib(src) {
+    const e = _shotLibs.get(src || SHOT_CDN);
+    if (!e) return;
+    _shotLibs.delete(src || SHOT_CDN);
+    if (e.s && e.s.parentNode) e.s.parentNode.removeChild(e.s);
+  }
+  function loadShotLib(src) {
     if (typeof window !== 'undefined' && window.html2canvas) return Promise.resolve(window.html2canvas);
-    if (_shotLibPromise) return _shotLibPromise;
-    _shotLibPromise = new Promise((resolve, reject) => {
+    const url = src || SHOT_CDN;
+    const hit = _shotLibs.get(url);
+    if (hit) return hit.p;
+    const e = { s: null, p: null };
+    e.p = new Promise((resolve, reject) => {
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
-      s.onload = () => resolve(window.html2canvas);
+      e.s = s;
+      s.src = url;
+      s.onload = () => (typeof window.html2canvas === 'function' ? resolve(window.html2canvas) : reject(new Error('html2canvas missing after load')));
       s.onerror = () => reject(new Error('html2canvas load failed'));
       document.head.appendChild(s);
     });
-    return _shotLibPromise;
+    e.p.catch(() => { if (_shotLibs.get(url) === e) dropShotLib(src); });
+    _shotLibs.set(url, e);
+    return e.p;
+  }
+  // Обрізка SVG: найзовнішні `svg` у цілі в порядку документа лишаються, поки сума SVG-елементів ≤ SHOT_MAX_SVG;
+  // решта — «порожні» корені (нащадки не йдуть у знімок, сам корінь тримає бокс).
+  function svgTrim(target) {
+    const NS = 'http://www.w3.org/2000/svg';
+    let all;
+    if (target.namespaceURI === NS) all = [target];   // ціль сама в SVG (svg чи його частина) — один корінь
+    else all = [...target.getElementsByTagNameNS(NS, 'svg')].filter((el) => {
+      const up = el.parentElement && el.parentElement.closest('svg');
+      return !up || !target.contains(up);
+    });
+    const roots = []; let sum = 0, over = false, dropped = 0;
+    for (const el of all) {
+      const n = el.getElementsByTagNameNS(NS, '*').length + 1;   // SVG-елементи кореня разом із ним
+      if (!over && sum + n <= SHOT_MAX_SVG) { sum += n; continue; }
+      over = true; roots.push(el); dropped += el.getElementsByTagName('*').length;   // у ліміт вузлів не йдуть усі нащадки кореня
+    }
+    return { roots, dropped };
   }
   function genId() {
     try { if (globalThis.crypto && globalThis.crypto.randomUUID) return globalThis.crypto.randomUUID(); } catch (e) {}
