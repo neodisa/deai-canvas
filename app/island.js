@@ -11,17 +11,46 @@ import { t } from "./i18n.js";
 /** Режим коментатора → іконка (форми ті самі, що в його власній смужці). Невідомий режим кнопки не отримує. */
 const MODE_ICON = { element: "element", text: "text", multi: "layers", area: "area" };
 
-export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn = false, commentsOn = false, commentsCount = 0, commentsNew = 0, commentTool = null } = {}) {
+/** Кнопка «Коментарі»: нові від команди (амбер, `isl-count--new`) важливіші за «відкритих усього» — число одне, не два. */
+function commentsBtn({ commentsOn, commentsCount, commentsNew }) {
+  const n = commentsNew > 0
+    ? `<span class="isl-count isl-count--new" aria-hidden="true">${commentsNew > 99 ? "99+" : commentsNew}</span>`
+    : commentsCount > 0
+      ? `<span class="isl-count" aria-hidden="true">${commentsCount > 99 ? "99+" : commentsCount}</span>` : "";
+  const label = commentsNew > 0 ? t("cmtIslandNew", commentsNew) : t("cmtIsland", commentsCount);
+  return `<button class="isl-btn${commentsOn ? " isl-btn--on" : ""}" data-act="comments" aria-pressed="${commentsOn}"`
+    + ` aria-label="${esc(label)}" title="${esc(t("cmtKey"))}">${ico("comment")}${n}</button>`;
+}
+
+function inspectorBtn(inspectorOn) {
+  return `<button class="isl-btn${inspectorOn ? " isl-btn--on" : ""}" data-act="inspector" aria-pressed="${inspectorOn}"`
+    + ` aria-label="${esc(t("inspector"))}" title="${esc(t("inspectorKey"))}">${ico("inspect")}</button>`;
+}
+
+/** «Сховати інтерфейс» — лише в превʼю (0.32.0): чистий перегляд макета, підказка з акордом. */
+function cleanBtn() {
+  const tip = esc(t("islandCleanKey"));
+  return `<button class="isl-btn" data-act="clean" aria-label="${esc(t("islandClean"))}" title="${tip}">${ico("clean")}</button>`;
+}
+
+/** Набори кнопок превʼю — у порядку й під ключами, відомими лише сюди (`bug`/AI у превʼю нема за визначенням). */
+const PREVIEW_TOOLS = ["cmt", "insp", "clean"];
+
+/**
+ * `tools` (0.32.0): явний набір для ЗОВНІШНЬОГО превʼю — `['cmt', 'insp', 'clean']` (невідоме ігнорується). Без нього — набір
+ * Deai, як і було (коментарі | інспектор | баг), байт у байт. Роздільник — лише між «коментарі+інспектор» і «сховати».
+ */
+export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn = false, commentsOn = false, commentsCount = 0, commentsNew = 0, commentTool = null, tools = null } = {}) {
+  if (Array.isArray(tools)) {
+    const want = PREVIEW_TOOLS.filter((k) => tools.includes(k));
+    const head = want.filter((k) => k !== "clean").map((k) => (k === "cmt"
+      ? commentsBtn({ commentsOn, commentsCount, commentsNew }) : inspectorBtn(inspectorOn)));
+    const tail = want.includes("clean") ? [cleanBtn()] : [];
+    return head.join("") + (head.length && tail.length ? '<span class="isl-sep" aria-hidden="true"></span>' : "") + tail.join("");
+  }
   const parts = [];
   if (screen === "task") {
-    /* Нові від команди (амбер, `isl-count--new`) важливіші за «відкритих усього» — число одне, не два. */
-    const n = commentsNew > 0
-      ? `<span class="isl-count isl-count--new" aria-hidden="true">${commentsNew > 99 ? "99+" : commentsNew}</span>`
-      : commentsCount > 0
-        ? `<span class="isl-count" aria-hidden="true">${commentsCount > 99 ? "99+" : commentsCount}</span>` : "";
-    const label = commentsNew > 0 ? t("cmtIslandNew", commentsNew) : t("cmtIsland", commentsCount);
-    parts.push(`<button class="isl-btn${commentsOn ? " isl-btn--on" : ""}" data-act="comments" aria-pressed="${commentsOn}"`
-      + ` aria-label="${esc(label)}" title="${esc(t("cmtKey"))}">${ico("comment")}${n}</button>`);
+    parts.push(commentsBtn({ commentsOn, commentsCount, commentsNew }));
     /* Фільтр ПЕРШИМ (лише власні ключі MODE_ICON — не `constructor`/`__proto__`), потім потрібно > 1 відомого режиму.
        На «Огляді» режим один — кнопок режимів нема за будь-яких даних інструмента. */
     const known = commentsOn && mode !== "overview" && commentTool && Array.isArray(commentTool.modes)
@@ -44,8 +73,7 @@ export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn 
       parts.push('<span class="isl-sep" aria-hidden="true"></span>');
     }
     if (mode === "layout") {
-      parts.push(`<button class="isl-btn${inspectorOn ? " isl-btn--on" : ""}" data-act="inspector" aria-pressed="${inspectorOn}"`
-        + ` aria-label="${esc(t("inspector"))}" title="${esc(t("inspectorKey"))}">${ico("inspect")}</button>`);
+      parts.push(inspectorBtn(inspectorOn));
     }
     parts.push('<span class="isl-sep" aria-hidden="true"></span>');
   }

@@ -334,6 +334,88 @@ describe("зовнішня оболонка на зібраному publish/", (
     }
   });
 
+  /* 0.32.0 Task 2: острівець превʼю. До Task 3–4 він має ОДНУ кнопку — «Сховати інтерфейс»: ні «баг», ні стану AI. */
+  const shownBox = (page, sel) => page.evaluate((q) => {
+    const e = document.querySelector(q);
+    return !!e && getComputedStyle(e).display !== "none" && e.getClientRects().length > 0;
+  }, sel);
+  const cleanOn = (page) => page.evaluate(() => document.documentElement.classList.contains("cv-clean"));
+
+  test("острівець: по центру внизу, одна кнопка «Сховати інтерфейс», без «баг» і AI", async (t) => {
+    const { ctx, page } = await fresh();
+    t.after(() => ctx.close());
+    await page.goto(`${base}/${IT1}`);
+    await unlock(page);
+    const isl = page.locator("#hud .island");
+    await isl.waitFor();
+    const box = await isl.boundingBox();
+    assert.ok(Math.abs(box.x + box.width / 2 - VIEW.width / 2) <= 2, `острівець не по центру: ${JSON.stringify(box)}`);
+    assert.ok(VIEW.height - (box.y + box.height) < 40 && box.y + box.height <= VIEW.height, `острівець не внизу: ${JSON.stringify(box)}`);
+    const acts = await page.evaluate(() => [...document.querySelectorAll("#hud [data-act]")].map((b) => b.dataset.act));
+    assert.deepEqual(acts, ["clean"]);
+    assert.equal(await page.locator('#hud [data-act="feedback"], #hud #claude-hud, #hud .isl-claude, #hud .isl-sep').count(), 0);
+    const btn = page.locator('#hud [data-act="clean"]');
+    assert.equal(await btn.getAttribute("aria-label"), "Сховати інтерфейс");
+    assert.match(await btn.getAttribute("title"), /⇧⌘\\/);
+    // Іконка справді намальована (symbol є в спрайті), а не порожній квадрат.
+    assert.equal(await page.locator("#sprite #i-clean").count(), 1);
+  });
+
+  test("кожен видимий контрол острівця щось робить на клік", async (t) => {
+    const { ctx, page } = await fresh();
+    t.after(() => ctx.close());
+    await page.goto(base);
+    await unlock(page);
+    const acts = await page.evaluate(() => [...document.querySelectorAll("#hud [data-act]")]
+      .filter((el) => el.offsetParent !== null && !el.disabled).map((el) => el.dataset.act));
+    assert.ok(acts.length >= 1, "острівець порожній");
+    for (const act of acts) {
+      const before = await page.evaluate(() => document.documentElement.className + !!document.querySelector(".cv-ask-scrim"));
+      await page.locator(`#hud [data-act="${act}"]`).first().click();
+      try {
+        await page.waitForFunction((b) => document.documentElement.className + !!document.querySelector(".cv-ask-scrim") !== b,
+          before, { timeout: 4000 });
+      } catch (e) {
+        assert.fail(`клік по «${act}» на острівці не змінив нічого — забутий рядок у EXT_ACTIONS`);
+      }
+      if (await cleanOn(page)) await page.click("#cv-unclean");
+    }
+  });
+
+  test("«Сховати інтерфейс»: ховає смугу, дерево й острівець; «Показати інтерфейс» і ⇧⌘\\ (з обгортки й з рамки) повертають", async (t) => {
+    const { ctx, page } = await fresh();
+    t.after(() => ctx.close());
+    await page.goto(`${base}/${IT1}`);
+    await unlock(page);
+    await page.waitForFunction(() => document.getElementById("frame")?.contentWindow?.document?.querySelector("h1"),
+      null, { timeout: 15000 });
+    const all = async () => ({ bar: await shownBox(page, "#bar .bar"), tree: await shownBox(page, "#pages-panel"),
+      island: await shownBox(page, "#hud .island") });
+    assert.deepEqual(await all(), { bar: true, tree: true, island: true });
+
+    await page.click('#hud [data-act="clean"]');
+    assert.deepEqual(await all(), { bar: false, tree: false, island: false }, "інтерфейс не сховався");
+    assert.equal(await shownBox(page, "#cv-unclean"), true);
+
+    await page.click("#cv-unclean");
+    assert.deepEqual(await all(), { bar: true, tree: true, island: true }, "«Показати інтерфейс» не повернув");
+
+    await page.keyboard.press("ControlOrMeta+Shift+Backslash");
+    assert.equal(await cleanOn(page), true, "акорд з обгортки не сховав");
+    await page.keyboard.press("ControlOrMeta+Shift+Backslash");
+    assert.equal(await cleanOn(page), false, "акорд з обгортки не повернув");
+
+    // З рамки: клік по макету віддає їй фокус — акорд ловить слухач документа рамки.
+    await page.click('#hud [data-act="clean"]');
+    await page.frameLocator("#frame").locator("h1").click();
+    await page.keyboard.press("ControlOrMeta+Shift+Backslash");
+    await page.waitForFunction(() => !document.documentElement.classList.contains("cv-clean"), null, { timeout: 3000 });
+    assert.deepEqual(await all(), { bar: true, tree: true, island: true }, "акорд з рамки не повернув інтерфейс");
+    await page.frameLocator("#frame").locator("h1").click();
+    await page.keyboard.press("ControlOrMeta+Shift+Backslash");
+    assert.equal(await cleanOn(page), true, "акорд з рамки не сховав");
+  });
+
   test("перемикач ширин задає ширину рамки", async (t) => {
     const { ctx, page } = await fresh();
     t.after(() => ctx.close());

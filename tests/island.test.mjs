@@ -109,3 +109,44 @@ test("порядок: коментарі, режими, заморозка, ін
   assert.deepEqual(acts(h), ["comments", "cmtmode", "cmtmode", "cmtmode", "cmtmode", "cmtfreeze", "inspector", "feedback"]);
   assert.match(h, /<div class="isl-modes" role="group" aria-label="Режим коментування">/);
 });
+
+/* ---- 0.32.0 Task 2: острівець превʼю (набір кнопок) ---- */
+const SEP = '<span class="isl-sep" aria-hidden="true"></span>';
+const CMT_BTN = (on, n) => `<button class="isl-btn${on ? " isl-btn--on" : ""}" data-act="comments" aria-pressed="${on}" aria-label="${n ? `Коментарі, відкритих: ${n}` : "Коментарі"}" title="Коментарі · C"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-comment"/></svg>${n ? `<span class="isl-count" aria-hidden="true">${n}</span>` : ""}</button>`;
+const INSP_BTN = (on) => `<button class="isl-btn${on ? " isl-btn--on" : ""}" data-act="inspector" aria-pressed="${on}" aria-label="Інспектор" title="Інспектор · I · Alt — відстані · Esc / ↵ — батько / дочірній · ← → — сусід"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-inspect"/></svg></button>`;
+const BUG_BTN = '<button class="isl-btn" data-act="feedback" aria-label="Баг / ідея" title="Баг / ідея"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-bug"/></svg></button>';
+const CLEAN_BTN = '<button class="isl-btn" data-act="clean" aria-label="Сховати інтерфейс" title="Сховати інтерфейс (⇧⌘\\)"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-clean"/></svg></button>';
+
+test("Deai без опції `tools` — розмітка байт у байт як до 0.32.0", () => {
+  assert.equal(islandToolsHTML({ screen: "task", mode: "layout", inspectorOn: true, commentsOn: true, commentsCount: 3 }),
+    CMT_BTN(true, 3) + INSP_BTN(true) + SEP + BUG_BTN);
+  assert.equal(islandToolsHTML({ screen: "task", mode: "overview", commentsNew: 2 }),
+    `<button class="isl-btn" data-act="comments" aria-pressed="false" aria-label="Коментарі: нових від команди — 2" title="Коментарі · C"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-comment"/></svg><span class="isl-count isl-count--new" aria-hidden="true">2</span></button>` + SEP + BUG_BTN);
+  assert.equal(islandToolsHTML({ screen: "home" }), BUG_BTN);
+});
+
+test("превʼю: `tools: ['clean']` — одна кнопка, без «баг», без AI і без зайвих роздільників", () => {
+  const h = islandToolsHTML({ tools: ["clean"] });
+  assert.equal(h, CLEAN_BTN);
+  assert.deepEqual(acts(h), ["clean"]);
+  assert.equal(h.includes("isl-sep"), false);
+});
+
+test("превʼю: `tools: ['cmt','insp','clean']` — три кнопки по порядку, роздільник лише між групами", () => {
+  const h = islandToolsHTML({ tools: ["cmt", "insp", "clean"], commentsCount: 2, inspectorOn: true });
+  assert.deepEqual(acts(h), ["comments", "inspector", "clean"]);
+  assert.equal(h, CMT_BTN(false, 2) + INSP_BTN(true) + SEP + CLEAN_BTN);
+  assert.equal(h.includes('data-act="feedback"'), false);
+  assert.equal(h.includes("claude"), false);
+  assert.equal(h.endsWith(SEP), false);
+  assert.deepEqual(acts(islandToolsHTML({ tools: ["insp", "clean"] })), ["inspector", "clean"]);
+});
+
+test("превʼю: невідомі імена в `tools` ігноруються; порожній набір — порожній рядок", () => {
+  assert.deepEqual(acts(islandToolsHTML({ tools: ["clean", "bug", "zzz"] })), ["clean"]);
+  assert.equal(islandToolsHTML({ tools: [] }), "");
+});
+
+test("превʼю: без `clean` роздільника нема (нічого після нього — хвостового роздільника не буває)", () => {
+  assert.equal(islandToolsHTML({ tools: ["cmt", "insp"] }), CMT_BTN(false, 0) + INSP_BTN(false));
+});

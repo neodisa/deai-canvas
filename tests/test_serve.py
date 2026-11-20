@@ -3165,6 +3165,14 @@ class PreviewWrapper(unittest.TestCase):
         self.assertIn('shell/ext-shell.js', h)
         self.assertEqual(h.count('type="module"'), 1)
 
+    def test_island_mount_is_an_empty_inert_point(self):
+        """0.32.0: острівець превʼю монтується в `#hud` (клас `cv-hud` — його ховає й чистий перегляд). Точка ПОРОЖНЯ:
+        стара оболонка її не наповнює, тож у зіставленні зі старим `shell/` вона нічого не показує."""
+        import re
+        m = re.search(r'<div id="hud" class="cv-hud">(.*?)</div>', self._html(), re.S)
+        self.assertIsNotNone(m, 'нема точки монтування острівця')
+        self.assertEqual(m.group(1), '', 'точка мусить бути порожньою — наповнює її ext-shell.js')
+
     def test_styles_come_from_the_shared_copy(self):
         """`shell/styles.css`, а не свій CSS у шаблоні: єдине, що робить зовнішню
         оболонку схожою на внутрішню, — ТОЙ САМИЙ файл, а не схожі правила."""
@@ -5248,7 +5256,7 @@ class ShellModulesList(unittest.TestCase):
     #: викинь `ext-shell.js`, і залишок усе одно замкнутий, тобто мутація
     #: «прибрати корінь» пройшла б зеленою. А ціна саме цього кореня —
     #: оболонка, що не піднялась узагалі: обгортка вантажить рівно один модуль.
-    EXT_OWN = ('ext-shell.js', 'ext-bar.js')
+    EXT_OWN = ('ext-shell.js', 'ext-bar.js', 'island.js')
 
     IMPORT_RE = re.compile(r"""from\s+["']\./([\w.-]+)["']""")
 

@@ -3718,6 +3718,8 @@ PAGES_PREVIEW_PAGE = """<!DOCTYPE html><html lang="uk"><head><meta charset="utf-
 <div id="sprite"></div>
 <div id="bar" class="bar-mount"></div>
 <div id="stage" class="cv-stage"><iframe id="frame" class="cv-frame"></iframe></div>
+<!-- Острівець превʼю (0.32.0): порожня точка монтування; наповнює її `ext-shell.js`, стара оболонка її не чіпає. -->
+<div id="hud" class="cv-hud"></div>
 <!-- Пароль — рівно для «Копіювати посилання» (`#k=…`, безшовний вхід колеги).
      У маніфест він НЕ їде: той файл читає оболонка, і пароль задачі їй знати
      нізащо, а лежить він і так у тексті гейта поруч. -->
@@ -3766,7 +3768,7 @@ LAYER_BUNDLE = 'comment-layer.min.js'
 SHELL_MODULES = ('i18n.js', 'icons.js', 'shell-panel.js', 'viewport.js',
                  'camera.js', 'canvas-geom.js', 'layout.js', 'rows-model.js',
                  'styles.css', 'ask.js', 'esc.js', 'ext-shell.js', 'ext-bar.js',
-                 'tree-model.js', 'clean-view.js')
+                 'tree-model.js', 'clean-view.js', 'island.js')
 
 #: Типова ширина кадру. МУСИТЬ дорівнювати `CANVAS_W` у app/viewport.js:
 #: саме на ній тримається правило ключа («типова ширина суфікса не додає»), і

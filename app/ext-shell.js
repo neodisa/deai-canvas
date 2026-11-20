@@ -50,6 +50,7 @@ import { applyClean, syncFrame } from "./clean-view.js";
 import { fitBox, focusBox, quantScale, zoomAt } from "./camera.js";
 import { GAP, HEAD, ROW_TITLE_TOP } from "./canvas-geom.js";
 import { extBarHTML } from "./ext-bar.js";
+import { islandToolsHTML } from "./island.js";
 import { LANG_KEY, readStoredLang, setLang, t } from "./i18n.js";
 import { SPRITE, ico } from "./icons.js";
 import { rowsLayout, worldBox } from "./layout.js";
@@ -516,6 +517,31 @@ const ui = {
 let man = null;
 let copyTimer = null;
 
+/**
+ * Модель острівця превʼю (0.32.0). «Коментарі» зʼявляються лише коли збірка має командні коментарі (Task 3), «Інспектор» —
+ * коли оболонка вміє його показати (Task 4): ці прапорці перемикають ті задачі, а «Сховати інтерфейс» є завжди.
+ */
+const island = { comments: false, inspector: false, last: null };
+
+/** Набір кнопок острівця за прапорцями; порядок і роздільники — у `islandToolsHTML`. */
+function islandTools() {
+  return [island.comments && "cmt", island.inspector && "insp", "clean"].filter(Boolean);
+}
+
+/** Закрити бічні панелі превʼю (коментарі, інспектор). Зараз їх нема; гачок для Task 3–4 — «Сховати інтерфейс» їх закриває. */
+function closeSidePanels() {}
+
+/** Острівець унизу по центру: монтується в `#hud` обгортки (у старої обгортки точки нема — тоді нічого й не малюємо). */
+function paintIsland() {
+  const hud = el("hud");
+  if (!hud) return;
+  const html = `<div class="island" role="group" aria-label="${t("islandNav")}"><div class="isl-tools">`
+    + `${islandToolsHTML({ tools: islandTools() })}</div></div>`;
+  if (html === island.last) return;
+  island.last = html;
+  hud.innerHTML = html;
+}
+
 const el = (id) => document.getElementById(id);
 const pageById = (id) => (man?.pages ?? []).find((p) => p.id === id) ?? null;
 
@@ -535,6 +561,7 @@ function paint() {
   const node = panelNode();
   node.className = `panel${ui.collapsed ? " panel--rail" : ""}`;
   node.innerHTML = panelHTML(extPanelState(man, ui));
+  paintIsland();
   document.body.classList.add("with-panel");
   document.body.classList.toggle("panel-collapsed", ui.collapsed);
 }
@@ -1007,6 +1034,8 @@ const EXT_ACTIONS = {
     apply();
   },
   copylink: () => copyLink(),
+  /* Кнопка острівця «Сховати інтерфейс» — той самий перемикач, що й акорд ⇧⌘\\. */
+  clean: () => toggleClean(true),
   /* Перезавантаження, а не повторний `fetch`: маніфест не прочитався — це або
      недоїхала публікація, або мережа глядача, і в обох випадках чесніше
      перезібрати сторінку цілком, ніж лагодити половину стану. */
@@ -1045,6 +1074,7 @@ function wire() {
 let clean = false;
 function toggleClean(on = !clean) {
   clean = on;
+  if (on) closeSidePanels();
   applyClean(document, el("frame"), on, { label: t("cleanExit"), title: t("cleanExitTitle"),
     onExit: () => toggleClean(false), onChord: () => toggleClean() });
 }

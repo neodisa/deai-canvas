@@ -64,6 +64,10 @@ export const ICONS = {
   inspect: `<symbol id="i-inspect" viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
   <circle cx="12" cy="12" r="4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></symbol>`,
+  /* «Сховати інтерфейс» (0.32.0, превʼю): чотири кути рамки — макет без оболонки. */
+  clean: `<symbol id="i-clean" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 9V6.5A2.5 2.5 0 0 1 6.5 4H9"/><path d="M15 4h2.5A2.5 2.5 0 0 1 20 6.5V9"/><path d="M20 15v2.5a2.5 2.5 0 0 1-2.5 2.5H15"/><path d="M9 20H6.5A2.5 2.5 0 0 1 4 17.5V15"/></symbol>`,
   ruler: `<symbol id="i-ruler" viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
   <rect x="2" y="8" width="20" height="8" rx="2" transform="rotate(-45 12 12)"/>
