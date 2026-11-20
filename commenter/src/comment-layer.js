@@ -151,6 +151,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     return heading || active.length ? { heading, active } : null;
   }
 
+  /** Сторінка з тегу версії піна/застосунку: усе після ПЕРШОГО `/` (`"1/holovna"` → `"holovna"`, `"3"` → `""`). */
+  function pageOf(v) {
+    if (typeof v !== 'string') return '';
+    const i = v.indexOf('/');
+    return i < 0 ? '' : v.slice(i + 1);
+  }
+
   /** Рядок для картки з `meta.ctx`: «Крок 2» · розділ «Ваш партнер». */
   function ctxLine(ctx) {
     if (!ctx || typeof ctx !== 'object') return '';
@@ -1060,13 +1067,16 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     // ---- annotation modes ----
     _toggleMulti(el) {
       const i = this._multiSel.indexOf(el);
+      const first = this._multiSel[0];
       if (i >= 0) { this._multiSel.splice(i, 1); el.classList.remove('cl-msel'); }
       else { this._multiSel.push(el); el.classList.add('cl-msel'); }
+      // Контекст multi-піна — від ПЕРШОГО вибраного елемента, у мить його вибору (і перезйомка, коли перший змінився).
+      if (this._multiSel[0] !== first) this._multiAt = this._multiSel[0] ? this._captureAt(this._multiSel[0]) : null;
       if (this._mccount) this._mccount.textContent = this._multiSel.length;
     },
     _clearMulti() {
       (this._multiSel || []).forEach((el) => el.classList.remove('cl-msel'));
-      this._multiSel = [];
+      this._multiSel = []; this._multiAt = null;
       if (this._mccount) this._mccount.textContent = '0';
       if (this._mcta) this._mcta.value = '';
     },
@@ -1075,6 +1085,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const text = this._mcta ? this._mcta.value.trim() : '';
       if (!this._multiSel.length || !text) { if (this._mcta) this._mcta.focus(); return; }
       const els = this._multiSel.slice();
+      const at = this._multiAt || this._captureAt(els[0]);   // ДО _clearMulti
       const fps = els.map((el) => fingerprint(el, this.target));
       const rect = unionRect(els);   // kept in meta so the selection region is on record
       // Screenshot the closest common ancestor: it shows every picked element in
@@ -1084,7 +1095,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const aud = this._pickedAud(this._mcompose);
       if (aud) this._emit('onAudiencePick', aud);
       this._clearMulti();
-      this._addComment(els[0], text, '', { mode: 'multi', fps, count: els.length, rect, shotEl: anc || els[0] }, aud);
+      this._addComment(els[0], text, '', { mode: 'multi', fps, count: els.length, rect, shotEl: anc || els[0], at }, aud);
     },
     /** Чипи адресата у формі «Кілька» (як у `_openCompose`): перемальовуємо при кожному показі — типовий вибір міг змінитись. */
     _refreshMultiAuds() {
@@ -1211,6 +1222,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     },
 
     _openCompose(el, sel, extra) {
+      const at = this._captureAt(el);   // контекст — у мить вибору цілі, не в мить збереження (SPA може змінити маршрут)
       const existing = this._sh.querySelector('.compose'); if (existing) existing.remove();
       const r = el.getBoundingClientRect();
       const box = document.createElement('div');
@@ -1237,19 +1249,33 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       box.querySelector('.save').onclick = () => {
         const text = ta.value.trim(); if (!text) return;
         const aud = this._pickedAud(box); if (aud) this._emit('onAudiencePick', aud);
-        this._addComment(el, text, sel, extra, aud); box.remove();
+        this._addComment(el, text, sel, Object.assign({}, extra, { at }), aud); box.remove();
+      };
+    },
+
+    /** Знімок контексту цілі в мить її вибору. `where` — з заголовком, `whereNoHead` — без (TD-36: заголовок лише для приватних). */
+    _captureAt(el) {
+      let where = null, whereNoHead = null;
+      try { where = captureContext(el, this.target, { heading: true }); } catch (e) { where = null; }
+      try { whereNoHead = captureContext(el, this.target, { heading: false }); } catch (e) { whereNoHead = null; }
+      return {
+        url: location.href, route: location.pathname + location.hash, version: this.appVersion,
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+        fp: fingerprint(el, this.target), outerHTML: el.outerHTML, text: el.textContent,
+        where, whereNoHead,
       };
     },
 
     _addComment(el, text, sel, extra, aud) {
       const user = getUser(this.user, this.opts && this.opts.defaultUser, this._hostOpts);
+      const at = extra && extra.at;   // зафіксовано при виборі цілі; без нього (інші виклики) — як і раніше, у мить збереження
       const ctx = buildContextBundle({
-        outerHTML: el.outerHTML,
-        text: el.textContent,
-        url: location.href,
-        route: location.pathname + location.hash,
-        version: this.appVersion,
-        viewport: { w: window.innerWidth, h: window.innerHeight },
+        outerHTML: at ? at.outerHTML : el.outerHTML,
+        text: at ? at.text : el.textContent,
+        url: at ? at.url : location.href,
+        route: at ? at.route : location.pathname + location.hash,
+        version: at ? at.version : this.appVersion,
+        viewport: at ? at.viewport : { w: window.innerWidth, h: window.innerHeight },
         ts: nowStamp(),
       });
       ctx.meta.seq = this._nextSeq();   // stable display number, assigned once
@@ -1260,10 +1286,15 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (extra && extra.rect) ctx.meta.rect = extra.rect;      // area: drawn region
       if (extra && extra.count) ctx.meta.count = extra.count;
       // TD-36: заголовок (там може бути ПІБ) пишемо лише в локальний пін; командний їде в спільне сховище без нього.
-      try { const where = captureContext(el, this.target, { heading: this.appLocal || this._audPrivate(aud) }); if (where) ctx.meta.ctx = where; } catch (e) { /* контекст — підказка, не умова */ }
+      try {
+        // TD-36: заголовок лише для локального/приватного піна — і для знімка з вибору (`at`), і для старого шляху без нього.
+        const where = at ? ((this.appLocal || this._audPrivate(aud)) ? at.where : at.whereNoHead)
+          : captureContext(el, this.target, { heading: this.appLocal || this._audPrivate(aud) });
+        if (where) ctx.meta.ctx = where;
+      } catch (e) { /* контекст — підказка, не умова */ }
       this.comments.push({
         id: genId(), author: user.name, text, status: 'open',
-        fp: fingerprint(el, this.target),
+        fp: at ? at.fp : fingerprint(el, this.target),
         htmlSnapshot: ctx.htmlSnapshot, meta: ctx.meta,
         bornV: this._version(), ts: nowStamp(),
         _pending: true,   // unsynced until _persist confirms — protects it from live-merge drop
@@ -1277,7 +1308,11 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._backupNow(); this._relocate(); this._render();
       // Захват — завжди ELEMENT-render (faithful across pages): для element/text це
       // елемент, для area — якір під областю, для multi — спільний предок (extra.shotEl).
-      const shotTarget = (extra && extra.shotEl && extra.shotEl.nodeType === 1) ? extra.shotEl : el;
+      let shotTarget = (extra && extra.shotEl && extra.shotEl.nodeType === 1) ? extra.shotEl : el;
+      // Ціль перемальовано між вибором і збереженням (SPA): шукаємо її наново за відбитком — лише на тому ж маршруті й не для multi.
+      if (at && shotTarget === el && !el.isConnected && !(extra && extra.mode === 'multi') && at.route === location.pathname + location.hash) {
+        try { const m = findMatch(at.fp, this.target); if (m.el && m.score >= MATCH_THRESHOLD) shotTarget = m.el; } catch (e) { /* без знімка */ }
+      }
       this._finishComment(newId, shotTarget);
     },
 
@@ -1356,12 +1391,18 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       return !c._el || !c._el.isConnected || c._el.getClientRects().length === 0;
     },
 
+    /** Режим хоста: пін іншої СТОРІНКИ за тегом версії (`"<ітерація>/<сторінка>"`). Маршрут тут не показник: у превʼю це адреса Deai. */
+    _otherPage(c) {
+      return !!(this._hostOpts && !this.anchors && this.appVersion != null && c && c.meta && c.meta.version != null
+        && pageOf(c.meta.version) !== pageOf(this.appVersion));
+    },
+
     _relocate() { // find each open comment's current element in the live DOM
       // Полотно: елемента в цьому документі немає — точку дає постачальник.
       if (this.anchors) { for (const c of this.comments) c._el = null; return; }
       for (const c of this.comments) {
         // Поза-скоупний пін (чужа ітерація) не якоримо → _placePins його не ставить.
-        if (c.status !== 'open' || !this._inScope(c)) { c._el = null; continue; }
+        if (c.status !== 'open' || !this._inScope(c) || this._otherPage(c)) { c._el = null; continue; }
         try { const m = findMatch(c.fp, this.target); c._el = (m.el && m.score >= MATCH_THRESHOLD) ? m.el : null; }
         catch (e) { c._el = null; } // one malformed comment must never break the panel
       }
@@ -1499,7 +1540,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       // Comment made on another page → navigate there (multi-page apps). The widget
       // re-inits on that page and its pin/element will be present.
       const route = location.pathname + location.hash;
-      if (c.meta && c.meta.route && c.meta.route !== route && c.meta.url) { location.href = c.meta.url; return; }
+      const hosted = !!this._hostOpts;   // у хості `meta.url` — адреса Deai: переходити нікуди, сторінку визначає тег версії
+      if (hosted && this._otherPage(c)) {
+        const src = c.meta && (c.meta.shot || c.meta.shotUrl);
+        if (src) this._openLightbox(src);
+        return;
+      }
+      if (!hosted && c.meta && c.meta.route && c.meta.route !== route && c.meta.url) { location.href = c.meta.url; return; }
       let el = c._el;
       if (!el) { const m = findMatch(c.fp, this.target); el = (m.el && m.score >= MATCH_THRESHOLD) ? m.el : null; c._el = el; }
       /* Елемента немає або він схований (інший крок `@switch`, закритий оверлей):
@@ -1905,7 +1952,11 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const route = location.pathname + location.hash;
       const where = (c) => {
         if (!this._inScope(c)) return 'here';   // не якоримо поза скоупом (_relocate) — «поза кадром» тут не про них
-        if (!this.anchors && c.meta && c.meta.route && c.meta.route !== route) return 'elsewhere';
+        if (this._hostOpts && !this.anchors) {
+          // Хост: сторінку дає тег версії; пін без тегу — за старим порівнянням маршруту.
+          if (this._otherPage(c)) return 'elsewhere';
+          if (c.meta && c.meta.version == null && c.meta.route && c.meta.route !== route) return 'elsewhere';
+        } else if (!this.anchors && c.meta && c.meta.route && c.meta.route !== route) return 'elsewhere';
         if (!this.anchors && c.status === 'open' && this._offscreen(c)) return 'offscreen';
         return 'here';
       };
