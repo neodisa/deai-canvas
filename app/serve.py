@@ -2917,8 +2917,9 @@ def audiences_arg(active):
 # Панель коментарів переїхала в оболонку: коментатор у рамці ховає ручку й свою панель і повідомляє оболонку
 # посилками (`postMessage` у батьківське вікно того самого походження), а оболонка керує ним методами
 # `window.CommentLayer.*`. Чому лише за `host=1` в URL: оболонка ЗАВЖДИ його додає, а сторінка без нього (відкрита
-# напряму, старі еталони `tests/fixtures/comments-role/`, публікація) — байт у байт як до 0.26.0. Публікація `host`
-# не отримує НІКОЛИ: у превʼю колег нема оболонки, і схована ручка лишила б їх без коментарів.
+# напряму, старі еталони `tests/fixtures/comments-role/`) — байт у байт як до 0.26.0. Публікація (0.32.0) отримує `host` у своєму
+# вигляді (`PREVIEW_HOST_ARG`, нижче): оболонка превʼю (`ext-shell.js`) теж малює панель; до 0.32.0 її там не було, і схована ручка
+# лишила б колег без коментарів.
 # Ключ `dc-cmt-aud` — памʼять вибору адресата піна, спільна для рамки й оболонки (той самий origin, поправка 12 плану Б2).
 # Чому `location.origin`, а не `'*'`: батько — оболонка цього ж сервера; чужому вікну посилка не потрібна.
 HOST_ARG = """,
@@ -2936,9 +2937,38 @@ HOST_ARG = """,
         })()"""
 
 
+# Режим хоста для ОПУБЛІКОВАНОГО превʼю (0.32.0): оболонка превʼю (`ext-shell.js`) малює панель сама, тож сторінка шле їй ті самі
+# посилки, що в Deai, плюс `onAdd` (id створеного коментаря — оболонка запише «свій») і `userName` (імʼя з localStorage —
+# спільного для оболонки й рамки, бо превʼю статичне, одного походження; його ставить діалог оболонки перед першим коментарем).
+# ⛔ `userName` присутній ЗАВЖДИ: він і є ознакою «prompt() не кличеться» (`getUser` у коментаторі). ⛔ Жодного `defaultUser`:
+# особа машини дизайнера в публічне превʼю не їде. Адресатів (`defaultAudience`) і `bottomInset` острівця тут нема: у превʼю
+# одна аудиторія, а відступ під острівець дає `window.parent.__dcIslandInset` (його ставить `ext-shell.js`, якщо є).
+# `postMessage` у `'*'` — лише коли походження непрозоре (`location.origin === 'null'`: локальна копія в пісочниці), інакше
+# `targetOrigin` кидає; отримувач все одно перевіряє і `source`, і `origin`.
+PREVIEW_HOST_ARG = """,
+        host: (function () {
+          var send = function (m) {
+            m.type = 'dc-comments';
+            try { var o = location.origin; window.parent.postMessage(m, o === 'null' ? '*' : o); } catch (e) {}
+          };
+          return {
+            onReady: function () { send({ ev: 'ready' }); },
+            onChange: function (s) { send({ ev: 'change', snapshot: s }); },
+            onSelect: function (id) { send({ ev: 'select', id: id }); },
+            onMode: function (on) { send({ ev: 'mode', on: !!on }); },
+            onAdd: function (id) { send({ ev: 'add', id: id }); },
+            userName: function () { try { return localStorage.getItem('comment-layer:user') || ''; } catch (e) { return ''; } },
+            bottomInset: function () { try { var f = window.parent && window.parent.__dcIslandInset; return typeof f === 'function' ? f() : 0; } catch (e) { return 0; } }
+          };
+        })()"""
+
+
 def host_arg(on):
     """Аргумент `host` для `init` (колбеки-посилки в оболонку) або порожній рядок. `HOST_ARG` — готовий JS, без
-    плейсхолдерів: у шаблон сніпета він іде ЗНАЧЕННЯМ `format`, тож фігурні дужки в ньому не екрануються."""
+    плейсхолдерів: у шаблон сніпета він іде ЗНАЧЕННЯМ `format`, тож фігурні дужки в ньому не екрануються.
+    `on == 'preview'` — хост опублікованого превʼю (`PREVIEW_HOST_ARG`); будь-яке інше істинне значення — хост Deai."""
+    if on == 'preview':
+        return PREVIEW_HOST_ARG
     return HOST_ARG if on else ''
 
 
@@ -3720,6 +3750,8 @@ PAGES_PREVIEW_PAGE = """<!DOCTYPE html><html lang="uk"><head><meta charset="utf-
 <div id="stage" class="cv-stage"><iframe id="frame" class="cv-frame"></iframe></div>
 <!-- Острівець превʼю (0.32.0): порожня точка монтування; наповнює її `ext-shell.js`, стара оболонка її не чіпає. -->
 <div id="hud" class="cv-hud"></div>
+<!-- Панель коментарів (0.32.0): порожня точка монтування справа; наповнює її `ext-shell.js` лише в збірці з командними коментарями. -->
+<div id="cmt-panel" class="insp cmt" hidden></div>
 <!-- Пароль — рівно для «Копіювати посилання» (`#k=…`, безшовний вхід колеги).
      У маніфест він НЕ їде: той файл читає оболонка, і пароль задачі їй знати
      нізащо, а лежить він і так у тексті гейта поруч. -->
@@ -3768,7 +3800,8 @@ LAYER_BUNDLE = 'comment-layer.min.js'
 SHELL_MODULES = ('i18n.js', 'icons.js', 'shell-panel.js', 'viewport.js',
                  'camera.js', 'canvas-geom.js', 'layout.js', 'rows-model.js',
                  'styles.css', 'ask.js', 'esc.js', 'ext-shell.js', 'ext-bar.js',
-                 'tree-model.js', 'clean-view.js', 'island.js')
+                 'tree-model.js', 'clean-view.js', 'island.js',
+                 'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js')
 
 #: Типова ширина кадру. МУСИТЬ дорівнювати `CANVAS_W` у app/viewport.js:
 #: саме на ній тримається правило ключа («типова ширина суфікса не додає»), і
@@ -3907,7 +3940,7 @@ def publish_frames(task, it_id, pages, dst_dir):
 PREVIEW_SHELL_VERSION = 2
 
 
-def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None, build=None):
+def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None, build=None, comments=None):
     """`publish/manifest.json` — ЄДИНЕ джерело правди зовнішньої оболонки.
 
     Без `serve.py` у превʼю немає ні `/api/task`, ні `/api/iteration-pages`, ні
@@ -3925,6 +3958,11 @@ def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None, build=N
     `build` — мітка збирача (`BUILD_KINDS`: `'legacy'` — ЛІГА, `'module'` — модуль публікації), ключ `"build"` ОСТАННІМ у
     файлі. Це для `ops/reseal_gate.py`: оболонка ключа не читає (бере лише названі поля), а `None` (виклик без мітки,
     старі збірки) ключа не пише — тоді reseal сам вгадує за складом `comment-layer/`.
+
+    `comments` — канал командних коментарів збірки (рядок) або `None` (без коментатора). Є — ключ `"comments": {"channel": …}`
+    (перед `build`, який лишається останнім): це ЄДИНИЙ сигнал оболонці превʼю (`ext-shell.js`), що в збірці є командні
+    коментарі, — кнопка «Коментарі» й панель зʼявляються лише з ним. Канал і так лежить у кожній сторінці збірки
+    (`__deaiCommentsCfg`), тож маніфест нічого нового не відкриває; оболонка ключує ним «мої» коментарі в localStorage.
 
     `trees` — `{it: дерево}`, знятий `_publish` ОДИН раз на всю збірку: `outline`
     і `pages` тоді рахуються з того самого знімка, а не з двох читань pages.json
@@ -4009,6 +4047,8 @@ def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None, build=N
             outline.append(row)
     man['outline'] = outline
     man['shell'] = PREVIEW_SHELL_VERSION
+    if comments:
+        man['comments'] = {'channel': str(comments)}
     if build is not None:
         man['build'] = build
     with open(os.path.join(dst_dir, 'manifest.json'), 'w', encoding='utf-8') as fh:
@@ -4565,7 +4605,8 @@ def build_preview(task, tid, its, *, comments, gate_pw, build):
                 html, f'{depth_up}comment-layer',
                 [f'{depth_up}comment-layer/{name}' for name, _data in adapter.files],
                 {**adapter.config, 'channel': adapter.channel},
-                version=pm.page_version_tag(p['it'], p['page']), inspector=False, audiences=False)
+                version=pm.page_version_tag(p['it'], p['page']), inspector=False, audiences=False,
+                host='preview')
         if gated:
             # ⛔ Гейт і на ВНУТРІШНІЙ сторінці, не лише в обгортці. До 03.08.2026
             # пряме посилання на неї минало пароль: перевірено живцем —
@@ -4582,7 +4623,8 @@ def build_preview(task, tid, its, *, comments, gate_pw, build):
         frames[it['id']] = fr
         if warn:
             frame_warnings.append(warn)
-    publish_manifest(task, tid, its, pages, frames, pub, trees, build=build)
+    publish_manifest(task, tid, its, pages, frames, pub, trees, build=build,
+                     comments=adapter.channel if adapter is not None else None)
     if gated:
         wrapper = preview_index_html(gate, gate_pw)
     else:

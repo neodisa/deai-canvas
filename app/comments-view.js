@@ -69,15 +69,25 @@ function cardHTML(c, st, kind) {
     acts = `<div class="cmt-acts cmt-acts--cfm">${confirmHTML({ title: t("cfmDelCmt"), yes: t("cmtDelete"), no: t("cmtCancel"),
       yesAttrs: `data-act="cmtdelyes" data-val="${esc(c.id)}"`, noAttrs: 'data-act="cmtdelno"' })}</div>`;
   } else if (c.id !== st.editingId) {
-    if (kind === "open") acts = btn("cmtshow", c.id, t("cmtShow"))
-      + (st.dual && audOf(c) === "project"
-        ? btn(assignedToClaude(c) ? "cmtunassign" : "cmtassign", c.id, t(assignedToClaude(c) ? "cmtUnassign" : "cmtAssign")) : "")
-      + btn("cmtedit", c.id, t("cmtEdit"), "pencil")
-      + btn("cmtres", c.id, t("cmtResolve"), "check") + btn("cmtdel", c.id, t("cmtDelete"), "trash");
-    else if (kind === "earlier") acts = btn("cmtcarry", c.id, t("cmtCarry", st.snapshot.iteration))
-      + btn("cmtdel", c.id, t("cmtDelete"), "trash");
-    else acts = btn("cmtreopen", c.id, t("cmtReopen"), "refresh") + btn("cmtdel", c.id, t("cmtDelete"), "trash");
-    acts = `<div class="cmt-acts">${acts}</div>`;
+    /* Типовий набір дій за видом картки — порядок і розмітка Deai. */
+    let list;
+    if (kind === "open") list = [["cmtshow", btn("cmtshow", c.id, t("cmtShow"))]]
+      .concat(st.dual && audOf(c) === "project"
+        ? [[assignedToClaude(c) ? "cmtunassign" : "cmtassign", btn(assignedToClaude(c) ? "cmtunassign" : "cmtassign", c.id, t(assignedToClaude(c) ? "cmtUnassign" : "cmtAssign"))]] : [])
+      .concat([["cmtedit", btn("cmtedit", c.id, t("cmtEdit"), "pencil")], ["cmtres", btn("cmtres", c.id, t("cmtResolve"), "check")],
+        ["cmtdel", btn("cmtdel", c.id, t("cmtDelete"), "trash")]]);
+    else if (kind === "earlier") list = [["cmtcarry", btn("cmtcarry", c.id, t("cmtCarry", st.snapshot.iteration))],
+      ["cmtdel", btn("cmtdel", c.id, t("cmtDelete"), "trash")]];
+    else list = [["cmtreopen", btn("cmtreopen", c.id, t("cmtReopen"), "refresh")], ["cmtdel", btn("cmtdel", c.id, t("cmtDelete"), "trash")]];
+    /* Права (зовнішнє превʼю, 0.32.0): `st.actions` — `{any, own, closed}` — дозволені дії; решта з типового набору відпадає.
+       Закриті — лише `closed` (у превʼю порожньо: закривати й відкривати знову — тільки в Deai). Без `st.actions` — усе як було. */
+    if (st.actions) {
+      const own = typeof st.isOwn === "function" && !!st.isOwn(c);
+      const ok = kind === "closed" ? st.actions.closed || [] : [...(st.actions.any || []), ...(own ? st.actions.own || [] : [])];
+      list = list.filter(([act]) => ok.includes(act));
+    }
+    acts = list.map(([, markup]) => markup).join("");
+    if (acts) acts = `<div class="cmt-acts">${acts}</div>`;
   }
   return `<article class="cmt-card${sel}${closed}" data-cid="${esc(c.id)}">${head}${iter}${body}${quote}${vp}${where}${shot}${done}${acts}</article>`;
 }
@@ -92,7 +102,8 @@ function foldHTML(key, title, items, st, kind) {
 
 const FILTER_KEY = { local: "cmtFLocal", project: "cmtFTeam", all: "cmtFAll" };
 
-/** st: {snapshot, query, selectedId, editingId, delAsk (id картки з питанням «Видалити назавжди?»), expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down} */
+/** st: {snapshot, query, selectedId, editingId, delAsk (id картки з питанням «Видалити назавжди?»), expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down}
+ *  Необовʼязково (превʼю, 0.32.0; без них — Deai як було): `isOwn(c)`, `actions: {any, own, closed}` (дозволені `data-act`), `adding: boolean` (кнопка «Додати коментар»). */
 export function commentsPanelHTML(st) {
   const filter = FILTERS.includes(st.filter) ? st.filter : "local";
   const hidden = !!(st.snapshot && st.snapshot.pinsHidden);
@@ -101,7 +112,11 @@ export function commentsPanelHTML(st) {
   const close = `<button type="button" class="icob" data-act="comments" aria-label="${esc(t("cmtClose"))}" title="${esc(t("cmtClose"))}">${ico("x")}</button>`;
   // Без командного каналу фільтра нема — тоді число відкритих лишається в шапці.
   const total = st.dual ? "" : `<span class="cmt-total">${openCount(st.snapshot)}</span>`;
-  const top = `<div class="insp-top cmt-top">${ico("comment")}<span class="panel-title">${esc(t("cmtTitle"))}</span>${total}${pins}${close}</div>`;
+  /* «Додати коментар» (зовнішнє превʼю, 0.32.0): там панель відкривається для читання, а режим додавання вмикає ця кнопка. */
+  const add = typeof st.adding === "boolean"
+    ? `<button type="button" class="icob" data-act="cmtadd" aria-pressed="${st.adding}" aria-label="${esc(t("prevAddCmt"))}"`
+      + ` title="${esc(t("prevAddCmt"))}">${ico("plus")}</button>` : "";
+  const top = `<div class="insp-top cmt-top">${ico("comment")}<span class="panel-title">${esc(t("cmtTitle"))}</span>${total}${add}${pins}${close}</div>`;
   const search = `<div class="cmt-search"><input type="search" id="cmt-q" value="${esc(st.query || "")}"`
     + ` placeholder="${esc(t("cmtSearch"))}" aria-label="${esc(t("cmtSearch"))}"></div>`;
   let seg = "";

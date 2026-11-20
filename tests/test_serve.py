@@ -3173,6 +3173,16 @@ class PreviewWrapper(unittest.TestCase):
         self.assertIsNotNone(m, 'нема точки монтування острівця')
         self.assertEqual(m.group(1), '', 'точка мусить бути порожньою — наповнює її ext-shell.js')
 
+    def test_comments_panel_mount_is_an_empty_hidden_inert_point(self):
+        """0.32.0 (Task 3): панель командних коментарів монтується в `#cmt-panel` (справа, `.insp.cmt` — розмітку й відступи
+        бере спільний `styles.css`). Точка схована й порожня: стара оболонка її не чіпає, а нова наповнює лише в збірці з коментарями."""
+        import re
+        m = re.search(r'<div id="cmt-panel"([^>]*)>(.*?)</div>', self._html(), re.S)
+        self.assertIsNotNone(m, 'нема точки монтування панелі коментарів')
+        self.assertIn('hidden', m.group(1), 'точка мусить бути схованою, поки оболонка її не відкрила')
+        self.assertIn('class="insp cmt"', m.group(1))
+        self.assertEqual(m.group(2), '', 'точка мусить бути порожньою')
+
     def test_styles_come_from_the_shared_copy(self):
         """`shell/styles.css`, а не свій CSS у шаблоні: єдине, що робить зовнішню
         оболонку схожою на внутрішню, — ТОЙ САМИЙ файл, а не схожі правила."""
@@ -5256,7 +5266,7 @@ class ShellModulesList(unittest.TestCase):
     #: викинь `ext-shell.js`, і залишок усе одно замкнутий, тобто мутація
     #: «прибрати корінь» пройшла б зеленою. А ціна саме цього кореня —
     #: оболонка, що не піднялась узагалі: обгортка вантажить рівно один модуль.
-    EXT_OWN = ('ext-shell.js', 'ext-bar.js', 'island.js')
+    EXT_OWN = ('ext-shell.js', 'ext-bar.js', 'island.js', 'ext-comments.js')
 
     IMPORT_RE = re.compile(r"""from\s+["']\./([\w.-]+)["']""")
 
@@ -5283,6 +5293,43 @@ class ShellModulesList(unittest.TestCase):
             for dep in self.IMPORT_RE.findall(body):
                 self.assertIn(dep, serve.SHELL_MODULES,
                               f'{name} імпортує {dep}, а везти його не збираємось')
+
+
+class PreviewHostArg(unittest.TestCase):
+    """0.32.0 (Task 3): аргумент `host` коментатора в ОПУБЛІКОВАНІЙ сторінці. Особа машини дизайнера й адресати Deai сюди
+    не потрапляють, а імʼя дає оболонка превʼю — тож `prompt()` у сторінці не бувало б ніколи."""
+
+    def test_deai_host_arg_is_untouched_and_preview_is_a_separate_one(self):
+        self.assertEqual(serve.host_arg(False), '')
+        self.assertIs(serve.host_arg(True), serve.HOST_ARG)
+        self.assertIs(serve.host_arg('preview'), serve.PREVIEW_HOST_ARG)
+        self.assertNotEqual(serve.HOST_ARG, serve.PREVIEW_HOST_ARG)
+
+    def test_preview_host_reports_to_the_shell_and_supplies_the_name(self):
+        js = serve.PREVIEW_HOST_ARG
+        for need in ('host: (function', "'dc-comments'", 'onReady', 'onChange', 'onSelect', 'onMode',
+                     "ev: 'add'", 'userName: function', "localStorage.getItem('comment-layer:user')", 'bottomInset'):
+            self.assertIn(need, js)
+
+    def test_preview_host_never_carries_the_machine_identity_or_a_prompt(self):
+        js = serve.PREVIEW_HOST_ARG
+        for bad in ('defaultUser', 'prompt(', 'defaultAudience', 'onAudiencePick', 'dc-cmt-aud'):
+            self.assertNotIn(bad, js)
+        self.assertNotIn('defaultUser', serve.MODULE_COMMENT_SNIPPET)    # і сам шаблон сніпета його не вміє
+
+    def test_opaque_origin_does_not_break_post_message(self):
+        """`postMessage(…, 'null')` кидає: у локальній копії (пісочниця) цільове походження — `'*'`, отримувач перевіряє сам."""
+        self.assertIn("o === 'null' ? '*' : o", serve.PREVIEW_HOST_ARG)
+
+    def test_injected_snippet_in_host_preview_mode(self):
+        html = serve.inject_module_comment_layer('<html><body></body></html>', '../comment-layer', [],
+                                                 {'channel': 'c'}, version='1', host='preview')
+        self.assertEqual(html.count('dc-comments'), 1)
+        self.assertIn('userName: function', html)
+        self.assertNotIn('defaultUser', html)
+        plain = serve.inject_module_comment_layer('<html><body></body></html>', '../comment-layer', [],
+                                                  {'channel': 'c'}, version='1')
+        self.assertNotIn('host: (function', plain, 'без прапорця сторінка така, як була')
 
 
 class FrameKeyRule(unittest.TestCase):
@@ -5554,6 +5601,25 @@ class PublishManifest(unittest.TestCase):
         self.assertIs(type(man['shell']), int)
         self.assertEqual(man['shell'], 2)
         self.assertEqual(on_disk['shell'], 2)
+
+    def test_manifest_carries_the_comments_channel_only_when_the_build_has_comments(self):
+        """0.32.0 (Task 3): `comments: {channel}` — єдиний сигнал оболонці превʼю, що є командні коментарі; без них ключа нема
+        (кнопки «Коментарі» й панелі не буде), а `build` лишається останнім ключем."""
+        task = self._task({'it1': None})
+        pages = serve.published_pages(task, [{'id': 'it1'}])
+        dst = os.path.join(self.tmp, 'publish')
+        os.makedirs(dst, exist_ok=True)
+        without = serve.publish_manifest(task, 'fixture', [{'id': 'it1'}], pages, {}, dst, build='module')
+        self.assertNotIn('comments', without)
+        withc = serve.publish_manifest(task, 'fixture', [{'id': 'it1'}], pages, {}, dst, build='module',
+                                       comments='deai/mod/fixture')
+        self.assertEqual(withc['comments'], {'channel': 'deai/mod/fixture'})
+        self.assertEqual(list(withc)[-1], 'build')
+        with open(os.path.join(dst, 'manifest.json'), encoding='utf-8') as fh:
+            self.assertEqual(json.load(fh)['comments'], {'channel': 'deai/mod/fixture'})
+        # порожній канал — це «без коментарів», а не збірка з порожнім ключем
+        empty = serve.publish_manifest(task, 'fixture', [{'id': 'it1'}], pages, {}, dst, comments='')
+        self.assertNotIn('comments', empty)
 
     def test_outline_carries_folders_and_kinds(self):
         task = self._task({'it1': [{'id': 'p', 'name': 'Картка', 'kind': 'page', 'children': [

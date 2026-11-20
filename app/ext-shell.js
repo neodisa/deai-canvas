@@ -49,6 +49,7 @@ import { ask } from "./ask.js";
 import { applyClean, syncFrame } from "./clean-view.js";
 import { fitBox, focusBox, quantScale, zoomAt } from "./camera.js";
 import { GAP, HEAD, ROW_TITLE_TOP } from "./canvas-geom.js";
+import { CMT_ACTS, CMT_EVENTS, createExtComments } from "./ext-comments.js";
 import { extBarHTML } from "./ext-bar.js";
 import { islandToolsHTML } from "./island.js";
 import { LANG_KEY, readStoredLang, setLang, t } from "./i18n.js";
@@ -523,20 +524,25 @@ let copyTimer = null;
  */
 const island = { comments: false, inspector: false, last: null };
 
-/** Набір кнопок острівця за прапорцями; порядок і роздільники — у `islandToolsHTML`. */
+/** Панель командних коментарів (Task 3): створюється в `open()`, лише коли збірка їх має (`manifest.comments`). */
+let cmt = null;
+
+/** Набір кнопок острівця за прапорцями; порядок і роздільники — у `islandToolsHTML`. «Коментарі» — лише там, де є живий макет
+ *  (в «Огляді» кадри — знімки, коментатора в них нема). */
 function islandTools() {
-  return [island.comments && "cmt", island.inspector && "insp", "clean"].filter(Boolean);
+  const live = effMode(man, ui) !== "overview";
+  return [island.comments && live && "cmt", island.inspector && "insp", "clean"].filter(Boolean);
 }
 
-/** Закрити бічні панелі превʼю (коментарі, інспектор). Зараз їх нема; гачок для Task 3–4 — «Сховати інтерфейс» їх закриває. */
-function closeSidePanels() {}
+/** Закрити бічні панелі превʼю (коментарі, інспектор): «Сховати інтерфейс» їх закриває; інспектор докладе Task 4. */
+function closeSidePanels() { cmt?.setOpen(false); }
 
 /** Острівець унизу по центру: монтується в `#hud` обгортки (у старої обгортки точки нема — тоді нічого й не малюємо). */
 function paintIsland() {
   const hud = el("hud");
   if (!hud) return;
   const html = `<div class="island" role="group" aria-label="${t("islandNav")}"><div class="isl-tools">`
-    + `${islandToolsHTML({ tools: islandTools() })}</div></div>`;
+    + `${islandToolsHTML({ tools: islandTools(), commentsOn: !!cmt?.isOpen(), commentsCount: cmt ? cmt.count() : 0 })}</div></div>`;
   if (html === island.last) return;
   island.last = html;
   hud.innerHTML = html;
@@ -561,6 +567,7 @@ function paint() {
   const node = panelNode();
   node.className = `panel${ui.collapsed ? " panel--rail" : ""}`;
   node.innerHTML = panelHTML(extPanelState(man, ui));
+  cmt?.setActive(effMode(man, ui) !== "overview");
   paintIsland();
   document.body.classList.add("with-panel");
   document.body.classList.toggle("panel-collapsed", ui.collapsed);
@@ -957,7 +964,11 @@ function apply({ focus = false } = {}) {
     if (canvas) canvas.hidden = true;
     el("stage").hidden = false;
     const p = pageById(ui.page);
-    if (p) el("frame").src = p.path;
+    if (p) {
+      /* Нова сторінка — старі картки з мертвими діями не лишаємо, доки вона не надішле свій список. */
+      cmt?.dropFrame();
+      el("frame").src = p.path;
+    }
   }
   paint();
 }
@@ -1041,6 +1052,9 @@ const EXT_ACTIONS = {
      перезібрати сторінку цілком, ніж лагодити половину стану. */
   retry: () => location.reload(),
 };
+/* Дії панелі коментарів — через ТОЙ САМИЙ реєстр і ту саму делегацію. Закрити/відкрити знову/доручити тут нема взагалі:
+   дії, якої немає в реєстрі, не викличе й підроблена розмітка. */
+for (const act of CMT_ACTS) EXT_ACTIONS[act] = (val, node, ev) => cmt?.actions[act]?.(val, node, ev);
 
 function wire() {
   document.addEventListener("click", (ev) => {
@@ -1060,6 +1074,14 @@ function wire() {
   });
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && ui.openDd) { ui.openDd = null; paint(); }
+    /* C — панель коментарів; поле вводу, модальний шар (діалог імені, питання) і модифікатори — не наші. */
+    if (cmt && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.repeat && !ev.isComposing && !ev.defaultPrevented
+        && (ev.key || "").toLowerCase() === "c" && !document.querySelector(".cv-ask-scrim, .cv-ask-pop")
+        && !/^(input|textarea|select)$/i.test(ev.target?.localName || "") && !ev.target?.isContentEditable
+        && effMode(man, ui) !== "overview" && !clean) {
+      ev.preventDefault();
+      cmt.toggle();
+    }
     /* ⇧⌘\\ — чистий перегляд макета, як у канвасі (fb-01102026-7f7b6d). */
     if ((ev.metaKey || ev.ctrlKey) && ev.shiftKey && !ev.altKey && ev.code === "Backslash") {
       ev.preventDefault();
@@ -1067,7 +1089,21 @@ function wire() {
     }
   });
   /* Новий документ рамки — свій слухач акорду і сховані піни, якщо режим увімкнено. */
-  el("frame")?.addEventListener("load", () => syncFrame(el("frame"), clean, () => toggleClean()));
+  el("frame")?.addEventListener("load", () => {
+    syncFrame(el("frame"), clean, () => toggleClean());
+    cmt?.onFrameLoad();
+  });
+  /* Посилки коментатора з рамки (режим хоста превʼю). Джерело й origin перевіряє сам контролер. */
+  window.addEventListener("message", (ev) => {
+    const m = ev.data;
+    if (cmt && m && m.type === "dc-comments" && CMT_EVENTS.has(m.ev)) cmt.onMessage(ev);
+  });
+  /* Скільки знизу рамки перекриває острівець: форма коментаря в макеті лягає над ним (`PREVIEW_HOST_ARG.bottomInset`). */
+  window.__dcIslandInset = () => {
+    const f = el("frame")?.getBoundingClientRect();
+    const i = el("hud")?.querySelector(".island")?.getBoundingClientRect();
+    return i && i.height && f ? Math.max(0, Math.round(f.bottom - i.top + 8)) : 0;
+  };
 }
 
 /** Чистий перегляд у превʼю: оболонка й піни сховані, кнопка повернення — завжди. */
@@ -1097,6 +1133,20 @@ async function open() {
   paint();
   if (ui.error) return;
   if (man?.task) document.title = man.task;
+  /* Командні коментарі — лише коли збірка їх має (`manifest.comments`); без них ні кнопки, ні панелі. */
+  if (man?.comments && typeof man.comments === "object") {
+    let mount = el("cmt-panel");
+    if (!mount) {          // обгортка до 0.32.0 точки не має — створюємо сами (нова оболонка в старій обгортці)
+      mount = document.createElement("div");
+      mount.id = "cmt-panel";
+      mount.className = "insp cmt";
+      mount.hidden = true;
+      document.body.appendChild(mount);
+    }
+    cmt = createExtComments({ frame: el("frame"), mount, channel: String(man.comments.channel || ""), onChange: paintIsland });
+    island.comments = true;
+    paintIsland();
+  }
   applyVp();
   const first = startPage(man, location.hash);
   if (first) goto(first);

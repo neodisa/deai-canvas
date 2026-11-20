@@ -365,6 +365,7 @@ class BuildPreview(TaskFixture):
         pub = self._build(comments=self._league(), gate_pw='x')['dir']
         with_mark = json.loads(_read(os.path.join(pub, 'manifest.json')))
         self.assertEqual(with_mark.pop('build'), 'legacy')
+        self.assertEqual(set(with_mark.pop('comments')), {'channel'})        # 0.32.0: канал коментарів — сигнал оболонці превʼю
         legacy_tree = _tree(pub)
         legacy_tree.pop('manifest.json')
         direct = serve.publish_manifest(*self._manifest_args(pub))
@@ -412,9 +413,15 @@ class BuildPreview(TaskFixture):
             self.assertIn('dc/fixture', html, rel)
             depth_up = '../' * rel.count('/')           # `it1/alpha/index.html` → `../../`
             self.assertIn(f'{depth_up}comment-layer/comment-layer.min.js', html, rel)
-            self.assertNotIn('dc-comments', html, rel)        # 0.26.0: публікація НІКОЛИ не отримує режиму хоста
-            self.assertNotIn('host:', html, rel)
-            for dual in ('DeaiDualStore', 'dual-store.js', 'defaultAudience'):        # 0.27.0: комбінованого сніпета в превʼю нема
+            # 0.32.0: сторінка превʼю — у режимі хоста СВОГО вигляду (панель малює оболонка превʼю), а не Deai
+            self.assertEqual(html.count('dc-comments'), 1, rel)
+            self.assertIn('host: (function', html, rel)
+            self.assertIn('onAdd: function', html, rel)                  # оболонка запише «свій» коментар
+            self.assertIn('userName: function', html, rel)               # імʼя дає оболонка, prompt() — ніколи
+            self.assertNotIn('prompt(', html, rel)
+            for gone in ('defaultUser', 'defaultAudience', 'onAudiencePick', 'dc-cmt-aud'):   # особа машини й аудиторії Deai не їдуть
+                self.assertNotIn(gone, html, rel)
+            for dual in ('DeaiDualStore', 'dual-store.js'):              # 0.27.0: комбінованого сніпета в превʼю нема
                 self.assertNotIn(dual, html, rel)
         self.assertTrue(self._mentions(pub, b'supabase'),
                         'контроль: з коментарями supabase у дереві МАЄ бути')
@@ -440,8 +447,9 @@ class BuildPreview(TaskFixture):
             pub = serve.build_preview(task, tid, its, comments=comments, gate_pw='x', build='legacy')['dir']
         self.assertEqual(len(calls), len(SOURCE_PAGES), 'кожна сторінка пройшла через інʼєкцію')
         for kw in calls:
-            self.assertEqual(set(kw) - {'version', 'inspector', 'audiences'}, set(), f'публікація передала зайве: {sorted(kw)}')
+            self.assertEqual(set(kw) - {'version', 'inspector', 'audiences', 'host'}, set(), f'публікація передала зайве: {sorted(kw)}')
             self.assertEqual((kw.get('inspector'), kw.get('audiences')), (False, False))
+            self.assertEqual(kw.get('host'), 'preview', 'публікація — хост превʼю (0.32.0), а не Deai')
         for rel in self._inner_pages(pub) + ['index.html']:
             html = _read(os.path.join(pub, rel))
             self.assertNotIn('sp=', html, rel)
