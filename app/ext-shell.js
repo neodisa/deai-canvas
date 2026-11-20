@@ -52,6 +52,7 @@ import { GAP, HEAD, ROW_TITLE_TOP } from "./canvas-geom.js";
 import { CMT_ACTS, CMT_EVENTS, createExtComments } from "./ext-comments.js";
 import { extBarHTML } from "./ext-bar.js";
 import { createExtInspect } from "./ext-inspect.js";
+import { followPageOf } from "./ext-follow.js";
 import { islandToolsHTML } from "./island.js";
 import { LANG_KEY, readStoredLang, setLang, t } from "./i18n.js";
 import { SPRITE, ico } from "./icons.js";
@@ -972,9 +973,36 @@ function apply({ focus = false } = {}) {
     if (p) {
       /* Нова сторінка — старі картки з мертвими діями не лишаємо, доки вона не надішле свій список. */
       cmt?.dropFrame();
+      expectedId = p.id;
       el("frame").src = p.path;
     }
   }
+  paint();
+}
+
+/**
+ * Сторінка, на яку оболонка САМА щойно повела рамку (`apply`). `load` цієї навігації мапиться на ту саму сторінку — це не
+ * «макет повів рамку кудись», і слідувати нема за чим (інакше `apply` ↔ `load` ходили б по колу).
+ */
+let expectedId = null;
+
+/**
+ * Рамка пішла за посиланням ВСЕРЕДИНІ макета: дерево, `#p=` і «Скопіювати посилання» йдуть за нею. Без `apply()` — друге
+ * `frame.src` перезавантажило б щойно відкриту сторінку. Інша ітерація, невідомий шлях, зовнішня чи 404-сторінка — нічого
+ * (`followPageOf` дає `null`): стан лишається на останній сторінці, яку показала оболонка.
+ */
+function followFrame() {
+  if (effMode(man, ui) === "overview") return;
+  let path;
+  try { path = el("frame").contentWindow.location.pathname; } catch (e) { return; }      // чужий документ
+  const id = followPageOf(path, location.pathname, man?.pages ?? [], ui.it);
+  if (!id || id === expectedId) return;
+  expectedId = id;
+  if (id === ui.page) return;
+  ui.page = id;
+  try {
+    history.replaceState(null, "", `${location.pathname}${location.search}#p=${encodeURIComponent(id)}`);
+  } catch (e) { /* превʼю, відкрите з диска: hash не критичний */ }
   paint();
 }
 
@@ -1104,6 +1132,7 @@ function wire() {
     syncFrame(el("frame"), clean, () => toggleClean());
     cmt?.onFrameLoad();
     insp?.onFrameLoad();
+    followFrame();
   });
   /* Посилки коментатора з рамки (режим хоста превʼю). Джерело й origin перевіряє сам контролер. */
   window.addEventListener("message", (ev) => {

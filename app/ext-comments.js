@@ -127,6 +127,8 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     open: false, active: true, adding: false, ready: false, readyDoc: null, snap: null, sel: null, query: "",
     editing: null, draft: null, delAsk: null, expanded: { earlier: false, closed: false },
     wantAdd: false,
+    /* Глядач САМ вимкнув додавання «+» за цієї відкритої панелі: нові сторінки його не вмикають (як у Deai, де це решта-режим). */
+    userOff: false,
   };
   mount.setAttribute("aria-label", t("cmtTitle"));
 
@@ -196,6 +198,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       if (st.adding) { try { layer()?.setCommentMode(false); } catch (e) { /* рамка пішла */ } }
       st.adding = false;
       st.wantAdd = false;
+      st.userOff = false;
     } else if (st.active && readName()) {
       armOpen();
     }
@@ -227,6 +230,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
 
   async function setAdding(on) {
     st.wantAdd = false;
+    st.userOff = !on;
     if (on) {
       if (!(await ensureName())) return;
       const L = layer();                      // ПІСЛЯ діалогу: за цей час рамка могла піти на іншу сторінку
@@ -324,6 +328,8 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       if (st.wantAdd) {
         st.wantAdd = false;
         if (visible() && readName() && L && !st.adding) armOpen();
+      } else if (visible() && st.active && !st.userOff && readName() && L && !st.adding) {
+        armOpen();                  // нова сторінка при відкритій панелі: додавання перезаряджається, як у Deai (`app.js`)
       }
       paint();
     } else if (m.ev === "change") {
