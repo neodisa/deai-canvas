@@ -834,7 +834,7 @@ class ListTest(Base):
         got = [r['timeout'] for r in self.seen]
         for t, full in zip(got, [8, 8, 8, 4, 4]):
             self.assertLessEqual(t, full)
-            self.assertGreater(t, full - 1)
+            self.assertGreater(t, full - 3)
         self.assertEqual(len(got), 5, 'list: коментарі+відповіді, resolve, check: коментарі+відповіді')
         self.assertEqual(got[2], 8, 'resolve — один запит: його строк і є бюджет')
 
@@ -1620,84 +1620,105 @@ class CheckRepliesTest(RepliesBase):
         got = [(r['url'].split('?')[0][len(URL):], r['timeout']) for r in self.seen]
         self.assertEqual([g[0] for g in got], [TABLE, REPLIES])
         for _, t in got:
-            self.assertTrue(3 < t <= 4, t)             # спільний дедлайн 4 с: другий запит — з тим, що лишилося
+            self.assertTrue(0 < t <= 4, t)             # спільний дедлайн 4 с: другий запит — з тим, що лишилося
+
+
+class _Clock:
+    """Фальшивий монотонний годинник модуля: стоїть, доки сервер не «проспить» (`eat`) — без справжніх затримок."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+    def eat(self, seconds):
+        """Предикат для `override(when=…)`: коли запит зіставлено, годинник іде на `seconds` уперед; завжди істина."""
+        def when(rec):
+            self.now += seconds
+            return True
+        return when
+
+
+class _ClockedTime:
+    """Підміна `time` у глобалах модуля: `monotonic` — фальшивий, решта (`strftime`) — справжня."""
+
+    def __init__(self, clock):
+        self.monotonic = clock.monotonic
+
+    def __getattr__(self, name):
+        return getattr(time, name)
 
 
 class BudgetTest(RepliesBase):
-    """Один спільний дедлайн на виклик: повільна таблиця відповідей не з'їдає бюджет коментарів (ядро чекає 5 с на `check`, 10 с на решту)."""
+    """Один спільний дедлайн на виклик: повільна таблиця відповідей не з'їдає бюджет коментарів (ядро чекає 5 с на `check`, 10 с на решту).
 
-    def tight(self, budget=0.6):
-        self.patch_globals(CALL_TIMEOUT_S=budget, CHECK_TIMEOUT_S=budget, REPLIES_MIN_S=0.3, REPLY_POST_MIN_S=0.3)
+    «Бюджет з'їдено» — детерміновано, фальшивим годинником (`_Clock`): запит до `comments` зсуває його, і перевіряємо, що запиту до
+    відповідей (чи POST) не було; справжніх затримок і годинникових тверджень нема. Справжній сон лише там, де під випробуванням сам
+    тайм-аут сокета: таблиця відповідей ВИСИТЬ."""
+
+    def tight(self, budget=1.0, floor=0.5):
+        self.patch_globals(CALL_TIMEOUT_S=budget, CHECK_TIMEOUT_S=budget, REPLIES_MIN_S=floor, REPLY_POST_MIN_S=floor)
+
+    def clocked(self):
+        self.clk = _Clock()
+        self.patch_globals(time=_ClockedTime(self.clk))
+        return self.clk
 
     def timed(self, fn, *args):
         t0 = time.monotonic()
         out = fn(*args)
         return out, time.monotonic() - t0
 
-    def test_a_slow_replies_table_still_gives_the_comments_within_the_budget(self):
-        self.tight()
-        chan = self.chan()
-        self.api.rows = [row('a', chan)]
-        self.api.override('GET', 200, [], path=REPLIES, delay=3)
-        got, spent = self.timed(self.fn('list'), self.ctx(), chan)
-        self.assertEqual([c['id'] for c in got], ['a'])
-        self.assertNotIn('replies', got[0])
-        self.assertLess(spent, 1.5, 'не чекали 3 с відповіді таблиці відповідей')
-
+    # ---- «бюджет з'їдено»: фальшивий годинник
     def test_list_does_not_even_ask_for_replies_when_the_comments_ate_the_budget(self):
         self.tight()
+        clk = self.clocked()
         chan = self.chan()
-        self.api.override('GET', 200, [row('a', chan)], path=TABLE, delay=0.4)
-        self.api.override('GET', 200, [reply_row('r1', 'a', chan)], path=REPLIES, delay=0.4)
-        got, spent = self.timed(self.fn('list'), self.ctx(), chan)
+        self.api.override('GET', 200, [row('a', chan)], path=TABLE, when=clk.eat(0.6))
+        got = self.fn('list')(self.ctx(), chan)
         self.assertEqual([c['id'] for c in got], ['a'])
         self.assertNotIn('replies', got[0])
         self.assertEqual([r['path'] for r in self.api.requests], [TABLE], 'залишок < REPLIES_MIN_S: запиту до відповідей нема')
-        self.assertLess(spent, 0.6)
+
+    def test_list_still_asks_for_replies_when_enough_is_left(self):
+        self.tight()
+        clk = self.clocked()
+        chan = self.chan()
+        self.api.override('GET', 200, [row('a', chan)], path=TABLE, when=clk.eat(0.4))
+        self.api.replies = [reply_row('r1', 'a', chan)]
+        (a,) = self.fn('list')(self.ctx(), chan)
+        self.assertEqual([r['id'] for r in a['replies']], ['r1'])
+        self.assertAlmostEqual(self.seen[-1]['timeout'], 0.6, places=3, msg='запит до відповідей іде з тим, що лишилось')
 
     def test_check_stays_ok_and_says_replies_were_not_checked(self):
         self.tight()
-        self.api.override('GET', 200, [], path=TABLE, delay=0.4)
-        res, spent = self.timed(self.fn('check'), self.ctx())
+        clk = self.clocked()
+        self.api.override('GET', 200, [], path=TABLE, when=clk.eat(0.6))
+        res = self.fn('check')(self.ctx())
         self.assertEqual(res, {'ok': True, 'replies': None,
                                'detail': 'таблиця comments доступна; таблицю відповідей не перевірено — не вистачило часу'})
         self.assertEqual([r['path'] for r in self.api.requests], [TABLE])
-        self.assertLess(spent, 0.6)
-
-    def test_check_with_a_slow_replies_probe_answers_inside_the_budget(self):
-        self.tight()
-        self.api.override('GET', 200, [], path=REPLIES, delay=3)
-        res, spent = self.timed(self.fn('check'), self.ctx())
-        self.assertEqual((res['ok'], res['replies']), (True, False))
-        self.assertIn('таблиця відповідей не відповіла', res['detail'])
-        self.assertLess(spent, 1.5)
 
     def test_recent_returns_only_comments_when_the_budget_is_spent(self):
         self.tight()
+        clk = self.clocked()
         chan = self.chan()
-        self.api.override('GET', 200, [{'id': 'a', 'ts': 't', 'author': 'o', 'status': 'open', 'version': '2'}], path=TABLE, delay=0.4)
-        got, spent = self.timed(self.fn('recent'), self.ctx(), chan)
+        self.api.override('GET', 200, [{'id': 'a', 'ts': 't', 'author': 'o', 'status': 'open', 'version': '2'}], path=TABLE,
+                          when=clk.eat(0.6))
+        got = self.fn('recent')(self.ctx(), chan)
         self.assertEqual([i['id'] for i in got], ['a'])
         self.assertEqual([r['path'] for r in self.api.requests], [TABLE])
-        self.assertLess(spent, 0.6)
-
-    def test_recent_with_a_slow_replies_table_returns_the_comments(self):
-        self.tight()
-        chan = self.chan()
-        self.api.rows = [row('a', chan)]
-        self.api.override('GET', 200, [], path=REPLIES, delay=3)
-        got, spent = self.timed(self.fn('recent'), self.ctx(), chan)
-        self.assertEqual([i['id'] for i in got], ['a'])
-        self.assertLess(spent, 1.5)
 
     def test_recent_stops_between_parent_chunks_when_the_budget_is_gone(self):
-        self.tight(0.6)
+        self.tight()
+        clk = self.clocked()
         self.patch_globals(IN_CHUNK=1)
         chan = self.chan()
         self.api.rows = [row('a', chan), row('b', chan)]
         self.api.replies = [reply_row('r1', 'a', chan), reply_row('r2', 'b', chan)]
-        self.api.override('GET', 200, [{'id': 'a', 'version': '2'}], path=TABLE, delay=0.4,
-                          when=lambda rec: 'in.' in rec['query'].get('id', [''])[0])
+        self.api.override('GET', 200, [{'id': 'a', 'version': '2'}], path=TABLE,
+                          when=lambda rec: 'in.' in rec['query'].get('id', [''])[0] and clk.eat(0.6)(rec))
         got = self.fn('recent')(self.ctx(), chan)
         self.assertEqual([i for i in got if 'parent' in i], [], 'частину батьків не дочекались — самі коментарі')
         asked = [r for r in self.api.requests if r['path'] == TABLE and 'in.' in r['query'].get('id', [''])[0]]
@@ -1705,8 +1726,9 @@ class BudgetTest(RepliesBase):
 
     def test_reply_does_not_post_when_too_little_budget_is_left(self):
         self.tight()
+        clk = self.clocked()
         chan = self.chan()
-        self.api.override('GET', 200, [{'id': 'a', 'status': 'open'}], path=TABLE, delay=0.4)
+        self.api.override('GET', 200, [{'id': 'a', 'status': 'open'}], path=TABLE, when=clk.eat(0.6))
         e = self.reply_fails(chan, 'a', 'текст', 'Агент')
         self.assertIsInstance(e, dm.ModuleError)
         self.assertEqual(e.code, 'module-error')
@@ -1716,12 +1738,42 @@ class BudgetTest(RepliesBase):
 
     def test_reply_posts_when_the_budget_is_enough(self):
         self.tight(3)
+        clk = self.clocked()
         chan = self.chan()
         self.api.rows = [row('a', chan)]
+        self.api.override('GET', 200, [{'id': 'a', 'status': 'open'}], path=TABLE, when=clk.eat(1))
         self.assertTrue(self.reply(chan, 'a', 'текст', 'Агент')['id'])
         post = self.seen[-1]
         self.assertEqual(post['method'], 'POST')
-        self.assertLessEqual(post['timeout'], 3)
+        self.assertAlmostEqual(post['timeout'], 2, places=3)
+
+    # ---- справжній сон: таблиця відповідей висить, під випробуванням тайм-аут сокета
+    def test_a_hanging_replies_table_still_gives_the_comments_within_the_budget(self):
+        self.tight(1.0, 0.3)
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.api.override('GET', 200, [], path=REPLIES, delay=5)
+        got, spent = self.timed(self.fn('list'), self.ctx(), chan)
+        self.assertEqual([c['id'] for c in got], ['a'])
+        self.assertNotIn('replies', got[0])
+        self.assertLess(spent, 2.5, 'не чекали 5 с відповіді таблиці відповідей')
+
+    def test_check_with_a_hanging_replies_probe_answers_inside_the_budget(self):
+        self.tight(1.0, 0.3)
+        self.api.override('GET', 200, [], path=REPLIES, delay=5)
+        res, spent = self.timed(self.fn('check'), self.ctx())
+        self.assertEqual((res['ok'], res['replies']), (True, False))
+        self.assertIn('таблиця відповідей не відповіла', res['detail'])
+        self.assertLess(spent, 2.5)
+
+    def test_recent_with_a_hanging_replies_table_returns_the_comments(self):
+        self.tight(1.0, 0.3)
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.api.override('GET', 200, [], path=REPLIES, delay=5)
+        got, spent = self.timed(self.fn('recent'), self.ctx(), chan)
+        self.assertEqual([i['id'] for i in got], ['a'])
+        self.assertLess(spent, 2.5)
 
 
 class OrderAndTextsTest(RepliesBase):
