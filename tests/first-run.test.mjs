@@ -92,3 +92,16 @@ test("пароль: меню веде в Модулі з шухлядою на �
   assert.match(src, /\(want \?\? el\.querySelector\('\[data-cn-field\]'\)/, "фокус — на названому полі, а не на першому");
   assert.equal(typeof barHTML, "function");
 });
+
+test("пароль: намір `pw` ставиться в `enterConnections` ПІСЛЯ всіх ранніх виходів, а не в `openPublishPassword`", () => {
+  const src = readFileSync(path.join(ROOT, "app", "app.js"), "utf8");
+  const open = src.slice(src.indexOf("function openPublishPassword("), src.indexOf("function openPublishPassword(") + 200);
+  assert.match(open, /enterConnections\('publish', \{ pw: true \}\)/);
+  assert.doesNotMatch(open, /connPwPending = true/);
+  const at = src.indexOf("async function enterConnections(");
+  const fn = src.slice(at, src.indexOf("\n}\n", at));
+  assert.match(fn, /async function enterConnections\(role = '', \{ pw = false \} = \{\}\)/);
+  const guard = fn.indexOf("if (!currentSpace(spacesResp)) return;");
+  const set = fn.indexOf("connPwPending = pw;");
+  assert.ok(guard > 0 && set > guard, "`connPwPending = pw` — після останнього раннього виходу");
+});

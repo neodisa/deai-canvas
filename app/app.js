@@ -266,8 +266,7 @@ let connFocusRole = '';
 let connPwPending = false;
 function openPublishPassword() {
   setConnSec('mods');
-  connPwPending = true;
-  enterConnections('publish');
+  enterConnections('publish', { pw: true });
 }
 /* Лічильник входів на «Підключення»: `enterConnections` чекає перелік просторів, і за цей час людина могла піти (`enterHome` із явною
    сторінкою — логотип, майстер; `leaveHome` — відкрила задачу) або клікнути вдруге. Оголошено ТУТ з тієї самої причини, що `cnDrawer`:
@@ -4310,7 +4309,7 @@ const repaintSettingsSec = (sec) => { if (connOpen() && connSec === sec) paintHo
  * `spacesResp` порожній тому, що новіший запит переліку (дропдаун чи палітра) відкинув нашу відповідь через `spacesSeq`, — це не збій,
  * а чужий запит у польоті: теж мовчимо.
  */
-async function enterConnections(role = '') {
+async function enterConnections(role = '', { pw = false } = {}) {
   const seq = ++connEntrySeq;
   const cold = spacesResp === null;
   if (cold) {
@@ -4323,6 +4322,7 @@ async function enterConnections(role = '') {
   }
   if (!currentSpace(spacesResp)) return;
   connFocusRole = role;
+  connPwPending = pw;                       // намір «Пароль превʼю» живе лише для цього входу: кожен інший вхід його скидає
   if (role) connFocusPending = true;
   enterHome(cold ? { page: 'conn', spaces: false } : { page: 'conn' });
 }
