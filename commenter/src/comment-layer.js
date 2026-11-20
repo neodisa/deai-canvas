@@ -597,7 +597,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         // Сховище може показати пін ОПТИМІСТИЧНО, до підтвердження запису
         // (локальний адаптер сповіщає одразу в save). Позначку не губимо: інакше
         // впалий запис лишає пін поза бекапом — тільки в памʼяті вікна (fb 05.11.2026).
-        else ext._pending = true;
+        else {
+          ext._pending = true;
+          // Відповіді «у польоті» (ще не підтверджені) не губимо: зовнішня копія може бути
+          // без них. Локальна версія перекриває зовнішню з тим самим id, нова — додається.
+          const mine = Array.isArray(local.replies) ? local.replies.filter((r) => r && r._pending) : [];
+          if (mine.length) ext.replies = mergeReplies(ext.replies, mine);
+        }
       }
       this.comments = [...byId.values()];
       this._seqHigh = this.comments.reduce((m, c) => Math.max(m, (c.meta && c.meta.seq) || 0), this._seqHigh || 0);
@@ -1699,7 +1705,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         ? `<span class="mtag">${mm === 'multi' ? icon('multi', 12) + (c.meta.count || '') : mm === 'area' ? icon('area', 12) + 'area' : icon('text', 12) + 'text'}</span>` : '';
       // Technical anchor info (pinned tag / version / fp / html snapshot) stays in the stored
       // comment for AI export & debugging, but is intentionally NOT shown to the reviewer.
-      const when = `<div class="when">${icon('clock', 12)}${c.ts ? markMatch(c.ts, this._query) : 'time unknown'}</div>`;
+      const when = `<div class="when">${icon('clock', 12)}${c.ts ? markMatch(c.ts, this._query) : 'time unknown'}</div>`
+        + (Array.isArray(c.replies) && c.replies.length ? `<div class="when">${c.replies.length} ${c.replies.length === 1 ? 'reply' : 'replies'}</div>` : '');
       /* Ширина — поруч із часом, не в технічному блоці: вона міняє СМИСЛ
          коментаря, а не пояснює його походження. */
       const vp = (c.meta && c.meta.viewport) || null;
@@ -1759,7 +1766,10 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       try {
         const res = this.store.save(plain);
         if (res && typeof res.then === 'function') await res;   // Supabase adapter throws on failure
-        this.comments.forEach((c) => { c._pending = false; });  // confirmed synced
+        this.comments.forEach((c) => {                          // confirmed synced
+          c._pending = false;
+          if (Array.isArray(c.replies)) c.replies.forEach((r) => { if (r) r._pending = false; });
+        });
         this._backupNow();                                      // нічого не висить → ключ прибрано
       } catch (e) {
         console.warn('[comment-layer] primary store save failed; comments kept in local backup for retry', e && e.message);
@@ -2022,6 +2032,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         version: this.appVersion, iteration: this._curIter(), pinsHidden: !!this._pinsHidden,
         comments: this.comments.map((c) => {
           const { _el, _pending, fp, htmlSnapshot, ...rest } = c;
+          if (Array.isArray(rest.replies)) rest.replies = rest.replies.map(({ _pending: _rp, ...r }) => r);
           return Object.assign({}, rest, rest.meta && typeof rest.meta === 'object' ? { meta: Object.assign({}, rest.meta) } : {},
             { n: this._seqOf(c), scope: scope(c), where: where(c), iter: this._pinIter(c), pending: !!_pending });
         }),
@@ -2041,6 +2052,36 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._persist(); this._render();
       return true;
     },
+    /** Відповідь у гілці піна (лише з хостом; лише під відкритим): повертає id відповіді чи `null`. `agent` коментатор не ставить. */
+    reply(id, text) {
+      const v = String(text == null ? '' : text).trim();
+      if (!this._hostOpts || !v) return null;
+      const c = this.comments.find((x) => x.id === id);
+      if (!c || c.status !== 'open') return null;
+      const r = { id: genId(), author: getUser(this.user, this.opts && this.opts.defaultUser, this._hostOpts).name, text: v, ts: nowStamp(), _pending: true };
+      c.replies = (c.replies || []).concat(r); c._pending = true;
+      this._emit('onReply', { comment: id, reply: r.id });   // ДО першого onChange, де є ця відповідь
+      this._persist(); this._render();
+      return r.id;
+    },
+    editReply(id, rid, text) {
+      const v = String(text == null ? '' : text).trim();
+      if (!this._hostOpts || !v) return false;
+      const c = this.comments.find((x) => x.id === id);
+      const r = c && Array.isArray(c.replies) && c.replies.find((x) => x && x.id === rid);
+      if (!r) return false;
+      r.text = v; r.editedTs = nowStamp(); r._pending = true; c._pending = true;
+      this._persist(); this._render();
+      return true;
+    },
+    removeReply(id, rid) {
+      if (!this._hostOpts) return false;
+      const c = this.comments.find((x) => x.id === id);
+      if (!c || !Array.isArray(c.replies) || !c.replies.some((x) => x && x.id === rid)) return false;
+      c.replies = c.replies.filter((x) => !(x && x.id === rid)); c._pending = true;
+      this._persist(); this._render();
+      return true;
+    },
     openShot(id) {
       const c = this.comments.find((x) => x.id === id);
       const src = c && c.meta && (c.meta.shot || c.meta.shotUrl);
@@ -2050,7 +2091,28 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     reset() { this.comments = []; this._ver = 1; this._persist(); this._render(); this._placePins(); },
   };
 
-  function stripRuntime(c) { const { _el, _pending, ...rest } = c; return rest; }
+  function stripRuntime(c) {
+    const { _el, _pending, ...rest } = c;
+    if (Array.isArray(rest.replies)) rest.replies = rest.replies.map(({ _pending: _rp, ...r }) => r);
+    return rest;
+  }
+  // `ДД.ММ.РРРР ГГ:ХХ` → `РРРРММДДГГХХ` для порівняння; не за форматом — порожньо (йде першим).
+  function stampKey(ts) {
+    const m = /^(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})$/.exec(String(ts || ''));
+    return m ? m[3] + m[2] + m[1] + m[4] + m[5] : '';
+  }
+  // Злиття відповідей: локальні «у польоті» перекривають зовнішні з тим самим id, нові додаються;
+  // порядок — за `ts`, за рівних — початковий (зовнішні першими).
+  function mergeReplies(external, mine) {
+    const base = Array.isArray(external) ? external.slice() : [];
+    for (const r of mine) {
+      const i = base.findIndex((x) => x && x.id === r.id);
+      if (i >= 0) base[i] = r; else base.push(r);
+    }
+    return base.map((r, i) => [r, i])
+      .sort((a, b) => stampKey(a[0].ts).localeCompare(stampKey(b[0].ts)) || a[1] - b[1])
+      .map((x) => x[0]);
+  }
   // Верх композера: під елементом, інакше над ним, інакше — притиснутий донизу,
   // але НЕ нижче `floor` (верх панелі режимів чи острівця хоста; елемент, що сам нижче межі, теж не опускає форму). Панель лежить вище за z-index, і
   // на великому <section> кнопки форми опинялись під нею: клік по «Comment»
