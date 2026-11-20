@@ -3,6 +3,16 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.32.1] — 20.11.2026
+
+Patch for the public preview: its tools moved from the bottom island into the top-right of the bar, so nothing covers the
+mockup any more. Previews published with 0.32.0 should be published again.
+
+### Змінено
+- Превʼю: «Коментарі» (з числом відкритих), «Інспектор» і «Сховати інтерфейс» — іконки в правому верхньому куті смуги перед
+  «Скопіювати посилання». Острівця внизу в превʼю більше нема, і макет під ним не закритий. Клавіші C / I / ⇧⌘\ — як були.
+- Вузька смуга превʼю: до 960 px «Скопіювати посилання» — лише іконка; до 640 px перемикач ширин ховається.
+
 ## [0.32.0] — 20.11.2026
 
 Stage Ж, the public preview. A published preview now looks and works like Deai itself: a dark password card with the

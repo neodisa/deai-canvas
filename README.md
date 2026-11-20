@@ -284,8 +284,8 @@ default) needs only a token — no `vercel login`, no CLI, no Node on the machin
 
 **The published preview (0.32).** A preview is static (no server behind it) and looks like Deai:
 - *Gate.* With a password, a dark card with the Deai mark asks for it; `#k=<password>` in the link opens it directly.
-- *Island.* At the bottom: «Comments» (with the number of open comments; only when the space has a `comments` module),
-  «Inspector» and «Hide interface». Keys: **C**, **I**, **⇧⌘\\**. Comments and the inspector are mutually exclusive.
+- *Tools.* In the top-right of the bar, before «Copy link»: «Comments» (with the number of open comments; only when the
+  space has a `comments` module), «Inspector» and «Hide interface» — nothing floats over the mockup. Keys: **C**, **I**, **⇧⌘\\**. Comments and the inspector are mutually exclusive.
 - *Comments.* Anyone with the link can add a comment; the name is asked once, before the first one, and kept in that
   browser. Only comments created in the same browser can be edited or deleted there; closing and reopening happen in Deai.
   Closed comments show «Done · It.N» and the reason. This is an interface rule, not a lock: the public key in every page
