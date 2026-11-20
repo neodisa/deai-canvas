@@ -512,6 +512,37 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     .root.hosted .handle,.root.hosted .panel,.root.hosted .sheetscrim,.root.hosted .sheetpeek,.root.hosted .modes{display:none !important}
   `;
 
+  /* Вигляд форм від хоста (`host.theme`): окремий лист, що додається в тіньовий корінь ЛИШЕ коли тема прийнята (`_applyTheme`).
+     `STYLE` не чіпаємо: без теми розмітка й правила — ті самі, що й були. Токени (`--s2`, `--sel`…) ставить на `.root` сама
+     `_applyTheme`; запасні значення в `var()` — на випадок, коли хост дав не всі. Той самий вигляд — і для `.compose`, і
+     для форми «Кілька» (`.mcompose`). */
+  const THEME_STYLE = `
+    .root.themed{--r:8px;--rsm:6px}
+    .root.themed .compose,.root.themed .mcompose{width:300px;background:var(--s2);border:1px solid var(--line2);border-radius:var(--r);padding:10px;
+      box-shadow:0 16px 44px rgba(0,0,0,.5);font-family:system-ui,sans-serif}
+    .root.themed .compose *,.root.themed .mcompose *{font-family:system-ui,sans-serif}
+    .root.themed .compose .csel{margin:0 0 8px;padding:0;border:0;background:none;border-radius:0;font-style:normal;font-size:11.5px;color:var(--dim,var(--lo));
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .root.themed .compose .csel code{font:11px ui-monospace,monospace;color:var(--mid);background:var(--s3);border:1px solid var(--line);border-radius:4px;padding:0 4px;margin-right:4px}
+    .root.themed .compose .csel svg{display:inline-block;vertical-align:-2px}
+    .root.themed .mchead{font-size:11.5px;color:var(--dim,var(--lo));margin-bottom:8px}
+    .root.themed .compose textarea,.root.themed .mcta{height:72px;background:var(--s1);color:var(--hi);border:1px solid var(--line);border-radius:var(--rsm);padding:7px 8px;font-size:13px;line-height:1.45}
+    .root.themed .compose textarea:focus,.root.themed .mcta:focus{border-color:var(--sel,var(--white))}
+    .root.themed .compose .caud,.root.themed .mcompose .caud{gap:0;margin-top:8px;border:1px solid var(--line);border-radius:var(--rsm);overflow:hidden}
+    .root.themed .compose .caud-b,.root.themed .mcompose .caud-b{flex:1;justify-content:center;min-height:28px;border:0;border-radius:0;background:none;color:var(--dim,var(--lo));font-size:12px}
+    .root.themed .compose .caud-b+.caud-b,.root.themed .mcompose .caud-b+.caud-b{border-left:1px solid var(--line)}
+    .root.themed .compose .caud-b[aria-pressed="true"],.root.themed .mcompose .caud-b[aria-pressed="true"]{background:var(--sel-tint-2,rgba(255,255,255,.12));color:var(--hi)}
+    .root.themed .compose .caud-note,.root.themed .mcompose .caud-note{color:var(--dim,var(--lo))}
+    .root.themed .compose .row,.root.themed .mcompose .row{gap:6px;margin-top:10px}
+    .root.themed .compose .row button,.root.themed .mcompose .row button{height:28px;padding:0 12px;border-radius:var(--rsm);font:500 12px/1 system-ui,sans-serif;border:1px solid var(--line2);background:var(--s3);color:var(--hi)}
+    .root.themed .compose .row button:hover,.root.themed .mcompose .row button:hover{background:var(--s4,var(--s3))}
+    .root.themed .compose .row button.primary,.root.themed .mcompose .row button.primary{background:var(--sel,var(--white));border-color:var(--sel,var(--white));color:var(--on-sel,var(--onwhite));font-weight:600}
+    .root.themed .compose .row button.primary:hover,.root.themed .mcompose .row button.primary:hover{background:var(--sel-hover,var(--sel,var(--white)))}
+  `;
+  /* Дозволені токени теми й підписи форми (`host.theme`, `host.labels`). */
+  const THEME_KEYS = ['s1', 's2', 's3', 's4', 'line', 'line2', 'hi', 'mid', 'lo', 'dim', 'sel', 'sel-hover', 'sel-tint-2', 'on-sel', 'open', 'bad', 'local-pin'];
+  const LABEL_KEYS = ['placeholder', 'cancel', 'submit', 'target', 'quote', 'area', 'multiTitle', 'clear'];
+
   /* ===========================================================================
    * 5. Controller
    * ========================================================================= */
@@ -728,6 +759,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._mcompose = root.querySelector('.mcompose');
       this._mcta = root.querySelector('.mcta');
       this._mccount = root.querySelector('.mccount');
+      this._applyTheme();
       root.querySelectorAll('.mode:not(.mstop):not(.mfreeze)').forEach((b) => {
         b.onclick = () => this._pickMode(b.getAttribute('data-mode'));
       });
@@ -1050,6 +1082,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       // Повторне ввімкнення в режимі «Кілька»: форма мусить повернутись (її ховає disarm), бо острівець показує Multi натиснутим.
       if (on && this._mode === 'multi' && this._mcompose) {
         this._mcompose.classList.add('show');
+        this._prepMulti();
         this._refreshMultiAuds();
         if (this._hostOpts) this._placeHostMulti();
       }
@@ -1171,9 +1204,10 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const r = t.rect;
       const box = document.createElement('div');
       box.className = 'compose';
-      const tx = (t.fp && t.fp.text || '').slice(0, 50);
-      box.innerHTML = `<div class="csel">on &lt;${esc(t.fp && t.fp.tag || '?')}&gt;${tx ? ' · “' + esc(tx) + '”' : ''}</div><textarea placeholder="Leave a change request…"></textarea>
-        ${this._audChipsHTML()}<div class="row"><button class="cancel">Cancel</button><button class="primary save">Comment</button></div>`;
+      this._applyTheme(); const L = this._labels();
+      const tgt = this._targetHTML(L, t.fp && t.fp.tag || '?', t.fp && t.fp.text || '');
+      box.innerHTML = `<div class="csel">${L.target ? tgt : 'on ' + tgt}</div><textarea placeholder="${esc(L.placeholder || 'Leave a change request…')}"></textarea>
+        ${this._audChipsHTML()}<div class="row"><button class="cancel">${esc(L.cancel || 'Cancel')}</button><button class="primary save">${esc(L.submit || 'Comment')}</button></div>`;
       this._sh.appendChild(box); this._wireAudChips(box);
       /* Права межа — за СПРАВЖНІМИ ширинами композера й панелі. Числа 260/340
          DOM-режиму менші за 290/372, і біля панелі кнопка «Comment» ховалась під
@@ -1250,13 +1284,14 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       box.style.left = Math.max(8, Math.min(r.left, rightBound)) + 'px';
       const m = extra && extra.mode;
       // What is being commented on — shown in every mode (like the text quote), so the target is always clear.
-      const desc = (e) => { const t = e.tagName.toLowerCase(); const tx = (e.textContent || '').replace(/\s+/g, ' ').trim(); return '&lt;' + t + '&gt;' + (tx ? ' · “' + esc(tx.slice(0, 50)) + '”' : ''); };
+      this._applyTheme(); const L = this._labels();
+      const desc = (e) => this._targetHTML(L, e.tagName.toLowerCase(), (e.textContent || '').replace(/\s+/g, ' ').trim());
       const note = m === 'multi' ? `${icon('multi', 13)} ${extra.count} elements`
-        : m === 'area' ? `${icon('area', 13)} area · ${desc(el)}`
-        : sel ? `on: “${esc(sel.slice(0, 120))}”`
-        : `on ${desc(el)}`;
-      box.innerHTML = `<div class="csel">${note}</div><textarea placeholder="Leave a change request…"></textarea>
-        ${this._audChipsHTML()}<div class="row"><button class="cancel">Cancel</button><button class="primary save">Comment</button></div>`;
+        : m === 'area' ? `${icon('area', 13)} ` + (L.area ? fillLabel(L.area, { target: desc(el) }) : `area · ${desc(el)}`)
+        : sel ? (L.quote ? fillLabel(L.quote, { text: esc(sel.slice(0, 120)) }) : `on: “${esc(sel.slice(0, 120))}”`)
+        : (L.target ? desc(el) : `on ${desc(el)}`);
+      box.innerHTML = `<div class="csel">${note}</div><textarea placeholder="${esc(L.placeholder || 'Leave a change request…')}"></textarea>
+        ${this._audChipsHTML()}<div class="row"><button class="cancel">${esc(L.cancel || 'Cancel')}</button><button class="primary save">${esc(L.submit || 'Comment')}</button></div>`;
       this._sh.appendChild(box); this._wireAudChips(box);
       /* Хост: праву межу рахуємо за СПРАВЖНЬОЮ шириною композера (260 — менше за неї) і за місцем, яке тримає хост. */
       if (this._hostOpts) box.style.left = Math.max(8, Math.min(r.left, window.innerWidth - this._hostInset() - (box.offsetWidth || 290) - 12)) + 'px';
@@ -1892,6 +1927,67 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     toggle() { this._panel.classList.contains('show') ? this._closePanel() : this._openPanel(); },
     getComments() { return this.comments.map(stripRuntime); },
 
+    /* ---- Вигляд і мова форм від хоста (`host.theme`, `host.labels`) ---- */
+    /** Токени теми хоста → `.root` (`--<ключ>`, клас `themed`, один `<style data-cl-theme>`). Без `host.theme`, при винятку чи коли
+     *  жодне значення не пройшло фільтр, нічого не ставиться (а раніше поставлене знімається). Кличеться при побудові й при
+     *  кожному відкритті форми, тож зміна теми оболонки діє з наступної форми. */
+    _applyTheme() {
+      const root = this._sh; if (!root) return;
+      const h = this._hostOpts;
+      let raw = null;
+      if (h && typeof h.theme === 'function') { try { raw = h.theme(); } catch (e) { raw = null; } }
+      const ok = themeFilter(raw);
+      const keys = Object.keys(ok);
+      (this._themeKeys || []).forEach((k) => { if (!(k in ok)) root.style.removeProperty('--' + k); });
+      const sr = root.getRootNode();
+      const have = sr && sr.querySelector ? sr.querySelector('style[data-cl-theme]') : null;
+      if (!keys.length) {
+        if (have) have.remove();
+        root.classList.remove('themed'); this._themeKeys = [];
+        return;
+      }
+      keys.forEach((k) => root.style.setProperty('--' + k, ok[k]));
+      root.classList.add('themed');
+      if (!have && sr && sr.appendChild) {
+        const st = document.createElement('style'); st.setAttribute('data-cl-theme', ''); st.textContent = THEME_STYLE; sr.appendChild(st);
+      }
+      this._themeKeys = keys;
+    },
+    /** Підписи форм від хоста: лише непорожні рядки відомих ключів; решта — англійський текст як був. */
+    _labels() {
+      const h = this._hostOpts; const r = {};
+      if (!h || typeof h.labels !== 'function') return r;
+      let o = null; try { o = h.labels(); } catch (e) { o = null; }
+      if (o && typeof o === 'object') LABEL_KEYS.forEach((k) => { if (typeof o[k] === 'string' && o[k]) r[k] = o[k]; });
+      return r;
+    },
+    /** Рядок цілі для форми: тег (у темі — чипом `<code>`) і, коли є текст, шаблон `target`; без тексту — самий тег. */
+    _targetHTML(L, tag, text) {
+      const tg = this._sh.classList.contains('themed') ? '<code>' + esc(tag) + '</code>' : '&lt;' + esc(tag) + '&gt;';
+      const tx = (text || '').slice(0, 50);
+      if (L.target) return tx ? fillLabel(L.target, { tag: tg, text: esc(tx) }) : tg;
+      return tg + (tx ? ' · “' + esc(tx) + '”' : '');
+    },
+    /** Підписи форми «Кілька» (вона одна на весь час життя): переписуємо лише коли набір підписів змінився. Без підписів — розмітка
+     *  не чіпається взагалі. `.mccount` після переписування знаходимо знову й наповнюємо поточним лічильником. */
+    _applyMultiLabels() {
+      const mc = this._mcompose; if (!mc) return;
+      const L = this._labels(); const key = JSON.stringify(L);
+      if (key === (this._mlabKey || '{}')) return;
+      this._mlabKey = key;
+      const head = mc.querySelector('.mchead');
+      if (head) {
+        const n = '<b class="mccount">' + (this._multiSel ? this._multiSel.length : 0) + '</b>';
+        head.innerHTML = icon('multi', 14) + (L.multiTitle ? fillLabel(L.multiTitle, { n }) : 'Comment on ' + n + ' element(s)');
+        this._mccount = head.querySelector('.mccount');
+      }
+      const ta = mc.querySelector('.mcta'); if (ta) ta.setAttribute('placeholder', L.placeholder || 'Leave a change request…');
+      const cl = mc.querySelector('.mccancel'); if (cl) cl.textContent = L.clear || 'Clear';
+      const sv = mc.querySelector('.mcsave'); if (sv) sv.innerHTML = icon('check') + esc(L.submit || 'Comment');
+    },
+    /** Показ форми «Кілька»: тема й підписи оболонки на цю мить. */
+    _prepMulti() { this._applyTheme(); this._applyMultiLabels(); },
+
     /* ---- API хоста (Deai 0.26.0) ---- */
     /** Скільки px справа у вікні коментатора займає ХОСТ (його панель): композер і підказки не лягають під неї. Без хоста,
      *  без колбека, нечисло чи виняток — 0. */
@@ -1917,7 +2013,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._mode = m;
       this._sh.querySelectorAll('.mode:not(.mstop):not(.mfreeze)').forEach((x) => x.classList.toggle('active', x.getAttribute('data-mode') === m));
       this._mcompose.classList.toggle('show', m === 'multi'); // multi uses a modal
-      if (m === 'multi') { this._refreshMultiAuds(); if (this._hostOpts) this._placeHostMulti(); }
+      if (m === 'multi') { this._prepMulti(); this._refreshMultiAuds(); if (this._hostOpts) this._placeHostMulti(); }
       this._armComment(true); // picking a mode readies commenting
     },
     /** Інструмент коментування для хоста (Deai 0.27.0, поправка 19): режим, заморозка, увімкнено, доступні режими
@@ -2219,6 +2315,20 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   // «Огляд» замість сторінки). Крос-origin батько — не знаємо, вважаємо видимою.
   function hiddenFrame() {
     try { const f = window.frameElement; return !!f && f.getClientRects().length === 0; } catch (e) { return false; }
+  }
+  /** Токени теми хоста: лише ключі білого списку; значення — рядок до 200 знаків без `;{}<>` (інакше вирвалось би з декларації). */
+  function themeFilter(o) {
+    const r = {};
+    if (!o || typeof o !== 'object') return r;
+    THEME_KEYS.forEach((k) => {
+      const v = Object.prototype.hasOwnProperty.call(o, k) ? o[k] : null;
+      if (typeof v === 'string' && v.trim() && v.length <= 200 && !/[;{}<>]/.test(v)) r[k] = v.trim();
+    });
+    return r;
+  }
+  /** Підпис-шаблон у розмітку: сам шаблон екранується, а `{токен}` заміняється ОДНИМ проходом готовим (уже екранованим) значенням. */
+  function fillLabel(tpl, vals) {
+    return esc(tpl).replace(/\{(\w+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(vals, k) ? vals[k] : m));
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
   // Escape for HTML, then wrap case-insensitive matches of the search query in <mark> (amber highlighter).

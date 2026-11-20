@@ -661,6 +661,39 @@ test("17: сторінка, відкрита НАПРЯМУ (без оболон
   assert.equal(await o.page.evaluate(() => window.__dcPreviewShell), 2);
 });
 
+test("18: форма коментаря в превʼю — у токенах і мові оболонки превʼю: themed, фон = --s2 оболонки, підписи з i18n (uk), тег чипом", async (t) => {
+  const env = await boot(t, { port: 16000 });
+  await seed(env, SEED);
+  const o = await openPreview(env, t, { init: preName, initArg: [USER_KEY, "Збережене Імʼя"] });
+  const { page, frame } = o;
+  await page.keyboard.press("c");
+  await until(() => mode(frame), "додавання ввімкнулось");
+  await frame.locator("h1").click();
+  const ta = frame.locator("[data-comment-layer] .compose textarea");
+  await ta.waitFor();
+  const shell = await page.evaluate(() => {
+    const p = document.createElement("i"); p.style.background = "var(--s2)"; document.body.appendChild(p);
+    const r = { bg: getComputedStyle(p).backgroundColor, tok: getComputedStyle(document.body).getPropertyValue("--s2").trim() };
+    p.remove(); return r;
+  });
+  assert.ok(shell.tok, "у оболонки превʼю нема --s2");
+  const form = await frame.evaluate(() => {
+    const sh = document.querySelector("[data-comment-layer]").shadowRoot;
+    const c = sh.querySelector(".compose");
+    return { themed: sh.querySelector(".root").classList.contains("themed"), bg: getComputedStyle(c).backgroundColor,
+      ph: c.querySelector("textarea").getAttribute("placeholder"), cancel: c.querySelector(".cancel").textContent,
+      save: c.querySelector(".save").textContent, code: c.querySelector(".csel code")?.textContent ?? null };
+  });
+  assert.equal(form.themed, true);
+  assert.equal(form.bg, shell.bg, "фон форми — не --s2 оболонки превʼю");
+  assert.equal(form.ph, "Що змінити?");
+  assert.equal(form.cancel, "Скасувати");
+  assert.equal(form.save, "Коментувати");
+  assert.equal(form.code, "h1");
+  if (process.env.DC_SHOT_DIR) await page.screenshot({ path: path.join(process.env.DC_SHOT_DIR, "preview-compose.png") });   // для ревʼю вигляду
+  assert.deepEqual(o.errors, []);
+});
+
 test("99: ізоляція — жодного запиту за межі машини, справжній ~/.deai не зачеплено", () => {
   assert.deepEqual(OUTSIDE, [], `запити за межі машини:\n${OUTSIDE.join("\n")}`);
   guardRealDeai();

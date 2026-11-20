@@ -700,3 +700,34 @@ test("26: кошик у картці — питання на місці; Esc / �
   await page.waitForSelector('#cmt-panel .cmt-card[data-cid="d1"]', { state: "detached" });
   assert.equal(dialogs, 0, "з'явилось нативне вікно браузера");
 });
+
+/* ───────── 0.34: форма над макетом — у токенах і мові оболонки (`host.theme`, `host.labels`) ───────── */
+test("20: форма коментаря над макетом — themed, фон = --s2 оболонки, підписи мовою оболонки (uk), тег чипом", async (t) => {
+  const { page, frame } = await boot(t, PORT_BASE + 50);
+  await page.click('#hud [data-act="comments"]');
+  await until(() => modesShown(frame));
+  await frame.click("#p");
+  await frame.waitForFunction(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea"));
+  const shell = await page.evaluate(() => {
+    const p = document.createElement("i"); p.style.background = "var(--s2)"; document.body.appendChild(p);
+    const o = { bg: getComputedStyle(p).backgroundColor, tok: getComputedStyle(document.body).getPropertyValue("--s2").trim() };
+    p.remove(); return o;
+  });
+  assert.ok(shell.tok, "у оболонки нема --s2");
+  const form = await frame.evaluate(() => {
+    const sh = document.querySelector("[data-comment-layer]").shadowRoot;
+    const c = sh.querySelector(".compose");
+    return { themed: sh.querySelector(".root").classList.contains("themed"), bg: getComputedStyle(c).backgroundColor,
+      ph: c.querySelector("textarea").getAttribute("placeholder"), cancel: c.querySelector(".cancel").textContent,
+      save: c.querySelector(".save").textContent, code: c.querySelector(".csel code")?.textContent ?? null,
+      styles: sh.querySelectorAll("style[data-cl-theme]").length };
+  });
+  assert.equal(form.themed, true);
+  assert.equal(form.bg, shell.bg, "фон форми — не --s2 оболонки");
+  assert.equal(form.ph, "Що змінити?");
+  assert.equal(form.cancel, "Скасувати");
+  assert.equal(form.save, "Коментувати");
+  assert.equal(form.code, "p");
+  assert.equal(form.styles, 1);
+  if (process.env.DC_SHOT_DIR) await page.screenshot({ path: path.join(process.env.DC_SHOT_DIR, "deai-compose.png") });   // для ревʼю вигляду
+});

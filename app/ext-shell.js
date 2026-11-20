@@ -49,6 +49,7 @@ import { ask } from "./ask.js";
 import { applyClean, syncFrame } from "./clean-view.js";
 import { fitBox, focusBox, quantScale, zoomAt } from "./camera.js";
 import { GAP, HEAD, ROW_TITLE_TOP } from "./canvas-geom.js";
+import { cmtLabels, cmtTheme } from "./cmt-form.js";
 import { CMT_ACTS, CMT_EVENTS, createExtComments } from "./ext-comments.js";
 import { extBarHTML } from "./ext-bar.js";
 import { createExtInspect } from "./ext-inspect.js";
@@ -65,7 +66,12 @@ import {
 
 /* Мітка «ми — оболонка превʼю»: сторінка макета вмикає режим хоста коментатора лише коли батько її несе (`PREVIEW_HOST_ARG`,
    `serve.py`). Ставиться на ініціалізації модуля, ДО будь-якого `frame.src`; відкрита напряму сторінка мітки не бачить. */
-if (typeof window !== "undefined") window.__dcPreviewShell = 2;
+if (typeof window !== "undefined") {
+  window.__dcPreviewShell = 2;
+  /* Вигляд і мова форми коментатора в рамці (`PREVIEW_HOST_ARG.theme` / `.labels`, `serve.py`): токени з `<body>` оболонки превʼю, підписи з її `t()`. */
+  window.__dcCmtTheme = () => cmtTheme(getComputedStyle(document.body));
+  window.__dcCmtLabels = () => cmtLabels(t);
+}
 
 /* ── чистий адаптер ─────────────────────────────────────────────────────── */
 

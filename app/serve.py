@@ -2999,7 +2999,9 @@ HOST_ARG = """,
             onMode: function (on) { send({ ev: 'mode', on: !!on }); },
             defaultAudience: function () { try { return localStorage.getItem('dc-cmt-aud'); } catch (e) { return null; } },
             onAudiencePick: function (id) { try { localStorage.setItem('dc-cmt-aud', id); } catch (e) {} },
-            bottomInset: function () { try { var f = window.parent && window.parent.__dcIslandInset; return typeof f === 'function' ? f() : 0; } catch (e) { return 0; } }
+            bottomInset: function () { try { var f = window.parent && window.parent.__dcIslandInset; return typeof f === 'function' ? f() : 0; } catch (e) { return 0; } },
+            theme: function () { try { var f = window.parent && window.parent.__dcCmtTheme; return typeof f === 'function' ? f() : null; } catch (e) { return null; } },
+            labels: function () { try { var f = window.parent && window.parent.__dcCmtLabels; return typeof f === 'function' ? f() : null; } catch (e) { return null; } }
           };
         })()"""
 
@@ -3035,7 +3037,9 @@ PREVIEW_HOST_ARG = """,
               try { v = localStorage.getItem('comment-layer:user') || ''; } catch (e) { v = ''; }
               if (v && v !== 'Anonymous') return v;
               try { return String(window.parent.__dcPreviewUser || ''); } catch (e) { return ''; }
-            }
+            },
+            theme: function () { try { var f = window.parent && window.parent.__dcCmtTheme; return typeof f === 'function' ? f() : null; } catch (e) { return null; } },
+            labels: function () { try { var f = window.parent && window.parent.__dcCmtLabels; return typeof f === 'function' ? f() : null; } catch (e) { return null; } }
           };
         })()"""
 
@@ -3885,7 +3889,7 @@ SHELL_MODULES = ('i18n.js', 'icons.js', 'shell-panel.js', 'viewport.js',
                  'camera.js', 'canvas-geom.js', 'layout.js', 'rows-model.js',
                  'styles.css', 'ask.js', 'esc.js', 'ext-shell.js', 'ext-bar.js',
                  'tree-model.js', 'clean-view.js', 'island.js',
-                 'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js',
+                 'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js', 'cmt-form.js',
                  'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js', 'ext-follow.js')
 
 #: Типова ширина кадру. МУСИТЬ дорівнювати `CANVAS_W` у app/viewport.js:

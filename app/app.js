@@ -71,6 +71,7 @@ import { TABS_KEY, closeTab, pruneTabs, readTabs, tabsModel, upsertTab, writeTab
 import { tabsHTML } from './tabs-view.js';
 import { applyRecentTitles, pruneRenamed } from './recent-titles.js';
 import { islandToolsHTML } from './island.js';
+import { cmtLabels, cmtTheme } from './cmt-form.js';
 import { commentsPanelHTML } from './comments-view.js';
 import { FILTERS, openCount } from './comments-model.js';
 import { arrived, baseline, countNew, isNew, markSeen, newsByPage, readSeen, seenKey, teamOf, writeSeen } from './comment-news.js';
@@ -1113,6 +1114,10 @@ function islandInsetOver(r) {
 }
 /* Рамка питає це через `HOST_ARG.bottomInset` (`serve.py`; пару приколює `test_comments_role`). */
 window.__dcIslandInset = () => islandInsetOver(frame.getBoundingClientRect());
+/* Вигляд і мова форми коментатора над макетом: рамка питає це через `HOST_ARG.theme` / `HOST_ARG.labels` (`serve.py`; пару
+   приколює `test_comments_role`). Токени — з `<body>` оболонки (поточний колір простору), підписи — мовою оболонки. */
+window.__dcCmtTheme = () => cmtTheme(getComputedStyle(document.body));
+window.__dcCmtLabels = () => cmtLabels(t);
 /**
  * Записати розмітку в контейнер, не гублячи фокус клавіатури: `innerHTML` знищує вузол, а з ним і фокус. Той самий рядок,
  * що й минулого разу, — нічого не пишемо взагалі (опит стану Claude та `paintBar` кличуть перемальовку часто); інакше

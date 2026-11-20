@@ -1928,6 +1928,26 @@ class DualPagesTest(PagesEnv):
         # «Огляд»: коментатор полотна живе у вікні оболонки і бере ту саму межу від свого `host`.
         self.assertIn('bottomInset: () => islandInsetOver(canvasEl.getBoundingClientRect())', js)
 
+    def test_host_args_ask_the_shell_for_theme_and_labels(self):
+        """Пара «Python ↔ JS» (0.34): форма коментатора бере токени й підписи в оболонки через `window.parent.__dcCmtTheme` /
+        `__dcCmtLabels`; оболонки (`app.js`, `ext-shell.js`) їх виставляють. Обидва хости — і Deai, і превʼю — мають обидві функції,
+        причому виняток чи відсутність провайдера дають `null` (коментатор тоді лишає свій вигляд)."""
+        base = os.path.dirname(serve.__file__)
+        for host in (serve.HOST_ARG, serve.PREVIEW_HOST_ARG):
+            for need in ('theme: function', 'labels: function', '__dcCmtTheme', '__dcCmtLabels'):
+                self.assertIn(need, host)
+            self.assertEqual(host.count("typeof f === 'function' ? f() : null; } catch (e) { return null; }"), 2)
+        for name in ('app.js', 'ext-shell.js'):
+            with open(os.path.join(base, name), encoding='utf-8') as fh:
+                js = fh.read()
+            self.assertIn('window.__dcCmtTheme = ', js, name)
+            self.assertIn('window.__dcCmtLabels = ', js, name)
+        # превʼю: острівця/адресатів нема, а охоронець походження й `userName` на місці
+        self.assertIn("window.parent === window || window.parent.__dcPreviewShell !== 2", serve.PREVIEW_HOST_ARG)
+        self.assertIn('userName: function', serve.PREVIEW_HOST_ARG)
+        # спільний модуль їде в публікацію разом з `ext-shell.js`
+        self.assertIn('cmt-form.js', serve.SHELL_MODULES)
+
     def test_dual_audience_labels_match_dictionary(self):
         """Підписи чипів у `DUAL_AUDIENCES_JS` — парні до `audChip*` у `app/i18n.js` (сервер не бачить JS-словника)."""
         with open(os.path.join(os.path.dirname(serve.__file__), 'i18n.js'), encoding='utf-8') as fh:
