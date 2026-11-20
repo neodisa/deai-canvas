@@ -2847,6 +2847,22 @@ PREVIEW_TOKENS_FILE = 'ds-snapshot.json'
 _TOKENS_PROFILE = 'profile'
 
 
+#: Значення токена, що несе локальний шлях чи завантаження файла: у публічне превʼю не їде (0.32.0).
+_LOCAL_VALUE_RE = re.compile(r'url\(|file:|/Users/|/home/|/private/|/tmp/|[A-Za-z]:\\', re.I)
+
+
+def _public_token_values(tokens):
+    """`tokens` без значень із локальними шляхами (`url(`, `file:`, домашня тека, `/Users/` `/home/` `/private/` `/tmp/`, диск Windows);
+    імʼя без жодного значення, що лишилось, відпадає. Форма `{імʼя: [значення…]}` не змінюється."""
+    home = os.path.expanduser('~')
+    out = {}
+    for name, vals in tokens.items():
+        keep = [v for v in vals if not _LOCAL_VALUE_RE.search(v) and not (len(home) > 1 and home in v)]
+        if keep:
+            out[name] = keep
+    return out
+
+
 def preview_tokens_snapshot(space):
     """Знімок токенів простору для превʼю (0.32.0): те, що віддає `GET /api/ds-tokens?space=<id>` (`ds_tokens_view`), —
     `{profile, tokens, source}` — або `None`, коли токенів нема (шар просторів вимкнено, простір неявний, нема постачальника ролі
@@ -2861,9 +2877,12 @@ def preview_tokens_snapshot(space):
     view = ds_tokens_view(space)
     if not isinstance(view, dict) or not view.get(_TOKENS_PROFILE) or not view.get('tokens'):
         return None
+    tokens = _public_token_values(view['tokens'])
+    if not tokens:
+        return None
     src = view.get('source')
     src = re.split(r'[\\/]', src)[-1] if isinstance(src, str) else ''
-    return {_TOKENS_PROFILE: view[_TOKENS_PROFILE], 'tokens': view['tokens'], 'source': src}
+    return {_TOKENS_PROFILE: view[_TOKENS_PROFILE], 'tokens': tokens, 'source': src}
 
 
 def preview_inspector_tag(depth_up, ds, tokens):

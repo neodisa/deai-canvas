@@ -4528,6 +4528,18 @@ class PreviewInspectorBuild(TaskFixture):
         with mock.patch.object(serve, 'ds_tokens_view', return_value=dict(self.SNAP, source=None)):
             self.assertEqual(serve.preview_tokens_snapshot(space)['source'], '')
 
+    def test_token_values_with_local_paths_never_reach_the_snapshot(self):
+        """⛔ Значення з `url(`, `file:`, домашньою текою, `/Users/` `/home/` `/private/` `/tmp/` чи диском Windows відпадають; імʼя без значень — теж."""
+        space = self._space()
+        home = os.path.expanduser('~')
+        bad = ['url(/Users/nadia/f.woff)', 'url(x.png)', 'file:///etc/x', f'{home}/a', '/home/n/a', '/private/var/a', '/tmp/a', 'C:\\ds\\f', 'X:\\a']
+        view = dict(self.SNAP, tokens={'--ok': ['#123', 'url(/Users/a/b.woff)'], '--font': bad, '--gap': ['4px']})
+        with mock.patch.object(serve, 'ds_tokens_view', return_value=view):
+            snap = serve.preview_tokens_snapshot(space)
+        self.assertEqual(snap['tokens'], {'--ok': ['#123'], '--gap': ['4px']})
+        with mock.patch.object(serve, 'ds_tokens_view', return_value=dict(self.SNAP, tokens={'--font': bad})):
+            self.assertIsNone(serve.preview_tokens_snapshot(space), 'нічого публічного не лишилось — знімка нема')
+
     def test_the_overlay_never_asks_for_a_snapshot_outside_the_build_folder(self):
         """Оверлей читає `tok` лише відносним шляхом без схеми й початкового `/` (захист у `inspector.js`)."""
         src = _read(os.path.join(ROOT, 'app', 'vendor', 'inspector.js'))

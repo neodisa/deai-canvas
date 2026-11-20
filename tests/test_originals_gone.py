@@ -498,7 +498,7 @@ class UnreadableSecretsConsumers(unittest.TestCase):
         pub = os.path.join(self.tdir, 'publish')
         os.makedirs(pub)
         with open(os.path.join(pub, 'manifest.json'), 'w', encoding='utf-8') as f:
-            json.dump({'build': 'legacy'}, f)
+            json.dump({'build': 'legacy', 'shell': serve.PREVIEW_SHELL_VERSION}, f)
         idx = os.path.join(pub, 'index.html')
         with open(idx, 'w', encoding='utf-8') as f:
             f.write('<html>old wrapper</html>')
