@@ -459,3 +459,30 @@ test("зміна лише replies викликає запис; незмінен�
   await s.save([{ ...seen2[0], text: "інша" }, seen2[1]]);
   assert.deepEqual(server.rows[1].replies, raw);
 });
+
+test("відповідь, видалена на диску, не воскресає, коли вкладка додає іншу (ревʼю T5)", async () => {
+  const server = fakeServer([pin("a", { replies: [reply("X", "20.11.2026 10:00"), reply("Y", "20.11.2026 10:01")] })]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  server.rows = [pin("a", { replies: [reply("Y", "20.11.2026 10:01")] })];   // X видалили на диску
+  await s.save([{ ...seen[0], replies: [...seen[0].replies, reply("Z", "20.11.2026 10:02")] }]);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["Y", "Z"]);
+});
+
+test("runtime-поля коментатора на обʼєктах із load() не доходять до POST (_goneReplies, reply._pending)", async () => {
+  const server = fakeServer([pin("a", { replies: [reply("R", "20.11.2026 10:00")] })]);
+  const s = await store(server);
+  const live = s.load()[0];                       // коментатор мутує саме ці обʼєкти
+  live._goneReplies = { r9: 1 };
+  live._pending = true;
+  live.replies[0]._pending = true;
+  live.replies.push({ ...reply("N", "20.11.2026 10:05"), _pending: true });
+  let body = null;
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => { if (opts && opts.method === "POST") body = opts.body; return orig(url, opts); };
+  await s.save(s.load());
+  assert.ok(body, "POST не було");
+  assert.equal(body.includes("_goneReplies"), false);
+  assert.equal(body.includes("_pending"), false);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["R", "N"]);
+});

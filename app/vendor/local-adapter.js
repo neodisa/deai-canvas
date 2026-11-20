@@ -55,6 +55,7 @@
     for (i = 0; i < S.length; i++) {
       r = S[i];
       if (!r || typeof r !== 'object') continue;
+      /* Спадок (без id) беремо лише з S: вкладка тримає його тільки те, що сама отримала з диска. */
       if (!isId(r)) { legacy.push(r); continue; }
       sById[r.id] = r;
       if (!seen[r.id]) { seen[r.id] = 1; order.push(r.id); }
@@ -68,7 +69,7 @@
     var kept = [];
     for (i = 0; i < order.length; i++) {
       var id = order[i], mine = mById[id], was = wById[id], srv = sById[id], pick;
-      if (mine) pick = (!was || !same(was, mine)) ? mine : (srv || mine);
+      if (mine) pick = (!was || !same(was, mine)) ? mine : srv;                   // знала й не міняла: бере серверну; на диску нема — видалили там
       else if (was) pick = null;                              // вкладка прибрала
       else pick = srv;                                        // чужа, вкладка не знала
       if (pick) kept.push(pick);
