@@ -75,10 +75,29 @@ export function createExtInspect({ frame, mount, onChange = () => {}, onOn = () 
     paint();
   }
 
+  /** Панель порожня й закрита, без звернення до оверлея (його документ уходить): жодного застарілого звіту. */
+  function clear() {
+    mount.hidden = true;
+    document.body.classList.remove("with-insp");
+    mount.innerHTML = "";
+    onChange();
+  }
+
+  /** Рамка веде на іншу сторінку: оверлей старого документа гасимо, панель закриваємо. Новий документ — новий оверлей, `on = false`
+   *  (так само в Deai: інспектор після переходу вимкнений), тож «увімкнений» не переноситься. */
+  function dropFrame() {
+    try { const a = api(); if (a && a.on) a.set(false); } catch (e) { /* рамка пішла */ }
+    clear();
+  }
+
   /** Рамка завантажила документ: новий документ = новий екземпляр оверлея, тож проводимо його заново (як `app.js` у Deai). */
   function onFrameLoad() {
     const a = api();
     st.has = !!a;
+    /* Навігація ВСЕРЕДИНІ макета (посилання, T5) оболонка не бачить: старий документ сам повідомляє, що йде. */
+    let w = null;
+    try { w = frame.contentWindow; } catch (e) { w = null; }
+    if (w) { try { w.addEventListener("pagehide", () => { if (frame.contentWindow === w) clear(); }); } catch (e) { /* чужий документ */ } }
     if (a) {
       a.setChrome(false);                                   // власну кнопку оверлея ховаємо: керуємо з острівця
       a.setLabels({ inspector: t("inspector") });
@@ -124,7 +143,7 @@ export function createExtInspect({ frame, mount, onChange = () => {}, onOn = () 
   };
 
   return {
-    actions, onFrameLoad, paint, shellKey, setOn,
+    actions, onFrameLoad, dropFrame, paint, shellKey, setOn,
     isOn,
     /** Чи є в рамці оверлей (для кнопки острівця): документ без нього — кнопки нема. */
     has: () => st.has && !!api(),

@@ -5384,6 +5384,19 @@ class PreviewHostArg(unittest.TestCase):
                      "ev: 'add'", 'userName: function', "localStorage.getItem('comment-layer:user')", 'bottomInset'):
             self.assertIn(need, js)
 
+    def test_host_mode_only_inside_our_shell(self):
+        """Пряме посилання на внутрішню сторінку (без оболонки) чи чужий вбудовувач — НЕ режим хоста: інакше схована ручка
+        лишила б колегу без панелі. Мітка `__dcPreviewShell` стоїть ПЕРЕД будь-якою посилкою й створенням обʼєкта хоста."""
+        js = serve.PREVIEW_HOST_ARG
+        guard = "window.parent === window || window.parent.__dcPreviewShell !== 2"
+        self.assertIn(guard, js)
+        self.assertIn('return null; }', js)
+        self.assertLess(js.index(guard), js.index('var send'))
+        self.assertLess(js.index(guard), js.index('return {'))
+        html = serve.inject_module_comment_layer('<html><body></body></html>', '../comment-layer', [],
+                                                 {'channel': 'c'}, version='1', host='preview')
+        self.assertIn(guard, html)
+
     def test_preview_host_never_carries_the_machine_identity_or_a_prompt(self):
         js = serve.PREVIEW_HOST_ARG
         for bad in ('defaultUser', 'prompt(', 'defaultAudience', 'onAudiencePick', 'dc-cmt-aud'):

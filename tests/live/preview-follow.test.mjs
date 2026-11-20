@@ -295,6 +295,51 @@ test("5: імені нема — перехід за посиланням дод
   assert.deepEqual(o.errors, []);
 });
 
+test("6: інспектор увімкнено, рамка йде на іншу сторінку (посилання в макеті, дерево) — панель закривається ОДРАЗУ і не показує старий звіт; на новій сторінці він вимкнений (як у Deai)", async (t) => {
+  const env = await boot(t, { port: 5000 });
+  const o = await openPreview(env, t);
+  const { page, frame } = o;
+  const panel = () => page.evaluate(() => { const p = document.getElementById("insp-panel"); return !!p && !p.hidden && p.innerHTML.trim() !== ""; });
+  const overlayOn = (f) => f.evaluate(() => !!(window.CanvasInspector && window.CanvasInspector.on)).catch(() => null);
+  await until(() => frame.evaluate(() => !!window.CanvasInspector).catch(() => false), "оверлей на першій сторінці");
+  await page.evaluate(() => { document.activeElement?.blur(); window.focus(); });
+  await page.keyboard.press("i");
+  await until(() => panel(), "панель інспектора відкрита");
+
+  /* (а) перехід за посиланням У макеті: оболонка навігації не бачить. Тримаємо оверлей нового документа (`inspector.js`), тож
+     документ уже ЗАМІНЕНО, а `load` ще нема — рівно те вікно, де лишався б старий звіт. */
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  await o.ctx.route(/\/(vendor\/inspector|comment-layer\/.*)\.js/, async (route) => { await gate; await route.continue(); });
+  /* Увімкнений інспектор перехоплює клік (це пін), тож перехід робимо скриптом макета — як роутер чи редирект. */
+  await frame.evaluate(() => { location.href = document.getElementById("to-poshuk").href; });
+  await until(() => page.frames().some((f) => /\/it1\/poshuk\/index\.html$/.test(f.url())), "документ нової сторінки");
+  await until(async () => !(await panel()), "панель досі показує звіт старої сторінки");
+  release();
+  const f2 = await readyFrame(page, /\/it1\/poshuk\/index\.html$/);
+  await until(() => f2.evaluate(() => !!window.CanvasInspector).catch(() => false), "оверлей нової сторінки");
+  assert.equal(await overlayOn(f2), false, "інспектор переїхав увімкненим (у Deai він вимикається)");
+  assert.equal(await panel(), false);
+  assert.equal(await page.locator('.island [data-act="inspector"]').getAttribute("aria-pressed"), "false");
+  await o.ctx.unroute(/\/(vendor\/inspector|comment-layer\/.*)\.js/);
+
+  /* (б) перехід по дереву: `apply()` — документ ще старий, але панель закрита вже на старті навігації. */
+  await page.evaluate(() => { document.activeElement?.blur(); window.focus(); });
+  await page.keyboard.press("i");
+  await until(() => panel(), "панель відкрита на другій сторінці");
+  let release2;
+  const gate2 = new Promise((done) => { release2 = done; });
+  await o.ctx.route(/\/it1\/holovna\/index\.html$/, async (route) => { await gate2; await route.continue(); });
+  await page.locator('#pages-panel .row', { hasText: "Головна" }).first().click();
+  await until(async () => !(await panel()), "панель лишилась відкритою на старті переходу по дереву");
+  release2();
+  const f3 = await readyFrame(page, /\/it1\/holovna\/index\.html$/);
+  await until(() => f3.evaluate(() => !!window.CanvasInspector).catch(() => false), "оверлей на третій сторінці");
+  assert.equal(await overlayOn(f3), false);
+  assert.equal(await panel(), false);
+  assert.deepEqual(o.errors, []);
+});
+
 test("99: ізоляція — жодного запиту за межі машини, справжній ~/.deai не зачеплено", () => {
   assert.deepEqual(OUTSIDE, [], `запити за межі машини:\n${OUTSIDE.join("\n")}`);
   guardRealDeai();

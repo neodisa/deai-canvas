@@ -3277,6 +3277,7 @@ class ResealModuleBuilds(TaskFixture):
                     out, deployed = self._reseal(*args)
                     self.assertIn('старою оболонкою', out)
                     self.assertIn('перепублікація', out)
+                    self.assertIn('НЕ змінено', out, 'ротація пароля не мусить виглядати успішною')
                     self.assertNotIn('передеплоєно', out)
                     self.assertNotIn('перезібрано', out)
                     self.assertEqual(deployed, [])
@@ -4529,14 +4530,17 @@ class PreviewInspectorBuild(TaskFixture):
             self.assertEqual(serve.preview_tokens_snapshot(space)['source'], '')
 
     def test_token_values_with_local_paths_never_reach_the_snapshot(self):
-        """⛔ Значення з `url(`, `file:`, домашньою текою, `/Users/` `/home/` `/private/` `/tmp/` чи диском Windows відпадають; імʼя без значень — теж."""
+        """⛔ Значення з `url(`, `file:`, домашньою текою, `/Users/` `/home/` `/private/` `/tmp/` диском Windows, `~/`, localhost/loopback чи приватною LAN-адресою відпадають; імʼя без значень — теж."""
         space = self._space()
         home = os.path.expanduser('~')
-        bad = ['url(/Users/nadia/f.woff)', 'url(x.png)', 'file:///etc/x', f'{home}/a', '/home/n/a', '/private/var/a', '/tmp/a', 'C:\\ds\\f', 'X:\\a']
-        view = dict(self.SNAP, tokens={'--ok': ['#123', 'url(/Users/a/b.woff)'], '--font': bad, '--gap': ['4px']})
+        bad = ['url(/Users/nadia/f.woff)', 'url(x.png)', 'file:///etc/x', f'{home}/a', '/home/n/a', '/private/var/a', '/tmp/a', 'C:\\ds\\f', 'X:\\a',
+               '~/fonts/a.woff', 'http://localhost:3000/a', 'x 127.0.0.1', 'http://0.0.0.0/a', 'http://[::1]/a',
+               'http://10.20.30.40/f', 'http://192.168.1.5/f', 'http://172.16.0.1/f', 'http://172.31.9.9/f']
+        view = dict(self.SNAP, tokens={'--ok': ['#123', 'url(/Users/a/b.woff)', '10.5px', '172.5', '192px', 'http://172.32.0.1/f', '1.2.3'],
+                                       '--font': bad, '--gap': ['4px']})
         with mock.patch.object(serve, 'ds_tokens_view', return_value=view):
             snap = serve.preview_tokens_snapshot(space)
-        self.assertEqual(snap['tokens'], {'--ok': ['#123'], '--gap': ['4px']})
+        self.assertEqual(snap['tokens'], {'--ok': ['#123', '10.5px', '172.5', '192px', 'http://172.32.0.1/f', '1.2.3'], '--gap': ['4px']})
         with mock.patch.object(serve, 'ds_tokens_view', return_value=dict(self.SNAP, tokens={'--font': bad})):
             self.assertIsNone(serve.preview_tokens_snapshot(space), 'нічого публічного не лишилось — знімка нема')
 

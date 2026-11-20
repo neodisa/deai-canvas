@@ -292,7 +292,8 @@ default) needs only a token — no `vercel login`, no CLI, no Node on the machin
   allows everything, so a real lock belongs to your comments service (for example Supabase row-level security).
 - *Inspector.* Read only: values, token chips, distances (Alt) and navigation (Esc / ↵ / ← →); no tuner and no edits.
   Tokens come from a snapshot of the space's tokens taken at publish time (`shell/ds-snapshot.json`; only the file name of
-  the source, no values that contain local paths). The preview makes no request to the canvas API.
+  the source, no values that contain local paths). The preview makes no request to the canvas API. The snapshot file, like the pages, is readable
+  without the password, because the gate is client-side.
 - *Links.* Following a link inside the mockup to another published page of the same iteration moves the page tree, `#p=`
   and «Copy link» with it.
 - *Compatibility.* A published preview is a frozen copy: previews published before 0.32 keep the old look until you publish

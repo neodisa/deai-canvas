@@ -620,6 +620,47 @@ test("16: панель відкрито, коли рамка ще вантажи
   assert.equal(await page.locator('#cmt-panel [data-act="cmtadd"]').getAttribute("aria-pressed"), "true");
 });
 
+/** Коментатор у документі: ручка видима? `hosted` — режим хоста (ручка, панель і режими сховані)? */
+const handleState = (fr) => fr.evaluate(() => {
+  const sh = window.CommentLayer._host.shadowRoot;
+  const h = sh.querySelector(".handle");
+  return { hosted: sh.querySelector(".root").classList.contains("hosted"), shown: !!h && getComputedStyle(h).display !== "none" };
+});
+
+test("17: сторінка, відкрита НАПРЯМУ (без оболонки), коментує як до 0.32.0: власна ручка, імʼя через свій потік, коментар доходить до сервісу; у оболонці — режим хоста", async (t) => {
+  const env = await boot(t, { port: 15000 });
+  await seed(env, SEED);
+  const ctx = await browser.newContext({ viewport: VIEW });
+  t.after(() => ctx.close());
+  await ctx.route((u) => !isLocal(u.href), (route) => (new URL(route.request().url()).hostname === CDN
+    ? route.fulfill({ status: 200, contentType: "application/javascript", body: "" }) : route.abort("blockedbyclient")));
+  const page = await ctx.newPage();
+  const asked = [];
+  /* Не-хост — це поведінка до 0.32.0: коментатор САМ питає імʼя через `prompt()`; тут відповідаємо на діалог. */
+  page.on("dialog", async (d) => { asked.push(d.type()); await d.accept("Прямий"); });
+  await page.goto(`${env.base}/it1/holovna/index.html#k=${PW}`);
+  await until(() => page.evaluate(() => !!(window.CommentLayer && window.CommentLayer._inited)).catch(() => false), "коментатор на сторінці");
+  assert.equal(await page.evaluate(() => window.parent === window), true, "контроль: сторінка без оболонки");
+  assert.equal(await page.evaluate(() => window.CommentLayer.opts.host ?? null), null, "режим хоста без оболонки");
+  assert.deepEqual(await handleState(page), { hosted: false, shown: true }, "власна ручка коментатора мусить бути видимою");
+  await page.keyboard.press("c");                      // клавіші C/P/H працюють лише поза режимом хоста
+  await until(() => page.evaluate(() => !!window.CommentLayer.commentMode), "режим коментування");
+  await page.locator("h1").click();
+  const ta = page.locator("[data-comment-layer] .compose textarea");
+  await ta.waitFor();
+  await ta.fill("Напряму");
+  await page.locator("[data-comment-layer] .compose .save").click();
+  const row = await until(() => (env.memo.store.get(CHANNEL) ?? []).find((c) => c.text === "Напряму") ?? null, "коментар у сервісі");
+  assert.equal(row.author, "Прямий");
+  assert.ok(asked.includes("prompt"), "імʼя мало питатися власним потоком коментатора");
+
+  /* Контроль: ТА САМА сторінка всередині оболонки — режим хоста, ручка схована. */
+  const o = await openPreview(env, t);
+  assert.deepEqual(await handleState(o.frame), { hosted: true, shown: false });
+  assert.equal(await o.frame.evaluate(() => typeof window.CommentLayer.opts.host), "object");
+  assert.equal(await o.page.evaluate(() => window.__dcPreviewShell), 2);
+});
+
 test("99: ізоляція — жодного запиту за межі машини, справжній ~/.deai не зачеплено", () => {
   assert.deepEqual(OUTSIDE, [], `запити за межі машини:\n${OUTSIDE.join("\n")}`);
   guardRealDeai();

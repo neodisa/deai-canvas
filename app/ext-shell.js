@@ -64,6 +64,10 @@ import {
   CANVAS_PRESETS, CANVAS_W, PRESETS, frameKey, splitFrameKey,
 } from "./viewport.js";
 
+/* Мітка «ми — оболонка превʼю»: сторінка макета вмикає режим хоста коментатора лише коли батько її несе (`PREVIEW_HOST_ARG`,
+   `serve.py`). Ставиться на ініціалізації модуля, ДО будь-якого `frame.src`; відкрита напряму сторінка мітки не бачить. */
+if (typeof window !== "undefined") window.__dcPreviewShell = 2;
+
 /* ── чистий адаптер ─────────────────────────────────────────────────────── */
 
 /**
@@ -973,6 +977,7 @@ function apply({ focus = false } = {}) {
     if (p) {
       /* Нова сторінка — старі картки з мертвими діями не лишаємо, доки вона не надішле свій список. */
       cmt?.dropFrame();
+      insp?.dropFrame();
       expectedId = p.id;
       el("frame").src = p.path;
     }
