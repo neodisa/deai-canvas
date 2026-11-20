@@ -64,6 +64,12 @@ function asksHTML(settings) {
   }).join("")}</ul>`;
 }
 
+/* Інструменти острівця й дії модуля (api 2): по рядку, лише коли є що показати. Мітки — з маніфесту теки (з диска): `cut` + `esc`. */
+function extHTML(items, key) {
+  const names = list0(items).filter((x) => x && typeof x.label === "string").map((x) => cut(x.label));
+  return names.length ? `<p class="tr-ext"><span class="tr-h3">${esc(t(key))}</span> ${esc(names.join(", "))}</p>` : "";
+}
+
 /* Позначки «новий»/«змінено» — лише коли є запис довіри: без нього кожен файл «новий», і позначка нічого не каже. */
 function filesHTML(d) {
   const files = list0(d.files).filter((f) => f && typeof f.path === "string");
@@ -99,7 +105,7 @@ export function trustDialogHTML(d) {
       + `${d.refused?.detail ? `<span class="cn-why-detail">${esc(cut(d.refused.detail))}</span>` : ""}</span></p>`
     : `<div class="tr-warn">${ico("warn")}<div><p>${esc(t("trWarn"))}</p>`
       + `${list0(d?.roles).includes("comments") ? `<p>${esc(t("trWarnComments"))}</p>` : ""}`
-      + `<p>${esc(t("trWarnSystem"))}</p></div></div>${asksHTML(d.settings)}${filesHTML(d)}`;
+      + `<p>${esc(t("trWarnSystem"))}</p></div></div>${asksHTML(d.settings)}${extHTML(d.tools, "trustTools")}${extHTML(d.actions, "trustActions")}${filesHTML(d)}`;
   const untrust = d?.record === true
     ? `<button type="button" class="tr-untrust" data-tr="untrust">${esc(t("cnUntrust"))}</button>` : "";
   return `<form class="cv-form tr" novalidate role="dialog" aria-modal="true" aria-labelledby="tr-h">

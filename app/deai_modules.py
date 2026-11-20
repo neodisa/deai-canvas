@@ -763,8 +763,37 @@ def _client_sig(d):
     return tuple(sorted(out))
 
 
+def _panel_sig(d):
+    """Відбиток файлів панелей, названих у `tools[*].panel` маніфесту теки `d`, і КОЖНОЇ теки їхніх шляхів (`lstat`: створення,
+    видалення, підміна посиланням чи жорстким посиланням — інший відбиток). Тотальна: що б не було з маніфестом чи диском — `()`/`None`,
+    не виняток. Без цього кеш лишав би вердикт `_panel_ok` застарілим, бо `module.json` не змінювався."""
+    try:
+        with open(os.path.join(d, 'module.json'), 'rb') as f:
+            raw = f.read(spaces.MAX_JSON_BYTES + 1)
+        if len(raw) > spaces.MAX_JSON_BYTES:
+            return ()
+        tools = json.loads(raw.decode('utf-8')).get('tools')
+        panels = sorted({t['panel'] for t in tools[:MAX_TOOLS]
+                         if isinstance(t, dict) and isinstance(t.get('panel'), str) and UI_PATH_RE.fullmatch(t['panel'])}
+                        ) if isinstance(tools, list) else []
+    except (OSError, ValueError, RecursionError, AttributeError, TypeError):
+        return ()
+    out = []
+    for rel in panels:
+        cur = d
+        for n in rel.split('/'):
+            cur = os.path.join(cur, n)
+            try:
+                st = os.lstat(cur)
+                out.append((cur, st.st_mode, st.st_nlink, st.st_size, st.st_mtime_ns, st.st_ino))
+            except OSError:
+                out.append((cur, None))
+                break
+    return tuple(out)
+
+
 def _load_dir(d, folder):
-    sig = (_sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')), _client_sig(d))
+    sig = (_sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')), _client_sig(d), _panel_sig(d))
     with _LOAD_LOCK:
         hit = _CACHE.get(d)
         if hit is not None and hit[0] == sig:
@@ -1012,7 +1041,7 @@ def catalog(space=None):
 def _catalog_sig():
     bases, items, _ = _scan()
     return (bases, tuple((n, d, _sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')),
-                          _client_sig(d)) for n, d in items))
+                          _client_sig(d), _panel_sig(d)) for n, d in items))
 
 
 # ------------------------------------------------------------------------------- простір і space.json
@@ -1086,6 +1115,36 @@ def space_modules(space):
     if path is None:
         return {}
     return _normalize(_raw_modules(_load_space_json(path)))
+
+
+def extensions(space):
+    """`{'tools': [...], 'actions': [...]}` для `GET /api/module-ext`: лише модулі каталогу простору зі `status == 'ok'`, api 2 і
+    ЯВНО увімкнені (`enabled is True` у `space.json`). Порядок — за id модуля, далі як у маніфесті. Модуль у стані `changed`
+    лишається в списку: його код і панелі — з довіреного знімка, а не з нової теки; недовірений/`refused` без знімка — `error`/
+    `untrusted`, тож сюди не потрапляє. Клавіша, заявлена двома інструментами (між УСІМА переліченими модулями), — `None` в обох.
+    ⚠️ Може виконати код (завантаження каталогу) — НЕ під `WRITE_LOCK`."""
+    explicit = space_modules(space)
+    sid = _space_id(space)
+    tools, actions = [], []
+    for mid, m in catalog(space).items():
+        if m.status != 'ok' or m.api != 2 or explicit.get(mid, {}).get('enabled') is not True:
+            continue
+        for t in m.tools:
+            tools.append({'module': mid, 'module_name': m.name, 'id': t['id'], 'label': t['label'], 'icon': t['icon'],
+                          'key': t['key'],
+                          'panel': '/api/module-ui/%s/%s/%s' % (quote(sid, safe=''), quote(mid, safe=''),
+                                                                 quote(t['panel'], safe='/'))})
+        for a in m.actions:
+            actions.append({'module': mid, 'module_name': m.name, 'id': a['id'], 'label': a['label'],
+                            'where': list(a['where'])})
+    count = {}
+    for t in tools:
+        if t['key']:
+            count[t['key']] = count.get(t['key'], 0) + 1
+    for t in tools:
+        if t['key'] and count[t['key']] > 1:
+            t['key'] = None
+    return {'tools': tools, 'actions': actions}
 
 
 def _enabled_in(m, space, explicit):
@@ -2451,7 +2510,7 @@ def trust_view(space, mid):
     m = _own_module(space, mid, src, records, rec_err)
     rec = records.get(module_trust.key_for(_space_path(space), mid)) if m.record else None   # аліас і так без `record`
     out = {'id': mid, 'name': m.name, 'version': m.version, 'roles': list(m.roles), 'settings': [],
-           'path': module_trust.tilde(src), 'record': rec is not None}
+           'path': module_trust.tilde(src), 'record': rec is not None}   # `tools`/`actions` — лише в нерефьюзнутого (з маніфесту теки)
     try:
         sc = module_trust.scan(src)
     except module_trust.Refused as e:
@@ -2467,7 +2526,9 @@ def trust_view(space, mid):
         state = 'trusted' if sc.hash == rec['hash'] else 'changed'
     files, removed = module_trust.diff(sc.files, rec['files'] if rec else None)
     out.update(state=state, name=meta['name'], version=meta['version'], roles=list(meta['roles']),
-               settings=[_trust_setting(s) for s in meta['settings']], hash=sc.hash, files=files, removed=removed,
+               settings=[_trust_setting(s) for s in meta['settings']],
+               tools=[{'label': t['label'], 'icon': t['icon']} for t in meta['tools']],
+               actions=[{'label': a['label']} for a in meta['actions']], hash=sc.hash, files=files, removed=removed,
                total={'files': len(sc.files), 'bytes': sc.total})
     return out
 

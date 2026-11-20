@@ -364,6 +364,7 @@ body.home-open .isl-tools::before{display:none}
 .cv-ask--form .tr-warn p:last-child{margin:0}
 .tr .tr-h3{font-weight:600;color:var(--mid)}
 .tr .tr-none{color:var(--dim)}
+.tr .tr-ext{margin:0;font-size:13px;color:var(--hi);overflow-wrap:anywhere}
 .tr-asks{margin:-8px 0 0;padding-left:18px;font-size:13px;color:var(--hi)}
 .tr-mark{margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:var(--mid);white-space:nowrap}
 .tr-files{max-height:180px;overflow:auto;margin:-8px 0 0;padding:6px 8px;list-style:none;border:1px solid var(--line);

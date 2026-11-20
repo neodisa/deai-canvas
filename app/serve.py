@@ -6191,7 +6191,7 @@ class Handler(SimpleHTTPRequestHandler):
                         '/api/task-restore', '/api/task-purge', '/api/spaces',
                         '/api/space-peek', '/api/space-new', '/api/space-update', '/api/space-tool',
                         '/api/space-switch',
-                        '/api/modules', '/api/module-enable', '/api/module-disable',
+                        '/api/modules', '/api/module-ext', '/api/module-enable', '/api/module-disable',
                         '/api/module-settings', '/api/module-check', '/api/ds-tokens',
                         '/api/module-trust', '/api/module-untrust', '/api/agents-md')
 
@@ -6348,6 +6348,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path.split('?')[0] == '/api/modules':
             self._modules_get()
+            return
+        if self.path.split('?')[0] == '/api/module-ext':
+            self._module_ext_get()
             return
         if self.path.split('?')[0] == '/api/module-trust':
             self._module_trust_get()
@@ -8862,6 +8865,14 @@ class Handler(SimpleHTTPRequestHandler):
         if sp is None:
             return
         self._send_json(modules_payload(sp))
+
+    def _module_ext_get(self):
+        """`GET /api/module-ext?space=` → `{tools: [...], actions: [...]}` (`deai_modules.extensions`): простір і відмови — ті самі, що в
+        `GET /api/modules` (`_module_space`; `space-json-unreadable` — 409 центрально). Шар просторів вимкнено — неявний простір, порожні списки."""
+        sp = self._module_space(parse_qs(urlparse(self.path).query).get('space', [None])[0])
+        if sp is None:
+            return
+        self._send_json(deai_modules.extensions(sp))
 
     def _ds_tokens_get(self):
         """`GET /api/ds-tokens?space=` → `ds_tokens_view`: завжди 200 для відомого простору (інспектор мусить

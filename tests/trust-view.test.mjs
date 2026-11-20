@@ -245,3 +245,43 @@ test("словник: кожен ключ, який кличе trust-view.js, є
   for (const k of ["trClose", "askCancel", "trNew", "trChanged", "trSecret", "trSecretPublic", "cnUntrust"]) assert.ok(keys.has(k), `не зібрано умовний ключ ${k}`);
   for (const k of keys) for (const lang of ["uk", "en"]) assert.ok(DICT[lang][k] !== undefined, `${lang}: немає «${k}»`);
 });
+
+/* M1 Task 2: інструменти в острівці й дії модуля — два рядки, лише коли непорожні. */
+import { createHash } from "node:crypto";
+const sha = (s) => createHash("sha256").update(s).digest("hex");
+
+test("без tools/actions розмітка побайтово та сама, що до M1 (золоті відбитки)", () => {
+  assert.equal(sha(trustDialogHTML(base())), "0e2daee73bb94252449c3430f194b391a6a32bd617e5791ad20c4b030a83480b");
+  assert.equal(sha(trustDialogHTML(base({ state: "changed", record: true }))), "f68f403e42d6cdb133a0df8c40afab098b5255bd35a05987b9c3a56a67bd1a5b");
+  assert.equal(sha(trustDialogHTML(base({ state: "refused", refused: { code: "x", detail: "d" } }))), "fcc9a5c9996bee509bdd9d181327f983772edaf22460a637e8f3fde92ce6d81d");
+  const empty = trustDialogHTML(base({ tools: [], actions: [] }));
+  assert.equal(sha(empty), "0e2daee73bb94252449c3430f194b391a6a32bd617e5791ad20c4b030a83480b");
+  assert.equal(trustDialogHTML(base({ tools: "x", actions: null })), empty, "не-масиви — як порожні");
+});
+
+test("tools і actions: два рядки з підписами зі словника, назви через кому, між «Просить» і файлами", () => {
+  const h = trustDialogHTML(base({ tools: [{ label: "Board", icon: "task" }, { label: "Notes", icon: "doc" }], actions: [{ label: "Go" }] }));
+  assert.match(h, /<p class="tr-ext"><span class="tr-h3">Інструменти в острівці<\/span> Board, Notes<\/p>/);
+  assert.match(h, /<p class="tr-ext"><span class="tr-h3">Дії<\/span> Go<\/p>/);
+  assert.ok(h.indexOf("Site id") < h.indexOf("Інструменти в острівці") && h.indexOf("Дії<") < h.indexOf("Файли ("));
+  const onlyActions = trustDialogHTML(base({ actions: [{ label: "Go" }] }));
+  assert.doesNotMatch(onlyActions, /Інструменти в острівці/);
+  assert.match(onlyActions, /Дії/);
+  assert.doesNotMatch(trustDialogHTML(base({ tools: [{ label: "Board" }] })), /<span class="tr-h3">Дії/);
+});
+
+test("tools і actions: усе з диска екранується й обрізається до TR_MAX; у режимі refused рядків нема", () => {
+  const h = trustDialogHTML(base({ tools: [{ label: "<b>x</b>" }], actions: [{ label: `<i>${"й".repeat(200)}` }] }));
+  assert.match(h, /&lt;b&gt;x&lt;\/b&gt;/);
+  assert.doesNotMatch(h, /<b>x<\/b>|<i>/);
+  assert.match(h, /&lt;i&gt;й+…<\/p>/);
+  const r = trustDialogHTML(base({ state: "refused", refused: { code: "x" }, tools: [{ label: "Board" }] }));
+  assert.doesNotMatch(r, /Board|tr-ext/);
+});
+
+test("словник: trustTools і trustActions є в uk та en", () => {
+  assert.equal(DICT.uk.trustTools, "Інструменти в острівці");
+  assert.equal(DICT.uk.trustActions, "Дії");
+  assert.equal(DICT.en.trustTools, "Island tools");
+  assert.equal(DICT.en.trustActions, "Actions");
+});
