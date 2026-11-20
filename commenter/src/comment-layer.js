@@ -1362,15 +1362,16 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._persist(); this._render(); this._placePins();
     },
 
-    // Заливка знімка: одна повторна спроба через 500 мс. `failed` — сховище є, а URL так і нема (null/таймаут/виняток).
+    // Заливка знімка: одна повторна спроба через 500 мс — лише після ШВИДКОЇ відмови (null/виняток), не після таймауту. `failed` — сховище є, а URL так і нема (null/таймаут/виняток).
     async _uploadShot(id, shot, c) {
       if (!this.store || typeof this.store.uploadShot !== 'function') return { url: null, failed: false };
       for (let i = 0; i < 2; i++) {
         if (i) await new Promise((res) => setTimeout(res, 500));
         try {
           const url = await raceTimeout(this.store.uploadShot(id, shot, c), 8000);
-          if (url && url !== SHOT_TIMEOUT) return { url, failed: false };
-        } catch (e) { /* повтор */ }
+          if (url === SHOT_TIMEOUT) break;   // після таймауту не повторюємо: найгірший час першого persist і гонка з зависшою спробою
+          if (url) return { url, failed: false };
+        } catch (e) { /* швидка відмова — повтор */ }
       }
       return { url: null, failed: true };
     },
@@ -1385,9 +1386,10 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         if (target.getElementsByTagName('*').length - trim.dropped > SHOT_MAX_NODES) return { miss: 'too-big' };
         const libSrc = shotLibSrc(this.opts && this.opts.shotLib);
         let h2c;
+        const libP = loadShotLib(libSrc);
         try {
-          const lib = await raceTimeout(loadShotLib(libSrc), 8000);   // свій бюджет 8 с — не їсть бюджет рендеру
-          if (lib === SHOT_TIMEOUT) { dropShotLib(libSrc); return { miss: 'no-lib' }; }
+          const lib = await raceTimeout(libP, 8000);   // свій бюджет 8 с — не їсть бюджет рендеру
+          if (lib === SHOT_TIMEOUT) { dropShotLib(libSrc, libP); return { miss: 'no-lib' }; }
           h2c = lib;
         } catch (e) { return { miss: 'no-lib' }; }
         if (typeof h2c !== 'function') return { miss: 'no-lib' };
@@ -2187,9 +2189,10 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   }
   // Кеш за адресою; відхилений (чи не встиглий) проміс не залишається — наступний пін пробує знову.
   const _shotLibs = new Map();
-  function dropShotLib(src) {
+  // `expected` — проміс, якого чекав викликач: скидаємо лише власний запис (чужий, новіший, не чіпаємо).
+  function dropShotLib(src, expected) {
     const e = _shotLibs.get(src || SHOT_CDN);
-    if (!e) return;
+    if (!e || (expected && e.p !== expected)) return;
     _shotLibs.delete(src || SHOT_CDN);
     if (e.s && e.s.parentNode) e.s.parentNode.removeChild(e.s);
   }
@@ -2207,7 +2210,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       s.onerror = () => reject(new Error('html2canvas load failed'));
       document.head.appendChild(s);
     });
-    e.p.catch(() => { if (_shotLibs.get(url) === e) dropShotLib(src); });
+    e.p.catch(() => { dropShotLib(src, e.p); });
     _shotLibs.set(url, e);
     return e.p;
   }

@@ -143,3 +143,23 @@ test("ціль із понад 300 SVG-вузлами (але <1500 елемен
   assert.equal(c.meta.shotMiss, undefined);
   await page.close();
 });
+
+test("посилання з живого вузла в порожній корінь рятує symbol, його path і градієнт, на який вказує path (транзитивно)", async () => {
+  const page = await boot();
+  await page.evaluate(() => {
+    const big = document.querySelector("#big");
+    big.style.padding = "30px";
+    // b1 — перший, понад бюджет → порожній; symbol і path (fill=url(#gr2)) ідуть РАНІШЕ за градієнт; живий b2 посилається на symbol
+    big.innerHTML = '<svg id="b1" width="10" height="10"><symbol id="sym2"><path id="sp2" d="M0 0h1v1z" fill="url(#gr2)"/></symbol>'
+      + '<linearGradient id="gr2"><stop id="st2" offset="0"/></linearGradient><path id="junk" d="M0 0h1v1z"/>' + "<path d=\"M0 0h1v1z\"/>".repeat(400) + '</svg>'
+      + '<svg id="b2" width="10" height="10" mask="url(#sym2)"><circle r="1"/></svg>';
+  });
+  await addComment(page, "#big", "транзитивно", { x: 5, y: 5 });
+  assert.equal(await page.evaluate(() => window.__calls.length), 1);
+  const r = await page.evaluate(() => {
+    const ig = window.__calls[0].opts.ignoreElements, q = (s) => document.querySelector(s);
+    return { sym: ig(q("#sym2")), path: ig(q("#sp2")), grad: ig(q("#gr2")), stop: ig(q("#st2")), junk: ig(q("#junk")), b1: ig(q("#b1")), b2: ig(q("#b2")), b2c: ig(q("#b2 circle")) };
+  });
+  assert.deepEqual(r, { sym: false, path: false, grad: false, stop: false, junk: true, b1: false, b2: false, b2c: true });
+  await page.close();
+});

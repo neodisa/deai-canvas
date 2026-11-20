@@ -14,6 +14,8 @@ import { chromium } from "playwright";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUNDLE = readFileSync(path.join(ROOT, "app", "vendor", "comment-layer.min.js"), "utf8");
 const CDN = "https://cdn.jsdelivr.net/**";
+const CDN_URL = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
+const CDN_SEL = `head script[src="${CDN_URL}"]`;
 
 const icon = (n) => `<svg class="ic" width="12" height="12"><g><path d="M0 0h${n}v4z"/><circle r="1"/></g></svg>`;
 const card = (i, icons = 10) => `<div class="card" id="card${i}" style="padding:10px"><h3>Картка ${i}</h3>${Array.from({ length: icons }, (_, k) => icon(k + 1)).join("")}</div>`;
@@ -119,7 +121,7 @@ test("3. CDN недоступний: shotMiss no-lib; потім бібліот�
   await addComment(page, "#lone", "без бібліотеки", corner);
   assert.equal((await cm(page, "без бібліотеки")).meta.shotMiss, "no-lib");
   assert.equal(reqs, 1);
-  assert.equal(await page.evaluate(() => document.querySelectorAll("head script[src*=html2canvas]").length), 0, "невдалий <script> прибрано");
+  assert.equal(await page.evaluate((q) => document.querySelectorAll(q).length, CDN_SEL), 0, "невдалий <script> прибрано");
   ok = true;
   await addComment(page, "#lone", "бібліотека є", corner);
   assert.equal(reqs, 2, "кеш відхиленого проміса мав скинутись — CDN запитано знову");
@@ -134,11 +136,39 @@ test("3б. CDN мовчить: після 8 с завантаження (page.cl
   await page.route(CDN, () => {});   // запит висить
   await page.click("#lone", { position: corner });
   await typeAndSave(page, "CDN мовчить");
-  await page.waitForFunction(() => document.querySelector("head script[src*=html2canvas]"));
+  await page.waitForFunction((q) => document.querySelector(q), CDN_SEL);
   await page.clock.fastForward(8500);
   await waitSaved(page, "CDN мовчить");
   assert.equal((await cm(page, "CDN мовчить")).meta.shotMiss, "no-lib");
-  assert.equal(await page.evaluate(() => document.querySelectorAll("head script[src*=html2canvas]").length), 0);
+  assert.equal(await page.evaluate((q) => document.querySelectorAll(q).length, CDN_SEL), 0);
+  await page.close();
+});
+
+test("3в. гонка скидання: запізнілий очікувач не знищує чужий, новіший запит бібліотеки", async () => {
+  const page = await boot({ h2c: "none", clock: true });
+  const held = [];
+  await page.route(CDN, (r) => { held.push(r); });
+  const pin = async (text) => { await page.click("#lone", { position: corner }); await typeAndSave(page, text); };
+  const nScripts = () => page.evaluate((q) => document.querySelectorAll(q).length, CDN_SEL);
+  await pin("A");
+  await page.waitForFunction((q) => document.querySelector(q), CDN_SEL);
+  await page.clock.fastForward(2000);
+  await pin("C");                       // чекає на той самий запит E1
+  await page.clock.fastForward(6500);   // t=8.5: A вичерпав 8 с і скинув E1
+  await waitSaved(page, "A");
+  assert.equal((await cm(page, "A")).meta.shotMiss, "no-lib");
+  await pin("B");                     // новий запит E2
+  await page.waitForFunction((q) => document.querySelector(q), CDN_SEL);   // скрипт E2 уже в <head>
+  await page.clock.fastForward(2000);   // t=10.5: C вичерпав свої 8 с
+  await waitSaved(page, "C");
+  assert.equal((await cm(page, "C")).meta.shotMiss, "no-lib");
+  assert.equal(await nScripts(), 1, "<script> запиту B прибрано чужим очікувачем");
+  // Chrome зливає другий запит тієї ж адреси з першим, що висить, — тож віддаємо єдиний утриманий: його чекають і E2
+  await held[0].fulfill({ contentType: "application/javascript", body: SPY_SRC });
+  await waitSaved(page, "B");
+  const b = await cm(page, "B");
+  assert.ok(b.meta.shot, "B мав отримати знімок");
+  assert.equal(b.meta.shotMiss, undefined);
   await page.close();
 });
 
@@ -174,7 +204,7 @@ test("5б. окремі бюджети: бібліотека вантажить�
     window.html2canvas = (el, opts) => { window.__calls.push({ el, opts }); return new Promise((res) => setTimeout(() => { const c = document.createElement("canvas"); c.width = 20; c.height = 10; res(c); }, 5000)); };`;
   await page.click("#lone", { position: corner });
   await typeAndSave(page, "два бюджети");
-  await page.waitForFunction(() => document.querySelector("head script[src*=html2canvas]"));
+  await page.waitForFunction((q) => document.querySelector(q), CDN_SEL);
   while (!held) await new Promise((r) => setTimeout(r, 20));
   await page.clock.fastForward(5000);
   await held.fulfill({ contentType: "application/javascript", body: SLOW });
@@ -209,6 +239,21 @@ test("6. uploadShot: null двічі → upload і рівно 2 виклики; 
   await addComment(page, "#lone", "виняток", corner);
   assert.equal(await page.evaluate(() => window.__uploads.length), 2);
   assert.equal((await cm(page, "виняток")).meta.shotMiss, "upload");
+  await page.close();
+});
+
+test("6б. uploadShot висить: після 8 с — upload одразу, рівно 1 виклик (без повтору після таймауту)", async () => {
+  const page = await boot({ clock: true, upload: "(id) => { window.__uploads.push(id); return new Promise(() => {}); }" });
+  await page.click("#lone", { position: corner });
+  await typeAndSave(page, "заливка висить");
+  await page.waitForFunction(() => window.__uploads.length === 1);
+  await page.clock.fastForward(8500);
+  await page.clock.fastForward(1000);   // повтор (якби був) стартував би через 500 мс після таймауту
+  await page.waitForFunction((t) => window.__mem.some((c) => c.text === t), "заливка висить", { timeout: 3000 });
+  assert.equal(await page.evaluate(() => window.__uploads.length), 1);
+  const c = await cm(page, "заливка висить");
+  assert.ok(c.meta.shot);
+  assert.equal(c.meta.shotMiss, "upload");
   await page.close();
 });
 

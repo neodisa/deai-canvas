@@ -35,21 +35,21 @@ export function shotScope(target, blankRoots) {
   if (blankRoots) for (const b of blankRoots) for (const d of b.getElementsByTagName('*')) blankDesc.add(d);
   const anchors = [target];
   const seen = new Set([target]);
-  const all = [target, ...target.getElementsByTagName('*')];
-  for (const el of all) {
-    if (blankDesc.has(el)) continue;   // посилання з відсічених вузлів нікому не потрібні
+  const queue = [];
+  const scan = (el) => {
     for (const id of refIds(el)) {
       const ref = doc.getElementById(id);
-      if (ref && !seen.has(ref)) {
-        seen.add(ref); anchors.push(ref);
-        if (blankDesc.size && blankDesc.has(ref)) {   // але на вузол усередині порожнього кореня вказує живий — лишаємо його, нащадків і предків до кореня
-          blankDesc.delete(ref);
-          for (const d of ref.getElementsByTagName('*')) blankDesc.delete(d);
-          for (let p = ref.parentElement; p && blankDesc.has(p); p = p.parentElement) blankDesc.delete(p);
-        }
+      if (!ref || seen.has(ref)) continue;
+      seen.add(ref); anchors.push(ref);
+      if (blankDesc.has(ref)) {   // на вузол усередині порожнього кореня вказує живий — лишаємо його, нащадків і предків до кореня
+        const keep = [ref, ...ref.getElementsByTagName('*')];
+        for (let p = ref.parentElement; p && blankDesc.has(p); p = p.parentElement) keep.push(p);
+        for (const k of keep) { blankDesc.delete(k); queue.push(k); }   // їхні власні посилання теж треба зібрати (транзитивно)
       }
     }
-  }
+  };
+  for (const el of [target, ...target.getElementsByTagName('*')]) if (!blankDesc.has(el)) scan(el);   // посилання з відсічених вузлів нікому не потрібні
+  while (queue.length) scan(queue.pop());
   return function ignoreElements(node) {
     if (blankDesc.size && blankDesc.has(node)) return true;
     if (node.closest && node.closest('head')) return false;
