@@ -3,6 +3,36 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.34.0] — 20.11.2026
+
+Modules M1: tools and actions. A space module (manifest `api: 2`) can now add its own tools to the island — a button,
+a panel on the right in a sandbox, an item in ⌘K, an optional letter key — and actions in ⌘K, the task «⋯» menu and the
+iteration menu. The frame of Deai stays fixed: modules can't change the bar, tabs, layout, theme or core keys, and they
+don't run code inside mockups (deferred, see `docs/modules/authoring.md` §8). Without such modules Deai looks and works
+exactly as before.
+
+### Додано
+- Маніфест модуля `api: 2`: `tools` (до 4: `id`, `label`, `icon` з набору Deai, `panel` — HTML у підтеці модуля,
+  необовʼязкова клавіша-літера) і `actions` (до 8: `id`, `label`, `where` — `palette` / `task` / `iteration`,
+  `timeout_s`). Старіший Deai такий модуль не довіряє, а не мовчки ігнорує частину. `frame` (скрипт у макеті) — відмова
+  «not supported yet».
+- Острівець: до 3 інструментів модулів після «Інспектора» (лише «Макет»), решта — у ⌘K (група «Модулі»). Права панель
+  одна на раз: інструмент, коментарі чи інспектор; «Сховати інтерфейс», «Огляд», екран «Задачі» й зміна простору
+  закривають інструмент, зміна задачі, ітерації чи сторінки — ні.
+- Панель інструмента — рамка-пісочниця без доступу до канваса, його сховища, `/api/*` і мережі; стилі оболонки (класи
+  `dk-*`) і міст `window.deai` (`context`, `selection`, `call` → функції `tool_*` модуля, `toast`, `close`, події
+  `context` / `theme` / `close`) підключаються самі.
+- Дії модулів у ⌘K, меню «⋯» картки задачі й дропдауні ітерації → `action_<id>` у `server.py` модуля → тост із текстом і,
+  якщо модуль дав адресу http(s), кнопкою «Відкрити».
+- Діалог довіри показує інструменти й дії модуля ще до довіри.
+- Приклад модуля «Нотатки сторінок» (`docs/modules/examples/page-notes/`) і розділи 7–8 у `docs/modules/authoring.md`
+  (контракт інструментів і дій, межі модулів).
+
+### Безпека
+- Файли панелі роздаються лише з теки панелі довіреного знімка, з політикою `sandbox` (`connect-src 'none'`,
+  `frame-ancestors 'self'`); виклики — лише `tool_*` і оголошених `action_*` увімкненого модуля поточного простору; тіло
+  ≤ 64 КіБ, результат ≤ 256 КіБ, не більше 4 одночасних викликів на модуль (`module-busy`).
+
 ## [0.33.0] — 20.11.2026
 
 First run. Deai Canvas now installs from one prompt to an agent (`SETUP.md`), and the canvas itself shows a newcomer what to
