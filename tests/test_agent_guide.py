@@ -469,7 +469,8 @@ class RealBlock(unittest.TestCase):
         self.assertRegex(g, r'^[0-9a-f]{8}$')
         self.assertIn(f'# Deai Canvas (guide {g})', self.block)
         self.assertIn('curl -sG http://127.0.0.1:8765/api/agent-guide --data-urlencode "path=$PWD" -d have=' + g, self.block)
-        self.assertIn('A 404 on this check means\nthe canvas is older than this file', self.block)
+        self.assertRegex(self.block, r'404 on this check means\s+the canvas is older than this file')
+        self.assertIn('unknown-space', self.block)
         self.assertIn('-d space=<space-id>', self.block)
 
     def test_the_index_lists_every_topic(self):
