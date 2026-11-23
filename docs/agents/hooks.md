@@ -29,11 +29,21 @@ take the task header (or the prefix).
 
     POST http://127.0.0.1:8765/api/autosync {}
 
-The quiet step of a Stop hook, with the `vcs` role (topic `vcs`): it commits the task folder locally and sends your newest
-own iteration to the repository when it changed since the last send. It never answers with a server error. When nothing is
-sent the answer is `{"ok": true, "changed": false, "reason": …}`: `no-gitlab` (no `vcs` role or no repository for the task),
-`autosync-off` (the module's «Send after every agent reply» is off; nothing is sent or committed), `no-iterations`,
-`foreign-only` (only colleagues' iterations), `clean` (nothing new). A failed send is `reason: "offline"` (usually the
-network; with a `code` when the module gave one), and `reason: "error"` is a local failure (unreadable task files,
-permissions): it is written to the server log, and the Stop hook reports it instead of staying silent. When a send happens the answer is the result of the send, as for `POST /api/vcs-push`,
-plus `it` and `local_sha`. The task is named by `X-Canvas-Task`, as everywhere; without it, the current one.
+The quiet step of a Stop hook, with the `vcs` role (topic `vcs`). It does two things, in this order:
+
+1. Always, even with autosync off or without a `vcs` role: it commits each of this computer's own changed iterations of the
+   task as its own local commit `itN: зміни AI` with the trailer `Deai-Actor: ai`, touching only `iterations/<itN>/`
+   (colleagues' iterations and other files stay uncommitted). It never pushes. A task folder without `.git` gets no AI
+   commit. The answer carries it as `ai`: `{"it", "sha", "its"}` (the newest commit and every iteration committed) or
+   `null` when nothing was committed.
+2. Then it sends your newest own iteration to the repository when it changed since the last send. It never answers with a
+   server error.
+
+When nothing is sent the answer is `{"ok": true, "changed": false, "reason": …, "ai": …}`: `no-gitlab` (no `vcs` role or no
+repository for the task), `autosync-off` (the module's «Send after every agent reply» is off: nothing is sent, but the
+local AI commit of step 1 is still made), `no-iterations`, `foreign-only` (only colleagues' iterations), `clean` (nothing
+new). A failed send is `reason: "offline"` (usually the network; with a `code` when the module gave one), and
+`reason: "error"` is a local failure (unreadable task files, permissions): it is written to the server log, and the Stop
+hook reports it instead of staying silent. When a send happens the answer is the result of the send, as for
+`POST /api/vcs-push`, plus `it`, `local_sha` and `ai`. The task is named by `X-Canvas-Task`, as everywhere; without it, the
+current one.

@@ -1,5 +1,5 @@
 # Iterations
-Versions of a task: create, rename, delete, list pages, turn iterations into pages.
+Versions of a task: create, rename, delete and restore, history, list pages, turn iterations into pages.
 
 Every call here acts on one task: send the header `X-Canvas-Task: <task-id>` (or prefix the path with `/t/<task-id>`).
 Without it the call acts on the current task of this computer.
@@ -25,8 +25,35 @@ when the iterations of a task are different pages rather than versions.
 
     POST http://127.0.0.1:8765/api/iteration-delete {"id": "itN"}
 
-Removes the iteration's folder and entry; answer `{"ok": true, "deleted": "itN"}`, `404` for an unknown id. The task's git
-history records the deletion.
+A soft delete: the iteration's folder and its entry move to the task's trash (`.trash/iterations/` in the task folder,
+outside git) and are erased after 7 days. Answer `{"ok": true, "deleted": "itN", "trash": "<slot>"}`; keep `<slot>` to
+restore it. `404` for an unknown id; `409 {"ok": false, "error": "last-iteration"}` when it is the only iteration of the
+task (a task is never left without one). The task's git history records `delete iteration itN`.
+
+## Restore
+
+    POST http://127.0.0.1:8765/api/iteration-restore {"trash": "<slot>"}
+
+Brings an iteration back from the trash. Answer `{"ok": true, "id", "renamed", "iteration": {…}}`: when its old id is taken
+by another iteration, it returns under the next free number and `renamed` is `true`. `404 {"error": "not-in-trash"}` for a
+slot that is gone (erased after 7 days or restored already), `400` for a malformed slot. The task's git history records
+`restore iteration itN`.
+
+## History
+
+    GET http://127.0.0.1:8765/api/iteration-history?id=itN
+
+The change history of one iteration, read from the task folder's git: `{"ok": true, "id", "entries": […], "pending": …,
+"degraded": false}`. `entries` come newest first (up to 300 commits are read); each is `{"sha", "at", "actor": {"kind":
+"ai" | "person", "name"}, "kind", "args", "text", "files", "more"}`: `kind` is `create`, `copy`, `merge`, `rename`, `delete`,
+`restore`, `page-new`, `page-rename`, `page-move`, `tree`, `publish`, `ai` (your edits) or `other`; `files` are up to 5
+files of this iteration the commit touched and `more` counts the rest. `pending` is the not yet committed changes of the
+iteration (`{"files", "more", "at"}`) or `null`. A task folder without git gives one entry built from the iteration's own
+record and `"degraded": true`. `404 {"error": "iteration-not-found"}` for an unknown id.
+
+Your own edits show as `actor.kind: "ai"`: after finishing edits to an iteration, call `POST /api/autosync {}` (topic
+`hooks`); the canvas commits them locally as `itN: зміни AI` with the trailer `Deai-Actor: ai`. Do not commit the task folder
+yourself.
 
 ## Pages of an iteration
 
