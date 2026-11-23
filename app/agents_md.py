@@ -156,11 +156,15 @@ def status(space_dir, *, version):
     return out
 
 
-def write(space_dir, *, version):
-    """Створити/оновити AGENTS.md; повертає `status` після запису. Файл новішої версії → `ValueError('newer')`, файл цілий."""
+def write(space_dir, *, version, only_stale=False):
+    """Створити/оновити AGENTS.md; повертає `status` після запису. Файл новішої версії → `ValueError('newer')`, файл цілий.
+    `only_stale=True` (автооновлення при старті): рішення за ВЛАСНИМ читанням цього виклику — пишемо лише коли файл є, блок є
+    й він застарів; інакше `ValueError('changed')` без запису (людина прибрала блок чи файл між перевіркою й записом)."""
     st = status(space_dir, version=version)
     if st['newer']:
         raise ValueError('newer')
+    if only_stale and not (st['exists'] and st['hasBlock'] and st['outdated']):
+        raise ValueError('changed')
     new = render_block(version=version)
     if not st['exists']:
         text = new

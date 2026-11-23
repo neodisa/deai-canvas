@@ -525,5 +525,46 @@ class ImplicitSpace(base.Bare):
         self.assertEqual(self.post('/api/agents-md', {})[0], 409)
 
 
+class OnlyStale(unittest.TestCase):
+    """`write(only_stale=True)`: пише лише коли ВЛАСНЕ читання бачить наявний застарілий блок; інакше `ValueError('changed')`."""
+    OLD = '<!-- deai:begin v0.1.0 · old -->\nold\n<!-- deai:end -->\n'.encode()
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp(prefix='only-stale-')
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.f = os.path.join(self.d, 'AGENTS.md')
+
+    def stale_write(self):
+        return agents_md.write(self.d, version='9.0.0', only_stale=True)
+
+    def test_missing_file_is_not_created(self):
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            self.stale_write()
+        self.assertEqual(os.listdir(self.d), [])
+
+    def test_file_without_a_block_is_untouched(self):
+        _put(self.f, b'# mine\n')
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            self.stale_write()
+        self.assertEqual(open(self.f, 'rb').read(), b'# mine\n')
+        self.assertEqual(os.listdir(self.d), ['AGENTS.md'])
+
+    def test_a_block_that_is_not_outdated_is_untouched(self):
+        same = agents_md.render_block(version='0.1.0').encode()
+        _put(self.f, same)
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            self.stale_write()
+        self.assertEqual(open(self.f, 'rb').read(), same)
+
+    def test_a_stale_block_is_rewritten(self):
+        _put(self.f, b'x\n' + self.OLD)
+        self.stale_write()
+        self.assertEqual(open(self.f, 'rb').read(), b'x\n' + agents_md.render_block(version='9.0.0').encode())
+
+    def test_default_still_creates_and_adds(self):
+        agents_md.write(self.d, version='9.0.0')
+        self.assertTrue(os.path.isfile(self.f))
+
+
 if __name__ == '__main__':
     unittest.main()

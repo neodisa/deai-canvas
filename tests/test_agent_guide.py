@@ -579,13 +579,92 @@ class Refresh(unittest.TestCase):
         self.space('b', agents=self.OLD)
         real = agents_md.write
 
-        def flaky(folder, *, version):
+        def flaky(folder, *, version, **kw):
             if folder == a:
                 raise RuntimeError('boom')
-            return real(folder, version=version)
+            return real(folder, version=version, **kw)
         with mock.patch.object(agents_md, 'write', side_effect=flaky):
             self.assertEqual(self.refresh(), ['b'])
-        self.assertEqual(self.logs, ['agents-md: skipped a: RuntimeError', 'agents-md: refreshed 1 space(s)'])
+        self.assertEqual(self.logs, ["agents-md: skipped 'a': RuntimeError", 'agents-md: refreshed 1 space(s)'])
+
+    def _mutate_after_status(self, mutate):
+        """Обгортає справжній `status`: після ПЕРШОГО виклику (власного в `refresh_spaces`) виконує `mutate`."""
+        real, calls = agents_md.status, []
+
+        def wrap(folder, *, version):
+            out = real(folder, version=version)
+            if not calls:
+                calls.append(1)
+                mutate()
+            return out
+        return mock.patch.object(agents_md, 'status', side_effect=wrap)
+
+    def test_block_removed_after_status_is_not_re_added(self):
+        d = self.space('a', agents=b'# mine\n' + self.OLD)
+        f = os.path.join(d, 'AGENTS.md')
+        with self._mutate_after_status(lambda: _wb(f, b'# mine\n')):
+            self.assertEqual(self.refresh(), [])
+        self.assertEqual(_rb(f), b'# mine\n')
+        self.assertEqual(self.logs, [])
+
+    def test_file_deleted_after_status_is_not_created(self):
+        d = self.space('a', agents=self.OLD)
+        f = os.path.join(d, 'AGENTS.md')
+        with self._mutate_after_status(lambda: os.unlink(f)):
+            self.assertEqual(self.refresh(), [])
+        self.assertEqual(os.listdir(d), [])
+        self.assertEqual(self.logs, [])
+
+    def test_unreadable_registry_is_one_log_line(self):
+        with mock.patch.object(spaces, 'read_registry', side_effect=KeyError('x')):
+            self.assertEqual(self.refresh(), [])
+        self.assertEqual(self.logs, ['agents-md: registry unreadable: KeyError'])
+
+    def test_an_id_with_a_newline_cannot_split_the_log(self):
+        d = self.space('a\nb', agents=self.OLD)
+        with mock.patch.object(agents_md, 'write', side_effect=RuntimeError):
+            self.refresh()
+        self.assertEqual(self.logs, ["agents-md: skipped 'a\\nb': RuntimeError"])
+
+    def test_begin_without_end_is_left_alone(self):
+        raw = '# mine\n<!-- deai:begin v0.1.0 · old -->\nno end\n'.encode()
+        d = self.space('a', agents=raw)
+        self.assertEqual(self.refresh(), [])
+        self.assertEqual(_rb(os.path.join(d, 'AGENTS.md')), raw)
+        self.assertEqual(self.logs, [])
+
+    def test_two_blocks_only_the_first_is_replaced(self):
+        second = '<!-- deai:begin v0.1.0 · two -->\ntwo\n<!-- deai:end -->\n'.encode()
+        d = self.space('a', agents=b'a\n' + self.OLD + b'mid\n' + second + b'z\n')
+        self.assertEqual(self.refresh(), ['a'])
+        new = agents_md.render_block(version=self.V).encode()
+        self.assertEqual(_rb(os.path.join(d, 'AGENTS.md')), b'a\n' + new + b'mid\n' + second + b'z\n')
+
+    def test_crlf_text_around_the_block_is_kept(self):
+        old = self.OLD.replace(b'\n', b'\r\n')
+        d = self.space('a', agents=b'# mine\r\n\r\n' + old + b'\r\nafter\r\n')
+        self.assertEqual(self.refresh(), ['a'])
+        got = _rb(os.path.join(d, 'AGENTS.md'))
+        self.assertTrue(got.startswith(b'# mine\r\n\r\n'))
+        self.assertTrue(got.endswith(b'\r\nafter\r\n'))
+        self.assertIn(agents_md.render_block(version=self.V).encode(), got)
+        self.assertNotIn(b'old text', got)
+
+    def test_agents_md_as_a_directory_is_skipped_silently(self):
+        d = self.space('a')
+        os.mkdir(os.path.join(d, 'AGENTS.md'))
+        self.assertEqual(self.refresh(), [])
+        self.assertTrue(os.path.isdir(os.path.join(d, 'AGENTS.md')))
+        self.assertEqual(self.logs, [])
+
+    def test_a_registered_symlinked_folder_is_refreshed(self):
+        # Задумано: зареєстрована тека — власний простір людини, тож шлях до неї може бути симлінком; перевіряється сам AGENTS.md.
+        real = self.space('real', agents=self.OLD)
+        link = os.path.join(self.tmp, 'link')
+        os.symlink(real, link)
+        self.reg['spaces'] = [{'id': 'l', 'path': link, 'legacy': False}]
+        self.assertEqual(self.refresh(), ['l'])
+        self.assertEqual(_rb(os.path.join(real, 'AGENTS.md')), agents_md.render_block(version=self.V).encode())
 
     def test_layer_off_or_a_bad_version_does_nothing(self):
         self.space('a', agents=self.OLD)
@@ -623,7 +702,15 @@ class Startup(unittest.TestCase):
         self.assertEqual(self.boot(False, 5), [updater.current_version(serve.UPDATER_ROOT)])
 
     def test_an_isolated_run_with_the_real_home_skips_it(self):
-        self.assertEqual(self.boot(True, 0.3), [])
+        names = []
+        real = threading.Thread
+
+        def spy(*a, **kw):
+            names.append(kw.get('name'))
+            return real(*a, **kw)
+        with mock.patch.object(serve.threading, 'Thread', side_effect=spy):
+            self.assertEqual(self.boot(True, 0), [])
+        self.assertNotIn('agents-md-refresh', names)
 
 
 if __name__ == '__main__':
