@@ -313,11 +313,13 @@ def _reply_ts(ts):
 REPLY_CONT = '\n                │ '
 #: Скільки символів тексту відповіді бачить агент (стільки ж приймає сховище); довше — з `…` в кінці.
 REPLY_TEXT_MAX = 4000
+REPLY_LINES_MAX = 60       # 4000 переносів інакше дали б 4000 рядків виводу на одну відповідь
 
 
 def reply_line(r):
     """Відповідь для виводу: `<автор>, <ДД.ММ ГГ:ХХ>[ (ред.)]: <текст>` (відповідь агента — `AI`). Текст — ПОВНИЙ (≤ 4000, довший
-    обрізається з `…`): людина відповідає на питання агента, і зрізати її відповідь мовчки не можна. Перший рядок іде в тому ж рядку,
+    обрізається з `…`; понад `REPLY_LINES_MAX` рядків — теж `…`): людина відповідає на питання агента, і зрізати її відповідь
+    мовчки не можна. Перший рядок іде в тому ж рядку,
     решта — з `REPLY_CONT`. Локальний файл пише браузер, а відповіді командного каналу — інші люди: кожен рядок проходить
     `agent_line` (без переносів і керівних символів)."""
     who = agent_line(r.get('author'), 100) or '?'
@@ -330,7 +332,10 @@ def reply_line(r):
     if len(t) > REPLY_TEXT_MAX:
         t = t[:REPLY_TEXT_MAX - 1] + '…'
     edited = ' (ред.)' if agent_line(r.get('editedTs'), 40).strip() else ''
-    body = REPLY_CONT.join(agent_line(ln, REPLY_TEXT_MAX) for ln in t.split('\n'))
+    lines = t.split('\n')
+    if len(lines) > REPLY_LINES_MAX:
+        lines = lines[:REPLY_LINES_MAX - 1] + ['…']
+    body = REPLY_CONT.join(agent_line(ln, REPLY_TEXT_MAX) for ln in lines)
     return f'{who}, {_reply_ts(r.get("ts"))}{edited}: {body}'
 
 

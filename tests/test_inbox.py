@@ -712,6 +712,15 @@ class ThreadOutput(InboxCase):
         self.assertIn('я' * 3999 + '…', out)
         self.assertNotIn('я' * 4000, out)
 
+    def test_a_reply_of_many_lines_is_cut_to_the_line_cap(self):
+        self.set_local([_pin('11111111-aaaa', 'пін', replies=[_reply('r1', '\n'.join(f'р{i}' for i in range(500)))])])
+        out = self.listing()
+        cont = [ln for ln in out.splitlines() if re.match(r'^ {16}│ ', ln)]
+        self.assertEqual(len(cont), 59, 'р0 у рядку відповіді, р1…р58 і `…` — продовження; разом 60 рядків')
+        self.assertEqual(cont[-1].strip(), '│ …')
+        self.assertIn('│ р58\n', out)
+        self.assertNotIn('р59', out)
+
     def test_an_edited_reply_is_marked(self):
         self.set_local([_pin('11111111-aaaa', 'пін', replies=[
             _reply('r1', 'виправлено', editedTs='20.09.2026 10:09'), _reply('r2', 'як було', editedTs=''),
