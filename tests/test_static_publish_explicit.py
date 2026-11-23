@@ -188,6 +188,7 @@ class LegacySpaces(Base):
                 mock.patch.object(liga_migrate, 'startup'), \
                 mock.patch.object(serve.isolation, 'real_home', return_value=False), \
                 mock.patch.object(serve.feedback, 'start_background'), \
+                mock.patch.object(serve.agent_guide, 'refresh_spaces', return_value=[]), \
                 mock.patch.object(spaces, 'materialize_static_publish', side_effect=lambda **kw: seen.append(kw) or []):
             serve.serve_main(0)
         self.assertIs(seen[0].get('skip'), liga_migrate.liga_space)
@@ -243,6 +244,7 @@ class StartupStep(Base):
                 mock.patch.object(liga_migrate, 'startup'), \
                 mock.patch.object(serve.isolation, 'real_home', return_value=real_home), \
                 mock.patch.object(serve.feedback, 'start_background'), \
+                mock.patch.object(serve.agent_guide, 'refresh_spaces', return_value=[]), \
                 mock.patch.object(spaces, 'materialize_static_publish', side_effect=side):
             serve.serve_main(0)
         srv.serve_forever.assert_called_once()

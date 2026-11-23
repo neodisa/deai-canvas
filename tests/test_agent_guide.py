@@ -484,5 +484,147 @@ class RealBlock(unittest.TestCase):
         self.assertIn('commit changes to it with your work', first)
 
 
+class Refresh(unittest.TestCase):
+    """`agent_guide.refresh_spaces`: реєстр підмінено, теки тимчасові."""
+    V = '9.0.0'
+    OLD = '<!-- deai:begin v0.1.0 · old -->\nold text\n<!-- deai:end -->\n'.encode()
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='agent-refresh-')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.reg = {'spaces': []}
+        self.logs = []
+        for p in (mock.patch.object(spaces, 'read_registry', side_effect=lambda: self.reg),
+                  mock.patch.object(spaces, 'layer_on', return_value=True)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def space(self, sid, agents=None, claude=None):
+        d = os.path.join(self.tmp, sid)
+        os.makedirs(d)
+        if agents is not None:
+            _wb(os.path.join(d, 'AGENTS.md'), agents)
+        if claude is not None:
+            _wb(os.path.join(d, 'CLAUDE.md'), claude)
+        self.reg['spaces'].append({'id': sid, 'path': d, 'legacy': False})
+        return d
+
+    def refresh(self):
+        return agent_guide.refresh_spaces(self.V, log=self.logs.append)
+
+    def test_a_stale_block_is_rewritten_and_own_text_kept(self):
+        d = self.space('a', agents=b'# mine\n\n' + self.OLD + b'\nafter\n', claude=b'@AGENTS.md\n')
+        self.assertEqual(self.refresh(), ['a'])
+        new = agents_md.render_block(version=self.V).encode()
+        self.assertEqual(_rb(os.path.join(d, 'AGENTS.md')), b'# mine\n\n' + new + b'\nafter\n')
+        self.assertEqual(_rb(os.path.join(d, 'CLAUDE.md')), b'@AGENTS.md\n')
+        self.assertEqual(self.logs, ['agents-md: refreshed 1 space(s)'])
+
+    def test_a_stale_block_without_claude_md_does_not_create_it(self):
+        d = self.space('a', agents=self.OLD)
+        self.assertEqual(self.refresh(), ['a'])
+        self.assertFalse(os.path.lexists(os.path.join(d, 'CLAUDE.md')))
+        self.assertEqual(_rb(os.path.join(d, 'AGENTS.md')), agents_md.render_block(version=self.V).encode())
+
+    def test_no_file_is_not_created(self):
+        d = self.space('a')
+        self.assertEqual(self.refresh(), [])
+        self.assertFalse(os.path.lexists(os.path.join(d, 'AGENTS.md')))
+        self.assertFalse(os.path.lexists(os.path.join(d, 'CLAUDE.md')))
+        self.assertEqual(self.logs, [])
+
+    def test_a_file_without_a_block_is_left_alone(self):
+        d = self.space('a', agents=b'# only mine\n')
+        self.assertEqual(self.refresh(), [])
+        self.assertEqual(_rb(os.path.join(d, 'AGENTS.md')), b'# only mine\n')
+
+    def test_a_newer_block_is_left_alone(self):
+        newer = '<!-- deai:begin v99.0.0 · x -->\nfuture\n<!-- deai:end -->\n'.encode()
+        d = self.space('a', agents=newer)
+        self.assertEqual(self.refresh(), [])
+        self.assertEqual(_rb(os.path.join(d, 'AGENTS.md')), newer)
+
+    def test_a_symlink_is_left_alone_silently(self):
+        d = self.space('a')
+        target = os.path.join(self.tmp, 'elsewhere.md')
+        _wb(target, self.OLD)
+        os.symlink(target, os.path.join(d, 'AGENTS.md'))
+        self.assertEqual(self.refresh(), [])
+        self.assertTrue(os.path.islink(os.path.join(d, 'AGENTS.md')))
+        self.assertEqual(_rb(target), self.OLD)
+        self.assertEqual(self.logs, [])
+
+    def test_the_same_text_from_an_older_version_is_not_rewritten(self):
+        same = agents_md.render_block(version='0.1.0').encode()
+        d = self.space('a', agents=same)
+        f = os.path.join(d, 'AGENTS.md')
+        before = os.stat(f).st_mtime_ns
+        self.assertEqual(self.refresh(), [])
+        self.assertEqual((_rb(f), os.stat(f).st_mtime_ns), (same, before))
+
+    def test_implicit_and_folderless_entries_are_skipped(self):
+        self.reg['spaces'] += [dict(spaces.IMPLICIT), {'id': 'nopath'}, {'id': 'int', 'path': 5},
+                               {'id': 'gone', 'path': os.path.join(self.tmp, 'nowhere')}]
+        self.space('a', agents=self.OLD)
+        self.assertEqual(self.refresh(), ['a'])
+
+    def test_a_concurrent_edit_is_skipped_silently(self):
+        self.space('a', agents=self.OLD)
+        with mock.patch.object(agents_md, 'write', side_effect=ValueError('changed')):
+            self.assertEqual(self.refresh(), [])
+        self.assertEqual(self.logs, [])
+
+    def test_one_failing_space_does_not_stop_the_rest(self):
+        a = self.space('a', agents=self.OLD)
+        self.space('b', agents=self.OLD)
+        real = agents_md.write
+
+        def flaky(folder, *, version):
+            if folder == a:
+                raise RuntimeError('boom')
+            return real(folder, version=version)
+        with mock.patch.object(agents_md, 'write', side_effect=flaky):
+            self.assertEqual(self.refresh(), ['b'])
+        self.assertEqual(self.logs, ['agents-md: skipped a: RuntimeError', 'agents-md: refreshed 1 space(s)'])
+
+    def test_layer_off_or_a_bad_version_does_nothing(self):
+        self.space('a', agents=self.OLD)
+        self.assertEqual(agent_guide.refresh_spaces('unknown', log=self.logs.append), [])
+        with mock.patch.object(spaces, 'layer_on', return_value=False):
+            self.assertEqual(self.refresh(), [])
+        self.assertEqual(self.logs, [])
+
+
+class Startup(unittest.TestCase):
+    """`serve_main` запускає `refresh_spaces` у фоні тим самим гейтом, що й `materialize_static_publish`.
+    (Маркер для tests/test_no_network.py: mock.patch.object(serve.feedback, 'start_background').)"""
+
+    def boot(self, real_home, wait):
+        import liga_migrate
+        started, seen = threading.Event(), []
+
+        def fake(version, **kw):
+            seen.append(version)
+            started.set()
+            return []
+        with mock.patch.object(serve, 'make_server', return_value=mock.Mock()), \
+                mock.patch.object(liga_migrate, 'startup'), \
+                mock.patch.object(serve.isolation, 'isolated', return_value=True), \
+                mock.patch.object(serve.isolation, 'real_home', return_value=real_home), \
+                mock.patch.object(serve.feedback, 'start_background'), \
+                mock.patch.object(serve.updater, 'start_background'), \
+                mock.patch.object(spaces, 'materialize_static_publish', return_value=[]), \
+                mock.patch.object(agent_guide, 'refresh_spaces', side_effect=fake):
+            serve.serve_main(0)
+            started.wait(wait)
+        return seen
+
+    def test_serve_main_refreshes_in_the_background(self):
+        self.assertEqual(self.boot(False, 5), [updater.current_version(serve.UPDATER_ROOT)])
+
+    def test_an_isolated_run_with_the_real_home_skips_it(self):
+        self.assertEqual(self.boot(True, 0.3), [])
+
+
 if __name__ == '__main__':
     unittest.main()

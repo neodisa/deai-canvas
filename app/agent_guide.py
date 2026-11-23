@@ -7,6 +7,7 @@
 import json
 import os
 import re
+import sys
 
 import agents_md
 import spaces
@@ -125,3 +126,37 @@ def render_live(d):
     if d['block']:
         out += ['', d['block'].rstrip('\n')]
     return '\n'.join(out) + '\n'
+
+
+def refresh_spaces(version, *, log=None):
+    """Крок старту (`serve_main`, фоновий потік): у кожному просторі реєстру з текою переписати ЛИШЕ застарілий наявний блок
+    AGENTS.md (`agents_md.write`: «Ваше» байт у байт, атомарно; CLAUDE.md `write` не чіпає). Пропуск без запису: файла нема
+    (не створюємо), блоку нема (людина прибрала = вимкнено), `newer`, симлінк/нечитний (`OSError`), файл змінили під час запису
+    (`ValueError('changed')`). Збій одного простору — рядок у журнал, решта йде. Повертає id переписаних просторів."""
+    log = log or (lambda line: print(line, file=sys.stderr))
+    if agents_md.version_tuple(version) is None or not spaces.layer_on():
+        return []
+    try:
+        reg = spaces.read_registry()
+    except spaces.SpacesError:
+        return []
+    done = []
+    for sp in reg.get('spaces', []):
+        folder = sp.get('path')
+        if spaces._is_implicit(sp) or not isinstance(folder, str) or not folder or not os.path.isdir(folder):
+            continue
+        try:
+            st = agents_md.status(folder, version=version)
+            if st['exists'] and st['hasBlock'] and st['outdated']:
+                agents_md.write(folder, version=version)
+                done.append(sp['id'])
+        except OSError:
+            continue
+        except ValueError as e:
+            if str(e) not in ('changed', 'newer'):
+                log(f'agents-md: skipped {sp.get("id")}: ValueError')
+        except Exception as e:  # noqa: BLE001 — один простір не зупиняє решту й не валить старт
+            log(f'agents-md: skipped {sp.get("id")}: {type(e).__name__}')
+    if done:
+        log(f'agents-md: refreshed {len(done)} space(s)')
+    return done

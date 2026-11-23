@@ -10545,7 +10545,8 @@ def make_server(port=0):
 def serve_main(port):
     """Порт — ПЕРШИМ (`make_server` біндить у конструкторі): зайнятий порт кидає `OSError` ДО міграції ЛІГИ, і простір лишається
     як був (старіший сервер, що тримає порт, не бачить простору, якого не розуміє). Далі міграція (не кидає, ізольовані прогони
-    пропускає), далі явний запис `static-publish` наявним просторам (`spaces.materialize_static_publish`, ідемпотентно), і лише потім `serve_forever`: зʼєднання тим часом чекають у черзі, запит обслуговується вже після міграції."""
+    пропускає), далі явний запис `static-publish` наявним просторам (`spaces.materialize_static_publish`, ідемпотентно), і лише потім `serve_forever`: зʼєднання тим часом чекають у черзі, запит обслуговується вже після міграції.
+    Далі — фонове оновлення застарілих блоків AGENTS.md (`agent_guide.refresh_spaces`, той самий гейт ізоляції)."""
     srv = make_server(port)
     updater.snapshot_restart()            # знімок «як запущено» — до будь-якого chdir (для `execv` після оновлення)
     import liga_migrate
@@ -10556,6 +10557,14 @@ def serve_main(port):
                 print('простір %s: публікація в теку тепер явний запис static-publish (екран «Підключення»)' % sid, file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — крок не валить старт
         print('static-publish: крок пропущено (%s)' % type(e).__name__, file=sys.stderr)
+    try:
+        if not (isolation.isolated() and isolation.real_home(spaces.home())):
+            # AGENTS.md просторів: застарілий блок → поточний (лише блок; «Ваше» й CLAUDE.md цілі). Оновлення Deai перезапускає
+            # `serve`, тож «після оновлення» — цей самий крок. У фоні: повільна тека простору не затримує старт.
+            threading.Thread(target=agent_guide.refresh_spaces, args=(updater.current_version(UPDATER_ROOT),),
+                             name='agents-md-refresh', daemon=True).start()
+    except Exception as e:  # noqa: BLE001 — крок не валить старт
+        print('agents-md: крок пропущено (%s)' % type(e).__name__, file=sys.stderr)
     try:
         updater.start_background(_updater())          # перша перевірка тегів через ~5 с, далі раз на 6 год; не валить старт
     except Exception as e:  # noqa: BLE001
