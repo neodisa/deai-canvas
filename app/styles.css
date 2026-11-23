@@ -959,8 +959,10 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
    «Онбординг клієнта» обрізалась). `.crumb--task` є лише в `ext-bar.js` (зовнішня оболонка); смуга інструмента не зачеплена.
    Два класи — щоб перемагати `.crumb{max-width:110px}` незалежно від порядку. */
 .crumb.crumb--task{max-width:none}
-/* Смуга ІНСТРУМЕНТА (`#bar`, фаза И): хост крошки задачі теж має клас `crumb--task`, але назву там обмежує вільне місце зони 1 (`#bar .crumb--title .txt`), а не 240px. */
-#bar .crumb--task .txt{max-width:none}
+/* Смуга ІНСТРУМЕНТА (фаза И): хост крошки задачі — `div.crumb-h.crumb--task`, назву там обмежує вільне місце зони 1
+   (`#bar .crumb--title .txt`), а не 240px. ⛔ Лише `.crumb-h`: оболонка превʼю теж монтується в `#bar`, і там
+   `span.crumb--flat.crumb--task` мусить лишатись у 240px (живий `ext-shell` «назва не малює нічого праворуч»). */
+#bar .crumb-h.crumb--task .txt{max-width:none}
 .crumb--iter .txt--soft{max-width:112px;min-width:2.5em}
 .crumb-marks{display:inline-flex;gap:3px;flex:none}
 /* Чужа ітерація — ВИДИМА ознака, а не лише текст у title: про межу («тут
