@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 import isolation  # закон ізоляції й шви тестів (4d-4b; раніше `implicit.py`)
+import iter_trash  # кошик ітерацій задачі (фаза И)
 import task_trash  # кошик задач простору (етап Д, 0.30.0): видалення без стирання, повернення, знищення
 import feedback  # відгук (0.23.0): кільце помилок, збирач діагностики, черга відправки
 import agents_md  # AGENTS.md простору (етап Е, 0.31.0): блок з шаблону + «Ваше»
@@ -156,7 +157,7 @@ def _ssl_context():
 #: дивиться `git add -A`.
 TASK_IGNORE = ('publish/', '*.bak', '*.tmp', '.DS_Store', 'comments-for-ai*',
                '.vercel/', '.dc-tuner.json', '.dc-local-comments.json',
-               '.pages.lock')
+               '.pages.lock', '.trash/')
 
 
 def ensure_task_gitignore(task_dir):
@@ -7682,6 +7683,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._iteration_rename(payload)
         elif self.path == '/api/iteration-delete':
             self._iteration_delete(payload)
+        elif self.path == '/api/iteration-restore':
+            self._iteration_restore(payload)
         elif self.path == '/api/publish-toggle':
             self._publish_toggle(payload)
         elif self.path == '/api/page-new':
@@ -7892,8 +7895,8 @@ class Handler(SimpleHTTPRequestHandler):
         tid, task = self._current_task()
         meta = load_meta(task)
         its = meta.setdefault('iterations', [])
-        nums = [int(m.group(1)) for i in its if (m := re.match(r'^it(\d+)$', i['id']))]
-        new_id = f'it{max(nums, default=0) + 1}'
+        # Фаза И: номер видаленої (у кошику) не повторюємо — інакше історія нової `itN` змішалась би зі старою.
+        new_id = iter_trash.next_id(task['dir'], [i['id'] for i in its])
         dst = os.path.join(task['dir'], 'iterations', new_id)
         src_id = payload.get('from')
         if src_id and any(i['id'] == src_id for i in its):
@@ -7922,24 +7925,58 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'iteration': entry, 'git': g})
 
     def _iteration_delete(self, payload):
-        """Видалити ітерацію (папку + запис). Git-коміт зберігає слід."""
+        """Видалити ітерацію: тека й запис — у кошик задачі (`iter_trash`, 7 днів), відповідь несе слот для «Повернути».
+        Останню ітерацію не видаляємо (409): задача без ітерацій лишилась би без макета."""
         tid, task = self._current_task()
         iid = payload.get('id', '')
-        if not NAME_RE.match(iid):
+        if not isinstance(iid, str) or not NAME_RE.fullmatch(iid):
             self.send_error(400, 'bad id')
             return
         meta = load_meta(task)
         its = meta.get('iterations', [])
-        if not any(i['id'] == iid for i in its):
+        entry = next((i for i in its if i['id'] == iid), None)
+        if entry is None:
             self.send_error(404, 'iteration not found')
             return
+        if len(its) <= 1:
+            self._send_json({'ok': False, 'error': 'last-iteration'}, status=409)
+            return
+        now = iter_trash.utcnow()
+        try:
+            slot = iter_trash.move_to_trash(task['dir'], entry, now)
+        except (OSError, iter_trash.IterTrashError) as e:
+            self._send_json({'ok': False, 'error': 'trash-failed', 'message': str(e)}, status=500)
+            return
         meta['iterations'] = [i for i in its if i['id'] != iid]
-        folder = os.path.join(task['dir'], 'iterations', iid)
-        if os.path.isdir(folder):
-            shutil.rmtree(folder)
         save_meta(task, meta)
+        try:
+            iter_trash.purge(task['dir'], now)
+        except OSError:
+            pass                       # прибирання — не умова видалення
         git_autocommit(task['dir'], f'delete iteration {iid}')
-        self._send_json({'ok': True, 'deleted': iid})
+        self._send_json({'ok': True, 'deleted': iid, 'trash': slot})
+
+    def _iteration_restore(self, payload):
+        """`POST /api/iteration-restore {trash}` — повернути ітерацію з кошика. Зайнятий id → наступний вільний номер."""
+        tid, task = self._current_task()
+        slot = payload.get('trash')
+        if not isinstance(slot, str) or not iter_trash.SLOT_RE.fullmatch(slot):
+            self.send_error(400, 'bad trash slot')
+            return
+        meta = load_meta(task)
+        its = meta.setdefault('iterations', [])
+        try:
+            entry, renamed = iter_trash.restore(task['dir'], slot, [i['id'] for i in its])
+        except iter_trash.IterTrashError as e:
+            self._send_json({'ok': False, 'error': e.code}, status=404 if e.code == 'not-in-trash' else 400)
+            return
+        except OSError as e:
+            self._send_json({'ok': False, 'error': 'restore-failed', 'message': str(e)}, status=500)
+            return
+        iter_trash.insert_ordered(its, entry)
+        save_meta(task, meta)
+        git_autocommit(task['dir'], f'restore iteration {entry["id"]}')
+        self._send_json({'ok': True, 'id': entry['id'], 'renamed': renamed, 'iteration': entry})
 
     def _iteration_rename(self, payload):
         """Перейменувати ітерацію: `label` — короткий підпис на пілюлі,
