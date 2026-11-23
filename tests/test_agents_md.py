@@ -65,7 +65,7 @@ class Render(Tmp):
         self.assertIn('<deai>/bin/inbox.py', b)
         self.assertIn('<deai>/docs/agents/', b)
         self.assertIn('<deai>/app/serve.py', b)
-        self.assertIn('/api/agents-md', b)
+        self.assertIn('/api/agents-md?space=<space-id>', b)
         self.assertIn('paths.deai', b)
         self.assertNotIn('{version}', b)
 

@@ -171,9 +171,8 @@ class Coverage(unittest.TestCase):
     def test_routes_are_extracted_completely(self):
         self.assertEqual(tripwire(self.serve, self.routes), [],
                          'app/serve.py builds or names an /api route the guard cannot see: spell it as a plain literal')
-        # маршрути-префікси модулів; імена складені, бо повний літерал робить файл «писарем просторів» для test_serve
-        for r in ('client', 'ui', 'ui-kit'):
-            self.assertIn('/api/module' + '-' + r, self.routes)
+        prefixes = {r[len('/api/module'):] for r in self.routes if r.startswith('/api/module')}
+        self.assertLessEqual({'-client', '-ui', '-ui-kit'}, prefixes)     # маршрути-префікси модулів
 
     def test_every_topic_file_is_a_topic(self):
         topics = {n for n, _ in agents_md.topics()}

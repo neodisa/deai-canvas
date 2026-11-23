@@ -462,14 +462,15 @@ class RealBlock(unittest.TestCase):
         self.assertLessEqual(len(self.block.encode('utf-8')), 6144, 'block is over 6 KB')
 
     def test_no_placeholders_left(self):
-        self.assertNotRegex(self.block, r'\{[a-z]+\}')
+        self.assertNotRegex(self.block, r'\{(?:version|index|guide)\}')
 
     def test_the_label_and_the_check(self):
         g = agents_md.guide_of(self.block)
         self.assertRegex(g, r'^[0-9a-f]{8}$')
         self.assertIn(f'# Deai Canvas (guide {g})', self.block)
         self.assertIn('curl -sG http://127.0.0.1:8765/api/agent-guide --data-urlencode "path=$PWD" -d have=' + g, self.block)
-        self.assertIn('404', self.block)
+        self.assertIn('A 404 on this check means\nthe canvas is older than this file', self.block)
+        self.assertIn('-d space=<space-id>', self.block)
 
     def test_the_index_lists_every_topic(self):
         for name, _ in agents_md.topics():

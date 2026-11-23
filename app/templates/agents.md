@@ -13,11 +13,13 @@ call in a session:
 
     curl -sG http://127.0.0.1:8765/api/agent-guide --data-urlencode "path=$PWD" -d have={guide}
 
-It says whether this guide is current and gives the live state: Deai version, the space and its id, the current task,
-enabled modules. When this file is out of date it also gives the current guide: follow that one. A 404 means the canvas
-is older than this file: ask the designer to update Deai Canvas. If the canvas is not running, ask the designer to start
-it (`python3 <deai>/app/serve.py`); `<deai>` is the installation folder: the check prints `<deai>/docs/agents`, and
-`GET http://127.0.0.1:8765/api/agents-md?space=<space-id>` answers it in `paths.deai`.
+(In Windows PowerShell write `curl.exe`.) It says whether this guide is current and gives the live state: Deai version,
+the space and its id, the current task, enabled modules. When this file is out of date it also gives the current guide:
+follow that one. If it names no space, you are outside the space folder: `GET http://127.0.0.1:8765/api/spaces` lists
+the spaces with their `path`; repeat the check with `-d space=<space-id>` instead of `path`. A 404 on this check means
+the canvas is older than this file: ask the designer to update Deai Canvas. If the canvas is not running, ask the
+designer to start it (`python3 <deai>/app/serve.py`); `<deai>` is the installation folder: the check prints
+`<deai>/docs/agents`, and `GET http://127.0.0.1:8765/api/agents-md?space=<space-id>` answers it in `paths.deai`.
 
 ## Tasks and iterations
 
