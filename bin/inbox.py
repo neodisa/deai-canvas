@@ -339,6 +339,11 @@ def reply_line(r):
     return f'{who}, {_reply_ts(r.get("ts"))}{edited}: {body}'
 
 
+def has_shot(meta):
+    """Чи має пін знімок: непорожній `shot` (data URL) чи `shotUrl` (кошик команди)."""
+    return any(isinstance(meta.get(k), str) and meta.get(k).strip() for k in ('shot', 'shotUrl'))
+
+
 def show_pins(pins, label, tag, where=None):
     openp = [p for p in pins if p.get('status') != 'resolved']
     resolved = len(pins) - len(openp)
@@ -355,8 +360,11 @@ def show_pins(pins, label, tag, where=None):
                 print(f'          ↳ відповіді ({len(replies)}):')
                 for r in replies[-REPLIES_SHOWN:]:
                     print(f'              {reply_line(r)}')
-            miss = (p.get('meta') or {}).get('shotMiss')
-            if isinstance(miss, str) and miss:
+            pm = p.get('meta') if isinstance(p.get('meta'), dict) else {}
+            miss = pm.get('shotMiss')
+            # Знімок є — причина його відсутності хибна: у 0.35.0 комбіноване сховище на локальних пінах відповідало «нема
+            # чого заливати» так само, як на відмову, і коментатор записував 'upload' поруч зі знімком.
+            if isinstance(miss, str) and miss and not has_shot(pm):
                 print(f'          ↳ без знімка: {SHOT_MISS.get(miss) or agent_line(miss, 60)}')
             w = (where or {}).get(p.get('id'))
             if w is not None:

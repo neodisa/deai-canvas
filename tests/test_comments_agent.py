@@ -782,6 +782,18 @@ class AgentPinUnitTest(unittest.TestCase):
             with self.subTest(junk=junk):
                 self.assertNotIn('shotMiss', serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': junk}))['meta'])
 
+    def test_shot_miss_is_dropped_when_the_pin_has_a_shot(self):
+        """0.35.0 записував `shotMiss: 'upload'` локальним пінам поруч зі знімком; `shot` агентові не віддаємо, тож рішення — тут."""
+        for meta in ({'shot': 'data:image/png;base64,AAAA'}, {'shotUrl': 'https://example.com/s.png'}):
+            with self.subTest(meta=list(meta)):
+                row = serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': 'upload', **meta}))
+                self.assertNotIn('shotMiss', row['meta'])
+                self.assertNotIn('shot', row['meta'])
+        for empty in ({'shot': ''}, {'shot': ' ', 'shotUrl': None}, {'shotUrl': 5}):
+            with self.subTest(empty=empty):
+                row = serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': 'upload', **empty}))
+                self.assertEqual(row['meta']['shotMiss'], 'upload')
+
     def test_the_list_is_validated_as_a_whole(self):
         pins = serve.agent_pins([cl('a1', 'один'), cl('a2', 'два')])
         self.assertIsInstance(pins, serve.ModulePins)

@@ -3581,6 +3581,7 @@ def _agent_meta(meta):
     """`meta` піна для агента. Усе, що `inbox` друкує чи розбирає, — у строгій формі (одним рядком, малі цілі, обмежені
     списки); решта — безпечна копія JSON (`_agent_json`). `shot` не беремо: ні `inbox`, ні агентові він не потрібен, а
     обрізаний base64 гірший за відсутній."""
+    shot = isinstance(meta, dict) and any(isinstance(meta.get(k), str) and meta.get(k).strip() for k in ('shot', 'shotUrl'))
     meta = (_agent_json(meta, [300]) if isinstance(meta, dict) else None) or {}
     meta.pop('shot', None)
     if 'version' in meta:                                           # друкується тегом `[itN]` і розбирається `pin_target`
@@ -3595,7 +3596,7 @@ def _agent_meta(meta):
     if 'shotMiss' in meta:                                          # код причини, чому нема знімка (`inbox` друкує його словом)
         miss = agent_line(meta['shotMiss'], 41) if isinstance(meta['shotMiss'], str) else ''
         miss = miss if len(miss) <= 40 else ''                      # довший за код — не код: відкидаємо, а не обрізаємо
-        if miss:
+        if miss and not shot:                                       # знімок є — причина хибна (0.35.0 писав 'upload' локальним пінам)
             meta['shotMiss'] = miss
         else:
             del meta['shotMiss']
