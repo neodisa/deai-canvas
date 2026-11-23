@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app'))
 import iter_trash as tr  # noqa: E402
@@ -106,6 +107,65 @@ class InsertOrdered(unittest.TestCase):
         its = [{'id': 'it1'}]
         tr.insert_ordered(its, {'id': 'draft'})
         self.assertEqual([i['id'] for i in its], ['it1', 'draft'])
+
+
+class Boundaries(unittest.TestCase):
+    def setUp(self):
+        self.d = _task(['it1', 'it2', 'it3'])
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def test_seven_day_boundary(self):
+        keep = tr.move_to_trash(self.d, {'id': 'it1'}, T0 - datetime.timedelta(days=6, hours=23))
+        gone = tr.move_to_trash(self.d, {'id': 'it2'}, T0 - datetime.timedelta(days=7, hours=1))
+        self.assertEqual(tr.purge(self.d, T0), [gone])
+        self.assertEqual(os.listdir(tr.trash_root(self.d)), [keep])
+
+    def test_purge_skips_malformed_date(self):
+        bad = os.path.join(tr.trash_root(self.d), 'it1--20261399-100000')
+        os.makedirs(bad)
+        old = tr.move_to_trash(self.d, {'id': 'it2'}, T0 - datetime.timedelta(days=9))
+        self.assertEqual(tr.purge(self.d, T0), [old])
+        self.assertTrue(os.path.isdir(bad))
+
+    def test_tampered_entry_id_is_refused(self):
+        slot = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        p = os.path.join(tr.trash_root(self.d), slot, 'entry.json')
+        with open(p, encoding='utf-8') as f:
+            data = json.load(f)
+        data['entry']['id'] = '../x'
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        for fn in (lambda: tr.restore(self.d, slot, ['it1']), lambda: tr.undo_move(self.d, slot)):
+            with self.assertRaises(tr.IterTrashError) as c:
+                fn()
+            self.assertEqual(c.exception.code, 'bad-id')
+        self.assertTrue(os.path.isdir(os.path.join(tr.trash_root(self.d), slot, 'files')))
+
+    def test_failed_rename_leaves_iteration_and_no_slot(self):
+        with mock.patch('iter_trash.os.rename', side_effect=OSError('boom')):
+            with self.assertRaises(OSError):
+                tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        self.assertTrue(os.path.isfile(os.path.join(self.d, 'iterations', 'it2', 'index.html')))
+        self.assertEqual(os.listdir(tr.trash_root(self.d)), [])
+
+    def test_undo_move(self):
+        slot = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        tr.undo_move(self.d, slot)
+        self.assertTrue(os.path.isfile(os.path.join(self.d, 'iterations', 'it2', 'index.html')))
+        self.assertEqual(os.listdir(tr.trash_root(self.d)), [])
+
+    def test_prepare_keeps_slot_until_finish_and_rollback_returns_files(self):
+        slot = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        entry, _ = tr.restore_prepare(self.d, slot, ['it1', 'it3'])
+        base = os.path.join(tr.trash_root(self.d), slot)
+        self.assertTrue(os.path.isfile(os.path.join(base, 'entry.json')))
+        self.assertTrue(os.path.isfile(os.path.join(self.d, 'iterations', 'it2', 'index.html')))
+        tr.restore_rollback(self.d, slot, entry)
+        self.assertTrue(os.path.isfile(os.path.join(base, 'files', 'index.html')))
+        self.assertFalse(os.path.exists(os.path.join(self.d, 'iterations', 'it2')))
+        tr.restore_prepare(self.d, slot, ['it1', 'it3'])
+        tr.restore_finish(self.d, slot)
+        self.assertFalse(os.path.exists(base))
 
 
 if __name__ == '__main__':

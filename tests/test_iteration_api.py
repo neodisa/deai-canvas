@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'app'))
@@ -100,6 +101,43 @@ class IterationApi(_Base):
     def test_unknown_iteration_still_404(self):
         st, _ = self.post_raw('/api/iteration-delete', {'id': 'it9'})
         self.assertEqual(st, 404)
+
+    def test_merge_pages_does_not_reuse_trashed_number(self):
+        self.post('/api/iteration', {'from': 'it1', 'note': 'Третя'})          # it3
+        self.post('/api/iteration-delete', {'id': 'it3'})
+        st, body = self.post('/api/pages-from-iterations', {'itIds': ['it1', 'it2']})
+        self.assertEqual((st, body['iteration']), (200, 'it4'))
+
+    def test_delete_purges_old_slots(self):
+        old = os.path.join(self.x_dir, '.trash', 'iterations', 'it5--20200101-100000')
+        os.makedirs(os.path.join(old, 'files'))
+        self.post('/api/iteration-delete', {'id': 'it2'})
+        self.assertFalse(os.path.exists(old))
+
+    def test_delete_survives_purge_failure(self):
+        with mock.patch('iter_trash.purge', side_effect=ValueError('x')):
+            st, body = self.post('/api/iteration-delete', {'id': 'it2'})
+        self.assertEqual((st, body['ok']), (200, True))
+
+    def test_delete_save_failure_leaves_iteration_live(self):
+        with mock.patch('serve.save_meta', side_effect=OSError('disk')):
+            st, body = self.post_raw('/api/iteration-delete', {'id': 'it2'})
+        self.assertEqual(st, 500)
+        self.assertEqual(self.ids(), ['it1', 'it2'])
+        self.assertTrue(os.path.isfile(os.path.join(self.x_dir, 'iterations', 'it2', 'index.html')))
+        root = os.path.join(self.x_dir, '.trash', 'iterations')
+        self.assertEqual(os.listdir(root) if os.path.isdir(root) else [], [])
+
+    def test_restore_save_failure_keeps_iteration_in_trash(self):
+        _, d = self.post('/api/iteration-delete', {'id': 'it2'})
+        with mock.patch('serve.save_meta', side_effect=OSError('disk')):
+            st, _ = self.post_raw('/api/iteration-restore', {'trash': d['trash']})
+        self.assertEqual(st, 500)
+        self.assertEqual(self.ids(), ['it1'])
+        self.assertFalse(os.path.exists(os.path.join(self.x_dir, 'iterations', 'it2')))
+        self.assertTrue(os.path.isfile(os.path.join(self.x_dir, '.trash', 'iterations', d['trash'], 'files', 'index.html')))
+        st, body = self.post('/api/iteration-restore', {'trash': d['trash']})   # повтор працює
+        self.assertEqual((st, body['id']), (200, 'it2'))
 
 
 if __name__ == '__main__':

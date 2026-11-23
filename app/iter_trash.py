@@ -54,11 +54,40 @@ def move_to_trash(task_dir, entry, now):
     dst = os.path.join(root, slot)
     os.makedirs(dst)
     src = os.path.join(task_dir, 'iterations', iid)
-    if os.path.isdir(src):
-        os.rename(src, os.path.join(dst, 'files'))
-    with open(os.path.join(dst, 'entry.json'), 'w', encoding='utf-8') as f:
-        json.dump({'entry': entry, 'deleted_at': now.strftime('%Y-%m-%dT%H:%M:%SZ')}, f, ensure_ascii=False)
+    # Спершу запис, потім перенесення: збій посередині лишає теку на місці (слот знімаємо), а не «сироту» без запису.
+    try:
+        with open(os.path.join(dst, 'entry.json'), 'w', encoding='utf-8') as f:
+            json.dump({'entry': entry, 'deleted_at': now.strftime('%Y-%m-%dT%H:%M:%SZ')}, f, ensure_ascii=False)
+        if os.path.isdir(src):
+            os.rename(src, os.path.join(dst, 'files'))
+    except BaseException:
+        shutil.rmtree(dst, ignore_errors=True)
+        raise
     return slot
+
+
+def _slot_entry(task_dir, slot):
+    """`(тека слота, запис)` з перевіркою імені слота й id із `entry.json` (файл могли підмінити)."""
+    if not isinstance(slot, str) or not SLOT_RE.fullmatch(slot):
+        raise IterTrashError('bad-slot', 'not a trash slot name')
+    base = os.path.join(trash_root(task_dir), slot)
+    meta_p = os.path.join(base, 'entry.json')
+    if not os.path.isfile(meta_p):
+        raise IterTrashError('not-in-trash', 'nothing to restore')
+    with open(meta_p, encoding='utf-8') as f:
+        entry = dict(json.load(f)['entry'])
+    if not _safe_id(entry.get('id')):
+        raise IterTrashError('bad-id', 'the iteration id in the trash entry is not a safe folder name')
+    return base, entry
+
+
+def undo_move(task_dir, slot):
+    """Скасувати `move_to_trash`: теку назад у `iterations/<id>`, слот прибрати (коли не вдалось записати `iterations.json`)."""
+    base, entry = _slot_entry(task_dir, slot)
+    files = os.path.join(base, 'files')
+    if os.path.isdir(files):
+        os.rename(files, os.path.join(task_dir, 'iterations', entry['id']))
+    shutil.rmtree(base)
 
 
 def next_id(task_dir, ids):
@@ -67,7 +96,7 @@ def next_id(task_dir, ids):
     root = trash_root(task_dir)
     if os.path.isdir(root):
         for name in os.listdir(root):
-            s = SLOT_RE.match(name)
+            s = SLOT_RE.fullmatch(name)
             if s and (m := NUM_RE.match(s.group(1))):
                 nums.append(int(m.group(1)))
     it_dir = os.path.join(task_dir, 'iterations')
@@ -78,17 +107,11 @@ def next_id(task_dir, ids):
     return f'it{max(nums, default=0) + 1}'
 
 
-def restore(task_dir, slot, taken_ids):
-    """Повернути ітерацію зі слота. `(entry, renamed)`; id зайнятий → наступний вільний номер, `git` прибирається
-    (історія нової теки починається з повернення, а не з коміту створення старої)."""
-    if not isinstance(slot, str) or not SLOT_RE.fullmatch(slot):
-        raise IterTrashError('bad-slot', 'not a trash slot name')
-    base = os.path.join(trash_root(task_dir), slot)
-    meta_p = os.path.join(base, 'entry.json')
-    if not os.path.isfile(meta_p):
-        raise IterTrashError('not-in-trash', 'nothing to restore')
-    with open(meta_p, encoding='utf-8') as f:
-        entry = dict(json.load(f)['entry'])
+def restore_prepare(task_dir, slot, taken_ids):
+    """Крок 1 повернення: вибрати id, перенести `files` у `iterations/<id>`; слот (з `entry.json`) ЛИШАЄТЬСЯ.
+    `(entry, renamed)`; id зайнятий → наступний вільний номер, `git` прибирається (історія нової теки починається
+    з повернення). Після запису `iterations.json` — `restore_finish`, при збої — `restore_rollback`."""
+    base, entry = _slot_entry(task_dir, slot)
     iid, renamed = entry['id'], False
     if iid in taken_ids or os.path.exists(os.path.join(task_dir, 'iterations', iid)):
         iid = next_id(task_dir, list(taken_ids) + [entry['id']])
@@ -102,7 +125,27 @@ def restore(task_dir, slot, taken_ids):
         os.rename(files, target)
     else:
         os.makedirs(target)
+    return entry, renamed
+
+
+def restore_finish(task_dir, slot):
+    """Крок 2: прибрати слот (лише після успішного запису `iterations.json`)."""
+    base, _ = _slot_entry(task_dir, slot)
     shutil.rmtree(base)
+
+
+def restore_rollback(task_dir, slot, entry):
+    """Скасувати `restore_prepare`: `iterations/<id>` назад у `slot/files`."""
+    base = os.path.join(trash_root(task_dir), slot)
+    target = os.path.join(task_dir, 'iterations', entry['id'])
+    if os.path.isdir(target) and not os.path.exists(os.path.join(base, 'files')):
+        os.rename(target, os.path.join(base, 'files'))
+
+
+def restore(task_dir, slot, taken_ids):
+    """Зручність для тестів: prepare + finish. Маршрут викликає кроки окремо."""
+    entry, renamed = restore_prepare(task_dir, slot, taken_ids)
+    restore_finish(task_dir, slot)
     return entry, renamed
 
 
@@ -114,10 +157,13 @@ def purge(task_dir, now, keep_days=KEEP_DAYS):
     edge = now - datetime.timedelta(days=keep_days)
     gone = []
     for name in sorted(os.listdir(root)):
-        s = SLOT_RE.match(name)
+        s = SLOT_RE.fullmatch(name)
         if not s:
             continue
-        at = datetime.datetime.strptime(s.group(2), '%Y%m%d-%H%M%S').replace(tzinfo=datetime.timezone.utc)
+        try:
+            at = datetime.datetime.strptime(s.group(2), '%Y%m%d-%H%M%S').replace(tzinfo=datetime.timezone.utc)
+        except ValueError:
+            continue                   # зіпсована дата в імені — слот не чіпаємо
         if at < edge:
             shutil.rmtree(os.path.join(root, name), ignore_errors=True)
             gone.append(name)

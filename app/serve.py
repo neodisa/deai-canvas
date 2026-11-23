@@ -1589,8 +1589,7 @@ def _pull_into_task(task, src, last_commit, src_name):
             meta['gitlab'] = {**(meta.get('gitlab') or {}), 'synced_hash': remote_hash}
             save_meta(task, meta)
             return {'ok': True, 'unchanged': True, 'iteration': None, 'same_as': i['id']}
-    nums = [int(m.group(1)) for i in its if (m := re.match(r'^it(\d+)$', i['id']))]
-    new_id = f'it{max(nums, default=0) + 1}'
+    new_id = iter_trash.next_id(task['dir'], [i['id'] for i in its])
     copy_mockup(src, os.path.join(task['dir'], 'iterations', new_id))
     entry = {'id': new_id, 'date': time.strftime('%d.%m.%Y %H:%M'),
              'note': note, 'published': bool(state.get('published')),
@@ -7948,10 +7947,18 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'ok': False, 'error': 'trash-failed', 'message': str(e)}, status=500)
             return
         meta['iterations'] = [i for i in its if i['id'] != iid]
-        save_meta(task, meta)
+        try:
+            save_meta(task, meta)
+        except Exception as e:         # запис не вдався — теку повертаємо: ітерація або жива, або в кошику, не навпіл
+            try:
+                iter_trash.undo_move(task['dir'], slot)
+            except Exception:
+                pass
+            self._send_json({'ok': False, 'error': 'delete-failed', 'message': str(e)}, status=500)
+            return
         try:
             iter_trash.purge(task['dir'], now)
-        except OSError:
+        except Exception:
             pass                       # прибирання — не умова видалення
         git_autocommit(task['dir'], f'delete iteration {iid}')
         self._send_json({'ok': True, 'deleted': iid, 'trash': slot})
@@ -7966,7 +7973,7 @@ class Handler(SimpleHTTPRequestHandler):
         meta = load_meta(task)
         its = meta.setdefault('iterations', [])
         try:
-            entry, renamed = iter_trash.restore(task['dir'], slot, [i['id'] for i in its])
+            entry, renamed = iter_trash.restore_prepare(task['dir'], slot, [i['id'] for i in its])
         except iter_trash.IterTrashError as e:
             self._send_json({'ok': False, 'error': e.code}, status=404 if e.code == 'not-in-trash' else 400)
             return
@@ -7974,7 +7981,19 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'ok': False, 'error': 'restore-failed', 'message': str(e)}, status=500)
             return
         iter_trash.insert_ordered(its, entry)
-        save_meta(task, meta)
+        try:
+            save_meta(task, meta)
+        except Exception as e:         # запис не вдався — теку назад у слот: лишається в кошику
+            try:
+                iter_trash.restore_rollback(task['dir'], slot, entry)
+            except Exception:
+                pass
+            self._send_json({'ok': False, 'error': 'restore-failed', 'message': str(e)}, status=500)
+            return
+        try:
+            iter_trash.restore_finish(task['dir'], slot)
+        except Exception:
+            pass                       # слот-залишок без `files` нешкідливий, знищиться через 7 днів
         git_autocommit(task['dir'], f'restore iteration {entry["id"]}')
         self._send_json({'ok': True, 'id': entry['id'], 'renamed': renamed, 'iteration': entry})
 
@@ -8357,9 +8376,7 @@ class Handler(SimpleHTTPRequestHandler):
         if len(src_its) < 2:
             self.send_error(400, 'need >= 2 iterations')
             return
-        nums = [int(m.group(1)) for i in meta['iterations']
-                if (m := re.match(r'^it(\d+)$', i['id']))]
-        new_id = f'it{max(nums, default=0) + 1}'
+        new_id = iter_trash.next_id(task['dir'], [i['id'] for i in meta['iterations']])
         new_dir = _iter_dir(task, new_id)
         pages = []
         for it in src_its:
