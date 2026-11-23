@@ -58,8 +58,9 @@
   в `test_serve`) лишається. Для `/api/local-shots` ліміт тіла перевіряється кортежем `self.path in ('/api/local-shots',)` — так само
   робимо для `/api/autosync` (регексп охоронця ловить лише `self.path == '/api/…'`).
 - `self.server.server_port` — справжній порт сервера (перевірено на `ThreadingHTTPServer(('127.0.0.1', 0), …)`).
-- `curl --data-binary @-` читає весь stdin і шле `Content-Length` (не chunked), тож ліміт 413 до читання працює; на 413 curl
-  вертає ненульовий код, а `|| true` його ховає (доводить Task 5).
+- `curl --data-binary @-` читає весь stdin і шле `Content-Length` (не chunked), тож ліміт 413 до читання працює. На 413 curl без
+  `--fail` сам виходить з кодом 0 (тіло відкидає `-o /dev/null`); `|| true` страхує від транспортних збоїв: канвас вимкнено (7),
+  таймаут 5 с (28), обрив зʼєднання (55/56) — зокрема коли сервер відмовляє на 413, не вичитавши тіло (доводить Task 5).
 - Для порожнього простору (`E` у `Fixture`) `load_tasks()` дає файл без `current` → `NoTask`, а не `SpaceUnavailable`.
 
 ## Карта файлів
@@ -2110,8 +2111,9 @@ if __name__ == '__main__':
 
 Run: `python3 -B -m unittest discover -s tests -p "test_claude_hook_e2e.py" -v 2>&1 | tail -12`
 Expected: `OK` (5 тестів; на машині без `curl` — `skipped`). Тести мають пройти одразу: Task 1–3 уже в гілці. Якщо
-`test_an_oversized…` дає `returncode != 0` — це не помилка тесту, а дірка в команді: `|| true` має ховати будь-який код `curl`
-(перевір, що в `claude_hook.command` він ПЕРЕД міткою).
+`test_an_oversized…` чи `test_with_the_canvas_stopped…` дає `returncode != 0` — це дірка в команді, а не в тесті: `|| true`
+має ховати будь-який транспортний код `curl` (перевір, що в `claude_hook.command` він ПЕРЕД міткою). На сам 413 curl без `--fail`
+і так виходить з 0.
 
 - [ ] **Step 3: Мутаційна перевірка доказу** (не комітити зміни)
 
