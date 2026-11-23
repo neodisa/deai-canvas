@@ -5089,22 +5089,34 @@ async function agentsWrite() {
   if (connSec === 'agents') focusAgents();
 }
 
-/** «Підключити» CLAUDE.md (0.33.0): `POST /api/agents-md {space, claude: true}` — дописати `@AGENTS.md` на початок чи
-    створити файл. Відповідь — той самий стан розділу (з `claude`); збій — тост і перечитування. */
-async function agentsClaude() {
+/** Дія рядка «Claude Code»: `POST /api/agents-md {space, …extra}`. Відповідь — той самий стан розділу (з `claude` і `hook`); тост
+    за відповіддю (`okKey(data)`), збій — `failKey` і перечитування. Читання, що летіло до запису, застаріло (`seq`). */
+async function agentsRowCall(extra, okKey, failKey) {
   const sid = agentsSt.spaceId;
   if (agentsSt.busy || !sid || sid !== connState.spaceId) return;
   agentsSt.busy = true;
   paintHome();
   let data = null;
-  try { data = await post('/api/agents-md', { space: sid, claude: true }); } catch (e) { data = null; }
+  try { data = await post('/api/agents-md', { space: sid, ...extra }); } catch (e) { data = null; }
   agentsSt.seq += 1;
   agentsSt.busy = false;
   if (!connOpen() || connState.spaceId !== sid) return;
-  if (data) { agentsSt.data = data; toast(t('frClaudeConnected')); }
-  else { toast(t('frClaudeFailed')); loadAgents(); }
+  if (data) { agentsSt.data = data; toast(t(okKey(data))); }
+  else { toast(t(failKey)); loadAgents(); }
   paintHome();
   if (connSec === 'agents') focusAgents();
+}
+
+/** «Підключити» / «Оновити» (0.33.0, хук — 23.11.2026): `{claude: true}` — CLAUDE.md і Stop-хук Claude Code. Збій хука при
+    підключеному CLAUDE.md сервер віддає як `hookError` (200): тост збою. */
+function agentsClaude() {
+  return agentsRowCall({ claude: true },
+    (d) => (d.hookError ? 'frHookFailed' : d.hook?.state === 'ok' ? 'frHookConnected' : 'frClaudeConnected'), 'frClaudeFailed');
+}
+
+/** «Відключити»: `{hook: false}` — знімає лише хук (CLAUDE.md лишається). */
+function agentsUnhook() {
+  return agentsRowCall({ hook: false }, () => 'frHookDisconnected', 'frHookFailed');
 }
 
 /** Кнопки розділу «AGENTS.md» (`data-th="ag"`, `data-v`). */
@@ -5116,6 +5128,7 @@ function agentsAction(v) {
   else if (v === 'retry') { agentsSt.data = null; paintHome(); loadAgents(); }
   else if (v === 'runcopy') agentsCopy(runCommand(a?.path), 'frCmdCopied', '#fr-run-cmd');
   else if (v === 'claude') agentsClaude();
+  else if (v === 'unhook') agentsUnhook();
 }
 
 /* Розділ «Простір»: запис `space-update` іде ЧЕРГОЮ — назва й колір летять двома запитами, а сервер пише обидва поля разом;

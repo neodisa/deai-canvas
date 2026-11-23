@@ -621,3 +621,16 @@ test("етап Е, «Застосунок»: мова — той самий swit
   assert.match(c, /updateChecking = true;\s*repaintSettingsSec\('upd'\);/, "кнопка зайнята ще до запиту");
   assert.match(c, /finally \{\s*updateChecking = false;[\s\S]*data-th="up"\]\[data-v="check"\]'\)\?\.focus/, "фокус вертається на кнопку");
 });
+
+test("AGENTS.md, рядок «Claude Code»: «Підключити»/«Оновити» — POST {claude:true}, «Відключити» — POST {hook:false}; тост залежить від відповіді", () => {
+  const c = fnc("agentsClaude");
+  assert.match(c, /claude: true/);
+  assert.match(c, /d\.hookError \? 'frHookFailed'/, "збій хука при підключеному CLAUDE.md — тост збою");
+  assert.match(c, /d\.hook\?\.state === 'ok' \? 'frHookConnected' : 'frClaudeConnected'/);
+  const u = fnc("agentsUnhook");
+  assert.match(u, /hook: false/);
+  assert.match(u, /'frHookDisconnected'/);
+  assert.match(fnc("agentsAction"), /v === 'unhook'\) agentsUnhook\(\)/);
+  assert.match(fnc("agentsRowCall"), /agentsSt\.seq \+= 1;/, "читання, що летіло до запису, застаріло");
+  assert.doesNotMatch(fnc("agentsAction"), /await/, "writeText — у тому ж такті, що й клік");
+});

@@ -171,3 +171,67 @@ test("AGENTS.md: файла ще нема — рядки є й над «Ство
   assert.match(old, /fr-run-cmd/);
   assert.doesNotMatch(old, /data-claude/);
 });
+
+/* ── Stop-хук Claude Code (23.11.2026): рядок «Claude Code» із двома файлами ────────────────────────────── */
+const HK = (state) => ({ state, path: "/Users/a/deai-work/p/.claude/settings.local.json" });
+const withHook = (claude, hook, busy = false) => agentsBodyHTML(A({ state: claude }, { hook: HK(hook) }), busy);
+const lis = (h) => (h.match(/<li><code>/g) ?? []).length;
+
+test("рядок «Claude Code», стан 1: CLAUDE.md не підключено — список із двох файлів, «Підключити»", () => {
+  const h = withHook("missing", "missing");
+  assert.match(h, /data-claude="missing" data-hook="missing"/);
+  assert.match(h, /<ul class="fr-will"><li><code>CLAUDE\.md<\/code> — рядок @AGENTS\.md<\/li>/);
+  assert.match(h, /<li><code>\.claude\/settings\.local\.json<\/code> — правки Claude в історії як AI, лише на цьому компʼютері<\/li>/);
+  assert.equal(lis(h), 2);
+  assert.match(h, /data-v="claude"[^>]*>Підключити</);
+  assert.doesNotMatch(h, /data-v="unhook"/);
+  assert.doesNotMatch(h, /Claude Code прочитає|Поруч нема CLAUDE\.md/, "без пояснювальних підписів: список — це згода");
+});
+
+test("рядок «Claude Code», стан 2: CLAUDE.md ok, хук missing — один пункт, «Підключити»", () => {
+  const h = withHook("ok", "missing");
+  assert.equal(lis(h), 1);
+  assert.match(h, /<li><code>\.claude\/settings\.local\.json<\/code>/);
+  assert.match(h, /data-v="claude"[^>]*>Підключити</);
+});
+
+test("рядок «Claude Code», стан 3: обидва ok — галочка, текст, «Відключити» (знімає лише хук), списку нема", () => {
+  const h = withHook("ok", "ok");
+  assert.match(h, /data-claude="ok" data-hook="ok"><span class="fr-ic fr-ic--ok">/);
+  assert.match(h, /Читає AGENTS\.md; його правки в історії — як AI\./);
+  assert.match(h, /data-v="unhook"[^>]*>Відключити</);
+  assert.doesNotMatch(h, /fr-will|data-v="claude"/);
+  assert.match(withHook("ok", "ok", true), /data-v="unhook" disabled/);
+});
+
+test("рядок «Claude Code», стан 4: хук stale — текст про порт і «Оновити» (та сама дія, що «Підключити»)", () => {
+  const h = withHook("ok", "stale");
+  assert.match(h, /Хук веде на інший порт канваса\./);
+  assert.match(h, /data-v="claude"[^>]*>Оновити</);
+  assert.doesNotMatch(h, /fr-will/);
+});
+
+test("рядок «Claude Code», стани 5 і 6: elsewhere і unreadable — пояснення без кнопки", () => {
+  const el = withHook("ok", "elsewhere");
+  assert.match(el, /Читає AGENTS\.md\. Хук тут не діє: тека простору всередині іншого git-репозиторію\./);
+  assert.doesNotMatch(el, /data-v="(claude|unhook)"/);
+  const un = withHook("ok", "unreadable");
+  assert.match(un, /\.claude\/settings\.local\.json не читається \(симлінк, тека чи не JSON\)\./);
+  assert.doesNotMatch(un, /data-v="(claude|unhook)"/);
+});
+
+test("рядок «Claude Code»: CLAUDE.md не читається — як було, без кнопки; старий сервер — без data-hook", () => {
+  const h = withHook("unreadable", "ok");
+  assert.match(h, /не читається/);
+  assert.doesNotMatch(h, /data-v="(claude|unhook)"|fr-will/);
+  assert.doesNotMatch(agentsBodyHTML(A({ state: "ok" })), /data-hook/);
+});
+
+test("рядок «Claude Code»: англійською ті самі стани", () => {
+  setLang("en");
+  const h = withHook("missing", "missing");
+  assert.match(h, /<li><code>CLAUDE\.md<\/code> — the line @AGENTS\.md<\/li>/);
+  assert.match(h, /data-v="claude"[^>]*>Connect</);
+  assert.match(withHook("ok", "ok"), /data-v="unhook"[^>]*>Disconnect</);
+  assert.match(withHook("ok", "stale"), /data-v="claude"[^>]*>Update</);
+});

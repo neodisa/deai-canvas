@@ -72,17 +72,25 @@ export function introCardHTML({ demo = false } = {}) {
 /** Рядки «Запуск агента» і «Claude Code» над файлом у розділі AGENTS.md. `a` — відповідь `GET /api/agents-md`. */
 export function agentRowsHTML(a, busy = false) {
   const cmd = runCommand(a?.path);
-  const row = claudeRow(a?.claude);
+  const row = claudeRow(a?.claude, a?.hook);
   if (!cmd && !row) return "";
   const run = cmd
     ? `<div class="set-row"><span class="fr-ic">${ico("code", 16)}</span><div class="set-row-l"><span class="set-row-t">${esc(t("frRunTitle"))}</span>`
       + `<span class="set-row-s">${esc(t("frRunText"))}</span><div class="fr-cmd"><code class="cn-code" id="fr-run-cmd">${esc(cmd)}</code></div></div>`
       + `<div class="set-row-a"><button type="button" class="ctl ctl--out" data-th="ag" data-v="runcopy">${ico("copy")}${esc(t("frCopy"))}</button></div></div>`
     : "";
+  // кнопка → [data-v, ключ підпису]: «Підключити» і «Оновити» — та сама дія (`{claude: true}`), «Відключити» знімає лише хук
+  const BTN = { connect: ["claude", "frClaudeConnect"], update: ["claude", "frClaudeUpdate"], disconnect: ["unhook", "frClaudeDisconnect"] };
+  const btn = row?.button ? BTN[row.button] : null;
+  const will = row?.items.length
+    ? `<ul class="fr-will">${row.items.map((i) => `<li><code>${esc(i.code)}</code> — ${esc(t(i.textKey))}</li>`).join("")}</ul>`
+    : "";
   const cl = row
-    ? `<div class="set-row" data-claude="${esc(a.claude.state)}"><span class="fr-ic fr-ic--${row.tone}">${ico(row.icon, 16)}</span>`
-      + `<div class="set-row-l"><span class="set-row-t">${esc(t("frClaudeTitle"))}</span><span class="set-row-s">${esc(t(row.textKey))}</span></div>`
-      + (row.connect ? `<div class="set-row-a"><button type="button" class="ctl ctl--out" data-th="ag" data-v="claude"${busy ? " disabled" : ""}>${esc(t("frClaudeConnect"))}</button></div>` : "")
+    ? `<div class="set-row" data-claude="${esc(a.claude.state)}"${a.hook?.state ? ` data-hook="${esc(a.hook.state)}"` : ""}>`
+      + `<span class="fr-ic fr-ic--${row.tone}">${ico(row.icon, 16)}</span>`
+      + `<div class="set-row-l"><span class="set-row-t">${esc(t("frClaudeTitle"))}</span>`
+      + (row.textKey ? `<span class="set-row-s">${esc(t(row.textKey))}</span>` : "") + will + `</div>`
+      + (btn ? `<div class="set-row-a"><button type="button" class="ctl ctl--out" data-th="ag" data-v="${btn[0]}"${busy ? " disabled" : ""}>${esc(t(btn[1]))}</button></div>` : "")
       + `</div>`
     : "";
   return `<div class="set-rows fr-run">${run}${cl}</div>`;

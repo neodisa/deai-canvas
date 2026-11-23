@@ -14,14 +14,32 @@ export function shotsBlock(setupShots) {
   return null;
 }
 
-/** Рядок «Claude Code» розділу AGENTS.md за `claude` з `GET /api/agents-md`; `null` — стану нема (старий сервер). */
-export function claudeRow(claude) {
-  switch (claude?.state) {
-    case "ok": return { icon: "check", tone: "ok", textKey: "frClaudeOk", connect: false };
-    case "missing": return { icon: "warn", tone: "warn", textKey: "frClaudeMissing", connect: true };
-    case "no-import": return { icon: "warn", tone: "warn", textKey: "frClaudeNoImport", connect: true };
-    case "unreadable": return { icon: "warn", tone: "warn", textKey: "frClaudeUnreadable", connect: false };
-    default: return null;
+const WILL_MD = { code: "CLAUDE.md", textKey: "frClaudeWillMd" };
+const WILL_HOOK = { code: ".claude/settings.local.json", textKey: "frClaudeWillHook" };
+const HOOK_STATES = ["ok", "missing", "stale", "unreadable", "elsewhere"];
+
+/** Рядок «Claude Code» розділу AGENTS.md за `claude` і `hook` з `GET /api/agents-md`; `null` — стану CLAUDE.md нема.
+    `{icon, tone, textKey | null, items: [{code, textKey}], button: null | "connect" | "update" | "disconnect"}`.
+    `items` — список «що буде записано» (він і є згода людини; тоді пояснювального тексту нема). Старий сервер без `hook`
+    (чи невідомий стан) — як у 0.33.0: лише CLAUDE.md. CLAUDE.md не читається — без кнопки, хук неважливий. */
+export function claudeRow(claude, hook) {
+  const cs = claude?.state;
+  if (!["ok", "missing", "no-import", "unreadable"].includes(cs)) return null;
+  const row = (icon, textKey, items = [], button = null) => ({ icon, tone: icon === "check" ? "ok" : "warn", textKey, items, button });
+  if (cs === "unreadable") return row("warn", "frClaudeUnreadable");
+  const hs = HOOK_STATES.includes(hook?.state) ? hook.state : null;
+  if (hs === null) {
+    if (cs === "ok") return row("check", "frClaudeOk");
+    return row("warn", cs === "missing" ? "frClaudeMissing" : "frClaudeNoImport", [], "connect");
+  }
+  const hookItems = hs === "missing" || hs === "stale" ? [WILL_HOOK] : [];
+  if (cs !== "ok") return row("warn", null, [WILL_MD, ...hookItems], "connect");
+  switch (hs) {
+    case "ok": return row("check", "frClaudeHookOk", [], "disconnect");
+    case "missing": return row("warn", null, hookItems, "connect");
+    case "stale": return row("warn", "frClaudeHookStale", [], "update");
+    case "elsewhere": return row("warn", "frClaudeHookElsewhere");
+    default: return row("warn", "frClaudeHookUnreadable");
   }
 }
 
