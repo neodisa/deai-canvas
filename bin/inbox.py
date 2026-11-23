@@ -74,7 +74,8 @@ CL_OWN_CLASSES = frozenset({'cl-hl', 'cl-msel', 'cl-el-flash'})
 
 def _it(p):
     m = p.get('meta') or {}
-    return m.get('version') or '—'
+    v = m.get('version')
+    return agent_line(v if isinstance(v, str) else str(v) if v else '', 40) or '—'
 
 
 def _local_path(task):
@@ -227,7 +228,7 @@ def _num(p, tag):
     (fb-30092026-e53eaa), тож голий «№91» неоднозначний. Локальні піни в
     канвасі номера не показують, але `meta.seq` мають — Claude посилається на нього."""
     seq = (p.get('meta') or {}).get('seq')
-    return f'{tag}#{seq if seq else "?"}'
+    return f'{tag}#{agent_line(seq if isinstance(seq, str) else str(seq) if seq else "", 20) or "?"}'
 
 
 def ctx_line(ctx):
@@ -306,15 +307,31 @@ def _reply_ts(ts):
     return d.strftime('%d.%m %H:%M') if d else agent_line(ts, 20)
 
 
+#: Префікс продовження багаторядкової ВІДПОВІДІ: глибший за рядок відповіді (14 пробілів) і за продовження тексту піна (12), з тим
+#: самим `│`. Рядок усередині тексту відповіді (`Іван, 01.01 10:00: …`, `↳ відповіді (9):`) так ніколи не стоїть на відступі
+#: справжнього рядка відповіді чи заголовка гілки.
+REPLY_CONT = '\n                │ '
+#: Скільки символів тексту відповіді бачить агент (стільки ж приймає сховище); довше — з `…` в кінці.
+REPLY_TEXT_MAX = 4000
+
+
 def reply_line(r):
-    """Один рядок відповіді: `<автор>, <ДД.ММ ГГ:ХХ>: <текст>` (≤ 300; відповідь агента — `AI`). Локальний файл пише
-    браузер, а відповіді командного каналу — інші люди: усе проходить `agent_line` (без переносів і керівних символів)."""
+    """Відповідь для виводу: `<автор>, <ДД.ММ ГГ:ХХ>[ (ред.)]: <текст>` (відповідь агента — `AI`). Текст — ПОВНИЙ (≤ 4000, довший
+    обрізається з `…`): людина відповідає на питання агента, і зрізати її відповідь мовчки не можна. Перший рядок іде в тому ж рядку,
+    решта — з `REPLY_CONT`. Локальний файл пише браузер, а відповіді командного каналу — інші люди: кожен рядок проходить
+    `agent_line` (без переносів і керівних символів)."""
     who = agent_line(r.get('author'), 100) or '?'
     if r.get('agent') is True:
         who = 'AI'
     elif who.strip().casefold() == 'ai':
         who = 'AI (людина)'                     # людина з імʼям «AI» не має виглядати відповіддю агента
-    return agent_line(f'{who}, {_reply_ts(r.get("ts"))}: {agent_line(r.get("text"), 4000)}', 300)
+    t = r.get('text')
+    t = t.strip() if isinstance(t, str) else ''
+    if len(t) > REPLY_TEXT_MAX:
+        t = t[:REPLY_TEXT_MAX - 1] + '…'
+    edited = ' (ред.)' if agent_line(r.get('editedTs'), 40).strip() else ''
+    body = REPLY_CONT.join(agent_line(ln, REPLY_TEXT_MAX) for ln in t.split('\n'))
+    return f'{who}, {_reply_ts(r.get("ts"))}{edited}: {body}'
 
 
 def show_pins(pins, label, tag, where=None):
@@ -525,7 +542,7 @@ def _is_open(p):
 
 
 def _cand(p):
-    return f'{(p.get("id") or "")[:8]} «{(p.get("text") or "").strip()[:40]}»'
+    return f'{agent_line(p.get("id") or "", 8)} «{agent_line((p.get("text") or "").strip(), 40)}»'
 
 
 def find_target(prefix, local, project_loader):

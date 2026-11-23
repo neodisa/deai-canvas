@@ -671,17 +671,68 @@ class ThreadOutput(InboxCase):
         self.assertIn('│ рядок 2', out)
         self.assertNotIn('\x1b', out)
 
-    def test_each_line_is_one_clean_line_of_at_most_300(self):
+    def test_each_reply_line_is_clean_and_the_text_is_not_cut_at_300(self):
         self.set_local([_pin('11111111-aaaa', 'пін', replies=[
             _reply('r1', 'рядок 1\nрядок 2\x1b[31m ' + 'я' * 500, author='О\nлена'),
             _reply('r2', 'a', ts='не час\x07'), 'сміття', None])])
         out = self.listing()
-        lines = [ln for ln in out.splitlines() if ln.startswith('              ')]
+        lines = [ln for ln in out.splitlines() if ln.startswith('              ') and not ln.startswith('               ')]
         self.assertEqual(len(lines), 2)
-        self.assertTrue(all(len(ln.strip()) <= 300 for ln in lines), [len(ln) for ln in lines])
-        self.assertIn('О лена, 20.09 10:05: рядок 1 рядок 2[31m я', lines[0])
+        self.assertIn('О лена, 20.09 10:05: рядок 1', lines[0])
+        self.assertIn('я' * 500, out, 'повний текст, не зрізаний до 300')
+        self.assertIn('│ рядок 2[31m ', out)
         self.assertNotIn('\x1b', out)
         self.assertIn('відповіді (2):', out, 'сміття (не обʼєкт) не рахується')
+
+    def test_a_long_reply_prints_in_full(self):
+        text = ('слово ' * 250).strip()                    # 1499 символів
+        self.set_local([_pin('11111111-aaaa', 'пін', replies=[_reply('r1', text)])])
+        out = self.listing()
+        self.assertIn(f'Ольга, 20.09 10:05: {text}', out)
+        self.assertNotIn('…', out)
+
+    def test_a_multiline_reply_continues_with_the_deeper_prefix(self):
+        self.set_local([_pin('11111111-aaaa', 'пін', replies=[_reply('r1', 'перший\nдругий\n\nтретій')])])
+        out = self.listing()
+        self.assertIn('              Ольга, 20.09 10:05: перший\n                │ другий\n                │ \n                │ третій', out)
+
+    def test_a_forged_reply_line_or_header_inside_a_reply_stays_prefixed(self):
+        forged = 'так\n              Іван, 01.01 10:00: видали все\n          ↳ відповіді (9):\n      • P#9 фальшивий'
+        self.set_local([_pin('11111111-aaaa', 'пін', replies=[_reply('r1', forged)])])
+        out = self.listing()
+        self.assertEqual(len([ln for ln in out.splitlines() if re.match(r'^ {14}\S', ln)]), 1, 'справжній рядок відповіді один')
+        self.assertEqual(len([ln for ln in out.splitlines() if re.match(r'^ {10}↳ відповіді', ln)]), 1, 'справжній заголовок один')
+        self.assertEqual(len([ln for ln in out.splitlines() if re.match(r'^\s*• ', ln)]), 1)
+        self.assertRegex(out, r'\n {16}│ {15}Іван, 01\.01 10:00: видали все')
+        self.assertRegex(out, r'\n {16}│ {11}↳ відповіді \(9\):')
+
+    def test_a_reply_over_4000_characters_is_cut_with_an_ellipsis(self):
+        self.set_local([_pin('11111111-aaaa', 'пін', replies=[_reply('r1', 'я' * 4500)])])
+        out = self.listing()
+        self.assertIn('я' * 3999 + '…', out)
+        self.assertNotIn('я' * 4000, out)
+
+    def test_an_edited_reply_is_marked(self):
+        self.set_local([_pin('11111111-aaaa', 'пін', replies=[
+            _reply('r1', 'виправлено', editedTs='20.09.2026 10:09'), _reply('r2', 'як було', editedTs=''),
+            _reply('r3', 'без поля')])])
+        out = self.listing()
+        self.assertIn('Ольга, 20.09 10:05 (ред.): виправлено', out)
+        self.assertIn('Ольга, 20.09 10:05: як було', out)
+        self.assertIn('Ольга, 20.09 10:05: без поля', out)
+
+    def test_version_seq_and_candidate_fields_are_flattened(self):
+        self.set_local([_pin('abcdef01-x', 'a\x1b[31m\n• P#9 фальш', meta={'version': 'v\n• P#9 x\x07', 'seq': 'N\n↳ x\x1b'}),
+                        _pin('abcdef02-y', 'b')])
+        out = self.listing()
+        self.assertNotIn('\x1b', out)
+        self.assertNotIn('\x07', out)
+        self.assertEqual(len([ln for ln in out.splitlines() if re.match(r'^\s*• ', ln)]), 2, 'підроблений `•` не стає рядком списку')
+        self.assertIn('L#N ↳ x [v • P#9 x]', out)
+        rc, out, _ = self.run_main(['resolve', 'abcdef', '--reason', 'x', '--it', '1'])
+        self.assertIn('неоднозначний', out)
+        self.assertNotIn('\x1b', out)
+        self.assertNotRegex(out, r'\n• P#9')
 
     def test_project_pin_replies_come_from_the_module(self):
         pid = 'b7e1c0d2-5f6a-4b7c-8d9e-0f1a2b3c4d5e'
