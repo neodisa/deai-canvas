@@ -1180,3 +1180,13 @@ test("⌘K «Видалити ітерацію»: єдина ітерація �
   assert.equal(del({ iterCount: 2 }).disabled, undefined);
   assert.equal(del({ iterCount: 2 }).whyKey, undefined);
 });
+
+test("⌘K «Видалені ітерації»: лише коли кошик не порожній, у групі ітерації; не на екрані «Задачі»", () => {
+  const find = (o) => paletteActions(S(o)).find((a) => a.id === "ittrash");
+  assert.equal(find({}), undefined);
+  assert.equal(find({ iterTrashCount: 0 }), undefined);
+  const a = find({ iterTrashCount: 2 });
+  assert.deepEqual({ act: a.act, group: a.group, labelKey: a.labelKey, icon: a.icon },
+    { act: "ittrash", group: "gIter", labelKey: "iterTrashPal", icon: "trash" });
+  assert.equal(find({ iterTrashCount: 2, homeOpen: true }), undefined);
+});

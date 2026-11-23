@@ -90,6 +90,7 @@ import { ico } from "./icons.js";
  *   hasIteration: boolean — керує групами `gIter`/`gFrames` і пунктом
  *     `go-iter` (той самий інваріант, що крихта ітерації смуги: немає
  *     ітерації — немає й дій над нею, а не «є, але вимкнені»).
+ *   iterTrashCount: number — скільки ітерацій у кошику задачі (пункт «Видалені ітерації»)
  *   pagesError, flowRaw, flowError — сирі поля для `flowWhyKey`
  *     (`bar-model.js`, той самий виклик, що робить сама смуга).
  *   published, iterPub, pagePub — сирі поля для `linkWhyKey`.
@@ -310,6 +311,8 @@ export function paletteActions(state) {
     out.push({ id: "dupit", group: "gIter", labelKey: "dupIteration", icon: "copy", act: "dupit" });
     /* Історія — права панель живого «Макета»: в «Огляді» (знімки) її нема. */
     if (s.mode !== "overview") out.push({ id: "ithist", group: "gIter", labelKey: "iterHistoryPal", icon: "refresh", act: "histcur" });
+    /* «Видалені» (патч після 0.36.0): лише коли кошик не порожній — порожнього кошика палітра не обіцяє. */
+    if (s.iterTrashCount > 0) out.push({ id: "ittrash", group: "gIter", labelKey: "iterTrashPal", icon: "trash", act: "ittrash" });
   }
 
   /* ── gPage: навпаки, ПРИЧИНА ВИДИМА — той самий вибір, що робить сама

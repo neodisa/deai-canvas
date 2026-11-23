@@ -1059,6 +1059,25 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
 .it-cfm{padding:2px 0}
 /* Меню рядка — fixed, позицію ставить `app.js` (праворуч від переліку на висоті рядка). */
 .dd--itmenu{position:fixed;top:0;left:0;min-width:210px;max-width:280px}
+/* «Видалені» (патч після 0.36.0): розділ кошика внизу переліку ітерацій. Шеврон праворуч; розгорнутий — донизу. */
+.it-gone-h .dd-t{color:var(--mid)}
+.it-gone-h .dd-marks{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+.it-gone-h .caret{transition:transform .12s}
+.it-gone-h[aria-expanded=true] .caret{transform:rotate(90deg)}
+.it-gone-list{padding-left:8px}
+.it-gone{display:grid;grid-template-columns:16px minmax(0,1fr) auto;gap:9px;align-items:center;
+  padding:6px 6px 6px 10px;border-radius:var(--r-sm);min-height:var(--h-ctl)}
+.it-gone:hover{background:var(--s3)}
+.it-gone>.ico{color:var(--dim)}
+.it-gone-b{display:flex;flex-direction:column;min-width:0}
+.it-gone-t{font-size:13px;color:var(--mid);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.it-gone-s{font-size:12px;color:var(--dim);margin-top:1px;font-variant-numeric:tabular-nums}
+.it-gone-s--soon{color:var(--open)}
+.it-back{height:var(--h-sm);padding:0 10px;border:1px solid var(--line2);border-radius:var(--r-sm);background:none;
+  color:var(--hi);font:inherit;font-size:12.5px;cursor:pointer;white-space:nowrap}
+.it-back:hover{background:var(--s4)}
+.it-back:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+@media (prefers-reduced-motion:reduce){.it-gone-h .caret{transition:none}}
 /* Навмисно ЛИШЕ transform, без opacity: headless-рендер `bin/shoot.mjs` не
    чекає кадр анімації так, як людське око, і дропдаун приїжджав би порожнім
    у знімку. Не «покращуй» додаванням прозорості — це стереже

@@ -202,6 +202,11 @@ export function barModel(s) {
         pub: !!x.pub, onGl: !!x.onGl, on: x.id === s.iterId,
         author: x.author || "", mine: x.mine !== false, origin: x.origin || null,
       })),
+      /* Кошик (розділ «Видалені», патч після 0.36.0): найсвіжіше першим, як віддав сервер; підпис — тими самими полями, що й
+         рядок переліку (`label` мовою глядача + `note`). */
+      trash: (s.iterTrash || []).map((x) => ({
+        trash: x.trash, label: x.label, note: x.note || "", deletedAt: x.deletedAt || "", expiresAt: x.expiresAt || "",
+      })),
     });
   }
 

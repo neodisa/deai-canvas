@@ -208,7 +208,50 @@ function iterMenu(x, count, modActs, overview = false) {
   </div>`;
 }
 
-function crumbIter(model, openDd, ui = null, modActs = [], overview = false) {
+/* «Видалені» (патч після 0.36.0): скільки лишилось до автоочищення кошика — від `expiresAt` до `nowMs`. Чиста (тести без DOM).
+   ≥ доби — дні, округлені до найближчих (свіжовидалена — «ще 7 дн.»); < доби — години вниз; < години, минуле чи зіпсоване —
+   «менше години». `soon` — колір попередження. */
+export function trashLeft(expiresAt, nowMs = Date.now()) {
+  const ms = Date.parse(expiresAt) - nowMs;
+  const H = 3600e3;
+  const D = 24 * H;
+  if (!(ms >= H)) return { text: t("trashLeftUnderHour"), soon: true };
+  if (ms < D) return { text: t("trashLeftHours", Math.floor(ms / H)), soon: true };
+  return { text: t("trashLeftDays", Math.round(ms / D)), soon: false };
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+/** Локальні дата й час видалення для підказки рядка (`DD.MM.YYYY`, `HH:MM`); зіпсоване — `null`. */
+function deletedWhen(at) {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return null;
+  return [`${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}`, `${pad2(d.getHours())}:${pad2(d.getMinutes())}`];
+}
+
+function goneRow(x, nowMs) {
+  const title = x.note ? `${x.label} · ${x.note}` : x.label;
+  const when = deletedWhen(x.deletedAt);
+  const tip = when ? t("trashDeletedAt", title, when[0], when[1]) : title;
+  const left = trashLeft(x.expiresAt, nowMs);
+  return `<div class="it-gone" title="${esc(tip)}">${ico("iter")}`
+    + `<span class="it-gone-b"><span class="it-gone-t">${esc(title)}</span>`
+    + `<span class="it-gone-s${left.soon ? " it-gone-s--soon" : ""}">${esc(left.text)}</span></span>`
+    + `<button type="button" class="it-back" data-act="itback" data-val="${esc(x.trash)}"`
+    + ` aria-label="${esc(t("iterRestoreAria", title))}">${esc(t("iterRestore"))}</button></div>`;
+}
+
+/* Розділ стоїть найнижче (під «Новою ітерацією»): дія рідкісна. Порожній кошик — рядок порожній, щоб розмітка дропдауна без кошика
+   лишилась байт-у-байт такою, як була. */
+function goneSection(trash, gone, nowMs) {
+  if (!trash.length) return "";
+  return `<div class="dd-sep"></div>`
+    + `<button class="dd-item it-gone-h" data-act="itgone" aria-expanded="${gone}">${ico("trash")}`
+    + `<span class="dd-body"><span class="dd-t">${esc(t("iterTrash"))}</span></span>`
+    + `<span class="dd-marks">${trash.length}${ico("chevright", 14, "ico caret")}</span></button>`
+    + (gone ? `<div class="it-gone-list">${trash.map((x) => goneRow(x, nowMs)).join("")}</div>` : "");
+}
+
+function crumbIter(model, openDd, ui = null, modActs = [], overview = false, gone = false, nowMs = Date.now()) {
   const it = model.zone1.find((x) => x.id === "iter");
   if (!it) return "";
   const open = openDd === "iter";
@@ -221,7 +264,7 @@ function crumbIter(model, openDd, ui = null, modActs = [], overview = false) {
   const menuFor = ui?.menu ? items.find((x) => x.id === ui.menu) : null;
   const dd = open ? `<div class="dd dd--iters">
     ${items.map((x) => iterRow(x, ui)).join("")}${items.length ? '<div class="dd-sep"></div>' : ""}
-    ${ddItem({ act: "newit", icon: "plus", title: t("newIteration") })}
+    ${ddItem({ act: "newit", icon: "plus", title: t("newIteration") })}${goneSection(it.trash || [], gone, nowMs)}
   </div>${menuFor ? iterMenu(menuFor, items.length, modActs, overview) : ""}` : "";
   /* Імені автора в крошці нема (власник: лише ітерація та її назва); чужа ітерація — видимий клас `crumb--foreign`
      і title-підказка: про межу треба дізнатись ДО того, як почав у ній працювати. Автор — у підказці кружка чужого рядка переліку. */
@@ -473,7 +516,8 @@ export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
   const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
   /* Третій аргумент `crumbIter` — `state.iterUi` `{menu, ren, del}`: меню рядка, поле назви, питання видалення (фаза И). */
-  const iter = home ? "" : crumbIter(model, openDd, state?.iterUi ?? null, Array.isArray(state?.modActs) ? state.modActs : [], state?.mode === "overview");
+  const iter = home ? "" : crumbIter(model, openDd, state?.iterUi ?? null, Array.isArray(state?.modActs) ? state.modActs : [],
+    state?.mode === "overview", state?.iterGone === true, typeof state?.now === "number" ? state.now : Date.now());
   const zone1 = home
     ? `${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
     : `<div class="crumbs">${crumbTask(model, openDd, state)}${iter ? `<span class="crumb-sep" aria-hidden="true">/</span>${iter}` : ""}</div>`;
