@@ -1930,6 +1930,7 @@ function closeReplyDelAsk(refocus) {
   paintComments();
   if (refocus && key) cmtEl.querySelector(`[data-act="cmtrdel"][data-val="${CSS.escape(key)}"]`)?.focus();
 }
+let cmtRestoringFocus = false;
 function paintComments() {
   const L = cmtLayer();
   const html = cmtOpen && !homeOpen ? commentsPanelHTML({ snapshot: cmtSnap, query: cmtQuery, selectedId: cmtSel,
@@ -1966,7 +1967,9 @@ function paintComments() {
   if (cmtReplyEdit && cmtReplyEditDraft != null) { const ed = cmtEl.querySelector('.cmt-redit'); if (ed) ed.value = cmtReplyEditDraft; }
   if (keep) {
     const el = cmtEl.querySelector(keep.sel);
-    el?.focus(); try { el?.setSelectionRange(...keep.range); } catch (e) {}
+    cmtRestoringFocus = true;   // повернутий перемальовкою фокус — не «вхід у поле» (`focusin` панелі його ігнорує: Esc не мусить знову розгортати поле)
+    try { el?.focus(); } finally { cmtRestoringFocus = false; }
+    try { el?.setSelectionRange(...keep.range); } catch (e) {}
   }
   if (cmtSel) cmtEl.querySelector(`[data-cid="${CSS.escape(cmtSel)}"]`)?.scrollIntoView({ block: 'nearest' });
   paintIsland();
@@ -7757,13 +7760,16 @@ cmtEl.addEventListener('input', (ev) => {
    коментар, `cmt-rbox--on` ставимо прямо, БЕЗ перемальовки — вона замінила б textarea посеред mousedown і згубила б каретку та виділення.
    Наступна звичайна перемальовка дає той самий стан із `cmtReplying`. */
 cmtEl.addEventListener('focusin', (ev) => {
+  if (cmtRestoringFocus) return;
   const ta = ev.target.closest?.('.cmt-rta');
   if (!ta) return;
   const id = ta.dataset.val;
   const c = cmtSnap?.comments?.find((x) => x && x.id === id);
   if (!c || c.status !== 'open' || repliesOff(c) != null || cmtReplying === id) return;
   cmtReplying = id;
-  ta.closest('.cmt-rbox')?.classList.add('cmt-rbox--on');
+  const box = ta.closest('.cmt-rbox');
+  for (const b of cmtEl.querySelectorAll('.cmt-rbox--on')) if (b !== box) b.classList.remove('cmt-rbox--on');   // розгорнутий рядок — один
+  box?.classList.add('cmt-rbox--on');
 });
 /* ⌘/Ctrl+Enter зберігає редагування, Esc скасовує; `stopPropagation`, щоб глобальний Esc не закрив панель. */
 cmtEl.addEventListener('keydown', (ev) => {

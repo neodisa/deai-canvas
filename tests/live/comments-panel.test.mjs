@@ -869,6 +869,32 @@ test("33: розгорнута гілка з відповідями — фоку
   await until(() => { const r = JSON.parse(readFileSync(path.join(dir, ".dc-local-comments.json"), "utf8")).find((c) => c.id === "a1"); return (r.replies || []).some((x) => x.text === "Дякую за все"); });
 });
 
+test("34: поле відповіді — розгорнуте одне (друге забирає рядок); Esc згортає рядок і він лишається згорнутим навіть після перемальовування", async (t) => {
+  const reps = (id) => [{ id, author: "Claude", agent: true, text: "Давня", ts: "19.11.2026 10:00" }];
+  const { page } = await boot(t, PORT_BASE + 130, (d) => seedOpenPin(d, [
+    { id: "a1", text: "Перший", replies: reps("o1"), meta: { iteration: "1", version: "1", seq: 1, viewport: { w: 1280, h: 900 } } },
+    { id: "a2", text: "Другий", replies: reps("o2"), meta: { iteration: "1", version: "1", seq: 2, viewport: { w: 1280, h: 900 } } }]));
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  for (const b of await page.locator("#cmt-panel .cmt-rsum").all()) await b.click();
+  const ta = (id) => `#cmt-panel .cmt-card[data-cid="${id}"] textarea.cmt-rta`;
+  const send = (id) => `#cmt-panel .cmt-card[data-cid="${id}"] [data-act="cmtreplysend"]`;
+  await page.click(ta("a1"));
+  assert.deepEqual([await page.isVisible(send("a1")), await page.isVisible(send("a2"))], [true, false]);
+  await page.click(ta("a2"));
+  assert.deepEqual([await page.isVisible(send("a1")), await page.isVisible(send("a2"))], [false, true], "перший бокс лишився розгорнутим");
+  await page.fill(ta("a2"), "Чернетка");
+  await page.press(ta("a2"), "Escape");
+  assert.equal(await page.locator("#cmt-panel .cmt-rbox--on").count(), 0, "Esc не згорнув поле");
+  assert.equal(await page.isVisible(send("a2")), false);
+  assert.equal(await page.inputValue(ta("a2")), "", "Esc не скинув чернетку");
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cmt-rta")), true, "фокус не лишився в полі");
+  await page.click('#cmt-panel [data-act="cmtthread"][data-val="a1"]');       // перемальовка панелі (згорнути/розгорнути гілку)
+  await page.click('#cmt-panel [data-act="cmtthread"][data-val="a1"]');
+  await page.waitForSelector(ta("a1"));
+  assert.equal(await page.locator("#cmt-panel .cmt-rbox--on").count(), 0, "перемальовка знову розгорнула поле");
+});
+
 /* ───────── 0.34: форма над макетом — у токенах і мові оболонки (`host.theme`, `host.labels`) ───────── */
 test("20: форма коментаря над макетом — themed, фон = --s2 оболонки, підписи мовою оболонки (uk), тег чипом", async (t) => {
   const { page, frame } = await boot(t, PORT_BASE + 50);

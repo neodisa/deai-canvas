@@ -374,6 +374,10 @@ test("новини з відповідями: cmtNewsUpdate і setCommentsOpen �
   assert.match(fn("replyNewsToast"), /par && par\.scope === 'earlier'\) cmtExpanded\.earlier = true;/, "батько в «З попередніх ітерацій» (у «Нове» картка видима й так — це запас)");
   assert.match(src, /cmtEl\.addEventListener\('focusin'[\s\S]*?classList\.add\('cmt-rbox--on'\);[\s\S]*?\}\);/, "focusin ставить клас без перемальовки");
   assert.doesNotMatch(/cmtEl\.addEventListener\('focusin'[\s\S]*?\n\}\);/.exec(src)[0], /paintComments/, "перемальовка у focusin губить каретку");
+  const fi = /cmtEl\.addEventListener\('focusin'[\s\S]*?\n\}\);/.exec(src)[0];
+  assert.match(fi, /if \(cmtRestoringFocus\) return;/, "фокус, повернутий перемальовкою, не мусить знову розгортати поле (Esc)");
+  assert.match(src, /cmtRestoringFocus = true;[^\n]*\n\s*try \{ el\?\.focus\(\); \} finally \{ cmtRestoringFocus = false; \}/, "прапор довкола focus() у paintComments");
+  assert.match(fi, /for \(const b of cmtEl\.querySelectorAll\('\.cmt-rbox--on'\)\) if \(b !== box\) b\.classList\.remove\('cmt-rbox--on'\);/, "розгорнутий рядок — один");
 });
 
 test("«не підтримує відповідей» — невідомо, поки store.ready не виконано: ні смуги, ні прихованого поля (поведінка справжніх storeIsReady/readSupportsReplies)", async () => {
