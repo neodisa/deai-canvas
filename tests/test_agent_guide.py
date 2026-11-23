@@ -431,5 +431,22 @@ class Route(base.Fixture):
         self.assertEqual(b['paths']['agents'], os.path.join(serve.ROOT, 'docs', 'agents'))
 
 
+class TopicFormat(unittest.TestCase):
+    """Кожна справжня тема: рядок 1 — `# Заголовок`, рядок 2 — непорожній рядок індексу (≤ 120 знаків, без `{` і маркерів `deai:`)."""
+
+    def test_every_topic(self):
+        found = agents_md.topics()
+        self.assertGreaterEqual(len(found), 12)
+        for name, path in found:
+            with self.subTest(topic=name):
+                with open(path, encoding='utf-8') as f:
+                    lines = f.read().split('\n')
+                self.assertTrue(lines[0].startswith('# ') and len(lines[0]) > 2)
+                self.assertTrue(lines[1].strip() and not lines[1].startswith('#'))
+                self.assertLessEqual(len(lines[1].strip()), 120)
+                self.assertNotIn('{', lines[1])
+                self.assertNotIn('deai:', lines[1])
+
+
 if __name__ == '__main__':
     unittest.main()

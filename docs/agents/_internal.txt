@@ -1,0 +1,26 @@
+# Not for agents. Each line: «<route, or a path under the bin folder> — <reason>». Read by tests/test_agent_guide_coverage.py.
+/api/update — updates are the human's decision in Settings → Updates
+/api/update-check — updates are the human's decision in Settings → Updates
+/api/update-apply — updates are the human's decision in Settings → Updates
+/api/update-notes — updates are the human's decision in Settings → Updates
+/api/setup — first-run checks of the canvas interface
+/api/demo-task — the demo task of the first run (canvas interface, ⌘K)
+/api/feedback — feedback to the Deai Canvas authors, sent by a person from the interface
+/api/feedback-preview — preview of that feedback (interface)
+/api/teams-mute — a person's notification preference (interface)
+/api/task-thumb — thumbnails of the task list (interface)
+/api/tasks-overview — data of the Overview screen (interface)
+/api/it-stamp — the open tab polls it to reload a changed iteration (interface)
+/api/gitlab-sync — legacy alias of /api/vcs-push
+/api/gitlab-pull — legacy alias of /api/vcs-pull
+/api/gitlab-status — legacy alias of /api/vcs-status
+bin/shoot.mjs — run by the canvas for /api/shoot
+bin/shots-geo.mjs — helper of bin/shoot.mjs
+bin/shots-manifest.mjs — helper of bin/shoot.mjs
+bin/shots-progress.mjs — helper of bin/shoot.mjs
+bin/shots-shutter.mjs — helper of bin/shoot.mjs
+bin/shots-stamp.mjs — helper of bin/shoot.mjs
+bin/migrate_liga.py — one-off migration of a legacy space, run by a person
+bin/registry.py — legacy task registry of one team, run by a person
+bin/roots.py — legacy work roots of one team, run by a person
+bin/overview_push.py — background push of task cards to the team dashboard
