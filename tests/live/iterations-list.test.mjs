@@ -187,6 +187,33 @@ test("видалення: «Видалити» вимкнене, коли лиш
   assert.equal(await del.isDisabled(), true, "єдину ітерацію можна видалити");
 });
 
+test("«Видалені»: після видалення розділ з числом; «Повернути» повертає й обирає; порожній кошик — розділу нема", async (t) => {
+  const { page, ids } = await boot(t, { count: 3 });
+  await openList(page);
+  assert.equal(await page.locator("#bar .it-gone-h").count(), 0, "розділ при порожньому кошику");
+  await openRowMenu(page, "it2");
+  await page.click('#bar .dd--itmenu [data-act="itdel"]');
+  await page.click('#bar .it-cfm [data-act="itdelyes"]');
+  await page.waitForFunction(async () => (await (await fetch("/api/task")).json()).iteration_trash.length === 1);
+  if (!(await page.locator("#bar .dd--iters").count())) await openList(page);
+  await page.waitForSelector("#bar .it-gone-h");
+  assert.match(await page.textContent("#bar .it-gone-h"), /Видалені\s*1/);
+  await page.click("#bar .it-gone-h");
+  await page.waitForSelector('#bar .it-gone [data-act="itback"]');
+  assert.ok(await page.locator("#bar .dd--iters").count(), "розгортання закрило дропдаун");
+  assert.match(await page.textContent("#bar .it-gone-t"), /^Іт\.2/);
+  assert.match(await page.textContent("#bar .it-gone-s"), /ще 7 дн\./);
+  await shot(page, "10-trash.png");
+  const req = page.waitForRequest((r) => r.url().endsWith("/api/iteration-restore"));
+  await page.click('#bar .it-gone [data-act="itback"]');
+  assert.ok((await req).headers()["x-canvas-task"], "«Повернути» з переліку без X-Canvas-Task");
+  await page.waitForFunction(async () => (await (await fetch("/api/task")).json()).iterations.length === 3);
+  assert.deepEqual(await ids(), ["it1", "it2", "it3"], "ітерація повернулась не на своє місце");
+  await page.waitForFunction(() => /Іт\.2/.test(document.querySelector('#bar [data-dd="iter"]')?.textContent || ""));
+  await openList(page);
+  assert.equal(await page.locator("#bar .it-gone-h").count(), 0, "розділ лишився після повернення єдиної видаленої");
+});
+
 test("«Огляд»: меню рядка без «Історії змін» (панелі там нема); ⌘K без історії; у «Макеті» пункт є", async (t) => {
   const { page } = await boot(t, { count: 2 });
   await openList(page);

@@ -3,6 +3,23 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.36.1] — 23.11.2026
+
+Deleted iterations can be brought back from the list, not only from the 8-second toast.
+
+### Додано
+- «Видалені» at the bottom of the iteration list. It shows only when the task's trash is not empty.
+  - It expands in place: each deleted iteration, newest first, with the time left before the trash clears it. The
+    hover tooltip says when it was deleted.
+  - «Повернути» puts the iteration back in its place and opens it; a taken number gets the next free one, as with the
+    toast.
+- ⌘K «Видалені ітерації» opens the list expanded (only when there is something in it).
+- `GET /api/task` carries `iteration_trash`: `[{trash, id, label_text, deleted_at, expires_at}]`, newest first;
+  restore is the same `POST /api/iteration-restore {trash}`. AGENTS.md says so.
+
+### Known limits
+- The trash is still local: it exists only on the machine where the iteration was deleted.
+
 ## [0.36.0] — 23.11.2026
 
 Tasks and iterations. A task is called by its name everywhere, the bar reads «task / iteration», and the iteration list

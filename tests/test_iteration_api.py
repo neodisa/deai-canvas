@@ -316,5 +316,44 @@ class HistoryAndAi(_Base):
         self.assertIn('A  notes.txt', self.status())
 
 
+class TrashList(_Base):
+    """`/api/task` несе кошик (`iteration_trash`) для розділу «Видалені»: зʼявляється після видалення, зникає після повернення."""
+
+    def test_task_carries_trash_after_delete_and_drops_it_after_restore(self):
+        st, task = self.jget('/api/task')
+        self.assertEqual((st, task['iteration_trash']), (200, []))
+        _, d = self.post('/api/iteration-delete', {'id': 'it2'})
+        _, task = self.jget('/api/task')
+        self.assertEqual(len(task['iteration_trash']), 1)
+        row = task['iteration_trash'][0]
+        self.assertEqual((row['trash'], row['id']), (d['trash'], 'it2'))
+        self.assertTrue(row['label_text'].startswith('Іт.2'), row)
+        self.assertRegex(row['deleted_at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+        self.assertRegex(row['expires_at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+        self.assertEqual(set(row), {'trash', 'id', 'label_text', 'deleted_at', 'expires_at'})
+        self.post('/api/iteration-restore', {'trash': d['trash']})
+        _, task = self.jget('/api/task')
+        self.assertEqual(task['iteration_trash'], [])
+
+    def test_one_bad_entry_skips_only_its_row(self):
+        self.post('/api/iteration', {'from': 'it1', 'note': 'Третя'})      # it3
+        _, d2 = self.post('/api/iteration-delete', {'id': 'it2'})
+        _, d3 = self.post('/api/iteration-delete', {'id': 'it3'})
+        path = os.path.join(self.x_dir, '.trash', 'iterations', d2['trash'], 'entry.json')
+        with open(path, encoding='utf-8') as f:
+            doc = json.load(f)
+        doc['entry']['label'] = 5
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(doc, f)
+        st, task = self.jget('/api/task')
+        self.assertEqual(st, 200)
+        self.assertEqual([r['trash'] for r in task['iteration_trash']], [d3['trash']])
+
+    def test_broken_trash_never_breaks_the_task_screen(self):
+        with mock.patch('iter_trash.list_slots', side_effect=OSError('x')):
+            st, task = self.jget('/api/task')
+        self.assertEqual((st, task['iteration_trash']), (200, []))
+
+
 if __name__ == '__main__':
     unittest.main()

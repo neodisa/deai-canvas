@@ -173,6 +173,43 @@ def purge(task_dir, now, keep_days=KEEP_DAYS):
     return gone
 
 
+def list_slots(task_dir, now, keep_days=KEEP_DAYS):
+    """Перелік кошика для інтерфейсу («Видалені»): `[{trash, entry, deleted_at, expires_at}]`, найсвіжіше першим. НЕ пише й не
+    прибирає (це `purge` при видаленні). Вік — за датою в імені слота, тим самим правилом, що в `purge` (рівно `keep_days` —
+    ще в кошику), тож перелік і прибирання не розходяться. Пропускає чужі імена, слоти без читабельного `entry.json` (залишок
+    після `restore_finish`), запис не тієї форми, небезпечний `id` і прострочені слоти. Нема кошика — `[]`."""
+    root = trash_root(task_dir)
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    edge = now - datetime.timedelta(days=keep_days)
+    found = []
+    for name in names:
+        s = SLOT_RE.fullmatch(name)
+        if not s:
+            continue
+        try:
+            at = datetime.datetime.strptime(s.group(2), '%Y%m%d-%H%M%S').replace(tzinfo=datetime.timezone.utc)
+        except ValueError:
+            continue
+        if at < edge:
+            continue
+        try:
+            with open(os.path.join(root, name, 'entry.json'), encoding='utf-8') as f:
+                entry = json.load(f)['entry']
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not isinstance(entry, dict) or not _safe_id(entry.get('id')):
+            continue
+        found.append((at, name, dict(entry)))
+    found.sort(key=lambda x: (x[0], x[1]), reverse=True)        # той самий час — суфікс `-N` новіший
+    fmt = '%Y-%m-%dT%H:%M:%SZ'
+    return [{'trash': name, 'entry': entry, 'deleted_at': at.strftime(fmt),
+             'expires_at': (at + datetime.timedelta(days=keep_days)).strftime(fmt)}
+            for at, name, entry in found]
+
+
 def insert_ordered(its, entry):
     """Вставити запис за номером (`it4` між `it3` і `it5`); не-`itN` — у кінець. Змінює `its` на місці."""
     m = NUM_RE.match(entry.get('id', ''))

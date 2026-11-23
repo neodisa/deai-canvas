@@ -738,14 +738,22 @@ def _flat(obj, path=''):
     return flat(obj, path)
 
 
+#: Ключі `/api/task`, що зʼявились ПІСЛЯ знімка 0.19.0 і до міграції стосунку не мають (нова функція, а не наслідок кроку D).
+#: Список точний: кожен ключ мусить бути в кожній відповіді «після» й бути відсутнім у знімку (`test_later_task_keys_are_real`);
+#: перед порівнянням знімаються лише вони.
+_LATER_TASK_KEYS = ('iteration_trash',)   # кошик ітерацій, розділ «Видалені» (патч після 0.36.0)
+
+
 def _no_profile(stand):
     """Знімок/стенд без ключа `profile` у відповідях API (його ВІДСУТНІСТЬ доводить `test_api_has_no_profile`): `api.task.*` (`profile`,
-    `keys.profile`) і рядки `api.tasks.rows`."""
+    `keys.profile`) і рядки `api.tasks.rows`. Також знімає `_LATER_TASK_KEYS` з `keys` кожної відповіді `api.task`."""
     s = json.loads(json.dumps(stand))
     api = s.get('api') or {}
     for row in (api.get('task') or {}).values():
         row.pop('profile', None)
         (row.get('keys') or {}).pop('profile', None)
+        for k in _LATER_TASK_KEYS:
+            (row.get('keys') or {}).pop(k, None)
     for row in (api.get('tasks') or {}).get('rows', []):
         row.pop('profile', None)
     return s
@@ -962,6 +970,14 @@ class AfterMigrationParity4d4a(unittest.TestCase):
                 self.assertEqual(row['profile'], '<absent>', (name, row['id']))
         # контроль: у знімку 0.19.0 `profile` БУВ — тест не порожній
         self.assertIn('profile', self.before['parity']['api']['task']['a-2']['keys'])
+
+    def test_later_task_keys_are_real(self):
+        """Ключі, що знімаються перед порівнянням, справді є в кожній відповіді «після» і справді відсутні в знімку: список не ховає зниклого ключа."""
+        for name in ('parity', 'notes', 'explicit'):
+            for tid, row in self.after[name]['api']['task'].items():
+                for k in _LATER_TASK_KEYS:
+                    self.assertIn(k, row['keys'], (name, tid))
+                    self.assertNotIn(k, self.before[name]['api']['task'][tid]['keys'] or {}, (name, tid))
 
     def test_a_profile_only_record_keeps_its_label_ds_and_registry_root(self):
         """Серце паритету: `a-2` має лише `profile: united` — без дописаного кроком `track` він втратив би мітку й ДС. Тепер (після D) — ті

@@ -229,6 +229,14 @@ let openDd = null;
 /* Перелік ітерацій (фаза И): відкрите меню рядка, рядок-поле назви, рядок-питання про видалення — id ітерації або null.
    Живе лише у відкритому дропдауні ітерації: його закриття скидає все (`paintBar`). Замінює колишній `iterDelAsk`. */
 let iterUi = { menu: null, ren: null, del: null };
+/* Розділ «Видалені» дропдауна ітерації розгорнутий? Окремо від `iterUi`: меню «⋯», поле назви й питання про видалення його не
+   згортають. Живе лише поки дропдаун ітерації відкритий — скидає `paintBar`. */
+let iterGone = false;
+/** Розгорнутий розділ «Видалені» — у видиму частину дропдауна (`.dd` прокручується; довгий перелік ховав би його під краєм). */
+function revealGone() {
+  if (!iterGone) return;
+  (bar.querySelector('.it-gone-list .it-gone:last-child') || bar.querySelector('.it-gone-h'))?.scrollIntoView({ block: 'nearest' });
+}
 const IT_NONE = { menu: null, ren: null, del: null };
 /* Відкритий екран «Задачі» (вхід — логотип у смузі). Прапорець ділять смуга
    (`barState().homeOpen` міняє її склад) і сам екран (`enterHome`/`leaveHome`
@@ -972,6 +980,8 @@ function dropNotice(id) {
 /** Номер ітерації з id (`it4` → `4`) — той самий рядок думки, що раніше жив
  *  локальним `itNum` у `render()`, тепер потрібен ще й `barState()`. */
 const itNum = (id) => String(id).replace(/^it/, '');
+/** Примітка ітерації без префікса «Іт.N · » з `label_text` сервера (номер малює клієнт мовою глядача). */
+const itNoteOf = (x) => (x.label_text || '').replace(new RegExp(`^Іт\\.${itNum(x.id)}\\s*(?:·\\s*)?`), '');
 
 /**
  * Адаптер стану модуля в те, що чекає `barModel()`. Чиста функція: жодного
@@ -1078,12 +1088,17 @@ function barState() {
     iterList: (curTask?.iterations || []).map((x) => ({
       id: x.id,
       label: t('iterTag', itNum(x.id)),
-      note: (x.label_text || '').replace(
-        new RegExp(`^Іт\\.${itNum(x.id)}\\s*(?:·\\s*)?`), ''),
+      note: itNoteOf(x),
       pub: !!x.published,
       onGl: !!(glCache && glCache.gitlab_it === x.id),
       author: x.author || '', mine: iterMine(x), origin: x.origin || null,
     })),
+    /* Кошик (розділ «Видалені»): ті самі поля, що й рядок переліку, плюс слот і час. */
+    iterTrash: (curTask?.iteration_trash || []).map((x) => ({
+      trash: x.trash, label: t('iterTag', itNum(x.id)), note: itNoteOf(x),
+      deletedAt: x.deleted_at || '', expiresAt: x.expires_at || '',
+    })),
+    iterGone,
     pagesError, flowRaw, flowError,
     right: inspectorApi()?.on ? 'inspector' : null,
     gl,
@@ -1290,6 +1305,7 @@ let barRepainting = false;
 function paintBar() {
   barSeeded = true;
   if (openDd !== 'iter') iterUi = IT_NONE;   // меню рядка, поле назви й питання живуть лише у відкритому дропдауні ітерації
+  if (openDd !== 'iter') iterGone = false;   // розділ «Видалені» — так само
   /* Поле назви ітерації в фокусі: `innerHTML` знищує вузол, а з ним набраний текст і виділення. Фоновий `render()`
      (опит, подія агента) не повинен його стирати — запамʼятовуємо значення й виділення, після малювання вертаємо. */
   const renIn = bar.querySelector('#it-ren-in');
@@ -1544,7 +1560,10 @@ async function restoreIteration(slot, label, taskId) {
     });
     if (!taskId || taskId === currentTaskId) { picked = r.id; await render(); }
     if (r.renamed) toast(t('iterRestoredAs', r.iteration?.label_text || t('iterTag', itNum(r.id))));
-  } catch (e) { toast(t('iterRestoreFailed', label)); }
+  } catch (e) {
+    toast(t('iterRestoreFailed', label));
+    if (!taskId || taskId === currentTaskId) await render();   // слот, прибраний чи повернутий деінде, зникає з переліку
+  }
 }
 
 /**
@@ -3189,6 +3208,21 @@ const BAR_ACTIONS = {
   ithist: (id) => openHistory(id),
   /* ⌘K «Історія ітерації» — для поточної (`picked`, інакше найновішої). */
   histcur: () => openHistory(picked || (curTask?.iterations || []).at(-1)?.id),
+  /* «Видалені» (патч після 0.36.0): «Повернути» з переліку — той самий шлях, що й з тосту (ітерація стає обраною; новий номер —
+     тост). Дропдаун уже закрила загальна делегація кліку. */
+  itback: (slot) => {
+    const x = (curTask?.iteration_trash || []).find((y) => y.trash === slot);
+    restoreIteration(slot, x?.label_text || slot, currentTaskId);
+  },
+  /* ⌘K «Видалені ітерації»: дропдаун ітерації з розгорнутим розділом. */
+  ittrash: () => {
+    if (!(curTask?.iteration_trash || []).length) return;
+    openDd = 'iter';
+    iterGone = true;
+    paintBar();
+    revealGone();
+    bar.querySelector('.it-gone-h')?.focus({ preventScroll: true });
+  },
   itmodact: (v) => {
     const i = String(v).indexOf('::');
     if (i > 0) runModuleAction(v.slice(i + 2), 'iteration', currentTaskId, v.slice(0, i));
@@ -3833,6 +3867,8 @@ bar.addEventListener('click', (ev) => {
   if (act === 'itdelyes') { deleteIteration(el.dataset.val); return; }
   if (act === 'newit') { createIteration(picked); return; }
   if (act === 'itdup') { createIteration(el.dataset.val); return; }
+  /* «Видалені»: розгорнути/згорнути, дропдаун лишається відкритим. */
+  if (act === 'itgone') { iterGone = !iterGone; paintBar(); revealGone(); bar.querySelector('.it-gone-h')?.focus({ preventScroll: true }); return; }
   const hadOpenDd = !!openDd;
   /* Рядок дропдауна просторів — фокус після закриття вернемо на фішку (див. нижче). */
   const fromSpaces = openDd === 'space' && !!el.closest('.dd--spaces');
@@ -9779,6 +9815,7 @@ function paletteState() {
   return {
     mode: st.mode, view: st.view, hasIteration: st.hasIteration,
     iterCount: (curTask?.iterations || []).length,
+    iterTrashCount: (curTask?.iteration_trash || []).length,
     homeOpen: st.homeOpen,
     homePage: st.homePage,
     pagesError: st.pagesError, flowRaw: st.flowRaw, flowError: st.flowError,
