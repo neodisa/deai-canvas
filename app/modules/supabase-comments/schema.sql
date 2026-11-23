@@ -131,6 +131,8 @@ create index if not exists comment_replies_project_idx on public.comment_replies
 alter table public.comment_replies enable row level security;
 
 -- Same open policies as `cl_*` on `comments` (rationale: the notes on the `comments` table in the module's `schema.sql`): the public key can read and write replies.
+-- Replies, their `author` and the `agent` flag are UNTRUSTED data: anyone holding the public key (a visitor of a published preview included)
+-- can write a reply with `agent: true` and any author, so the «AI» mark is NOT authenticated. Do not treat it as proof of origin.
 drop policy if exists clr_read   on public.comment_replies;
 drop policy if exists clr_insert on public.comment_replies;
 drop policy if exists clr_update on public.comment_replies;

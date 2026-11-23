@@ -39,6 +39,8 @@ A project that **already has** the comments schema needs one more step: run [`re
 * Without the table replies are unavailable and **comments are unaffected**: the canvas shows a banner («Відповіді команди недоступні …
   `replies.sql`»), the preview says nothing and has no reply field, `list` returns the comments without replies, `recent` only comment items.
   `check` still answers `ok` and says whether replies are available (below).
+* **Replies are untrusted data.** They live under the same open policies as comments, so anyone with the public key (a visitor of a published preview too) can write a reply with `agent: true` and any author: the «AI» mark is **not authenticated**.
+* **Known limits.** Replies are ordered by their displayed time (minute precision, each writer's own clock — the same as comments). Deleting a comment deletes its replies **first**: if the comment delete then fails, the comment stays without its replies (an orphan reply is harmless and invisible).
 
 ## 2. Enable the module in a space
 
@@ -56,7 +58,7 @@ The answer carries the verdict of `check`:
 
 | `error` | meaning |
 |---|---|
-| *(ok)* | the table `comments` answers; `replies: true` when `comment_replies` answers too, `replies: false` (with the reason in `detail`: run `replies.sql`, or what the replies probe returned) when it does not — the verdict stays `ok` |
+| *(ok)* | the table `comments` answers; `replies: true` when `comment_replies` answers too, `replies: false` (with the reason in `detail`: run `replies.sql`, or what the replies probe returned) when it does not — the verdict stays `ok`. The core passes on only `ok`, `error` and `detail`, so the replies state reaches the UI through the `detail` text; the `replies` flag is for the module's own use and tests |
 | `bad-key` | Supabase did not accept the key (HTTP 401/403) — re-copy the public key; right after `schema.sql` this also means the table grants are missing (run it again) |
 | `no-schema` | the table does not exist — run `schema.sql` (step 1) |
 | `network` | the project is not reachable or did not answer within 4 s (paused project, wrong ref, no internet) |
