@@ -30,15 +30,20 @@ async function boot({ dpr = 1, upload = null, withHost = false, version = "1", s
   await page.addScriptTag({ content: BUNDLE });
   await page.evaluate(({ upload, withHost, version, seed }) => {
     window.__calls = []; window.__uploads = [];
+    window.__rel = []; window.__holdN = 0; window.__saves = [];
     window.html2canvas = (el, opts) => {
       const r = el.getBoundingClientRect(); window.__calls.push({ w: r.width, h: r.height, scale: opts.scale });
+      if (window.__holdN > 0) { window.__holdN -= 1; return new Promise((res) => window.__rel.push(() => res(mk(r, opts)))); }
+      return Promise.resolve(mk(r, opts));
+    };
+    const mk = (r, opts) => {
       const c = document.createElement("canvas");
       c.width = Math.round(r.width * opts.scale); c.height = Math.round(r.height * opts.scale);
       const g = c.getContext("2d"); g.fillStyle = "#357"; g.fillRect(0, 0, c.width, c.height); g.fillStyle = "#fa0"; g.fillRect(0, 0, c.width / 2, c.height / 2);
       return Promise.resolve(c);
     };
     const mem = seed ? JSON.parse(seed) : []; window.__mem = mem;
-    const store = { load: () => mem.slice(), save: (l) => { mem.length = 0; mem.push(...l); } };
+    const store = { load: () => mem.slice(), save: (l) => { window.__saves.push(JSON.parse(JSON.stringify(l))); mem.length = 0; mem.push(...l); } };
     if (upload) store.uploadShot = (0, eval)(`(${upload})`);
     window.CommentLayer.init({ projectId: "t", storage: store, version, user: { name: "Тест" },
       host: withHost ? { onReady() {}, onChange() {}, onSelect() {}, onMode() {} } : undefined });
@@ -175,4 +180,70 @@ test("лайтбокс: openShot і «інша сторінка» (host) від�
     assert.equal(await lbSrc(page), want, "інша сторінка зі знімком — лайтбокс");
     await page.close();
   }
+});
+
+const fillAndSave = async (page, sel, text) => {
+  await page.click(sel, { position: { x: 3, y: 3 } });
+  await page.waitForFunction(`!!${SHADOW}.querySelector('.compose textarea')`);
+  await page.evaluate((t) => {
+    const ta = document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea");
+    ta.value = t; ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }, text);
+  await page.evaluate(`${SHADOW}.querySelector('.compose .save').click()`);
+};
+
+test("DPR 0.67 (зум браузера < 100 %): масштаб не нижче 1", async () => {
+  const page = await boot({ dpr: 0.67, upload: UPLOAD_OK });
+  await addComment(page, "#small", "м1");
+  assert.deepEqual(await page.evaluate(() => window.__calls.map((c) => c.scale)), [1]);
+  await page.close();
+});
+
+test("toBlob не відповідає: після 4 с — запасний toDataURL, пін зберігається з повним знімком", async () => {
+  const page = await boot({ upload: UPLOAD_OK });
+  await page.evaluate(() => { HTMLCanvasElement.prototype.toBlob = function () { /* ніколи не кличе колбек */ }; });
+  const t0 = Date.now();
+  const c = await addComment(page, "#small", "м2");
+  const dt = Date.now() - t0;
+  assert.ok(dt >= 3500 && dt < 9000, `очікували ≈ 4 с, а було ${dt} мс`);
+  assert.equal(c.meta.shotMiss, undefined);
+  const ups = await page.evaluate(() => window.__uploads);
+  assert.equal(ups.length, 1);
+  assert.ok(ups[0].shot.startsWith("data:image/jpeg"));
+  assert.equal(c.meta.shotUrl, "https://example.test/s/" + c.id + ".jpg");
+  await page.close();
+});
+
+test("пін, що ще знімається, не потрапляє в чужий save: перша поява в сховищі — одразу з meta.shot і shotUrl", async () => {
+  const page = await boot({ upload: UPLOAD_OK, withHost: true });
+  await page.evaluate(() => { window.__holdN = 1; });   // знімок першого піна (A) висить
+  await fillAndSave(page, "#small", "A");
+  await page.waitForFunction(() => window.__rel.length === 1);
+  await fillAndSave(page, "#mid", "B");
+  await page.waitForFunction((t) => window.__mem.some((c) => c.text === t), "B", { timeout: 15000 });
+  const withA = await page.evaluate(() => window.__saves.filter((l) => l.some((c) => c.text === "A")).length);
+  assert.equal(withA, 0, "A (знімок ще триває) потрапив у чужий save без shotUrl");
+  assert.deepEqual(await page.evaluate(() => window.__saves.at(-1).map((c) => c.text)), ["B"]);
+  assert.equal(await page.evaluate(() => JSON.stringify(window.__saves).includes("_awaitShot")), false, "службова позначка протекла в сховище");
+  // пін A при цьому видно в знімку для хоста
+  assert.ok(await page.evaluate(() => window.CommentLayer.snapshot().comments.some((c) => c.text === "A" && !("_awaitShot" in c))));
+  await page.evaluate(() => window.__rel.forEach((f) => f()));
+  await page.waitForFunction((t) => window.__mem.some((c) => c.text === t), "A", { timeout: 15000 });
+  const first = await page.evaluate(() => window.__saves.find((l) => l.some((c) => c.text === "A")).find((c) => c.text === "A"));
+  assert.ok(first.meta.shot.startsWith("data:image/jpeg"));
+  assert.equal(first.meta.shotUrl, "https://example.test/s/" + first.id + ".jpg");
+  await page.close();
+});
+
+test("лайтбокс: shotUrl не відкрився (404) — одноразово переходить на meta.shot", async () => {
+  const page = await boot({ seed: seed({ shotUrl: SHOT_FULL }) });
+  await page.route(SHOT_FULL, (r) => r.fulfill({ status: 404, body: "no" }));
+  await page.evaluate(`${SHADOW}.querySelector('#cp1 img.shot').click()`);
+  await page.waitForFunction(`${SHADOW}.querySelector('.cllb img').getAttribute('src') === ${JSON.stringify(SHOT_THUMB)}`);
+  await page.close();
+  const p2 = await boot({ withHost: true, version: "1/holovna", seed: seed({ shotUrl: SHOT_FULL }) });
+  await p2.route(SHOT_FULL, (r) => r.fulfill({ status: 404, body: "no" }));
+  await p2.evaluate(() => window.CommentLayer.openShot("p1"));
+  await p2.waitForFunction(`${SHADOW}.querySelector('.cllb img').getAttribute('src') === ${JSON.stringify(SHOT_THUMB)}`);
+  await p2.close();
 });

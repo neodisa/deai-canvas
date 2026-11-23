@@ -813,7 +813,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         if (img) {
           e.stopPropagation();
           const cardEl = img.closest('.c'), cm = cardEl && cardEl.id ? this.comments.find((x) => x.id === cardEl.id.slice(1)) : null;
-          this._openLightbox((cm && cm.meta && (cm.meta.shotUrl || cm.meta.shot)) || img.getAttribute('src'));   // повний знімок, якщо є
+          this._openLightbox((cm && cm.meta && (cm.meta.shotUrl || cm.meta.shot)) || img.getAttribute('src'), (cm && cm.meta && cm.meta.shot) || img.getAttribute('src'));   // повний знімок, якщо є; не відкрився — мініатюра
           return;
         }
         // Don't navigate while typing in an editor; ignore clicks inside edit forms.
@@ -1244,7 +1244,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this.comments.push({
         id, author: user.name, text, status: 'open', fp: t.fp,
         htmlSnapshot: ctx.htmlSnapshot, meta: ctx.meta,
-        bornV: this._version(), ts: nowStamp(), _pending: true,
+        bornV: this._version(), ts: nowStamp(), _pending: true, _awaitShot: true,
         ...(aud ? { _aud: aud } : {}),
       });
       this._emit('onAdd', id);
@@ -1273,6 +1273,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
           }
         }
       } catch (e) { miss = miss || 'render'; }
+      finally { if (c()) delete c()._awaitShot; }   // усі await вище обмежені за часом: пін не лишається в затримці назавжди
       if (miss && c()) { c().meta = c().meta || {}; c().meta.shotMiss = miss; }   // ДО першого persist
       this._persist(); this._render(); this._placePins();
     },
@@ -1376,6 +1377,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         htmlSnapshot: ctx.htmlSnapshot, meta: ctx.meta,
         bornV: this._version(), ts: nowStamp(),
         _pending: true,   // unsynced until _persist confirms — protects it from live-merge drop
+        _awaitShot: true, // знімок ще триває: `_persist` цей пін не пише, поки `_finishComment` не зніме позначку (перший запис — одразу з shot/shotUrl)
         ...(aud ? { _aud: aud } : {}),
       });
       // Пин показуємо одразу (оптимістично) + негайний бекап; РЕАЛЬНИЙ persist
@@ -1409,6 +1411,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
           }
         } else miss = (r && r.miss) || 'render';
       } catch (e) { miss = miss || 'render'; }
+      finally { const cf = this.comments.find((x) => x.id === id); if (cf) delete cf._awaitShot; }   // усі await вище обмежені за часом: пін не лишається в затримці назавжди
       const c2 = this.comments.find((x) => x.id === id);
       if (miss && c2) { c2.meta = c2.meta || {}; c2.meta.shotMiss = miss; }   // ДО першого persist (він — INSERT із тригером Teams)
       this._persist(); this._render(); this._placePins();
@@ -1657,7 +1660,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const hosted = !!this._hostOpts;   // у хості `meta.url` — адреса Deai: переходити нікуди, сторінку визначає тег версії
       if (hosted && this._otherPage(c)) {
         const src = c.meta && (c.meta.shotUrl || c.meta.shot);
-        if (src) this._openLightbox(src);
+        if (src) this._openLightbox(src, c.meta.shot);
         return;
       }
       if (!hosted && c.meta && c.meta.route && c.meta.route !== route && c.meta.url) { location.href = c.meta.url; return; }
@@ -1668,7 +1671,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
          сталось (fb-06102026-c38f46). Тепер — знімок елемента, якщо є. */
       if (!el || el.getClientRects().length === 0) {
         const src = c.meta && (c.meta.shotUrl || c.meta.shot);
-        if (src) this._openLightbox(src);
+        if (src) this._openLightbox(src, c.meta.shot);
         return;
       }
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1677,10 +1680,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     },
 
     // Full-screen preview of a comment's screenshot; click anywhere (or Esc) to close.
-    _openLightbox(src) {
+    // `fallback` — вбудована мініатюра: повна адреса могла вмерти (інший порт, інша задача) — один перехід, без циклу.
+    _openLightbox(src, fallback) {
       if (!src) return;
       const lb = document.createElement('div'); lb.className = 'cllb';
-      const img = document.createElement('img'); img.src = src; img.alt = 'comment snapshot';
+      const img = document.createElement('img'); img.alt = 'comment snapshot';
+      img.onerror = () => { img.onerror = null; if (fallback && fallback !== src) img.src = fallback; };
+      img.src = src;
       lb.appendChild(img); lb.onclick = () => lb.remove();
       this._sh.appendChild(lb);
     },
@@ -1814,13 +1820,14 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     async _persist() {
       // Лічильник поколінь: лише НАЙНОВІШИЙ запис знімає «в польоті» (старіший, що встиг раніше, не знімає позначки новіших змін).
       const gen = this._saveGen = (this._saveGen || 0) + 1;
-      const plain = this.comments.map(stripRuntime);
+      const plain = this.comments.filter((c) => !c._awaitShot).map(stripRuntime);   // пін, чий знімок ще триває, у сховище не йде (бекап і панель його мають)
       this._backupNow();
       try {
         const res = this.store.save(plain);
         if (res && typeof res.then === 'function') await res;   // Supabase adapter throws on failure
         if (gen === this._saveGen) {
           this.comments.forEach((c) => {                        // confirmed synced
+            if (c._awaitShot) return;                           // його в цьому записі не було
             c._pending = false;
             delete c._goneReplies;
             if (Array.isArray(c.replies)) c.replies.forEach((r) => { if (r) r._pending = false; });
@@ -2156,7 +2163,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       return {
         version: this.appVersion, iteration: this._curIter(), pinsHidden: !!this._pinsHidden,
         comments: this.comments.map((c) => {
-          const { _el, _pending, _goneReplies, fp, htmlSnapshot, ...rest } = c;
+          const { _el, _pending, _goneReplies, _awaitShot, fp, htmlSnapshot, ...rest } = c;
           if (Array.isArray(rest.replies)) rest.replies = rest.replies.filter((r) => r && typeof r === 'object').map(({ _pending: _rp, ...r }) => r);
           return Object.assign({}, rest, rest.meta && typeof rest.meta === 'object' ? { meta: Object.assign({}, rest.meta) } : {},
             { n: this._seqOf(c), scope: scope(c), where: where(c), iter: this._pinIter(c), pending: !!_pending });
@@ -2211,14 +2218,14 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     openShot(id) {
       const c = this.comments.find((x) => x.id === id);
       const src = c && c.meta && (c.meta.shotUrl || c.meta.shot);
-      if (src) this._openLightbox(src);
+      if (src) this._openLightbox(src, c.meta.shot);
     },
     togglePins() { if (!this._inited) return false; this._togglePins(); this._render(); return !!this._pinsHidden; },
     reset() { this.comments = []; this._ver = 1; this._persist(); this._render(); this._placePins(); },
   };
 
   function stripRuntime(c) {
-    const { _el, _pending, _goneReplies, ...rest } = c;
+    const { _el, _pending, _goneReplies, _awaitShot, ...rest } = c;
     if (Array.isArray(rest.replies)) rest.replies = rest.replies.filter((r) => r && typeof r === 'object').map(({ _pending: _rp, ...r }) => r);
     return rest;
   }
@@ -2382,8 +2389,9 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   const SHOT_MAX_PX = 6000000;
   const SHOT_THUMB_MAX = 720;
   const SHOT_FULL_MAX = 2400;
+  const SHOT_BLOB_MS = 4000;
   function shotScale(w, h, dpr) {
-    let s = Math.min(Number(dpr) || 1, 2);
+    let s = Math.max(1, Math.min(Number(dpr) || 1, 2));   // зум браузера < 100 % не опускає нижче масштабу 1 (як було до 0.35.1)
     if (!(s > 0)) s = 1;
     const area = (w > 0 && h > 0) ? w * h : 0;
     if (area && area * s * s > SHOT_MAX_PX) s = Math.max(0.1, Math.sqrt(SHOT_MAX_PX / area));
@@ -2405,7 +2413,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     if (typeof canvas.toBlob !== 'function') return Promise.resolve(sync());
     return new Promise((resolve) => {
       let done = false;
-      const fin = (v) => { if (!done) { done = true; resolve(v); } };
+      const fin = (v) => { if (!done) { done = true; clearTimeout(tm); resolve(v); } };
+      const tm = setTimeout(() => { try { fin(sync()); } catch (e) { fin(null); } }, SHOT_BLOB_MS);   // toBlob завис (сторінка завантажена) — синхронне кодування
       try {
         canvas.toBlob((blob) => {
           if (!blob) return fin(sync());
