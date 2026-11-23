@@ -1763,6 +1763,7 @@ function what(e) {
     case "merge": return t("histMerge", (a.from || []).map(itTag).join(", "));
     case "rename": return t("histRename", a.name || "");
     case "restore": return t("histRestore");
+    case "delete": return t("histDelete");
     case "page-new": return t("histPageNew", a.name || a.page || "");
     case "page-rename": return t("histPageRename", a.name || a.page || "");
     case "page-move": return t("histPageMove", a.name || a.page || "");
@@ -1819,6 +1820,7 @@ export function histHTML({ label, entries = [], pending = null, degraded = false
   histMerge: (list) => `Зібрано зі сторінок ітерацій ${list}`,  // en: `Built from pages of ${list}`
   histRename: (n) => (n ? `Перейменовано на «${n}»` : 'Назву прибрано'),  // en: (n) => (n ? `Renamed to “${n}”` : 'Name removed')
   histRestore: 'Повернуто з кошика',                // en: 'Restored from trash'
+  histDelete: 'Переміщено в кошик',                // en: 'Moved to trash'
   histPageNew: (n) => `Додано сторінку «${n}»`,      // en: `Page “${n}” added`
   histPageRename: (n) => `Сторінку «${n}» перейменовано`,  // en: `Page “${n}” renamed`
   histPageMove: (n) => `Сторінку «${n}» переміщено`, // en: `Page “${n}” moved`
