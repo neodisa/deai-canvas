@@ -315,7 +315,9 @@ default) needs only a token — no `vercel login`, no CLI, no Node on the machin
   space has a `comments` module), «Inspector» and «Hide interface» — nothing floats over the mockup. Keys: **C**, **I**, **⇧⌘\\**. Comments and the inspector are mutually exclusive.
 - *Comments.* Anyone with the link can add a comment; the name is asked once, before the first one, and kept in that
   browser. Only comments created in the same browser can be edited or deleted there; closing and reopening happen in Deai.
-  Closed comments show «Done · It.N» and the reason. This is an interface rule, not a lock: the public key in every page
+  Closed comments show «Done · It.N» and the reason. *Replies (0.35.0):* anyone with the link may reply to any open comment (the name
+  is asked once, in the same dialog); only replies created in the same browser can be edited or deleted there; a closed comment takes
+  no replies. Re-publish a preview to get replies; if the project's `comment_replies` table is missing (see *Comments*) the preview stays quiet about them. This is an interface rule, not a lock: the public key in every page
   allows everything, so a real lock belongs to your comments service (for example Supabase row-level security).
 - *Inspector.* Read only: values, token chips, distances (Alt) and navigation (Esc / ↵ / ← →); no tuner and no edits.
   Tokens come from a snapshot of the space's tokens taken at publish time (`shell/ds-snapshot.json`; only the file name of
@@ -462,10 +464,26 @@ default; `hidden` in `/comments` counts all hidden pins, resolved ones too. New 
 island and on the tabs of other tasks (the optional `recent` function of the module feeds the tab numbers). If the team
 channel is down, a strip says why and local pins keep working.
 
+**Replies (0.35.0).** A comment has a thread of replies, in Deai and in the published preview. In Deai an open comment shows
+«Відповісти» (or «› N відповідей · author, time») between its text and the actions; you can edit your own reply, delete any
+reply (with a confirmation), and a closed comment shows its thread read-only. Replies are searched too. **New replies are news:**
+the «Нове» section of the panel (formerly «Нові від команди») lists new team comments and any comment with a reply that is not
+yours, the island badge counts them, a toast says «Нова відповідь від …», and the tabs of other tasks carry the numbers; no
+Teams card is sent for a reply. The agent sees the thread under each pin in `bin/inbox.py` and answers with
+`python3 bin/inbox.py reply <id> --text "…"` — a local pin, or a team pin assigned to Claude (a closed pin and an unassigned team pin are refused;
+`--dry-run` checks first). Local replies live inside the pin in `<task>/.dc-local-comments.json`; team replies are rows of a separate Supabase
+table, `comment_replies`. **An existing Supabase project needs one step:** run
+[`app/modules/supabase-comments/replies.sql`](app/modules/supabase-comments/replies.sql) once in its SQL editor (idempotent; new
+projects get the table from `schema.sql`). Without it team replies are unavailable — the panel says so, local replies keep working and
+comments are unaffected. Details and the warnings for shared databases are in the module README.
+
 **Pin screenshots.** Set the optional `shots_bucket` (the name of a **public** Storage bucket of the
 same project) and the browser adapter uploads the screenshot of a pin to
 `<bucket>/comment-shots/<id>.jpg` and keeps the public address in the pin; without it pins have no
 uploaded screenshot. The bucket and its policies are yours to create (details in the module README).
+Since 0.35.0 a pin without a screenshot is never silent: the commenter writes the reason to `meta.shotMiss` (`too-big`,
+`no-lib`, `timeout`, `render`, `detached`, `upload`), the panel shows «Без знімка: …» and `inbox.py` prints `↳ без знімка: <reason>`.
+A host that cannot reach the CDN for `html2canvas` can point the commenter at its own copy with the option `shotLib`.
 
 **The legacy (LIGA) space** keeps the address and the **public** key of its shared Supabase in its
 `supabase-comments` record (the address in the settings, the key as a secret) — the migration of

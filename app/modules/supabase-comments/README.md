@@ -25,16 +25,19 @@ The module changes nothing in the project's schema: you run `schema.sql` yoursel
 ### Comment replies (`comment_replies`) — existing projects
 
 Replies to comments live in a second table, `public.comment_replies`. A **new** project gets it from `schema.sql` (the last block).
-A project that **already has** the comments schema needs one more step: run [`replies.sql`](replies.sql) once in the SQL editor
-(it is idempotent; it holds exactly the replies block of `schema.sql`, without touching `public.comments`).
+A project that **already has** the comments schema needs one more step: run [`replies.sql`](replies.sql) **once per project**, in that project's SQL editor
+(**SQL Editor → New query → Run**; it is idempotent; it holds exactly the replies block of `schema.sql`, without touching `public.comments`).
 
 * **Shared or organisation databases** whose `comments` policies differ from the open ones in `schema.sql` (e.g. a database shared with other products): run
   **only** `replies.sql`, never the whole `schema.sql` — it would replace the policies of `public.comments`.
 * **Check first** that the project has no unrelated table named `public.comment_replies`: `create table if not exists` would adopt it
   (row-level security on, policies replaced, the public key granted full access).
+* The table has the same guards as `comments`: an immutable `project_id`, and a delete cannot cross channels or exceed **100 rows**
+  per DELETE statement (the adapter deletes replies in batches of at most 100 rows, and the replies of ten comments per request, so it stays under the guard; a hand-written bulk `DELETE` of more than 100 rows is refused).
 * There is no foreign key and no `on delete cascade` on purpose: older clients delete only the `comments` row, and a foreign key
   would make that delete fail. Orphan replies are harmless — a reply is shown only together with its comment.
-* Without the table everything else keeps working: `list` returns the comments without replies, `recent` only comment items.
+* Without the table replies are unavailable and **comments are unaffected**: the canvas shows a banner («Відповіді команди недоступні …
+  `replies.sql`»), the preview says nothing and has no reply field, `list` returns the comments without replies, `recent` only comment items.
   `check` still answers `ok` and says whether replies are available (below).
 
 ## 2. Enable the module in a space
