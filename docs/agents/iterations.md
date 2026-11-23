@@ -26,9 +26,10 @@ when the iterations of a task are different pages rather than versions.
     POST http://127.0.0.1:8765/api/iteration-delete {"id": "itN"}
 
 A soft delete: the iteration's folder and its entry move to the task's trash (`.trash/iterations/` in the task folder,
-outside git) and are kept at least 7 days: the next delete in this task erases the slots older than that. Answer `{"ok": true, "deleted": "itN", "trash": "<slot>"}`; keep `<slot>` to
-restore it (or read it from `iteration_trash`, below). `404` for an unknown id; `409 {"ok": false, "error": "last-iteration"}` when it is the only iteration of the
-task (a task is never left without one). The task's git history records `delete iteration itN`.
+outside git) and are kept at least 7 days: the next delete in this task erases the slots older than that. Answer
+`{"ok": true, "deleted": "itN", "trash": "<slot>"}`; keep `<slot>` to restore it (or read it from `iteration_trash`, below).
+`404` for an unknown id; `409 {"ok": false, "error": "last-iteration"}` when it is the only iteration of the task (a task
+is never left without one). The task's git history records `delete iteration itN`.
 
 ## Restore
 
@@ -56,17 +57,21 @@ bottom of the iteration list (and as «Видалені ітерації» in �
 The change history of one iteration, read from the task folder's git: `{"ok": true, "id", "entries": […], "pending": …,
 "degraded": false}`. `entries` come newest first (up to 300 commits are read); each is `{"sha", "at", "actor": {"kind":
 "ai" | "person", "name"}, "kind", "args", "text", "files", "more"}`: `kind` is `create`, `copy`, `merge`, `rename`, `delete`,
-`restore`, `page-new`, `page-rename`, `page-move`, `tree`, `publish`, `ai` (your edits) or `other`; `files` are up to 5
+`restore`, `page-new`, `page-rename`, `page-move`, `tree`, `publish`, `ai` (your edits), `sync` (a commit `itN: автосинк`
+without the AI trailer) or `other`; `files` are up to 5
 files of this iteration the commit touched and `more` counts the rest. `pending` is the not yet committed changes of the
-iteration (`{"files", "more", "at"}`) or `null`. `"degraded": true` means the history is not read from git: the task folder has no `.git`, or a git call failed (error,
-timeout), and `entries` is then one `create` entry built from the iteration's own record, `pending` is `null`. If
+iteration (`{"files", "more", "at"}`) or `null`. `"degraded": true` means the history is not read from git: the task
+folder has no `.git`, or a git call failed (error, timeout), and `entries` is then one `create` entry built from the
+iteration's own record, `pending` is `null`. If
 `iterations.json` itself cannot be read the answer is `200 {"ok": false, "error": "meta-unreadable", "entries": [],
 "pending": null, "degraded": true}`. `404 {"error": "iteration-not-found"}` for an unknown id.
 
 Your own edits show as `actor.kind: "ai"`: after finishing edits to an iteration, call `POST /api/autosync {}` (topic
 `hooks`); the canvas commits them locally as `itN: зміни AI` with the trailer `Deai-Actor: ai`. Do not commit the task folder
-yourself. Without this call your edits stay uncommitted until the next commit made by a designer's action in the canvas
-(a page, a rename, a delete…), which takes the whole task folder under the designer's git identity.
+yourself. Without this call your edits stay uncommitted until the next canvas action that commits the whole task folder
+(creating, renaming or deleting an iteration, a page action, publishing — including your own calls to these routes). That
+commit carries no `Deai-Actor` trailer, so the history shows your edits as a person's, under this computer's git identity.
+A colleague's iteration is never committed by this call.
 
 ## Pages of an iteration
 
