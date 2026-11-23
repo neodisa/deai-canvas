@@ -114,7 +114,8 @@ test("canTouchReply: лише СВОЯ відповідь під ВІДКРИТ�
 function harness({ store, name = "Гість", snap, replies = true } = {}) {
   const handlers = {};
   const calls = { reply: [], editReply: [], removeReply: [] };
-  const mount = { innerHTML: "", hidden: true, setAttribute() {}, contains: () => false, querySelector: () => null, querySelectorAll: () => [],
+  const mount = { innerHTML: "", hidden: true, setAttribute() {}, contains: () => false, querySelector: () => null,
+    querySelectorAll: (sel) => (sel === ".cmt-rta" ? mount.rtas : sel === ".cmt-rbox--on" ? mount.onBoxes : []), rtas: [], onBoxes: [],
     addEventListener: (k, f) => { handlers[k] = f; } };
   const g = globalThis;
   const saved = { document: g.document, window: g.window, location: g.location, CSS: g.CSS };
@@ -241,4 +242,99 @@ test("відповіді ввімкнені, але відповідей ще н
   setLang("uk");
   const h = boot2({ snap: { iteration: "1", comments: [rc("e", "open", [], 1)] } });
   try { assert.match(h.mount.innerHTML, /data-act="cmtreply" data-val="e"/); } finally { h.done(); }
+});
+
+const fakeTa = (cid, box = { classList: { added: [], add(c) { this.added.push(c); } } }) =>
+  ({ classList: { contains: (k) => k === "cmt-rta" }, dataset: { val: cid }, value: "", box, closest: (sel) => (sel === ".cmt-rbox" ? box : sel === ".cmt-rta" ? null : null) });
+const focusTarget = (ta) => ({ target: { closest: (sel) => (sel === ".cmt-rta" ? ta : null) } });
+
+test("focusin на полі відповіді: рядок «Надіслати» вмикається БЕЗ перемальовки (клас на боксі + `replying`); закритий коментар чи вимкнені відповіді — нічого", () => {
+  setLang("uk");
+  const snap = { iteration: "1", comments: [rc("o", "open", [rp("r1")]), rc("x", "resolved", [rp("r2")], 2)] };
+  const h = boot2({ snap });
+  try {
+    const before = h.mount.innerHTML;
+    const ta = fakeTa("o");
+    h.handlers.focusin(focusTarget(ta));
+    assert.deepEqual(ta.box.classList.added, ["cmt-rbox--on"], "клас не поставлено");
+    assert.equal(h.mount.innerHTML, before, "focusin перемалював панель (згубить каретку)");
+    h.handlers.focusin(focusTarget(ta));
+    assert.equal(ta.box.classList.added.length, 1, "повторний фокус знову ставить клас");
+    h.post({ ev: "change", snapshot: snap });                 // наступна звичайна перемальовка дає той самий стан із `replying`
+    assert.match(h.mount.innerHTML, /cmt-rbox cmt-rbox--on/);
+    const closed = fakeTa("x");
+    h.handlers.focusin(focusTarget(closed));
+    assert.deepEqual(closed.box.classList.added, [], "закритий коментар");
+    h.handlers.focusin({ target: { closest: () => null } });   // не наше поле — тихо
+  } finally { h.done(); }
+  const off = boot2({ snap, store: {} });
+  try {
+    const ta = fakeTa("o");
+    off.handlers.focusin(focusTarget(ta));
+    assert.deepEqual(ta.box.classList.added, [], "вимкнені відповіді");
+  } finally { off.done(); }
+});
+
+test("утримане ⌘↵ (`ev.repeat`) відповідь не шле; звичайне — шле один раз", async () => {
+  setLang("uk");
+  const snap = { iteration: "1", comments: [rc("o", "open", [rp("r1")])] };
+  const h = boot2({ snap });
+  try {
+    h.handlers.input({ target: { classList: { contains: (k) => k === "cmt-rta" }, dataset: { val: "o" }, value: "Привіт" } });
+    const key = (repeat) => h.handlers.keydown({ key: "Enter", ctrlKey: true, repeat, preventDefault() {}, stopPropagation() {},
+      target: { closest: (sel) => (/cmt-rta/.test(sel) ? fakeTa("o") : null) } });
+    key(true);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(h.calls.reply, [], "повтор клавіші надіслав відповідь");
+    key(false);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(h.calls.reply, [["o", "Привіт"]]);
+  } finally { h.done(); }
+});
+
+test("чернетка відповіді переживає перехід рамки (`dropFrame`) і повертається в поле після `ready`", () => {
+  setLang("uk");
+  const snap = { iteration: "1", comments: [rc("o", "open", [rp("r1")])] };
+  const h = boot2({ snap });
+  try {
+    const ta = fakeTa("o");
+    h.mount.rtas = [ta];
+    h.handlers.input({ target: { classList: { contains: (k) => k === "cmt-rta" }, dataset: { val: "o" }, value: "Недописана" } });
+    h.ctl.dropFrame();
+    ta.value = "";
+    h.post({ ev: "ready" });
+    assert.equal(ta.value, "Недописана", "чернетку скинуто разом із рамкою");
+  } finally { h.done(); }
+});
+
+test("focusin: другий бокс забирає рядок «Надіслати» в першого (розгорнутий лише один)", () => {
+  setLang("uk");
+  const snap = { iteration: "1", comments: [rc("o", "open", [rp("r1")]), rc("e", "open", [rp("r2")], 2)] };
+  const h = boot2({ snap });
+  try {
+    const mk = () => ({ cls: new Set(), classList: null });
+    const b1 = mk(), b2 = mk();
+    for (const b of [b1, b2]) b.classList = { add: (c) => b.cls.add(c), remove: (c) => b.cls.delete(c) };
+    h.mount.onBoxes = [b1, b2];
+    h.handlers.focusin(focusTarget(fakeTa("o", b1)));
+    h.handlers.focusin(focusTarget(fakeTa("e", b2)));
+    assert.deepEqual([b1.cls.has("cmt-rbox--on"), b2.cls.has("cmt-rbox--on")], [false, true]);
+  } finally { h.done(); }
+});
+
+test("Esc у полі відповіді згортає рядок і він лишається згорнутим: фокус, повернутий перемальовкою, `focusin` не вмикає знову", () => {
+  setLang("uk");
+  const snap = { iteration: "1", comments: [rc("o", "open", [rp("r1")])] };
+  const h = boot2({ snap });
+  try {
+    const box = { classList: { added: [], add(c) { this.added.push(c); }, remove() {} } };
+    const ta = fakeTa("o", box);
+    // перемальовка повертає фокус: `focus()` синхронно кидає focusin (як у браузері) — поки `paint` відновлює фокус
+    h.mount.querySelector = (sel) => (/cmt-rta\[/.test(sel) ? Object.assign(ta, { focus: () => h.handlers.focusin(focusTarget(ta)), setSelectionRange() {} }) : null);
+    globalThis.document.activeElement = Object.assign(ta, { id: "", selectionStart: 0, selectionEnd: 0 });
+    h.mount.contains = () => true;
+    h.handlers.keydown({ key: "Escape", preventDefault() {}, stopPropagation() {}, target: { closest: (sel) => (/cmt-rta/.test(sel) ? ta : null) } });
+    assert.deepEqual(box.classList.added, [], "Esc → перемальовка → повернутий фокус знову розгорнув поле");
+    assert.doesNotMatch(h.mount.innerHTML, /cmt-rbox--on/);
+  } finally { h.done(); }
 });

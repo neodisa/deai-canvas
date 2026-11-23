@@ -21,7 +21,7 @@
 import "./_env.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -111,10 +111,12 @@ function modulesWithoutReplies() {
 async function boot(t, { enable = true, port = 0, noReplies = false } = {}) {
   const memo = await startMemo();
   t.after(() => memo.close());
+  const modulesDir = noReplies ? modulesWithoutReplies() : null;
+  if (modulesDir) t.after(() => rmSync(modulesDir, { recursive: true, force: true }));   // тимчасова копія модулів — лише наша
   const task = t45Task();
   const server = await startServer(null, {
     portBase: PORT_BASE + port, spaces: [{ name: "Mod", id: SPACE, color: "space-3", tasks: { [TASK]: { dir: task.dir, title: "Задача" } } }],
-    env: { DEAI_EXTRA_MODULES: noReplies ? modulesWithoutReplies() : MODULES_DIR, PLAYWRIGHT_BROWSERS_PATH: browsersPath() },
+    env: { DEAI_EXTRA_MODULES: noReplies ? modulesDir : MODULES_DIR, PLAYWRIGHT_BROWSERS_PATH: browsersPath() },
   });
   t.after(() => stop(server.child));
   if (enable) {
@@ -826,10 +828,9 @@ test("21: «Скасувати» в діалозі імені — відпові
   await page.locator(".cv-ask--form").waitFor();
   await page.click('.cv-ask--form button[data-a="cancel"]');
   await page.locator(".cv-ask--form").waitFor({ state: "detached" });
-  await sleep(500);
-  assert.deepEqual(memoReplies(env, "seed-open").map((r) => r.id), ["fr1"], "скасування імені надіслало відповідь");
   assert.equal(await ls(page, USER_KEY), null);
   assert.equal(await card.locator("textarea.cmt-rta").inputValue(), "Чернетка", "чернетку втрачено");
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cmt-rta")), true, "після діалогу фокус не повернувся в поле відповіді");
 
   // чужа відповідь: ні змінити, ні видалити — навіть підробленою кнопкою
   await fakeAct(page, "cmtredit", "seed-open|fr1");
@@ -838,9 +839,15 @@ test("21: «Скасувати» в діалозі імені — відпові
   await fakeAct(page, "cmtrdel", "seed-open|fr1");
   assert.equal(await page.locator("#cmt-panel .cmt-reply .cfm").count(), 0, "для чужої відповіді показано «Видалити»");
   await fakeAct(page, "cmtrdelyes", "seed-open|fr1");
-  await sleep(600);
+  // бар'єр: законна дія ПІСЛЯ підроблених — та сама чернетка з тепер уже введеним імʼям; її запис у сервісі означає, що попередні оброблено
+  await card.locator("textarea.cmt-rta").press("ControlOrMeta+Enter");
+  await page.locator(".cv-ask--form").waitFor();
+  await page.fill('.cv-ask--form input[name="name"]', "Другий Заход");
+  await page.click('.cv-ask--form button[data-a="ok"]');
+  await until(() => memoReplies(env, "seed-open").some((r) => r.text === "Чернетка"), "бар'єр: відповідь у сервісі");
   const fr = memoReplies(env, "seed-open");
-  assert.deepEqual(fr.map((r) => [r.id, r.text]), [["fr1", "Чужа відповідь"]], "чужу відповідь змінено/видалено");
+  assert.deepEqual(fr.map((r) => r.text), ["Чужа відповідь", "Чернетка"], "скасування імені надіслало відповідь, або чужу змінено/видалено");
+  assert.equal(fr[0].id, "fr1");
   assert.deepEqual(o.outside, []);
 });
 
@@ -863,9 +870,15 @@ test("22: закритий коментар — відповіді лише чи
   await fakeAct(page, "cmtredit", "seed-closed|fr-closed");
   await fakeAct(page, "cmtrdel", "seed-closed|fr-closed");
   await fakeAct(page, "cmtrdelyes", "seed-closed|fr-closed");
-  await sleep(600);
   assert.equal(await page.locator("#cmt-panel textarea.cmt-rta, #cmt-panel textarea.cmt-redit, #cmt-panel .cmt-reply .cfm").count(), 0);
-  assert.deepEqual(memoReplies(env, "seed-closed").map((r) => r.id), ["fr-closed"], "під закритим щось змінено");
+  // бар'єр: законна відповідь під ВІДКРИТИМ після підроблених; її запис у сервісі означає, що попередні вже оброблено
+  const open = await openCard(page, "seed-open");
+  await expand(open);
+  await open.locator("textarea.cmt-rta").fill("Бар'єр");
+  await open.locator("textarea.cmt-rta").press("ControlOrMeta+Enter");
+  await until(() => memoReplies(env, "seed-open").some((r) => r.text === "Бар'єр"), "бар'єр: відповідь у сервісі");
+  assert.deepEqual(memoReplies(env, "seed-closed").map((r) => [r.id, r.text]), [["fr-closed", "Стара відповідь"]], "під закритим щось змінено");
+  assert.deepEqual(memoReplies(env, "seed-open").map((r) => r.text), ["Чужа відповідь", "Бар'єр"], "підроблена відповідь потрапила не туди");
 });
 
 test("23: модуль без відповідей — тихо: ні поля, ні «Відповісти», ні кнопок змінити/видалити, ні примітки, ні смуги; наявні відповіді читаються; prompt() не кличуть", async (t) => {
@@ -903,7 +916,8 @@ test("23: модуль без відповідей — тихо: ні поля, 
   await setStore({ supportsReplies: "fn-false", repliesDown: null });
   c2 = await repaint();
   assert.equal(await page.locator("#cmt-panel textarea, #cmt-panel .cmt-rnote, #cmt-panel .cmt-teamdown, #cmt-panel .cmt-reply [data-act]").count(), 0, "функція false");
-  await sleep(300);
+  // бар'єр: законний запис (коментар) після всіх спроб; коли він у сервісі, спроби записати відповідь уже були б там
+  await addComment(o, env, "Бар'єр без відповідей", { name: "Хтось" });
   assert.deepEqual(memoReplies(env, "seed-open").map((r) => r.id), ["fr1", "mr1"], "без відповідей щось записано");
   assert.deepEqual(await prompts(o), { shell: [], frame: [] });
   assert.deepEqual(o.errors, []);
@@ -925,6 +939,136 @@ test("24: картки, створені в Deai (маршрут /commented), у
   assert.doesNotMatch(await card.innerText(), /На іншій сторінці/);
 });
 const frame0 = (o) => o.frame.evaluate(() => ({ pinned: !!window.CommentLayer.snapshot().comments.find((c) => c.id === "seed-open" && c.where === "here") }));
+
+test("25: фокус у полі відповіді розгорнутої гілки показує «Надіслати» БЕЗ перемальовки; клік на початок чернетки лишає каретку там; відправка КНОПКОЮ", async (t) => {
+  const env = await boot(t, { port: 23000 });
+  await seed(env, [REPLY_SEED[0], { id: "seed-open-2", author: "Марко", text: "Заголовок задовгий", extra: { replies: [reply("fr2", "Хтось", "Інша")] } }]);
+  const o = await openPreview(env, t, { init: preName, initArg: [USER_KEY, "Збережене Імʼя"] });
+  const { page } = o;
+  const c1 = await openCard(page, "seed-open");
+  const card = await openCard(page, "seed-open-2");
+  await expand(c1); await expand(card);
+  const ta = card.locator("textarea.cmt-rta");
+  const send = card.locator('[data-act="cmtreplysend"]');
+  assert.equal(await send.isVisible(), false, "до фокуса рядок кнопок видно");
+  await ta.fill("Початок");
+  await c1.locator("textarea.cmt-rta").click();                  // фокус і `replying` — на першому боксі: клік у другий знову проходить через focusin
+  assert.equal(await send.isVisible(), false, "перший бокс не забрав рядок");
+  const box = await ta.boundingBox();
+  await page.evaluate(() => { window.__rta = document.querySelector('#cmt-panel .cmt-rta[data-val="seed-open-2"]'); });
+  await page.mouse.click(box.x + 9, box.y + 14);   // клік на початок першого рядка → каретка на початку (кінець — те, куди її повернула б перемальовка)
+  assert.equal(await send.isVisible(), true, "фокус не показав «Надіслати»");
+  assert.equal(await page.evaluate(() => document.querySelector('#cmt-panel .cmt-rta[data-val="seed-open-2"]') === window.__rta), true,
+    "focusin перемалював панель: поле замінено посеред mousedown");
+  assert.equal(await page.evaluate(() => { const e = document.activeElement; return e.classList.contains("cmt-rta") && e.selectionStart === 0 && e.selectionEnd === 0; }), true,
+    "каретка від кліку втрачена");
+  await page.keyboard.type("Х");
+  assert.equal(await ta.inputValue(), "ХПочаток");
+  await send.click();
+  const r = await until(() => memoReplies(env, "seed-open-2").find((x) => x.text === "ХПочаток") ?? null, "відповідь кнопкою в сервісі");
+  assert.equal(r.author, "Збережене Імʼя");
+  assert.deepEqual(o.errors, []);
+});
+
+test("26: чернетка, фокус і каретка переживають перемальовування панелі — і в полі відповіді, і в правці відповіді", async (t) => {
+  const env = await boot(t, { port: 24000 });
+  const rows = await seed(env, [{ ...REPLY_SEED[0], extra: { replies: [reply("fr1", "Хтось", "Чужа відповідь"), reply("mr1", "Я", "Моя відповідь")] } }]);
+  const o = await openPreview(env, t, { init: preName, initArg: [OWN_KEY, JSON.stringify(["mr1"])] });
+  const { page } = o;
+  await page.evaluate(([k, v]) => localStorage.setItem(k, v), [USER_KEY, "Я"]);
+  const card = await openCard(page, "seed-open");
+  await expand(card);
+  const state = (sel) => page.evaluate((q) => { const e = document.activeElement; return e && e.matches(q) ? { v: e.value, a: e.selectionStart, b: e.selectionEnd } : null; }, sel);
+  let n = 0;
+  const repaint = async () => {   // знімок із новим коментарем → панель перемальовується
+    n += 1;
+    env.memo.store.get(CHANNEL).push({ ...rows[0], id: `seed-extra-${n}`, text: `Додатковий ${n}`, replies: [] });
+    await page.locator(`#cmt-panel .cmt-card[data-cid="seed-extra-${n}"]`).waitFor();
+  };
+
+  const ta = card.locator("textarea.cmt-rta");
+  await ta.click();
+  await page.keyboard.type("abcdef");
+  await page.keyboard.press("ArrowLeft"); await page.keyboard.press("ArrowLeft");
+  assert.deepEqual(await state(".cmt-rta"), { v: "abcdef", a: 4, b: 4 });
+  await repaint();
+  assert.deepEqual(await state(".cmt-rta"), { v: "abcdef", a: 4, b: 4 }, "поле відповіді: чернетка/фокус/каретка не пережили перемальовування");
+
+  await card.locator('[data-act="cmtredit"]').click();
+  const re = card.locator("textarea.cmt-redit");
+  await re.click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.type("XYZ");
+  await page.keyboard.press("ArrowLeft");
+  assert.deepEqual(await state(".cmt-redit"), { v: "Моя відповідьXYZ", a: 15, b: 15 });
+  await repaint();
+  assert.deepEqual(await state(".cmt-redit"), { v: "Моя відповідьXYZ", a: 15, b: 15 }, "правка відповіді: чернетка/фокус/каретка не пережили перемальовування");
+  assert.equal(await card.locator("textarea.cmt-rta").inputValue(), "abcdef", "чернетка поля відповіді зникла");
+  assert.deepEqual(o.errors, []);
+});
+
+test("27: два діалоги імені не складаються (відповіді під двома коментарями одночасно); повторне ⌘↵ під тим самим не дублює; «Скасувати» вертає фокус у поле", async (t) => {
+  const env = await boot(t, { port: 25000 });
+  await seed(env, [REPLY_SEED[0], { id: "seed-open-2", author: "Марко", text: "Заголовок задовгий", extra: { replies: [reply("fr2", "Хтось", "Інша")] } }]);
+  const o = await openPreview(env, t);
+  const { page } = o;
+  const c1 = await openCard(page, "seed-open");
+  const c2 = await openCard(page, "seed-open-2");
+  await expand(c1); await expand(c2);
+  await c1.locator("textarea.cmt-rta").fill("Перша");
+  await c2.locator("textarea.cmt-rta").fill("Друга");
+  const burst = () => page.evaluate(() => {
+    for (const id of ["seed-open", "seed-open", "seed-open-2"]) {
+      const ta = document.querySelector(`#cmt-panel .cmt-rta[data-val="${id}"]`);
+      ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+    }
+  });
+  await burst();
+  await page.locator(".cv-ask--form").waitFor();
+  await sleep(300);
+  assert.equal(await page.locator(".cv-ask--form").count(), 1, "діалоги імені склались");
+  // перемальовування за відкритого діалогу відриває поле-відкривач: фокус мусить піти в поле ТОГО коментаря, а не на «+»
+  env.memo.store.get(CHANNEL).push({ ...env.memo.store.get(CHANNEL)[0], id: "seed-extra", text: "Додатковий", replies: [] });
+  await page.locator('#cmt-panel .cmt-card[data-cid="seed-extra"]').waitFor();
+  await page.click('.cv-ask--form button[data-a="cancel"]');
+  await page.locator(".cv-ask--form").waitFor({ state: "detached" });
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('.cmt-rta[data-val="seed-open"]')), true, "фокус не повернувся в поле відповіді");
+  await burst();
+  await page.locator(".cv-ask--form").waitFor();
+  await page.fill('.cv-ask--form input[name="name"]', "Один Раз");
+  await page.click('.cv-ask--form button[data-a="ok"]');
+  await until(() => memoReplies(env, "seed-open").some((r) => r.text === "Перша") && memoReplies(env, "seed-open-2").some((r) => r.text === "Друга"), "обидві відповіді в сервісі");
+  await sleep(300);
+  assert.equal(memoReplies(env, "seed-open").filter((r) => r.text === "Перша").length, 1, "відповідь задубльовано");
+  assert.equal(memoReplies(env, "seed-open-2").filter((r) => r.text === "Друга").length, 1);
+  assert.deepEqual(o.errors, []);
+});
+
+test("28: розгорнуте поле відповіді — одне (друге забирає рядок «Надіслати»); Esc згортає рядок і він лишається згорнутим, навіть після перемальовування", async (t) => {
+  const env = await boot(t, { port: 26000 });
+  await seed(env, [REPLY_SEED[0], { id: "seed-open-2", author: "Марко", text: "Заголовок задовгий", extra: { replies: [reply("fr2", "Хтось", "Інша")] } }]);
+  const o = await openPreview(env, t, { init: preName, initArg: [USER_KEY, "Збережене Імʼя"] });
+  const { page } = o;
+  const c1 = await openCard(page, "seed-open");
+  const c2 = await openCard(page, "seed-open-2");
+  await expand(c1); await expand(c2);
+  const s1 = c1.locator('[data-act="cmtreplysend"]'), s2 = c2.locator('[data-act="cmtreplysend"]');
+  await c1.locator("textarea.cmt-rta").click();
+  assert.deepEqual([await s1.isVisible(), await s2.isVisible()], [true, false]);
+  await c2.locator("textarea.cmt-rta").click();
+  assert.deepEqual([await s1.isVisible(), await s2.isVisible()], [false, true], "перший бокс лишився розгорнутим");
+  await c2.locator("textarea.cmt-rta").fill("Чернетка");
+  await c2.locator("textarea.cmt-rta").press("Escape");
+  assert.equal(await page.locator("#cmt-panel .cmt-rbox--on").count(), 0, "Esc не згорнув поле");
+  assert.equal(await s2.isVisible(), false);
+  assert.equal(await c2.locator("textarea.cmt-rta").inputValue(), "", "Esc не скинув чернетку");
+  // перемальовка після Esc (фокус лишився в полі): рядок так і лишається згорнутим
+  env.memo.store.get(CHANNEL).push({ ...env.memo.store.get(CHANNEL)[0], id: "seed-extra", text: "Додатковий", replies: [] });
+  await page.locator('#cmt-panel .cmt-card[data-cid="seed-extra"]').waitFor();
+  assert.equal(await page.locator("#cmt-panel .cmt-rbox--on").count(), 0, "перемальовка знову розгорнула поле");
+  assert.equal(await page.evaluate(() => document.activeElement?.matches(".cmt-rta")), true, "фокус не лишився в полі");
+  assert.deepEqual(o.errors, []);
+});
 
 test("99: ізоляція — жодного запиту за межі машини, справжній ~/.deai не зачеплено", () => {
   assert.deepEqual(OUTSIDE, [], `запити за межі машини:\n${OUTSIDE.join("\n")}`);

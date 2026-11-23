@@ -157,7 +157,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     open: false, active: true, adding: false, ready: false, readyDoc: null, snap: null, sel: null, query: "",
     editing: null, draft: null, delAsk: null,
     /* Відповіді (0.34): розгорнуті гілки, коментар із відкритим полем, чернетки полів (id → текст), правка відповіді `"cid|rid"`. */
-    threads: new Set(), replying: null, rdraft: new Map(), replyEdit: null, replyEditDraft: null, replyDelAsk: null,
+    threads: new Set(), sending: new Set(), replying: null, rdraft: new Map(), replyEdit: null, replyEditDraft: null, replyDelAsk: null,
     expanded: { earlier: false, closed: false },
     wantAdd: false,
     /* Глядач САМ вимкнув додавання «+» за цієї відкритої панелі: нові сторінки його не вмикають (як у Deai, де це решта-режим). */
@@ -178,6 +178,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   /** Додавання ввімкнене чи ось-ось увімкнеться (рамка ще вантажиться): для «+» і підказки порожньої панелі. */
   const armed = () => st.adding || st.wantAdd;
 
+  let restoring = false;
   function paint() {
     const ownIds = own.all();
     const repliesOn = storeRepliesOn(layer()?.store);
@@ -215,17 +216,18 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     if (st.replyEdit && st.replyEditDraft != null) { const ed = mount.querySelector(".cmt-redit"); if (ed) ed.value = st.replyEditDraft; }
     if (keep) {
       const el = mount.querySelector(keep.sel);
-      el?.focus();
+      restoring = true;                // фокус, повернутий перемальовкою, — не «вхід у поле»: `focusin` його ігнорує (Esc не мусить знову розгортати поле)
+      try { el?.focus(); } finally { restoring = false; }
       try { el?.setSelectionRange(...keep.range); } catch (e) { /* не текстове поле */ }
     }
     if (st.sel) mount.querySelector(`[data-cid="${CSS.escape(st.sel)}"]`)?.scrollIntoView({ block: "nearest" });
     onChange();
   }
 
-  function reset({ sel = true } = {}) {
+  function reset({ sel = true, keepDrafts = false } = {}) {
     if (sel) {
       st.sel = null; st.editing = null; st.draft = null; st.delAsk = null;
-      st.threads.clear(); st.rdraft.clear(); st.replying = null; st.replyEdit = null; st.replyEditDraft = null; st.replyDelAsk = null;
+      st.threads.clear(); if (!keepDrafts) st.rdraft.clear(); st.replying = null; st.replyEdit = null; st.replyEditDraft = null; st.replyDelAsk = null;
     }
   }
 
@@ -233,7 +235,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   function dropFrame({ keepWant = false } = {}) {
     st.ready = false; st.readyDoc = null; st.snap = null; st.adding = false;
     if (!keepWant) st.wantAdd = false;
-    reset();
+    reset({ keepDrafts: true });       // набрана відповідь переживає перехід рамки (канал той самий): чернетка чекає в полі, коли його відкриють знову
     paint();
   }
 
@@ -262,10 +264,16 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   }
 
   /** Імʼя перед ПЕРШИМ коментарем: є — `true` одразу; нема — діалог оболонки; «Скасувати» — `false` (додавання не вмикаємо). */
-  async function ensureName() {
-    if (readName()) return true;
+  let nameAsk = null;      // діалог імені, що висить: другий виклик (утримане ⌘↵, «+» і відповідь) чекає ТОЙ САМИЙ, а не відкриває ще один
+  function ensureName(opts) {
+    if (readName()) return Promise.resolve(true);
+    if (!nameAsk) nameAsk = askName(opts).finally(() => { nameAsk = null; });
+    return nameAsk;
+  }
+  /** `focusBack` — куди повернути фокус після закриття діалогу (типово кнопка «+»). */
+  async function askName({ focusBack = () => mount.querySelector('[data-act="cmtadd"]') } = {}) {
     const vals = await askForm(nameFormHTML, {
-      focusBack: () => mount.querySelector('[data-act="cmtadd"]'),
+      focusBack,
       onSubmit: (v, ctl) => {
         const name = String(v.name || "").trim();
         if (!name) { ctl.focus("name"); return t("cnFieldRequired"); }
@@ -337,14 +345,17 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     },
     cmtreplysend: async (id) => {
       const text = String(mount.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`)?.value ?? st.rdraft.get(id) ?? "").trim();
-      if (!text || !replyOpenOk(id)) return;
-      /* Імʼя — перед ПЕРШИМ записом (відповіддю чи коментарем): «Скасувати» — нічого не надсилаємо, чернетку лишаємо. */
-      if (!(await ensureName())) return;
-      if (!replyOpenOk(id)) return;           // за час діалогу рамка/коментар могли змінитись
-      let ok = false;
-      try { ok = !!layer()?.reply(id, text); } catch (e) { ok = false; }
-      if (ok) { st.rdraft.delete(id); if (st.replying === id) st.replying = null; st.threads.add(id); }
-      paint();
+      if (!text || !replyOpenOk(id) || st.sending.has(id)) return;     // друге ⌘↵ під тим самим коментарем, поки висить діалог імені, не дублює відповідь
+      st.sending.add(id);
+      try {
+        /* Імʼя — перед ПЕРШИМ записом (відповіддю чи коментарем): «Скасувати» — нічого не надсилаємо, чернетку лишаємо. */
+        if (!(await ensureName({ focusBack: () => mount.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`) }))) return;
+        if (!replyOpenOk(id)) return;           // за час діалогу рамка/коментар могли змінитись
+        let ok = false;
+        try { ok = !!layer()?.reply(id, text); } catch (e) { ok = false; }
+        if (ok) { st.rdraft.delete(id); if (st.replying === id) st.replying = null; st.threads.add(id); }
+        paint();
+      } finally { st.sending.delete(id); }
     },
     cmtreplycancel: (id) => { st.rdraft.delete(id); if (st.replying === id) st.replying = null; paint(); },
     cmtredit: (key) => {
@@ -421,6 +432,19 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     st.query = ev.target.value;
     paint();
   });
+  /* Фокус у полі відповіді відкриває рядок «Надіслати / Скасувати» (у розгорнутій гілці з відповідями поле стоїть без нього): `replying` = цей
+     коментар, `cmt-rbox--on` ставимо прямо, БЕЗ перемальовки — вона замінила б textarea посеред mousedown і згубила б каретку. */
+  mount.addEventListener("focusin", (ev) => {
+    if (restoring) return;
+    const ta = ev.target.closest?.(".cmt-rta");
+    if (!ta) return;
+    const id = ta.dataset.val;
+    if (!replyOpenOk(id) || st.replying === id) return;
+    st.replying = id;
+    const box = ta.closest(".cmt-rbox");
+    for (const b of mount.querySelectorAll(".cmt-rbox--on")) if (b !== box) b.classList.remove("cmt-rbox--on");   // розгорнутий рядок — один
+    box?.classList.add("cmt-rbox--on");
+  });
   /* ⌘/Ctrl+Enter зберігає редагування, Esc скасовує; `stopPropagation`, щоб Esc не пішов далі в оболонку. */
   mount.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && st.replyDelAsk && ev.target.closest?.(".cmt-reply .cfm")) { ev.preventDefault(); ev.stopPropagation(); closeReplyDelAsk(true); return; }
@@ -428,7 +452,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     if (!ta) return;
     const [save, cancel] = ta.classList.contains("cmt-rta") ? ["cmtreplysend", "cmtreplycancel"]
       : ta.classList.contains("cmt-redit") ? ["cmtreditsave", "cmtreditcancel"] : ["cmteditsave", "cmteditcancel"];
-    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); actions[save](ta.dataset.val); }
+    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); if (!ev.repeat) actions[save](ta.dataset.val); }
     else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); actions[cancel](ta.dataset.val); }
   });
 
