@@ -30,7 +30,7 @@ AGENTS.md («після правок ітерації клич `/api/autosync`»
 
 ```json
 {"hooks": [{"type": "command", "timeout": 10,
-  "command": "curl -s --max-time 5 -o /dev/null -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:<port>/api/autosync || true # deai-autosync"}]}
+  "command": "curl -s --noproxy '*' --max-time 5 -o /dev/null -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:<port>/api/autosync || true # deai-autosync"}]}
 ```
 
 - `<port>` — порт канваса в момент підключення (`self.server.server_port`).
@@ -126,6 +126,10 @@ AGENTS.md («після правок ітерації клич `/api/autosync`»
 - Хуки Codex та інших агентів (для них — інструкція AGENTS.md).
 - Автоматичне встановлення чи оновлення хука при старті канваса.
 - Використання `session_id`, тексту відповіді чи транскрипту.
+
+Відоме обмеження: Claude Code, запущений усередині теки задачі (вона — окремий git-репозиторій), читає
+`settings.local.json` з кореня ТОГО репозиторію й хука простору не бачить. Звичайний запуск — у теці простору («Запуск агента»).
+`--noproxy '*'`: змінна `http_proxy` в оточенні не відправить запит на `127.0.0.1` через проксі.
 
 ## Тести (повна строгість — пишемо в налаштування людини)
 
