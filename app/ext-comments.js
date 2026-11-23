@@ -426,7 +426,8 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   }, 0));
   mount.addEventListener("input", (ev) => {
     if (ev.target.classList?.contains("cmt-edit")) { st.draft = ev.target.value; return; }
-    if (ev.target.classList?.contains("cmt-rta")) { st.rdraft.set(ev.target.dataset.val, ev.target.value); return; }
+    /* Набір у полі знову розгортає рядок: після Esc фокус лишається в полі, а `focusin` вдруге не спрацює. */
+    if (ev.target.classList?.contains("cmt-rta")) { st.rdraft.set(ev.target.dataset.val, ev.target.value); armReplyBox(ev.target); return; }
     if (ev.target.classList?.contains("cmt-redit")) { st.replyEditDraft = ev.target.value; return; }
     if (ev.target.id !== "cmt-q") return;
     st.query = ev.target.value;
@@ -434,16 +435,18 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   });
   /* Фокус у полі відповіді відкриває рядок «Надіслати / Скасувати» (у розгорнутій гілці з відповідями поле стоїть без нього): `replying` = цей
      коментар, `cmt-rbox--on` ставимо прямо, БЕЗ перемальовки — вона замінила б textarea посеред mousedown і згубила б каретку. */
-  mount.addEventListener("focusin", (ev) => {
-    if (restoring) return;
-    const ta = ev.target.closest?.(".cmt-rta");
-    if (!ta) return;
+  function armReplyBox(ta) {
     const id = ta.dataset.val;
     if (!replyOpenOk(id) || st.replying === id) return;
     st.replying = id;
-    const box = ta.closest(".cmt-rbox");
+    const box = ta.closest?.(".cmt-rbox");
     for (const b of mount.querySelectorAll(".cmt-rbox--on")) if (b !== box) b.classList.remove("cmt-rbox--on");   // розгорнутий рядок — один
     box?.classList.add("cmt-rbox--on");
+  }
+  mount.addEventListener("focusin", (ev) => {
+    if (restoring) return;
+    const ta = ev.target.closest?.(".cmt-rta");
+    if (ta) armReplyBox(ta);
   });
   /* ⌘/Ctrl+Enter зберігає редагування, Esc скасовує; `stopPropagation`, щоб Esc не пішов далі в оболонку. */
   mount.addEventListener("keydown", (ev) => {

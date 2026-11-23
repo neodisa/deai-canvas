@@ -734,7 +734,7 @@
           else ids.forEach(function (id) { gone[id] = true; });   // `remove` поза чергою save: без цього застарілий save воскресив би коментар
           cache = cache.filter(function (c) { return ids.indexOf(c.id) < 0; });
           ids.forEach(function (id) { delete written[id]; });
-          Object.keys(replyOwner).forEach(function (rid) { if (ids.indexOf(replyOwner[rid]) >= 0) { delete writtenReplies[rid]; delete replyOwner[rid]; } });
+          Object.keys(replyOwner).forEach(function (rid) { if (ids.indexOf(replyOwner[rid]) >= 0) { delete writtenReplies[rid]; delete replyOwner[rid]; delete retryDel[rid]; } });
           seq++;
           if (!res.error) syncSnap();
         });

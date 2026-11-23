@@ -1978,3 +1978,11 @@ test("повтор видалення знімається, коли засто�
   assert.equal(deletes(w).length, 1, "лише перша, що впала; нове видалення не йде");
   assert.deepEqual(plain(s.load()[0].replies.map((r) => r.id)), ["rn"]);
 });
+
+/* Зовні це не спостерігається: після `remove` застарілий `retryDel[rid]` і так знімає наступне застосоване читання (де відповіді вже нема),
+   а до нього коментар під тим самим id заблокований надгробком `gone`. Тому — перевірка самого очищення в тексті адаптера. */
+test("remove: разом із writtenReplies/replyOwner знімається й повтор видалення (retryDel) відповідей видаленого коментаря", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new (await import("node:url")).URL("../app/modules/supabase-comments/adapter.js", import.meta.url), "utf8");
+  assert.match(src, /ids\.indexOf\(replyOwner\[rid\]\) >= 0\) \{ delete writtenReplies\[rid\]; delete replyOwner\[rid\]; delete retryDel\[rid\]; \}/);
+});

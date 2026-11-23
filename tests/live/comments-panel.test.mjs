@@ -889,6 +889,10 @@ test("34: поле відповіді — розгорнуте одне (дру�
   assert.equal(await page.isVisible(send("a2")), false);
   assert.equal(await page.inputValue(ta("a2")), "", "Esc не скинув чернетку");
   assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cmt-rta")), true, "фокус не лишився в полі");
+  // N1: фокус лишився в полі, а focusin вдруге не спрацює — набір знову розгортає рядок
+  await page.keyboard.type("Знову");
+  assert.equal(await page.isVisible(send("a2")), true, "набір після Esc не повернув «Надіслати»");
+  await page.press(ta("a2"), "Escape");
   await page.click('#cmt-panel [data-act="cmtthread"][data-val="a1"]');       // перемальовка панелі (згорнути/розгорнути гілку)
   await page.click('#cmt-panel [data-act="cmtthread"][data-val="a1"]');
   await page.waitForSelector(ta("a1"));

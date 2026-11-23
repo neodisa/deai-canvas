@@ -93,7 +93,10 @@ test("newsItems: командні коментарі + відповіді на �
     { id: "l3", status: "open", author: "Я" },
   ];
   const items = newsItems(all);
-  assert.deepEqual(items.map((i) => i.id), ["p1", "rp", "rl"], "закритий і без відповідей — без відповідей; без id пропущено");
+  assert.deepEqual(items.map((i) => i.id), ["p1", "rp", "rl", "rc"], "відповіді закритого — теж у списку (для бази «бачив»), без відповідей — нічого; без id пропущено");
+  assert.equal(items.find((i) => i.id === "rc").status, "resolved", "відповідь закритого несе статус батька");
+  assert.equal(isNew(items.find((i) => i.id === "rc"), new Set(), "Хтось"), false, "відповідь закритого не нова");
+  assert.equal(countNew(items, new Set(), "Хтось"), 3, "закрита не рахується (p1, rp, rl)");
   assert.deepEqual(items.find((i) => i.id === "rl"), { id: "rl", ts: "20.11.2026 10:00", author: "Я", status: "open", version: "3/b", parent: "l1" });
   assert.equal(items.find((i) => i.id === "rp").parent, "p1");
   assert.equal(items.find((i) => i.id === "rp").version, "3/a");
@@ -111,4 +114,14 @@ test("newsItems + isNew/countNew: власна відповідь не нова;
   assert.equal(countNew(items, new Set(["ai"]), "Я"), 0);
   assert.deepEqual([...baseline(items)], ["mine", "ai"]);
   assert.deepEqual(arrived(new Set(["mine"]), items).map((i) => i.id), ["ai"]);
+});
+
+test("newsItems: закритий коментар відкрили знову — його давні відповіді не стають «новими» (їх покрила база «бачив»)", () => {
+  const R = (id) => ({ id, ts: "t", author: "AI" });
+  const closed = [{ id: "c1", status: "resolved", author: "Я", replies: [R("old1"), R("old2")] }];
+  const seen = baseline(newsItems(closed));                      // перший знімок: коментар закритий
+  assert.deepEqual([...seen].sort(), ["old1", "old2"]);
+  const reopened = [{ id: "c1", status: "open", author: "Я", replies: [R("old1"), R("old2"), R("fresh")] }];
+  const news = newsItems(reopened);
+  assert.deepEqual(news.filter((c) => isNew(c, seen, "Я")).map((c) => c.id), ["fresh"], "давні відповіді стали новими після відкриття");
 });

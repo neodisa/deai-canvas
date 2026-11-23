@@ -338,3 +338,17 @@ test("Esc у полі відповіді згортає рядок і він л�
     assert.doesNotMatch(h.mount.innerHTML, /cmt-rbox--on/);
   } finally { h.done(); }
 });
+
+test("набір у полі відповіді розгортає рядок, коли він згорнутий (після Esc фокус лишається, а `focusin` не повториться); закритий — ні", () => {
+  setLang("uk");
+  const snap = { iteration: "1", comments: [rc("o", "open", [rp("r1")]), rc("x", "resolved", [rp("r2")], 2)] };
+  const h = boot2({ snap });
+  try {
+    const ta = fakeTa("o");
+    h.handlers.input({ target: ta });
+    assert.deepEqual(ta.box.classList.added, ["cmt-rbox--on"], "набір не розгорнув рядок");
+    const closed = fakeTa("x");
+    h.handlers.input({ target: closed });
+    assert.deepEqual(closed.box.classList.added, []);
+  } finally { h.done(); }
+});

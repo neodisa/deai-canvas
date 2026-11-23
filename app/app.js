@@ -7755,7 +7755,7 @@ cmtEl.addEventListener('click', (ev) => {
 });
 cmtEl.addEventListener('input', (ev) => {
   if (ev.target.classList?.contains('cmt-edit')) { cmtDraft = ev.target.value; return; }
-  if (ev.target.classList?.contains('cmt-rta')) { cmtReplyDraft.set(ev.target.dataset.val, ev.target.value); return; }
+  if (ev.target.classList?.contains('cmt-rta')) { cmtReplyDraft.set(ev.target.dataset.val, ev.target.value); armReplyBox(ev.target); return; }   // після Esc фокус у полі лишається, а focusin вдруге не спрацює
   if (ev.target.classList?.contains('cmt-redit')) { cmtReplyEditDraft = ev.target.value; return; }
   if (ev.target.id !== 'cmt-q') return;
   cmtQuery = ev.target.value;
@@ -7764,10 +7764,7 @@ cmtEl.addEventListener('input', (ev) => {
 /* Фокус у полі відповіді відкриває рядок «Надіслати / Скасувати» (у розгорнутій гілці з відповідями поле стоїть без нього): `replying` = цей
    коментар, `cmt-rbox--on` ставимо прямо, БЕЗ перемальовки — вона замінила б textarea посеред mousedown і згубила б каретку та виділення.
    Наступна звичайна перемальовка дає той самий стан із `cmtReplying`. */
-cmtEl.addEventListener('focusin', (ev) => {
-  if (cmtRestoringFocus) return;
-  const ta = ev.target.closest?.('.cmt-rta');
-  if (!ta) return;
+function armReplyBox(ta) {
   const id = ta.dataset.val;
   const c = cmtSnap?.comments?.find((x) => x && x.id === id);
   if (!c || c.status !== 'open' || repliesOff(c) != null || cmtReplying === id) return;
@@ -7775,6 +7772,11 @@ cmtEl.addEventListener('focusin', (ev) => {
   const box = ta.closest('.cmt-rbox');
   for (const b of cmtEl.querySelectorAll('.cmt-rbox--on')) if (b !== box) b.classList.remove('cmt-rbox--on');   // розгорнутий рядок — один
   box?.classList.add('cmt-rbox--on');
+}
+cmtEl.addEventListener('focusin', (ev) => {
+  if (cmtRestoringFocus) return;
+  const ta = ev.target.closest?.('.cmt-rta');
+  if (ta) armReplyBox(ta);
 });
 /* ⌘/Ctrl+Enter зберігає редагування, Esc скасовує; `stopPropagation`, щоб глобальний Esc не закрив панель. */
 cmtEl.addEventListener('keydown', (ev) => {

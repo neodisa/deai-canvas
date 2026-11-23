@@ -530,7 +530,7 @@ test("11: імені нема — панель лише читає; «+» пит
   await add.waitFor();
   assert.equal(await mode(frame), false, "без імені панель увімкнула додавання");
   assert.equal(await add.getAttribute("aria-pressed"), "false");
-  assert.match(await page.locator("#cmt-panel .cmt-body").innerText(), /Натисніть «\+», щоб залишити коментар\./);
+  await until(async () => /Натисніть «\+», щоб залишити коментар\./.test(await page.locator("#cmt-panel .cmt-body").innerText()), "підказка порожньої панелі (знімок рамки ще міг не дійти)");
   await add.click();
   await page.locator(".cv-ask--form").waitFor();
   await page.fill('.cv-ask--form input[name="name"]', "Нова Людина");
@@ -1025,7 +1025,6 @@ test("27: два діалоги імені не складаються (відп
   });
   await burst();
   await page.locator(".cv-ask--form").waitFor();
-  await sleep(300);
   assert.equal(await page.locator(".cv-ask--form").count(), 1, "діалоги імені склались");
   // перемальовування за відкритого діалогу відриває поле-відкривач: фокус мусить піти в поле ТОГО коментаря, а не на «+»
   env.memo.store.get(CHANNEL).push({ ...env.memo.store.get(CHANNEL)[0], id: "seed-extra", text: "Додатковий", replies: [] });
@@ -1038,7 +1037,8 @@ test("27: два діалоги імені не складаються (відп
   await page.fill('.cv-ask--form input[name="name"]', "Один Раз");
   await page.click('.cv-ask--form button[data-a="ok"]');
   await until(() => memoReplies(env, "seed-open").some((r) => r.text === "Перша") && memoReplies(env, "seed-open-2").some((r) => r.text === "Друга"), "обидві відповіді в сервісі");
-  await sleep(300);
+  assert.equal(await o.frame.evaluate(() => window.CommentLayer.snapshot().comments.find((c) => c.id === "seed-open").replies.filter((r) => r.text === "Перша").length), 1,
+    "відповідь задубльовано (знімок коментатора)");
   assert.equal(memoReplies(env, "seed-open").filter((r) => r.text === "Перша").length, 1, "відповідь задубльовано");
   assert.equal(memoReplies(env, "seed-open-2").filter((r) => r.text === "Друга").length, 1);
   assert.deepEqual(o.errors, []);
@@ -1061,12 +1061,15 @@ test("28: розгорнуте поле відповіді — одне (дру�
   await c2.locator("textarea.cmt-rta").press("Escape");
   assert.equal(await page.locator("#cmt-panel .cmt-rbox--on").count(), 0, "Esc не згорнув поле");
   assert.equal(await s2.isVisible(), false);
-  assert.equal(await c2.locator("textarea.cmt-rta").inputValue(), "", "Esc не скинув чернетку");
+  assert.equal(await c2.locator("textarea.cmt-rta").inputValue(), "", "Esc не скинув чернетку (поле мало очиститись)");
   // перемальовка після Esc (фокус лишився в полі): рядок так і лишається згорнутим
   env.memo.store.get(CHANNEL).push({ ...env.memo.store.get(CHANNEL)[0], id: "seed-extra", text: "Додатковий", replies: [] });
   await page.locator('#cmt-panel .cmt-card[data-cid="seed-extra"]').waitFor();
   assert.equal(await page.locator("#cmt-panel .cmt-rbox--on").count(), 0, "перемальовка знову розгорнула поле");
   assert.equal(await page.evaluate(() => document.activeElement?.matches(".cmt-rta")), true, "фокус не лишився в полі");
+  // N1: фокус лишився в полі, а `focusin` вдруге не спрацює — набір знову розгортає рядок
+  await page.keyboard.type("Знову");
+  assert.equal(await s2.isVisible(), true, "набір після Esc не повернув «Надіслати»");
   assert.deepEqual(o.errors, []);
 });
 
