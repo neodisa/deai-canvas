@@ -309,6 +309,17 @@ class GitlabSyncHonesty(unittest.TestCase):
         self.assertFalse(r.get('unchanged'))
         self.assertEqual(r['iteration']['id'], 'it2')
 
+    def test_pull_does_not_reuse_a_trashed_iteration_number(self):
+        """Фаза И: найвищий номер лежить у кошику (запису в iterations.json нема) — нова ітерація бере наступний, а не його."""
+        import iter_trash
+        import datetime
+        os.makedirs(os.path.join(self.task_dir, 'iterations', 'it2'))
+        iter_trash.move_to_trash(self.task_dir, {'id': 'it2'}, datetime.datetime.now(datetime.timezone.utc))
+        self._sync()
+        self._peer_commit('mockup/t1/index.html', '<h1>чуже</h1>', 'колега правив макет')
+        r = self.serve.gitlab_pull(self.task, self.gl)
+        self.assertEqual(r['iteration']['id'], 'it3')
+
     def _peer_push_with_state(self, html, author, key, source_it='it3'):
         """Коміт колеги РАЗОМ із його `.canvas-state.json` — так виглядає
         справжня передача, а не просто чужий файл у репо."""

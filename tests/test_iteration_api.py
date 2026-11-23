@@ -139,6 +139,27 @@ class IterationApi(_Base):
         st, body = self.post('/api/iteration-restore', {'trash': d['trash']})   # повтор працює
         self.assertEqual((st, body['id']), (200, 'it2'))
 
+    def test_restore_finish_failure_does_not_allow_a_second_restore(self):
+        _, d = self.post('/api/iteration-delete', {'id': 'it2'})
+        with mock.patch('iter_trash.shutil.rmtree', side_effect=OSError('boom')):
+            st, body = self.post('/api/iteration-restore', {'trash': d['trash']})
+        self.assertEqual((st, body['id']), (200, 'it2'))
+        st, _ = self.post_raw('/api/iteration-restore', {'trash': d['trash']})
+        self.assertEqual(st, 404)
+        self.assertEqual(self.ids(), ['it1', 'it2'])
+
+    def test_failed_rollback_is_reported(self):
+        with mock.patch('serve.save_meta', side_effect=OSError('disk')), \
+                mock.patch('iter_trash.undo_move', side_effect=OSError('stuck')), \
+                mock.patch('sys.stderr'):
+            st, body = self.post('/api/iteration-delete', {'id': 'it2'})
+        self.assertEqual((st, body['error'], body['rolled_back']), (500, 'delete-failed', False))
+
+    def test_successful_rollback_is_reported(self):
+        with mock.patch('serve.save_meta', side_effect=OSError('disk')):
+            st, body = self.post('/api/iteration-delete', {'id': 'it2'})
+        self.assertEqual((st, body['rolled_back']), (500, True))
+
 
 if __name__ == '__main__':
     unittest.main()

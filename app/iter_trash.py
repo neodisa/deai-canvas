@@ -131,7 +131,10 @@ def restore_prepare(task_dir, slot, taken_ids):
 def restore_finish(task_dir, slot):
     """Крок 2: прибрати слот (лише після успішного запису `iterations.json`)."""
     base, _ = _slot_entry(task_dir, slot)
-    shutil.rmtree(base)
+    # Спершу `entry.json`: слот без нього відповідає `not-in-trash`, тож повторне повернення не створить порожню копію,
+    # навіть якщо дальше видалення теки не вдалось.
+    os.remove(os.path.join(base, 'entry.json'))
+    shutil.rmtree(base, ignore_errors=True)
 
 
 def restore_rollback(task_dir, slot, entry):

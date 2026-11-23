@@ -117,8 +117,9 @@ class Boundaries(unittest.TestCase):
     def test_seven_day_boundary(self):
         keep = tr.move_to_trash(self.d, {'id': 'it1'}, T0 - datetime.timedelta(days=6, hours=23))
         gone = tr.move_to_trash(self.d, {'id': 'it2'}, T0 - datetime.timedelta(days=7, hours=1))
+        exact = tr.move_to_trash(self.d, {'id': 'it3'}, T0 - datetime.timedelta(days=7))   # рівно 7 днів — ще лежить
         self.assertEqual(tr.purge(self.d, T0), [gone])
-        self.assertEqual(os.listdir(tr.trash_root(self.d)), [keep])
+        self.assertEqual(sorted(os.listdir(tr.trash_root(self.d))), sorted([keep, exact]))
 
     def test_purge_skips_malformed_date(self):
         bad = os.path.join(tr.trash_root(self.d), 'it1--20261399-100000')
@@ -166,6 +167,23 @@ class Boundaries(unittest.TestCase):
         tr.restore_prepare(self.d, slot, ['it1', 'it3'])
         tr.restore_finish(self.d, slot)
         self.assertFalse(os.path.exists(base))
+
+    def test_entry_is_written_before_the_rename(self):
+        with mock.patch('iter_trash.json.dump', side_effect=OSError('boom')):
+            with self.assertRaises(OSError):
+                tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        self.assertTrue(os.path.isfile(os.path.join(self.d, 'iterations', 'it2', 'index.html')))
+        self.assertEqual(os.listdir(tr.trash_root(self.d)), [])
+
+    def test_finish_without_entry_json_means_not_in_trash(self):
+        slot = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        tr.restore_prepare(self.d, slot, ['it1', 'it3'])
+        with mock.patch('iter_trash.shutil.rmtree', side_effect=OSError('boom')):
+            with self.assertRaises(OSError):
+                tr.restore_finish(self.d, slot)
+        with self.assertRaises(tr.IterTrashError) as c:
+            tr.restore_prepare(self.d, slot, ['it1', 'it2', 'it3'])
+        self.assertEqual(c.exception.code, 'not-in-trash')
 
 
 if __name__ == '__main__':

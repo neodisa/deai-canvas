@@ -7950,11 +7950,14 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             save_meta(task, meta)
         except Exception as e:         # запис не вдався — теку повертаємо: ітерація або жива, або в кошику, не навпіл
+            rolled_back = True
             try:
                 iter_trash.undo_move(task['dir'], slot)
             except Exception:
-                pass
-            self._send_json({'ok': False, 'error': 'delete-failed', 'message': str(e)}, status=500)
+                rolled_back = False
+                sys.stderr.write(traceback.format_exc())
+            self._send_json({'ok': False, 'error': 'delete-failed', 'message': str(e),
+                             'rolled_back': rolled_back}, status=500)
             return
         try:
             iter_trash.purge(task['dir'], now)
@@ -7984,11 +7987,14 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             save_meta(task, meta)
         except Exception as e:         # запис не вдався — теку назад у слот: лишається в кошику
+            rolled_back = True
             try:
                 iter_trash.restore_rollback(task['dir'], slot, entry)
             except Exception:
-                pass
-            self._send_json({'ok': False, 'error': 'restore-failed', 'message': str(e)}, status=500)
+                rolled_back = False
+                sys.stderr.write(traceback.format_exc())
+            self._send_json({'ok': False, 'error': 'restore-failed', 'message': str(e),
+                             'rolled_back': rolled_back}, status=500)
             return
         try:
             iter_trash.restore_finish(task['dir'], slot)
