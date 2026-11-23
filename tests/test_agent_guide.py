@@ -448,5 +448,38 @@ class TopicFormat(unittest.TestCase):
                 self.assertNotIn('deai:', lines[1])
 
 
+class RealBlock(unittest.TestCase):
+    """Справжній блок: бюджет, мітка, правило перевірки, індекс усіх тем."""
+    V = '0.99.0'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.block = agents_md.render_block(version=cls.V)
+
+    def test_budget(self):
+        self.assertLessEqual(self.block.count('\n'), 80, 'block is over 80 lines')
+        self.assertLessEqual(len(self.block.encode('utf-8')), 6144, 'block is over 6 KB')
+
+    def test_no_placeholders_left(self):
+        self.assertNotRegex(self.block, r'\{[a-z]+\}')
+
+    def test_the_label_and_the_check(self):
+        g = agents_md.guide_of(self.block)
+        self.assertRegex(g, r'^[0-9a-f]{8}$')
+        self.assertIn(f'# Deai Canvas (guide {g})', self.block)
+        self.assertIn('curl -sG http://127.0.0.1:8765/api/agent-guide --data-urlencode "path=$PWD" -d have=' + g, self.block)
+        self.assertIn('404', self.block)
+
+    def test_the_index_lists_every_topic(self):
+        for name, _ in agents_md.topics():
+            with self.subTest(topic=name):
+                self.assertIn(f'- `{name}` — ', self.block)
+
+    def test_the_notes_for_people_are_in_the_begin_comment(self):
+        first = self.block.split('\n', 1)[0]
+        self.assertTrue(first.startswith(f'<!-- deai:begin v{self.V} ') and first.endswith(' -->'))
+        self.assertIn('commit changes to it with your work', first)
+
+
 if __name__ == '__main__':
     unittest.main()
