@@ -3,6 +3,75 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.35.0] — 23.11.2026
+
+Replies in comments. A pin now has a thread: in Deai and in the published preview people answer a comment instead of leaving
+a second pin, and the agent can read the thread and ask a question back instead of guessing. New replies count as news,
+pins no longer lose their screenshot or their page without saying so, and the commenter's compose form over a mockup now
+follows the shell's theme and language. Team replies live in a new table, so **existing Supabase projects need one SQL
+step** (see "Owner actions after update").
+
+### Додано
+- Replies in the card (Deai): a thread line between the text and the actions («Відповісти» / «› N відповідей · author, time»
+  with «+K нова»), a reply field that grows in focus (⌘↵ sends, Esc cancels), reply / edit own / delete with an in-place
+  confirmation; a closed comment has a read-only thread; deleting a comment with replies asks about the replies too.
+  Search covers reply text and authors. A reply of the agent carries a purple dot and «AI».
+- Replies in the published preview: anyone with the link may reply to any open comment and edit or delete only their own
+  replies (those created in that browser); the name is asked once, in the same dialog as for a comment, never with
+  `prompt()`. Closed comments take no replies. Re-publish a preview to get this; older previews keep working without replies.
+- «Нове» («New») includes new replies: the section (formerly «Нові від команди») lists new team comments and any comment
+  with a new reply not from you, including an AI reply on a local pin. The island badge counts such comments, the toast says
+  «Нова відповідь від …» with «Показати» (opens the thread), and the tabs of other tasks carry the numbers. No Teams card is
+  sent for a reply.
+- The agent: `bin/inbox.py` prints the thread under each pin (`↳ відповіді (N):`) and `↳ без знімка: <reason>` for a pin
+  without a screenshot; `inbox.py reply ID --text … [--dry-run]` answers in the thread — a local pin, or a team pin
+  **assigned to AI only**; a closed pin, an unassigned team pin and a module without `reply` are refused. `agents.md` tells
+  the agent to ask in the thread instead of guessing.
+- Commenter API (optional, only with `host`): `reply`, `editReply`, `removeReply`, the host callback `onReply`, the host
+  option `shotLib`; `replies` travels on the comment. Without the new options the commenter looks and works as before (a
+  golden DOM test holds it).
+- Module contract: `replies` on a comment; the optional `supportsReplies` / `repliesDown` of the store; the optional server
+  function `reply(ctx, channel, id, text, author)`; `recent` items with `parent`; `GET /api/comment-news` answers `team`.
+
+### Змінено
+- Team storage: a separate table `comment_replies` (one reply = one row, no foreign key or cascade on purpose, so older
+  clients that delete only the comment row keep working). New projects get it from `schema.sql`; the `supabase-comments`
+  module reads it next to `comments`.
+- The commenter's compose form over a mockup uses the shell's theme tokens and language (`host.theme`, `host.labels`),
+  in Deai, in Overview and in the preview; pins and the rest of the layer are unchanged. Without `host` the form is as before.
+- `GET /api/comment-news` adds the agent's local replies and the flag `team` (the team channel really answered).
+
+### Виправлено
+- A pin without a screenshot is never silent: `meta.shotMiss` carries the reason (`too-big`, `no-lib`, `timeout`,
+  `render`, `detached`, `upload`); the panel shows «Без знімка: …». Heavy pages are shot with oversized SVGs replaced by
+  empty blocks of the same size; the library and render budgets are separate; a failed upload is tried once more.
+- The pin's `url`, route, version, viewport and context are taken when the target is chosen, not when the comment is saved
+  (an SPA that changed its route while the form was open no longer re-binds the pin to another page).
+- The preview no longer says «На іншій сторінці» on every card made in Deai: in host mode the page comes from the pin's scope
+  (iteration and page), not from `meta.route`.
+- Focusing a pin in host mode (the preview and Deai) never navigates to `meta.url`: a pin of the same page flashes its element,
+  a pin of another page shows its screenshot.
+- The toast «Нова відповідь від …» opens the thread that is visible.
+- `supabase-comments` adapter and server, robustness: a shared time budget for a module call's consecutive requests; replies
+  are written and deleted by difference; a stale save neither deletes a fresh reply nor resurrects a remotely deleted one;
+  a failed reply delete is retried; a reply written during an outage is not lost.
+- Local merge: a reply deleted on disk is not resurrected by an open tab.
+
+### Owner actions after update
+- **Run `app/modules/supabase-comments/replies.sql` once in the SQL editor of each existing Supabase project** that already
+  has the comments schema (it is idempotent). In a shared or organisation database run only this file, never the whole
+  `schema.sql`, and first check that there is no unrelated table `public.comment_replies`. Without it team replies are
+  unavailable: Deai shows a banner with the reason, the preview stays quiet; comments and local replies work as before.
+- **Re-publish the active previews** (the preview wrapper and the commenter inside it changed). Previews published earlier
+  work but show no replies.
+- Nothing to rebuild: the commenter bundle (`app/vendor/comment-layer.min.js`) is committed. A product that embeds its own
+  copy of the commenter takes the new file; the API is backward compatible.
+
+### Known limits
+- A reply is one level only: no mentions, reactions or attachments, and no editing of other people's replies.
+- Reply ownership in the preview is an interface rule, not a lock: the public key allows everything; the `agent` flag can be forged the same way.
+- «Нове» does not exist in the published preview. The commenter's own panel outside Deai shows only «N replies» on a card.
+
 ## [0.34.0] — 20.11.2026
 
 Modules M1: tools and actions. A space module (manifest `api: 2`) can now add its own tools to the island — a button,
