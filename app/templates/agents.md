@@ -35,8 +35,8 @@ Add an iteration; the canvas copies `itN` (a folder created by hand is not regis
     POST http://127.0.0.1:8765/api/iteration {"from": "itN", "note": "what this iteration is"}
     header: X-Canvas-Task: <task-id>
 
-After finishing edits to an iteration, call (it commits them locally as yours; the fallback when you have no hook):
-`POST http://127.0.0.1:8765/api/autosync {}` with header `X-Canvas-Task: <task-id>`.
+After finishing edits to an iteration, call `POST http://127.0.0.1:8765/api/autosync {}` with `X-Canvas-Task: <task-id>`.
+The canvas commits them locally as an AI edit (`itN: зміни AI`, `Deai-Actor: ai`); do not commit the folder yourself.
 
 ## Comments
 
