@@ -386,6 +386,33 @@ class Elsewhere(Base):
     def test_a_plain_space_without_any_repository_above_is_not_elsewhere(self):
         self.assertEqual(self.state(), 'missing')
 
+class ReadOnly(Base):
+    def test_a_file_without_the_owner_write_bit_is_unreadable_and_untouched(self):
+        raw = '{"env": {"A": "1"}}'
+        _put(self.f, raw)
+        os.chmod(self.f, 0o444)
+        self.assertEqual(self.state(), 'unreadable')
+        with self.assertRaises(OSError):
+            claude_hook.connect(self.space, PORT)
+        with self.assertRaises(OSError):
+            claude_hook.disconnect(self.space, PORT)
+        self.assertEqual(_get(self.f), raw.encode('utf-8'))
+        self.assertEqual(stat.S_IMODE(os.stat(self.f).st_mode), 0o444)
+        self.assertEqual(self.tmp_files(), [])
+
+    def test_a_writable_file_still_works(self):
+        _put(self.f, '{}')
+        os.chmod(self.f, 0o644)
+        self.assertEqual(claude_hook.connect(self.space, PORT)['state'], 'ok')
+
+
+class BadPort(Base):
+    def test_a_bool_is_not_a_port(self):
+        for bad in (True, False):
+            with self.assertRaises(ValueError):
+                claude_hook.command(bad)
+
+
 class Lossless(Base):
     """Файл, який не можна перезаписати без втрат, — `unreadable`: не пишемо, байти ті самі, `.claude/` не створюємо."""
 

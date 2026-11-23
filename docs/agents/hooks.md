@@ -25,13 +25,13 @@ pressed. Do not write this hook by hand: ask the person to press the button.
 
 States of the row: ok; missing; stale (the hook points at another canvas port — the canvas moved ports, or two canvases on
 different ports serve one space — or an older/duplicated entry of ours; «Оновити» fixes it); unreadable (among others: not valid
-JSON or not safely mergeable — duplicate keys, a symlink, a non-regular file; the file is left alone); elsewhere (the space
+JSON or not safely mergeable — duplicate keys, a symlink, a non-regular file, a read-only file; the file is left alone); elsewhere (the space
 folder is inside another git repository: no hook is installed, because Claude Code reads that repository's own
 `.claude/settings.local.json`). «Відключити» removes only our entry (and a `hooks.Stop` / `hooks` that became empty because of
 it); a file that ends up as `{}` is deleted. The `.claude/` folder, the `.git/info/exclude` line, `CLAUDE.md` and `AGENTS.md`
-stay. A file with other content is rewritten (2-space indentation). A canvas restart changes nothing.
+stay. A file with other content is rewritten (2-space indentation; numbers may be normalised). A canvas restart changes nothing.
 
-Limits: With Claude Code started INSIDE a task folder (each task folder is its own git repository) the hook does not fire there,
+Limits: with Claude Code started INSIDE a task folder (each task folder is its own git repository) the hook does not fire there,
 because Claude Code reads that repository's own `.claude/settings.local.json`: start Claude Code in the space folder. Only Claude Code and only
 this one file are covered: no team or global settings, no other agents, no automatic install at canvas start. For agents
 without the hook use the manual call below (`POST /api/autosync {}` with `X-Canvas-Task`; see `AGENTS.md`).

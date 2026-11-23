@@ -6,10 +6,10 @@
 канвас вимкнено → нічого. Windows на справжній машині не перевірено (команда — синтаксис sh).
 
 Запис — злиття, а не перезапис: чужі хуки й ключі лишаються; наші групи (точніше, наші записи в групах) прибираємо й ставимо одну
-свіжу, тож повторне «Підключити» не дублює. Нечитне (симлінк, не-звичайний файл чи тека `.claude`, не UTF-8, не JSON, верхній
+свіжу, тож повторне «Підключити» не дублює. Нечитне (лише для читання, симлінк, не-звичайний файл чи тека `.claude`, не UTF-8, не JSON, верхній
 рівень не обʼєкт, `hooks` не обʼєкт, `hooks.Stop` не список) не чіпаємо взагалі: стан `unreadable`, `connect`/`disconnect` → `OSError`.
 Запис атомарний (тимчасовий файл у `.claude/`, `fsync`, права як у наявного, новий — за umask); перед заміною файл читається ще раз,
-і зміна (чужа правка, файл, що зʼявився) — `ValueError('changed')`. Форматування файла може змінитись (відступ 2 пробіли).
+і зміна (чужа правка, файл, що зʼявився) — `ValueError('changed')`. Форматування файла може змінитись (відступ 2 пробіли), числа — нормалізуватись (`1E5` → `100000.0`).
 """
 import json
 import os
@@ -29,6 +29,8 @@ def _home():
 
 def command(port):
     """Команда хука для порту канваса. `port` не число → `ValueError` (у shell-рядок потрапляє лише ціле)."""
+    if isinstance(port, bool):
+        raise ValueError('port')
     return ("curl -s --noproxy '*' --max-time 5 -o /dev/null -X POST -H 'Content-Type: application/json' --data-binary @- "
             f"http://127.0.0.1:{int(port)}/api/autosync || true {HOOK_MARK}")
 
@@ -50,6 +52,8 @@ def _read_raw(space_dir):
     p = _path(space_dir)
     if os.path.islink(p) or (os.path.lexists(p) and not os.path.isfile(p)):
         raise OSError('settings.local.json: not a regular file')
+    if os.path.exists(p) and not (os.stat(p).st_mode & 0o200):
+        raise OSError('settings.local.json: read-only')      # людина закрила файл від запису: не замінюємо його через теку
     try:
         with open(p, 'rb') as f:
             return f.read()
