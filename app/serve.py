@@ -2929,6 +2929,23 @@ def task_api_iterations(meta):
             for it in (meta or {}).get('iterations', [])]
 
 
+def task_iteration_trash(task):
+    """Кошик ітерацій для `/api/task` (`iteration_trash`, розділ «Видалені»): найсвіжіше першим, з тим самим `label_text`, що в
+    переліку. Будь-який збій читання → `[]`: екран задачі не сміє впасти через кошик."""
+    try:
+        slots = iter_trash.list_slots(task['dir'], iter_trash.utcnow())
+    except Exception:
+        return []
+    rows = []
+    for x in slots:
+        try:        # битий запис пропускаємо сам, решта переліку лишається
+            rows.append({'trash': x['trash'], 'id': x['entry']['id'], 'label_text': iteration_label(x['entry']),
+                         'deleted_at': x['deleted_at'], 'expires_at': x['expires_at']})
+        except Exception:
+            continue
+    return rows
+
+
 def comment_channel(task, tid, internal=False):
     """Єдиний канал коментарів на ЗАДАЧУ (не на ітерацію): історію проєкту і
     коментарі колег тримаємо в одному потоці, а конкретну ітерацію коментаря
@@ -6743,6 +6760,9 @@ class Handler(SimpleHTTPRequestHandler):
                    'space': space_view(sp),
                    'comment_channel': _task_comment_channel(sp, task, tid),
                    'iterations': task_api_iterations(meta),
+                   # Кошик ітерацій (розділ «Видалені» дропдауна): `render()` перечитує задачу після видалення й
+                   # повернення, тож окремого маршруту не треба.
+                   'iteration_trash': task_iteration_trash(task),
                    # Ключ ЦІЄЇ машини: браузер не знає git-конфіга, а
                    # «своя/чужа» ітерація рахується саме по ньому.
                    # Імʼя окремо не шлемо — воно вже в кожному записі.

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { barModel } from "../app/bar-model.js";
-import { barHTML, initials } from "../app/shell-bar.js";
+import { barHTML, initials, trashLeft } from "../app/shell-bar.js";
 import { setLang, t } from "../app/i18n.js";
 
 const S = (o = {}) => ({
@@ -968,4 +968,68 @@ test("Р10: «Видалити» єдиної ітерації вимкнене 
   assert.doesNotMatch(one, /dd-why/);
   assert.doesNotMatch(one, /копія обраної/);
   assert.doesNotMatch(itHtml({ openDd: "iter" }), /dd-sub/);
+});
+
+/* «Видалені» (патч після 0.36.0): розділ кошика внизу переліку ітерацій. */
+const TR = [
+  { trash: "it5--20261123-124000", label: "Іт.5", note: "Темна тема", deletedAt: "2026-11-23T12:40:00Z", expiresAt: "2026-11-30T12:40:00Z" },
+  { trash: "it3--20261116-150000", label: "Іт.3", note: "", deletedAt: "2026-11-16T15:00:00Z", expiresAt: "2026-11-23T15:00:00Z" },
+];
+const NOW = Date.parse("2026-11-23T12:40:00Z");
+
+test("«Видалені»: порожній кошик — розділу нема зовсім (ні роздільника, ні підпису)", () => {
+  const a = itHtml({});
+  const b = itHtml({ iterTrash: [] });
+  assert.equal(a, b);
+  assert.doesNotMatch(b, /it-gone|itgone/);
+});
+
+test("«Видалені»: заголовок під «Новою ітерацією», з числом; згорнутий — без рядків", () => {
+  setLang("uk");
+  const h = itHtml({ iterTrash: TR, now: NOW });
+  assert.match(h, /<button class="dd-item it-gone-h" data-act="itgone" aria-expanded="false">/);
+  assert.match(h, /<span class="dd-t">Видалені<\/span>/);
+  assert.match(h, /<span class="dd-marks">2<svg/);
+  assert.ok(h.indexOf('data-act="newit"') < h.indexOf('data-act="itgone"'), "розділ не під «Новою ітерацією»");
+  assert.doesNotMatch(h, /class="it-gone"|data-act="itback"/);
+});
+
+test("«Видалені»: розгорнутий — рядки найсвіжіше першим, скільки лишилось, «Повернути» на слот", () => {
+  setLang("uk");
+  const h = itHtml({ iterTrash: TR, iterGone: true, now: NOW });
+  assert.match(h, /aria-expanded="true"/);
+  const backs = [...h.matchAll(/data-act="itback" data-val="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(backs, ["it5--20261123-124000", "it3--20261116-150000"]);
+  assert.match(h, /<span class="it-gone-t">Іт\.5 · Темна тема<\/span>/);
+  assert.match(h, /<span class="it-gone-t">Іт\.3<\/span>/);
+  assert.match(h, /<span class="it-gone-s">ще 7 дн\.<\/span>/);
+  assert.match(h, /<span class="it-gone-s it-gone-s--soon">ще 2 год\.<\/span>/);
+  assert.match(h, /title="Іт\.5 · Темна тема — видалено \d\d\.\d\d\.2026 о \d\d:\d\d"/);
+  assert.match(h, /aria-label="Повернути Іт\.5 · Темна тема">Повернути<\/button>/);
+});
+
+test("«Видалені»: закритий дропдаун розділу не малює; назва екранується", () => {
+  assert.doesNotMatch(itHtml({ iterTrash: TR, iterGone: true, openDd: null }), /it-gone/);
+  const h = itHtml({ iterTrash: [{ ...TR[0], note: 'A"<b>' }], iterGone: true, now: NOW });
+  assert.doesNotMatch(h, /<b>/);
+  assert.match(h, /A&quot;&lt;b&gt;/);
+});
+
+test("trashLeft: дні округлено, години вниз, менше години / минуле / зіпсоване — попередження", () => {
+  setLang("uk");
+  const at = "2026-11-30T12:00:00Z";
+  const H = 3600e3;
+  const end = Date.parse(at);
+  assert.deepEqual(trashLeft(at, end - 7 * 24 * H), { text: "ще 7 дн.", soon: false });
+  assert.deepEqual(trashLeft(at, end - 36.5 * H), { text: "ще 2 дн.", soon: false });
+  assert.deepEqual(trashLeft(at, end - 24 * H), { text: "ще 1 дн.", soon: false });
+  assert.deepEqual(trashLeft(at, end - 23.9 * H), { text: "ще 23 год.", soon: true });
+  assert.deepEqual(trashLeft(at, end - H), { text: "ще 1 год.", soon: true });
+  assert.deepEqual(trashLeft(at, end - 59 * 60e3), { text: "менше години", soon: true });
+  assert.deepEqual(trashLeft(at, end + H), { text: "менше години", soon: true });
+  assert.deepEqual(trashLeft("зіпсовано", end), { text: "менше години", soon: true });
+  setLang("en");
+  assert.deepEqual(trashLeft(at, end - 24 * H), { text: "1 day left", soon: false });
+  assert.deepEqual(trashLeft(at, end - 3 * 24 * H), { text: "3 days left", soon: false });
+  setLang("uk");
 });
