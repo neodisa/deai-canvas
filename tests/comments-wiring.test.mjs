@@ -216,6 +216,27 @@ test("pollTabNews: рахує нові інших вкладок, пише ма�
   assert.deepEqual(h2.saved, ["s1:T1"], "перша відповідь supported:true — основа без числа; unsupported — без запису");
   assert.deepEqual(h2.f.news(), {});
 });
+const withReplies = [{ id: "t1" }, { id: "r1", parent: "p" }, { id: "r2", parent: "p" }];
+test("pollTabNews 0.34: «бачене» — обʼєднання головного маркера й маркера відповідей (`dc-seen-r:`), як у виду", async () => {
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
+    replies: { T1: { supported: true, items: withReplies } },
+    seenStore: { "s1:T1": new Set(["t1"]), "dc-seen-r:s1:T1": new Set(["r1", "r2"]) } });
+  await h.f.run();
+  assert.deepEqual(h.f.news(), {}, "відповіді, побачені у виді й записані в `dc-seen-r:`, на вкладці не «нові»");
+  const h2 = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
+    replies: { T1: { supported: true, items: withReplies } },
+    seenStore: { "s1:T1": new Set(["t1"]), "dc-seen-r:s1:T1": new Set(["r1"]) } });
+  await h2.f.run();
+  assert.deepEqual(h2.f.news(), { T1: 1 }, "r2 ще не бачено ніким — одна нова відповідь");
+});
+test("pollTabNews 0.34: є лише маркер відповідей (вид без команди) — основа без відповідей, нова відповідь не губиться", async () => {
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
+    replies: { T1: { supported: true, items: withReplies } },
+    seenStore: { "dc-seen-r:s1:T1": new Set(["r1"]) } });
+  await h.f.run();
+  assert.deepEqual(h.f.news(), { T1: 1 }, "r2 прийшла після останнього погляду — лишається новою, а не поглинається основою");
+  assert.deepEqual([...h.seenStore["s1:T1"]], ["t1"], "головний маркер — основа лише командних (без `parent`)");
+});
 test("pollTabNews: supported:true з error (команда впала) — ні числа, ні маркера (інакше після одужання усе «нове»)", async () => {
   const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, items: [], error: "x" } } });
   await h.f.run();

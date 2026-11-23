@@ -143,6 +143,16 @@ ANSWER_SERVER = tm.CHECK_ONLY + (
     '    with open(os.path.join(ctx["space"]["path"], "resolved.log"), "a", encoding="utf-8") as f:\n'
     '        f.write(json.dumps([channel, id, reason]) + "\\n")\n')
 
+#: Модуль-фікстура з необовʼязковою `reply` (пише `replied.log` у теці простору) і `recent` (відповідь — `news.json`).
+REPLY_SERVER = ANSWER_SERVER + (
+    'def recent(ctx, channel):\n'
+    '    with open(os.path.join(ctx["space"]["path"], "news.json"), encoding="utf-8") as f:\n'
+    '        return json.loads(f.read())\n'
+    'def reply(ctx, channel, id, text, author):\n'
+    '    with open(os.path.join(ctx["space"]["path"], "replied.log"), "a", encoding="utf-8") as f:\n'
+    '        f.write(json.dumps([channel, id, text, author], ensure_ascii=False) + "\\n")\n'
+    '    return {"id": "r-1"}\n')
+
 CONTROL = re.compile('[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]')
 
 
@@ -733,6 +743,45 @@ class AgentPinUnitTest(unittest.TestCase):
                           row['html_snapshot'], row['born_v'], row['resolve_reason']),
                          ('', 'open', '', '', {}, None, None, None, None))
 
+    def test_replies_pass_through_clean_and_without_a_key_when_there_are_none(self):
+        row = serve.agent_pin(cl('c0ffee01-aaaa', 'Текст', replies=[
+            {'id': 'r1', 'author': 'Ол\x1b[31mена\nX', 'text': 'рядок 1\nрядок 2\x07', 'ts': '19.10.2026 11:00', 'editedTs': '19.10.2026 11:05\x00'},
+            {'id': 'r2', 'author': 'AI', 'text': 'питання?', 'ts': '19.10.2026 11:10', 'agent': True}]))
+        self.assertEqual(row['replies'], [
+            {'id': 'r1', 'author': 'Ол[31mена X', 'text': 'рядок 1\nрядок 2', 'ts': '19.10.2026 11:00', 'editedTs': '19.10.2026 11:05'},
+            {'id': 'r2', 'author': 'AI', 'text': 'питання?', 'ts': '19.10.2026 11:10', 'agent': True}])
+        for none in (None, [], 'x', {'id': 'r1'}, 5):
+            self.assertNotIn('replies', serve.agent_pin(cl('c0ffee01-aaaa', 'Текст', replies=none)), repr(none))
+        self.assertNotIn('replies', serve.agent_pin(cl('c0ffee01-aaaa', 'Текст')))
+
+    def test_a_reply_with_an_unsafe_id_or_a_junk_shape_is_dropped_and_agent_must_be_literally_true(self):
+        bad = ['a b', 'x&y=1', '../x', 'a\nb', '', None, 5, 'a' * 201]
+        raw = [{'id': b, 'text': 'зле'} for b in bad] + ['junk', 7, None, {'id': 'ok1', 'text': 'добре', 'agent': 'yes'}]
+        row = serve.agent_pin(cl('c0ffee01-aaaa', 'Текст', replies=raw))
+        self.assertEqual([r['id'] for r in row['replies']], ['ok1'])
+        self.assertNotIn('agent', row['replies'][0], '`agent` — лише справжній `True`, не будь-яке «правдиве»')
+
+    def test_at_most_200_replies_pass_the_first_ones(self):
+        raw = [{'id': f'r{i}', 'text': 't'} for i in range(250)]
+        row = serve.agent_pin(cl('c0ffee01-aaaa', 'Текст', replies=raw))
+        self.assertEqual((len(row['replies']), row['replies'][0]['id'], row['replies'][-1]['id']), (200, 'r0', 'r199'))
+        self.assertEqual(serve.MAX_AGENT_REPLIES, 200)
+        bad_then_good = [{'id': 'a b'}] * 300 + [{'id': 'ok', 'text': 't'}]
+        self.assertEqual(len(serve.agent_pin(cl('c0ffee01-aaaa', 't', replies=bad_then_good))['replies']), 1)
+
+    def test_a_reply_text_is_cut_to_4000(self):
+        row = serve.agent_pin(cl('c0ffee01-aaaa', 't', replies=[{'id': 'r1', 'text': 'я' * 9000}]))
+        self.assertEqual(len(row['replies'][0]['text']), 4000)
+
+    def test_shot_miss_passes_in_meta_as_one_clean_word_and_junk_is_dropped(self):
+        for given, want in (('too-big', 'too-big'), ('no-lib', 'no-lib'), ('ti\x1bme\nout', 'time out'), ('x' * 100, 'x' * 40)):
+            with self.subTest(given=given):
+                row = serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': given}))
+                self.assertEqual(row['meta']['shotMiss'], want)
+        for junk in (None, 5, ['render'], {'a': 1}, '', '\x1b'):
+            with self.subTest(junk=junk):
+                self.assertNotIn('shotMiss', serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': junk}))['meta'])
+
     def test_the_list_is_validated_as_a_whole(self):
         pins = serve.agent_pins([cl('a1', 'один'), cl('a2', 'два')])
         self.assertIsInstance(pins, serve.ModulePins)
@@ -1191,6 +1240,14 @@ class AgentNewsUnitTest(unittest.TestCase):
         [c] = serve.agent_news([self.good(ts='19.10\n10:00\x1b[31m', author='О\x07лена\nX', version=3)])
         self.assertEqual((c['ts'], c['author'], c['version'], c['status']), ('19.10 10:00[31m', 'Олена X', '3', 'open'))
 
+    def test_a_reply_item_keeps_a_safe_parent_and_loses_an_unsafe_one(self):
+        raw = [self.good(id='r1', parent='c0ffee01-aaaa'), self.good(id='r2', parent='a b'), self.good(id='r3', parent='x&y=1'),
+               self.good(id='r4', parent=7), self.good(id='r5', parent=None), self.good(id='r6')]
+        got = {c['id']: c for c in serve.agent_news(raw)}
+        self.assertEqual(got['r1']['parent'], 'c0ffee01-aaaa')
+        for rid in ('r2', 'r3', 'r4', 'r5', 'r6'):
+            self.assertNotIn('parent', got[rid], rid)
+
     def test_the_answer_is_capped(self):
         raw = [self.good(id=f'c{i:07d}-aaaa') for i in range(serve.MAX_NEWS + 50)]
         self.assertEqual(len(serve.agent_news(raw)), serve.MAX_NEWS)
@@ -1199,6 +1256,55 @@ class AgentNewsUnitTest(unittest.TestCase):
         for raw in ({'a': 1}, 'x', None, 5):
             with self.assertRaises(dm.ModuleError, msg=repr(raw)):
                 serve.agent_news(raw)
+
+
+class ProjectCommentsReplyTest(AgentEnv):
+    """`ProjectComments.reply` (0.34): необовʼязкова `reply` модуля; без неї — `None`, а не помилка."""
+
+    def replier(self, sp):
+        self.mkcm('replier', server=REPLY_SERVER, settings=[])
+        dm.write_module_state(sp, 'replier', enabled=True, settings={})
+        tcr._write(os.path.join(sp['path'], 'answer.json'), '[]')
+
+    def log(self, sp):
+        f = os.path.join(sp['path'], 'replied.log')
+        if not os.path.exists(f):
+            return []
+        with open(f, encoding='utf-8') as fh:
+            return [json.loads(ln) for ln in fh.read().splitlines()]
+
+    def test_a_module_without_reply_answers_none_and_calls_nothing(self):
+        self.enable_memo_in(self.plain)
+        self.assertIsNone(self.pc(self.plain).prov.fn('reply'))
+        self.assertIsNone(self.pc(self.plain).reply({}, 'px', 'c0ffee01-aaaa', 'текст'))
+        self.assertEqual([e for e in self.svc.log if e[0] == 'POST'], [])
+
+    def test_the_module_gets_channel_id_text_and_ai_as_the_author(self):
+        self.replier(self.plain)
+        got = self.pc(self.plain).reply({}, 'px', 'c0ffee01-aaaa', 'це про кнопку?')
+        self.assertEqual(got, {'id': 'r-1'})
+        self.assertEqual(self.log(self.plain), [[self.chan(self.plain, 'px'), 'c0ffee01-aaaa', 'це про кнопку?', 'AI']])
+
+    def test_the_internal_channel_is_used_on_request(self):
+        self.replier(self.plain)
+        self.pc(self.plain).reply({}, 'px', 'c0ffee01-aaaa', 'x', internal=True)
+        self.assertEqual(self.log(self.plain)[0][0], self.chan(self.plain, 'px', internal=True))
+
+    def test_an_unsafe_id_never_reaches_the_module(self):
+        self.replier(self.plain)
+        pc = self.pc(self.plain)
+        for pid in PinIdWhitelistTest.BAD + [None, 5]:
+            with self.subTest(bad=pid), self.assertRaises(dm.ModuleError):
+                pc.reply({}, 'px', pid, 'x')
+        self.assertEqual(self.log(self.plain), [])
+
+    def test_a_space_without_a_provider_is_role_off_and_a_broken_module_is_its_error(self):
+        with self.assertRaises(spaces.RoleOff):
+            self.pc(self.new_space('Bare')).reply({}, 'px', 'c0ffee01-aaaa', 'x')
+        self.break_module(self.liga)
+        self.use(self.liga)
+        with self.assertRaises(dm.ModuleError):
+            self.pc(self.liga).reply({}, 'lx', 'c0ffee01-aaaa', 'x')
 
 
 class ServerEnv(AgentEnv):
@@ -1438,6 +1544,65 @@ class CommentNewsRouteTest(ServerEnv):
         self.answer(self.plain, [])
         st, raw = self.news()
         self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'items': []}), 'модуль `answer` не має `recent`')
+
+    # --- 0.34: відповіді агента на відкриті локальні піни ---
+    def lpin(self, pid, status='open', replies=None, version='3/p', **kw):
+        p = self.local_pin(pid, 'локальний', status=status)
+        p['meta'] = {'version': version}
+        if replies is not None:
+            p['replies'] = replies
+        p.update(kw)
+        return p
+
+    def test_local_agent_replies_on_open_pins_are_news_even_without_a_module(self):
+        self.set_local(self.plain, 'px', [
+            self.lpin('11111111-aaaa', replies=[
+                {'id': 'r-ai', 'author': 'AI', 'text': 'питання?', 'ts': '19.10.2026 11:00', 'agent': True},
+                {'id': 'r-human', 'author': 'Ольга', 'text': 'відповідь людини', 'ts': '19.10.2026 11:05'}]),
+            self.lpin('22222222-bbbb', status='resolved', replies=[{'id': 'r-closed', 'author': 'AI', 'text': 'x', 'ts': 't', 'agent': True}]),
+            self.lpin('33333333-cccc')])
+        st, raw = self.news()
+        self.assertEqual(st, 200, raw)
+        self.assertEqual(json.loads(raw), {'supported': True, 'items': [
+            {'id': 'r-ai', 'ts': '19.10.2026 11:00', 'author': 'AI', 'status': 'open', 'version': '3/p', 'parent': '11111111-aaaa'}]})
+
+    def test_the_local_replies_are_appended_to_the_module_items(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'Новий')])
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': 'r-ai', 'author': 'AI', 'text': 'q', 'ts': '19.10.2026 11:00', 'agent': True}])])
+        st, raw = self.news()
+        items = json.loads(raw)['items']
+        self.assertEqual((st, [c['id'] for c in items], items[1].get('parent')), (200, ['c0ffee01-aaaa', 'r-ai'], '11111111-aaaa'))
+        self.assertNotIn('parent', items[0])
+
+    def test_a_local_file_alone_makes_the_answer_supported_but_a_module_without_recent_and_no_file_does_not(self):
+        self.answer(self.plain, [])
+        self.assertEqual(json.loads(self.news()[1]), {'supported': False, 'items': []})
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa')])
+        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'items': []})
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': 'r-ai', 'author': 'AI', 'text': 'q', 'ts': '19.10.2026 11:00', 'agent': True}])])
+        self.assertEqual([c['id'] for c in json.loads(self.news()[1])['items']], ['r-ai'], 'модуль без `recent` + локальний файл — локальні новини')
+
+    def test_hostile_local_ids_and_text_do_not_pass(self):
+        self.set_local(self.plain, 'px', [
+            self.lpin('a b', replies=[{'id': 'r1', 'agent': True}]),
+            self.lpin('11111111-aaaa', version='3\x1b[31m/p', replies=[
+                {'id': 'x&y=1', 'agent': True}, {'id': 'r-ok', 'author': 'A\nI\x07', 'ts': '19.10\n2026', 'agent': True}, 'junk', None])])
+        items = json.loads(self.news()[1])['items']
+        self.assertEqual(items, [{'id': 'r-ok', 'ts': '19.10 2026', 'author': 'A I', 'status': 'open', 'version': '3[31m/p', 'parent': '11111111-aaaa'}])
+
+    def test_an_unreadable_local_file_is_no_source(self):
+        tcr._write(os.path.join(self.plain['path'], 'px', '.dc-local-comments.json'), '{broken')
+        self.assertEqual(json.loads(self.news()[1]), {'supported': False, 'items': []})
+        tcr._write(os.path.join(self.plain['path'], 'px', '.dc-local-comments.json'), '{"not": "a list"}')
+        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'items': []})
+
+    def test_the_local_news_are_capped(self):
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': f'r{i}', 'author': 'AI', 'ts': 't', 'agent': True} for i in range(serve.MAX_NEWS * 4)])])
+        self.assertEqual(len(json.loads(self.news()[1])['items']), serve.MAX_NEWS)
 
 
 if __name__ == '__main__':

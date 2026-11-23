@@ -21,6 +21,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from urllib.parse import unquote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
@@ -73,9 +74,10 @@ class FakeNet:
     """Замість мережі (шов `_open` модуля `supabase-comments`): GET віддає фікстуру проєктних пінів, PATCH записується і
     підтверджується списком змінених рядків (модуль просить `return=representation`)."""
 
-    def __init__(self, project=None, get_error=None):
+    def __init__(self, project=None, get_error=None, replies=None):
         self.project = project or []
         self.get_error = get_error
+        self.replies = replies or []           # рядки `comment_replies` (0.34): `list` модуля читає їх поруч із коментарями
         self.calls = []
 
     def __call__(self, req, timeout=None, context=None):
@@ -87,12 +89,24 @@ class FakeNet:
         if req.get_method() == 'GET':
             if self.get_error:
                 raise self.get_error
+            if '/rest/v1/comment_replies' in req.full_url:
+                return _Resp(json.dumps(self.replies).encode('utf-8'))
+            one = re.search(r'[?&]id=eq\.([^&]+)&project_id=[^&]+&select=id,status$', req.full_url)
+            if one:                            # перевірка перед `reply` модуля: чи коментар є й відкритий
+                want = unquote(one.group(1))
+                return _Resp(json.dumps([{'id': p['id'], 'status': p['status']} for p in self.project
+                                         if p['id'] == want]).encode('utf-8'))
             return _Resp(json.dumps(self.project).encode('utf-8'))
+        if req.get_method() == 'POST':         # `reply` модуля: POST у `comment_replies` з `return=representation`
+            return _Resp(json.dumps([{'id': json.loads(req.data.decode('utf-8'))['id']}]).encode('utf-8'))
         pin_id = re.search(r'[?&]id=eq\.([^&]+)', req.full_url).group(1)
         return _Resp(json.dumps([{'id': pin_id}]).encode('utf-8'))
 
     def patches(self):
         return [c for c in self.calls if c['method'] == 'PATCH']
+
+    def posts(self):
+        return [c for c in self.calls if c['method'] == 'POST']
 
 
 class InboxCase(unittest.TestCase):
@@ -581,6 +595,333 @@ class DryRun(InboxCase):
         self.assertEqual(self.net.calls, [])
 
 
+def _reply(rid, text, author='Ольга', ts='20.09.2026 10:05', **kw):
+    r = {'id': rid, 'author': author, 'text': text, 'ts': ts}
+    r.update(kw)
+    return r
+
+
+class ThreadOutput(InboxCase):
+    """0.34: під пінем — гілка відповідей (`↳ відповіді (N):`) і причина відсутнього знімка (`↳ без знімка:`)."""
+
+    def listing(self, argv=()):
+        rc, out, err = self.run_main(list(argv))
+        self.assertEqual((rc, err), (0, ''), out)
+        return out
+
+    def test_local_thread_lists_replies_with_author_time_and_ai_mark(self):
+        self.set_local([_pin('11111111-aaaa', 'пін', replies=[
+            _reply('r1', 'це про кнопку?', author='Ольга', ts='20.09.2026 10:05'),
+            _reply('r2', 'так, у шапці', author='Ольга', ts='20.09.2026 10:07'),
+            _reply('r3', 'зрозумів', author='AI', ts='21.09.2026 09:30', agent=True)])])
+        out = self.listing()
+        self.assertIn('          ↳ відповіді (3):', out)
+        self.assertIn('              Ольга, 20.09 10:05: це про кнопку?', out)
+        self.assertIn('              AI, 21.09 09:30: зрозумів', out)
+        self.assertLess(out.index('відповіді (3)'), out.index('Разом до відпрацювання'))
+
+    def test_a_pin_without_replies_has_no_thread_line(self):
+        self.set_local([_pin('11111111-aaaa', 'пін'), _pin('22222222-bbbb', 'пін2', replies=[])])
+        self.assertNotIn('відповіді (', self.listing())
+
+    def test_an_agent_reply_is_marked_ai_whatever_its_author_field_says(self):
+        self.set_local([_pin('11111111-aaaa', 'пін', replies=[_reply('r1', 'x', author='Хтось', agent=True),
+                                                              _reply('r2', 'y', author='AI')])])
+        out = self.listing()
+        self.assertIn('AI, 20.09 10:05: x', out)
+        self.assertIn('AI, 20.09 10:05: y', out, 'людина з імʼям AI — просто автор AI')
+        self.assertNotIn('Хтось', out)
+
+    def test_only_the_last_20_are_shown_but_the_header_counts_all(self):
+        self.set_local([_pin('11111111-aaaa', 'пін',
+                             replies=[_reply(f'r{i}', f'відповідь №{i:02d}') for i in range(25)])])
+        out = self.listing()
+        self.assertIn('відповіді (25):', out)
+        self.assertNotIn('відповідь №04', out)
+        self.assertIn('відповідь №05', out)
+        self.assertIn('відповідь №24', out)
+        self.assertEqual(out.count('Ольга, 20.09 10:05:'), 20)
+
+    def test_each_line_is_one_clean_line_of_at_most_300(self):
+        self.set_local([_pin('11111111-aaaa', 'пін', replies=[
+            _reply('r1', 'рядок 1\nрядок 2\x1b[31m ' + 'я' * 500, author='О\nлена'),
+            _reply('r2', 'a', ts='не час\x07'), 'сміття', None])])
+        out = self.listing()
+        lines = [ln for ln in out.splitlines() if ln.startswith('              ')]
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(len(ln.strip()) <= 300 for ln in lines), [len(ln) for ln in lines])
+        self.assertIn('О лена, 20.09 10:05: рядок 1 рядок 2[31m я', lines[0])
+        self.assertNotIn('\x1b', out)
+        self.assertIn('відповіді (2):', out, 'сміття (не обʼєкт) не рахується')
+
+    def test_project_pin_replies_come_from_the_module(self):
+        pid = 'b7e1c0d2-5f6a-4b7c-8d9e-0f1a2b3c4d5e'
+        self.net.project = [_proj(pid, 'командний', meta={'version': '3', 'assignee': 'claude'})]
+        self.net.replies = [{'id': 'r1', 'comment_id': pid, 'author': 'Олег', 'text': 'як там?', 'ts': '20.09.2026 11:00'},
+                            {'id': 'r2', 'comment_id': pid, 'author': 'AI', 'text': 'працюю', 'ts': '20.09.2026 11:30', 'agent': True}]
+        out = self.listing()
+        self.assertIn('відповіді (2):', out)
+        self.assertIn('Олег, 20.09 11:00: як там?', out)
+        self.assertIn('AI, 20.09 11:30: працюю', out)
+
+    def test_shot_miss_prints_the_ukrainian_reason_for_every_code(self):
+        want = {'too-big': 'елемент завеликий для знімка', 'no-lib': 'бібліотека знімків не завантажилась',
+                'timeout': 'знімок не встиг', 'render': 'знімок не вдався',
+                'detached': 'елемент зник зі сторінки до збереження', 'upload': 'знімок не завантажився в сховище'}
+        self.assertEqual(set(inbox.SHOT_MISS), set(want))
+        for code, text in want.items():
+            with self.subTest(code=code):
+                self.set_local([_pin('11111111-aaaa', 'пін', meta={'version': '3', 'shotMiss': code})])
+                self.assertIn(f'          ↳ без знімка: {text}\n', self.listing())
+
+    def test_unknown_shot_miss_is_printed_clean_and_no_shot_miss_means_no_line(self):
+        self.set_local([_pin('11111111-aaaa', 'пін', meta={'version': '3', 'shotMiss': 'нове\x1b[31m\nкод'})])
+        out = self.listing()
+        self.assertIn('↳ без знімка: нове[31m код', out)
+        self.assertNotIn('\x1b', out)
+        for miss in (None, '', 5, ['x']):
+            self.set_local([_pin('11111111-aaaa', 'пін', meta={'version': '3', 'shotMiss': miss})])
+            self.assertNotIn('без знімка', self.listing(), repr(miss))
+
+    def test_the_list_hint_shows_a_reply_example_with_the_task_flag(self):
+        self.set_local([_pin('11111111-aaaa', 'пін')])
+        out = self.listing()
+        self.assertIn('Відповісти в гілці: python3 bin/inbox.py reply <id> --text "', out)
+        out = self.listing(['--task', 'fx'])
+        self.assertIn('python3 bin/inbox.py --task fx reply <id> --text', out)
+
+    def test_help_and_epilog_carry_a_reply_example(self):
+        rc, out, _ = self.run_main(['-h'])
+        self.assertEqual(rc, 0)
+        self.assertRegex(out, r'reply \S+ --text')
+        self.assertIn('{resolve,reply}', out)
+        rc, out, _ = self.run_main(['reply', '-h'])
+        self.assertEqual(rc, 0)
+        self.assertIn('--text', out)
+        self.assertIn('--dry-run', out)
+
+
+class ReplyLocal(InboxCase):
+    PIN = '11111111-aaaa'
+
+    def setUp(self):
+        super().setUp()
+        self.set_local([_pin(self.PIN, 'перший'), _pin('22222222-bbbb', 'другий')])
+
+    def test_the_reply_is_appended_with_exact_fields_and_nothing_else_changes(self):
+        before = self.local_pins()
+        rc, out, _ = self.run_main(['reply', '111111', '--text', '  це про кнопку в шапці?  '])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.strip(), '✓ 11111111 відповідь додано (локальний)')
+        after = self.local_pins()
+        self.assertEqual(after[1], before[1], 'сусідній пін не чіпано')
+        [r] = after[0]['replies']
+        self.assertEqual(set(r), {'id', 'author', 'text', 'ts', 'agent'})
+        self.assertEqual((r['author'], r['text'], r['agent']), ('AI', 'це про кнопку в шапці?', True))
+        self.assertRegex(r['ts'], r'^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$')
+        self.assertRegex(r['id'], r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
+        expect = copy.deepcopy(before[0])
+        expect['replies'] = [r]
+        self.assertEqual(after[0], expect, 'решта полів піна — ті самі')
+        self.assertEqual(self.local_bytes().decode('utf-8'), json.dumps(after, ensure_ascii=False, indent=1))
+        self.assertEqual(self.net.calls, [], 'локальна відповідь не йде в мережу')
+
+    def test_a_second_reply_is_appended_after_existing_ones_with_a_new_id(self):
+        self.set_local([_pin(self.PIN, 'перший', replies=[_reply('r-old', 'людина', agent=None)])])
+        self.run_main(['reply', '111111', '--text', 'раз'])
+        self.run_main(['reply', '111111', '--text', 'два'])
+        rs = self.local_pins()[0]['replies']
+        self.assertEqual([r['text'] for r in rs], ['людина', 'раз', 'два'])
+        self.assertEqual(len({r['id'] for r in rs}), 3)
+
+    def test_a_write_between_the_lookup_and_the_write_is_not_lost(self):
+        """Файл перечитується безпосередньо перед записом: вкладка канваса дописала пін, поки йшов пошук."""
+        real = inbox.find_target
+        tab_pin = _pin('99999999-tab0', 'з вкладки')
+
+        def find_then_tab_writes(*a, **k):
+            got = real(*a, **k)
+            self.set_local(self.local_pins() + [tab_pin])
+            return got
+        with mock.patch.object(inbox, 'find_target', side_effect=find_then_tab_writes):
+            rc, out, _ = self.run_main(['reply', '111111', '--text', 'відповідь'])
+        self.assertEqual(rc, 0, out)
+        after = self.local_pins()
+        self.assertEqual([p['id'] for p in after], [self.PIN, '22222222-bbbb', '99999999-tab0'], 'пін вкладки не загублено')
+        self.assertEqual([r['text'] for r in after[0]['replies']], ['відповідь'])
+
+    def test_a_pin_closed_in_the_window_refuses_and_keeps_the_tabs_write(self):
+        real = inbox.find_target
+
+        def find_then_tab_closes(*a, **k):
+            got = real(*a, **k)
+            pins = self.local_pins()
+            pins[0]['status'] = 'resolved'
+            self.set_local(pins)
+            return got
+        with mock.patch.object(inbox, 'find_target', side_effect=find_then_tab_closes):
+            rc, out, _ = self.run_main(['reply', '111111', '--text', 'відповідь'])
+        self.assertEqual(rc, 1)
+        self.assertIn('пін закрито, поки йшов пошук', out)
+        self.assertNotIn('replies', self.local_pins()[0])
+        self.assertEqual(self.local_pins()[0]['status'], 'resolved')
+
+    def test_a_pin_deleted_in_the_window_refuses(self):
+        real = inbox.find_target
+
+        def find_then_tab_deletes(*a, **k):
+            got = real(*a, **k)
+            self.set_local(self.local_pins()[1:])
+            return got
+        with mock.patch.object(inbox, 'find_target', side_effect=find_then_tab_deletes):
+            rc, out, _ = self.run_main(['reply', '111111', '--text', 'відповідь'])
+        self.assertEqual(rc, 1)
+        self.assertIn('піна вже нема', out)
+        self.assertEqual([p['id'] for p in self.local_pins()], ['22222222-bbbb'])
+
+    def test_dry_run_prints_the_plan_and_writes_nothing(self):
+        raw = self.local_bytes()
+        rc, out, _ = self.run_main(['reply', '111111', '--text', 'питання?', '--dry-run'])
+        self.assertEqual(rc, 0, out)
+        self.assertIn('[dry-run]', out)
+        self.assertIn('11111111', out)
+        self.assertIn('"питання?"', out)
+        self.assertIn('нічого не записано', out)
+        self.assertEqual(self.local_bytes(), raw)
+        self.assertEqual(self.net.calls, [])
+
+    def test_a_closed_pin_is_refused_and_the_file_is_untouched(self):
+        self.set_local([_pin(self.PIN, 'закритий', status='resolved', resolveReason='ok')])
+        raw = self.local_bytes()
+        rc, out, _ = self.run_main(['reply', '111111', '--text', 'x'])
+        self.assertEqual(rc, 1)
+        self.assertIn('✗ 11111111: пін закрито — відповідати можна лише на відкритий', out)
+        self.assertEqual(self.local_bytes(), raw)
+
+    def test_an_unknown_or_ambiguous_prefix_is_refused(self):
+        raw = self.local_bytes()
+        rc, out, _ = self.run_main(['reply', 'deadbeef', '--text', 'x'])
+        self.assertEqual(rc, 1)
+        self.assertIn('не знайдено', out)
+        self.set_local([_pin('aaaaaa01-x', 'a'), _pin('aaaaaa02-y', 'b')])
+        raw = self.local_bytes()
+        rc, out, _ = self.run_main(['reply', 'aaaaaa', '--text', 'x'])
+        self.assertEqual(rc, 1)
+        self.assertIn('неоднозначний', out)
+        self.assertEqual(self.local_bytes(), raw)
+
+    def test_empty_and_overlong_text_are_usage_errors_before_anything_is_read(self):
+        raw = self.local_bytes()
+        with mock.patch.object(inbox, 'load_tasks', side_effect=AssertionError('задачу читали до перевірки тексту')):
+            for text, word in (('', 'порожній'), ('   \n ', 'порожній'), ('я' * 4001, 'задовгий')):
+                with self.subTest(len=len(text)):
+                    rc, _, err = self.run_main(['reply', '111111', '--text', text])
+                    self.assertEqual(rc, 2)
+                    self.assertIn(word, err)
+        self.assertEqual(self.local_bytes(), raw)
+
+    def test_exactly_4000_characters_is_accepted(self):
+        rc, out, _ = self.run_main(['reply', '111111', '--text', 'я' * 4000])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(self.local_pins()[0]['replies'][0]['text']), 4000)
+
+    def test_text_is_required_and_the_flag_task_goes_before_the_subcommand(self):
+        rc, _, err = self.run_main(['reply', '111111'])
+        self.assertEqual(rc, 2)
+        self.assertIn('--text', err)
+        rc, out, _ = self.run_main(['--task', 'fx', 'reply', '111111', '--text', 'x'])
+        self.assertEqual(rc, 0, out)
+        rc, _, err = self.run_main(['--task', 'nope', 'reply', '111111', '--text', 'x'])
+        self.assertEqual(rc, 2)
+        self.assertIn("немає задачі 'nope'", err)
+
+    def test_the_reply_appears_in_the_listing_afterwards_marked_ai(self):
+        self.run_main(['reply', '111111', '--text', 'уточнення?'])
+        rc, out, _ = self.run_main([])
+        self.assertIn('відповіді (1):', out)
+        self.assertRegex(out, r'AI, \d{2}\.\d{2} \d{2}:\d{2}: уточнення\?')
+
+
+class ReplyProject(InboxCase):
+    PID = 'b7e1c0d2-5f6a-4b7c-8d9e-0f1a2b3c4d5e'
+
+    def setUp(self):
+        super().setUp()
+        self.set_local([_pin('11111111-aaaa', 'локальний')])
+        self.net.project = [_proj(self.PID, 'командний', meta={'version': '3', 'assignee': 'claude'}),
+                            _proj('c0ffee00-1111', 'чужий колег'),
+                            _proj('d00dfeed-2222', 'закритий', status='resolved', meta={'version': '3', 'assignee': 'claude'})]
+
+    def test_the_post_has_agent_true_ai_the_channel_and_the_text(self):
+        raw = self.local_bytes()
+        rc, out, _ = self.run_main(['reply', 'b7e1c0', '--text', '  уточни, будь ласка  '])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.strip(), '✓ b7e1c0d2 відповідь додано (проєкт)')
+        [call] = self.net.posts()
+        self.assertEqual(call['url'], f'{sbconf.SB_URL}/rest/v1/comment_replies?select=id')
+        body = call['body']
+        self.assertTrue(body.pop('id'))
+        self.assertRegex(body.pop('ts'), r'^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$')
+        self.assertEqual(body, {'comment_id': self.PID, 'project_id': 'dc/fixture-inbox-test', 'author': 'AI',
+                                'text': 'уточни, будь ласка', 'agent': True})
+        self.assertIs(body['agent'], True)
+        h = call['headers']
+        self.assertEqual((h['apikey'], h['authorization'], h['prefer']),
+                         (sbconf.SB_KEY, f'Bearer {sbconf.SB_KEY}', 'return=representation'))
+        self.assertEqual(self.net.patches(), [], 'відповідь не закриває пін')
+        self.assertEqual(self.local_bytes(), raw, 'командна відповідь не чіпає локальний файл')
+
+    def test_a_pin_not_assigned_to_ai_is_refused_without_any_post(self):
+        rc, out, _ = self.run_main(['reply', 'c0ffee00', '--text', 'x'])
+        self.assertEqual(rc, 1)
+        self.assertIn('✗ c0ffee00: пін не доручено AI — відповідати можна лише в дорученому', out)
+        self.assertEqual(self.net.posts(), [])
+
+    def test_a_closed_team_pin_is_refused_without_any_post(self):
+        rc, out, _ = self.run_main(['reply', 'd00dfeed', '--text', 'x'])
+        self.assertEqual(rc, 1)
+        self.assertIn('пін закрито — відповідати можна лише на відкритий', out)
+        self.assertEqual(self.net.posts(), [])
+
+    def test_a_module_without_reply_is_refused_with_its_own_message(self):
+        real = serve.deai_modules.Module.fn
+        with mock.patch.object(serve.deai_modules.Module, 'fn',
+                               lambda self, name: None if name == 'reply' else real(self, name)):
+            rc, out, _ = self.run_main(['reply', 'b7e1c0', '--text', 'x'])
+            self.assertEqual(rc, 1)
+            self.assertIn('✗ b7e1c0d2: модуль коментарів не підтримує відповідей', out)
+            rc, out, _ = self.run_main(['reply', 'b7e1c0', '--text', 'x', '--dry-run'])
+            self.assertEqual(rc, 1)
+            self.assertIn('не підтримує відповідей', out)
+        self.assertEqual(self.net.posts(), [])
+
+    def test_a_failing_post_makes_the_exit_nonzero_and_says_who_refused(self):
+        def boom(req, timeout=None, context=None):
+            if req.get_method() == 'POST':
+                raise OSError('503')
+            return FakeNet.__call__(self.net, req, timeout, context)
+        sbconf.patch_open(self, boom)
+        rc, out, _ = self.run_main(['reply', 'b7e1c0', '--text', 'x'])
+        self.assertEqual(rc, 1)
+        self.assertIn('✗ b7e1c0d2: Supabase не прийняв', out)
+        self.assertNotIn('відповідь додано', out)
+
+    def test_dry_run_posts_nothing_and_prints_neither_url_nor_key(self):
+        rc, out, _ = self.run_main(['reply', 'b7e1c0', '--text', 'питання?', '--dry-run'])
+        self.assertEqual(rc, 0, out)
+        self.assertIn('[dry-run] Supabase: reply dc/fixture-inbox-test ' + self.PID + ' "питання?"', out)
+        self.assertIn('нічого не записано', out)
+        self.assertEqual(self.net.posts(), [])
+        self.assertNotIn(sbconf.SB_URL, out)
+        self.assertNotIn(sbconf.SB_KEY, out)
+
+    def test_a_local_pin_wins_over_the_project_and_never_goes_to_the_net(self):
+        rc, out, _ = self.run_main(['reply', '111111', '--text', 'x'])
+        self.assertEqual(rc, 0, out)
+        self.assertIn('(локальний)', out)
+        self.assertEqual(self.net.posts(), [])
+
+
 class TaskFlag(InboxCase):
     """`--task <id>` (fb-07102026-e627c2): `current` один на машину, а паралельна
     сесія його перемикає — тож без явної задачі inbox і `resolve` читали й ПИСАЛИ
@@ -718,7 +1059,7 @@ class TaskFlag(InboxCase):
         rc, out, _ = self.run_main(['-h'])
         self.assertEqual(rc, 0)
         self.assertIn('--task', out)
-        self.assertIn('паралельних сесій', out)
+        self.assertIn('паралельних сесій', ' '.join(out.split()))     # перенос рядка в довідці залежить від ширини колонки підкоманд
 
     def test_descriptions_do_not_claim_the_task_is_always_the_current(self):
         """Описи казали «поточної задачі», хоч із `--task` це названа."""

@@ -48,9 +48,13 @@ The designer pins comments on the mockup. Read the open ones and resolve them:
     python3 <deai>/bin/inbox.py --task <task-id>
     python3 <deai>/bin/inbox.py resolve <comment-id> --reason "what you changed"
     python3 <deai>/bin/inbox.py --task <task-id> resolve <comment-id> --reason "what you changed"
+    python3 <deai>/bin/inbox.py reply <comment-id> --text "question or note"
 
 `--task` names a task of this space instead of the current one (use it when several sessions work in parallel). A
 reason is required: it is what the designer reads.
+
+People's replies under a pin are part of the task: read them with the comment. When the meaning of a comment is
+ambiguous, ask in its thread with `reply` instead of guessing; a reply on a team pin is visible to colleagues.
 
 ## Modules
 

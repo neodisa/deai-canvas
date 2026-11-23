@@ -3459,6 +3459,12 @@ def _agent_meta(meta):
             del meta['version']
     if 'url' in meta:
         meta['url'] = agent_line(meta['url'], 500)
+    if 'shotMiss' in meta:                                          # код причини, чому нема знімка (`inbox` друкує його словом)
+        miss = agent_line(meta['shotMiss'], 40) if isinstance(meta['shotMiss'], str) else ''
+        if miss:
+            meta['shotMiss'] = miss
+        else:
+            del meta['shotMiss']
     if 'seq' in meta:                                               # `P#<seq>`
         seq = _agent_version(meta['seq'])
         if seq is None:
@@ -3505,6 +3511,36 @@ def _agent_fp(fp):
     return fp
 
 
+#: Скільки відповідей під пінем бере агент (решту відкидаємо) і скільки знаків тексту відповіді (як межа `reply` модуля).
+MAX_AGENT_REPLIES = 200
+AGENT_REPLY_TEXT = 4000
+
+
+def _agent_replies(raw):
+    """Відповіді піна (форма CommentLayer: `id, author, text, ts[, editedTs][, agent]`) → безпечний список ≤ `MAX_AGENT_REPLIES`.
+    `id` — за білим списком `_AGENT_ID` (інакше відповідь відкинута), текст — з очищенням як у тексту піна, однорядкові поля —
+    через `agent_line`. Не список → `[]`; зіпсований елемент пропускається (не рахуючись у межу)."""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for r in raw[:MAX_AGENT_REPLIES * 4]:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get('id')
+        if not isinstance(rid, str) or not _AGENT_ID.fullmatch(rid):
+            continue
+        item = {'id': rid, 'author': agent_line(r.get('author'), 200), 'text': _agent_text(r.get('text'), AGENT_REPLY_TEXT),
+                'ts': agent_line(r.get('ts'), 40)}
+        if agent_line(r.get('editedTs'), 40):
+            item['editedTs'] = agent_line(r.get('editedTs'), 40)
+        if r.get('agent') is True:
+            item['agent'] = True
+        out.append(item)
+        if len(out) >= MAX_AGENT_REPLIES:
+            break
+    return out
+
+
 def agent_pin(c):
     """Коментар модуля (форма CommentLayer: `id, author, text, status, fp, htmlSnapshot, meta, bornV, resolvedV,
     resolveReason, ts`) → рядок у формі REST ЛІГА (`id, text, status, author, ts, meta, born_v, fp, html_snapshot,
@@ -3522,7 +3558,8 @@ def agent_pin(c):
     snap = c.get('htmlSnapshot')
     snap = ({'text': _agent_text(snap.get('text'), 2000), 'outerHTML': _agent_text(snap.get('outerHTML'), 20000)}
             if isinstance(snap, dict) else None)
-    return {'id': pid,
+    replies = _agent_replies(c.get('replies'))
+    pin = {'id': pid,
             'text': _agent_text(c.get('text'), 10000),
             'status': 'resolved' if c.get('status') == 'resolved' else 'open',
             'author': agent_line(c.get('author'), 200),
@@ -3533,6 +3570,9 @@ def agent_pin(c):
             'html_snapshot': snap if snap and (snap['text'] or snap['outerHTML']) else None,
             'resolved_v': _agent_version(c.get('resolvedV')),
             'resolve_reason': agent_line(c.get('resolveReason'), 1000) or None}
+    if replies:                                                     # лише коли є: пін без відповідей — як до 0.34
+        pin['replies'] = replies
+    return pin
 
 
 def agent_pins(raw):
@@ -3569,7 +3609,7 @@ MAX_NEWS = 200
 
 
 def agent_news(raw):
-    """Відповідь `recent` модуля → `[{id, ts, author, status: 'open', version}]` лише відкритих, ≤ `MAX_NEWS`. Не список —
+    """Відповідь `recent` модуля → `[{id, ts, author, status: 'open', version[, parent]}]` лише відкритих, ≤ `MAX_NEWS`. Не список —
     `ModuleError`. Поля — як у `agent_pin`: `id` за `_AGENT_ID` (інакше пропуск), однорядкові тексти без керівних символів."""
     if not isinstance(raw, list):
         raise deai_modules.ModuleError('module-error', message='the comments module must answer recent() with a list')
@@ -3583,10 +3623,48 @@ def agent_news(raw):
         seen.add(pid)
         v = c.get('version')
         ver = str(v) if isinstance(v, int) and not isinstance(v, bool) else agent_line(v, 200)
-        out.append({'id': pid, 'ts': agent_line(c.get('ts'), 40), 'author': agent_line(c.get('author'), 200),
-                    'status': 'open', 'version': ver or None})
+        item = {'id': pid, 'ts': agent_line(c.get('ts'), 40), 'author': agent_line(c.get('author'), 200),
+                'status': 'open', 'version': ver or None}
+        parent = c.get('parent')
+        if isinstance(parent, str) and _AGENT_ID.fullmatch(parent):  # відповідь: `parent` — id коментаря (0.34)
+            item['parent'] = parent
+        out.append(item)
         if len(out) >= MAX_NEWS:
             break
+    return out
+
+
+def local_agent_news(path):
+    """Відповіді агента (`agent: true`) на ВІДКРИТІ піни локального файла задачі — у формі елементів `agent_news` (з `parent`);
+    `None`, коли файла нема чи він нечитабельний (джерела нема), `[]` — файл є, а відповідей нема. Лише читання; усе, що
+    йде в маршрут, чиститься як у `agent_pin` (`id` за `_AGENT_ID`, однорядкові поля без керівних символів), ≤ `MAX_NEWS`."""
+    try:
+        if not os.path.isfile(path):
+            return None
+        with open(path, encoding='utf-8') as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    out = []
+    for c in data if isinstance(data, list) else ():
+        if not isinstance(c, dict) or c.get('status') == 'resolved' or not isinstance(c.get('replies'), list):
+            continue
+        pid = c.get('id')
+        if not isinstance(pid, str) or not _AGENT_ID.fullmatch(pid):
+            continue
+        meta = c.get('meta') if isinstance(c.get('meta'), dict) else {}
+        v = meta.get('version')
+        ver = str(v) if isinstance(v, int) and not isinstance(v, bool) else agent_line(v, 200)
+        for r in c['replies'][:MAX_AGENT_REPLIES * 4]:
+            if not isinstance(r, dict) or r.get('agent') is not True:
+                continue
+            rid = r.get('id')
+            if not isinstance(rid, str) or not _AGENT_ID.fullmatch(rid):
+                continue
+            out.append({'id': rid, 'ts': agent_line(r.get('ts'), 40), 'author': agent_line(r.get('author'), 200),
+                        'status': 'open', 'version': ver or None, 'parent': pid})
+            if len(out) >= MAX_NEWS:
+                return out
     return out
 
 
@@ -3703,6 +3781,17 @@ class ProjectComments:
         if self.prov.fn('recent') is None:
             return None
         return agent_news(self._module('recent', task, tid, False))
+
+    def reply(self, task, tid, pin_id, text, internal=False):
+        """Відповісти на коментар від імені агента (`reply(ctx, channel, id, text, author)` необовʼязкової функції модуля; автор
+        — `AI`). Модуль без `reply` → `None` («не підтримує»), а не помилка: викликач скаже це людині. Решту (коментар існує й
+        відкритий, межі тексту й автора) перевіряє сам модуль. `id` — лише за білим списком `_AGENT_ID`, як у `resolve`."""
+        self._check()
+        if self.prov.fn('reply') is None:
+            return None
+        if not isinstance(pin_id, str) or not _AGENT_ID.fullmatch(pin_id):
+            raise deai_modules.ModuleError('module-error', message='comments: the pin id is not a safe identifier')
+        return self._module('reply', task, tid, internal, pin_id, text, 'AI')
 
     def resolve(self, task, tid, pin_id, reason, iteration=None, internal=False):
         """Закрити пін модулем (`resolve(ctx, channel, id, reason[, iteration])`); номер ітерації — лише коли
@@ -7269,16 +7358,21 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(task, dict):
             self._send_json({'ok': False, 'error': 'unknown task'}, status=404)
             return
+        # 0.34: відповіді агента на ВІДКРИТІ локальні піни (їх дописує `inbox.py reply` у локальний файл) — теж новини вкладки.
+        local = local_agent_news(self._local_file(task))
         pc = ProjectComments(spaces.active_space())
         if pc.kind != 'module':
-            self._send_json({'supported': False, 'items': []})
+            self._send_json({'supported': local is not None, 'items': local or []})
             return
         try:
             items = pc.recent(task, tid)
         except (OSError, deai_modules.ModuleError) as e:
             self._send_json({'supported': True, 'items': [], 'error': agent_line(str(e), 300)})
             return
-        self._send_json({'supported': items is not None, 'items': items or []})
+        if items is None and local is None:
+            self._send_json({'supported': False, 'items': []})
+            return
+        self._send_json({'supported': True, 'items': (items or []) + (local or [])})
 
     # ---------- Локальні коментарі (фідбек Claude, НЕ в Supabase, у файлі) ----------
     def _local_file(self, task):

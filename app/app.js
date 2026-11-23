@@ -7104,10 +7104,15 @@ async function pollTabNews(force = false) {
       try { r = await api(`/api/comment-news?task=${encodeURIComponent(x.id)}`); } catch (e) { r = null; }
       /* `error` при supported:true — команда впала (квота/мережа): порожній список НЕ основа, інакше після одужання усе «нове». */
       if (!r || !r.supported || r.error || !Array.isArray(r.items)) continue;
-      const key = seenKey(sp, x.id);
+      /* Два маркера, як у `cmtSeenSet` (0.34): головний `dc-seen:` і відповідей `dc-seen-r:`; «бачене» — їх обʼєднання, інакше
+         відповідь агента в проєкті без команди (її бачив відкритий вид, а головного маркера немає) висіла б «новою» вічно. */
+      const key = seenKey(sp, x.id), rkey = `dc-seen-r:${sp || '-'}:${x.id}`;
       let seen = loadSeen(key);
-      if (!seen) { seen = baseline(r.items); saveSeen(key, seen); }
-      const n = countNew(r.items, seen, myName());
+      const rseen = loadSeen(rkey);
+      /* Основа лише коли нема жодного маркера; є лише маркер відповідей (вид без команди) — основа командних БЕЗ відповідей, щоб
+         відповідь, що прийшла після останнього погляду, лишилась новою. */
+      if (!seen) { seen = baseline(rseen ? r.items.filter((c) => !c.parent) : r.items); saveSeen(key, seen); }
+      const n = countNew(r.items, rseen ? new Set([...seen, ...rseen]) : seen, myName());
       if (n && x.id !== currentTaskId) next[x.id] = n;
     }
     /* Простір перемкнули, поки ішов опит: чужі числа не малюємо (новий опит уже в черзі від paintTabs). */

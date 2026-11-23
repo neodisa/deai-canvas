@@ -1571,12 +1571,13 @@ class ReplyTest(RepliesBase):
         self.assertEqual(get['query']['id'], ['eq.' + weird])
         self.assertEqual(set(get['query']), {'id', 'project_id', 'select'})
 
-    def test_the_module_stays_valid_when_the_core_does_not_know_reply_yet(self):
+    def test_the_core_knows_reply_as_an_optional_function_and_the_module_provides_it(self):
         m = dm.catalog()[MID]
         self.assertEqual((m.status, m.error), ('ok', None))
         self.assertTrue(callable(self.g['reply']))
-        self.assertNotIn('reply', sum(dm.ROLE_OPTIONAL_FUNCTIONS.values(), ()), 'додати `reply` у ядро — Task 9')
-        self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS['comments'], ('recent',))
+        self.assertIn('reply', dm.ROLE_OPTIONAL_FUNCTIONS['comments'], '`reply` — необовʼязкова функція ролі (Task 9)')
+        self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS['comments'], ('recent', 'reply'))
+        self.assertTrue(callable(m.fn('reply')), 'ядро бере `reply` модуля у `fns`')
 
 
 class CheckRepliesTest(RepliesBase):

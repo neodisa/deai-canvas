@@ -385,6 +385,32 @@ class ProviderTest(CommentsEnv):
 
 # --------------------------------------------------------------------------------------- comments_client
 
+class OptionalReplyTest(CommentsEnv):
+    """0.34: `reply` — НЕобовʼязкова функція ролі `comments` (як `recent`): модуль без неї валідний, з нею — ядро її бере."""
+
+    def test_a_module_without_reply_is_valid_and_has_no_reply_fn(self):
+        self.mkcm('plain')
+        m = dm.catalog()['plain']
+        self.assertEqual((m.status, m.error), ('ok', None))
+        self.assertIsNone(m.fn('reply'))
+        self.assertNotIn('reply', dm.ROLE_FUNCTIONS['comments'], '`reply` не обовʼязкова')
+
+    def test_a_module_with_reply_gets_it_in_fns_and_a_junk_reply_is_just_absent(self):
+        self.mkcm('withreply', server=tm.COMMENTS_FNS + 'def reply(ctx, channel, id, text, author):\n    return {"id": "r1"}\n')
+        self.mkcm('junk', server=tm.COMMENTS_FNS + 'reply = 5\n')
+        cat = dm.catalog()
+        self.assertEqual((cat['withreply'].status, cat['junk'].status), ('ok', 'ok'))
+        self.assertTrue(callable(cat['withreply'].fn('reply')))
+        self.assertIsNone(cat['junk'].fn('reply'), 'не-функція `reply` — не помилка маніфесту, а відсутня функція')
+
+    def test_the_core_passes_ctx_channel_and_the_arguments_to_reply(self):
+        self.mkcm('withreply', server=tm.COMMENTS_FNS + 'def reply(ctx, channel, id, text, author):\n    return {"got": [channel, id, text, author]}\n')
+        m = dm.catalog()['withreply']
+        sp = self.new_space()
+        got = dm.call(m, 'reply', {'space': sp}, 'chan', 'c1', 'привіт', 'AI')
+        self.assertEqual(got, {'got': ['chan', 'c1', 'привіт', 'AI']})
+
+
 class CommentsClientTest(CommentsEnv):
     TOKEN, PUB = 'tok-SECRET-1', 'pub-OPEN-2'
 
