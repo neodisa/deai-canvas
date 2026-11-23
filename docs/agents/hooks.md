@@ -2,14 +2,16 @@
 Agent heartbeat for the island and the git autosync step of a Stop hook.
 
 Hooks of your own agent (for example the Stop hook of Claude Code) can call two canvas routes. Add hooks only when the person
-asks for it (`SETUP.md` in `<deai>`, section «Agent status»): nothing else in the canvas depends on them.
+asks for it (`SETUP.md` in `<deai>`, section «Agent status»): nothing else in the canvas depends on them. For Claude Code, pressing «Підключити» is that request (next section).
 The same section has a `SessionStart` hook that prints the live guide (`GET /api/agent-guide`) at the start of a Claude Code session.
 
 ## The Stop hook the canvas installs
 
-The person presses «Підключити» in Settings → AGENTS.md, row «Claude Code» (the button then reads «Оновити» or «Відключити»).
+The person presses «Підключити» in Settings → AGENTS.md, row «Claude Code» (once the hook is in place the button reads «Відключити»; «Оновити» when the hook points at another port; no button when the
+state is elsewhere or unreadable).
 The canvas writes ONE Stop hook into `<space>/.claude/settings.local.json`: Claude Code's per-user, local file (Claude Code
-git-ignores it when it creates it; when the canvas creates it in a repository root it adds one line to `.git/info/exclude`).
+itself normally keeps this file out of git; when the canvas creates the file in a repository root and `.git` is a real directory,
+it adds one line to `.git/info/exclude`).
 It never touches the team's `.claude/settings.json` or `~/.claude/settings.json`. The entry is merged into `hooks.Stop`; the
 command ends with the mark `# deai-autosync`, which is how the canvas recognises its own entry. Foreign hooks and other keys are
 never changed. The command (timeout 10):
@@ -17,23 +19,27 @@ never changed. The command (timeout 10):
     curl -s --noproxy '*' --max-time 5 -o /dev/null -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:<port>/api/autosync || true # deai-autosync
 
 After every reply Claude Code pipes a JSON to the hook's stdin; the canvas reads only `cwd` from it. The hook is silent and never
-blocks Claude: `-o /dev/null` drops the body, curl (without `--fail`) exits 0 even on `413`, and `|| true` covers transport
+fails or blocks the reply (at worst it adds up to 5 s): `-o /dev/null` drops the body, curl (without `--fail`) exits 0 even on `413`, and `|| true` covers transport
 failures (canvas stopped, 5 s timeout, connection reset). `<port>` is the port of the canvas that was running when the button was
 pressed. Do not write this hook by hand: ask the person to press the button.
 
-States of the row: ok; missing; stale (the hook points at another canvas port: the canvas moved ports, or two canvases on
-different ports serve one space; «Оновити» fixes it); unreadable (the file cannot be merged safely: invalid JSON, duplicate keys,
-NaN/Infinity, a symlink or a non-regular file; it is left alone); elsewhere (the space folder is inside another git repository,
-so Claude Code reads that repository's root settings; no hook is installed). «Відключити» removes only our entry (an emptied file
-the canvas created is deleted). A canvas restart changes nothing.
+States of the row: ok; missing; stale (the hook points at another canvas port — the canvas moved ports, or two canvases on
+different ports serve one space — or an older/duplicated entry of ours; «Оновити» fixes it); unreadable (among others: not valid
+JSON or not safely mergeable — duplicate keys, a symlink, a non-regular file; the file is left alone); elsewhere (the space
+folder is inside another git repository: no hook is installed, because Claude Code reads that repository's own
+`.claude/settings.local.json`). «Відключити» removes only our entry (and a `hooks.Stop` / `hooks` that became empty because of
+it); a file that ends up as `{}` is deleted. The `.claude/` folder, the `.git/info/exclude` line, `CLAUDE.md` and `AGENTS.md`
+stay. A file with other content is rewritten (2-space indentation). A canvas restart changes nothing.
 
-Limits: Claude Code started INSIDE a task folder (each task folder is its own git repository) reads that repository's
-`.claude/settings.local.json`, so the hook does not fire there: start Claude Code in the space folder. Only Claude Code and only
+Limits: With Claude Code started INSIDE a task folder (each task folder is its own git repository) the hook does not fire there,
+because Claude Code reads that repository's own `.claude/settings.local.json`: start Claude Code in the space folder. Only Claude Code and only
 this one file are covered: no team or global settings, no other agents, no automatic install at canvas start. For agents
 without the hook use the manual call below (`POST /api/autosync {}` with `X-Canvas-Task`; see `AGENTS.md`).
 
 When Claude ends a reply, every own changed iteration of every task of the space is committed as `itN: зміни AI` (see
-«Autosync by folder» below). A change a person makes outside the canvas in the same minute is committed as AI too.
+«Autosync by folder» below). The hook cannot tell who wrote an uncommitted change: when it fires, everything uncommitted under `iterations/<itN>/` of this
+computer's own iterations is committed as AI — including a person's edit made outside the canvas (in an editor, say) and not yet
+committed. Edits made through the canvas are already committed under the person's name.
 
 ## Heartbeat
 
@@ -75,8 +81,8 @@ local AI commit of step 1 is still made), `no-iterations`, `foreign-only` (only 
 new). A failed send is `reason: "offline"` (usually the network; with a `code` when the module gave one), and
 `reason: "error"` is a local failure (unreadable task files, permissions): it is written to the server log, and the Stop
 hook reports it instead of staying silent. When a send happens the answer is the result of the send, as for
-`POST /api/vcs-push`, plus `it`, `local_sha` and `ai`. The task is named by `X-Canvas-Task`, as everywhere; without it, the
-current one.
+`POST /api/vcs-push`, plus `it`, `local_sha` and `ai`. The task is named by `X-Canvas-Task`, as everywhere; without it and without `cwd` in
+the body, the current one; with `cwd`, see «Autosync by folder».
 
 ### Autosync by folder
 
@@ -89,6 +95,6 @@ the rest go on). The push step then runs only for the space's CURRENT task, as a
 plus `ai` (the current task's AI commit) and `ai_tasks`: `{"<task-id>": {"it", "sha", "its"}}` for every task where something was
 committed (`{}` when nothing was). `reason: "no-space"` means `cwd` is in no registered space and nothing is done;
 `reason: "no-task"` means the space has no current task (the AI commits of the other tasks were still made). With `X-Canvas-Task`
-or the prefix the behaviour is the old one and the header wins over `cwd`. Concurrent calls (for example another Stop hook
-firing at the same moment) are serialised per task folder. Only `cwd` is read from the body, nothing of it is kept; a body over
+or the prefix the behaviour is the old one and the header wins over `cwd`. Concurrent calls (another Stop hook firing at the same moment, say) are serialised per task folder for the AI commits: the
+second one finds the folder clean. The push step is not part of that lock. Only `cwd` is read from the body, nothing of it is kept; a body over
 2 MiB is `413 body-too-large`, answered before reading.

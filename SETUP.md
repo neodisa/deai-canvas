@@ -102,7 +102,8 @@ For Claude Code the canvas installs the Stop hook itself: the person presses the
 Settings -> AGENTS.md. That press also connects `CLAUDE.md` and writes the hook into `.claude/settings.local.json` of the
 space folder (the per-user local file, not the team's `.claude/settings.json`), so the agent's edits to iterations are
 committed in the history as AI without any skill. Do not write that hook by hand: tell the person to press the button (the
-row lists exactly what it writes). Start Claude Code in the space folder, not inside a task folder.
+row lists exactly what it writes). Start Claude Code in the space folder: inside a task folder the hook does not fire, because Claude Code reads that
+repository's own `.claude/settings.local.json`.
 
 Agents read `AGENTS.md` once, when a session starts. To also give Claude Code the live state of the canvas (the space,
 the current task, modules, and the current guide when the file is out of date), add a `SessionStart` hook — again only if
