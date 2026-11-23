@@ -20,9 +20,9 @@ answer `{"ok": true, "id"}`. A folder that is already a space is refused (`path-
 
 ## Rename, switch, tools
 
-    POST http://127.0.0.1:8765/api/space-update {"id": "<id>", "name": "New name", "color": "space-2"}
-    POST http://127.0.0.1:8765/api/space-switch {"id": "<id>"}
-    POST http://127.0.0.1:8765/api/space-tool   {"space": "<id>", "tool": "figma", "on": false}
+    POST http://127.0.0.1:8765/api/space-update {"id": "<space-id>", "name": "New name", "color": "space-2"}
+    POST http://127.0.0.1:8765/api/space-switch {"id": "<space-id>"}
+    POST http://127.0.0.1:8765/api/space-tool   {"space": "<space-id>", "tool": "figma", "on": false}
 
 `space-update` changes name and colour, keeps the rest of `space.json`; answer `{"ok", "id", "name", "color"}`.
 `space-switch` makes the space current: `{"ok": true, "current", "task"}` (`task` is its current task or `null`).
@@ -31,9 +31,9 @@ answer `{"ok": true, "id"}`. A folder that is already a space is refused (`path-
 
 ## AGENTS.md and CLAUDE.md
 
-    GET  http://127.0.0.1:8765/api/agents-md?space=<id>
-    POST http://127.0.0.1:8765/api/agents-md {"space": "<id>"}
-    POST http://127.0.0.1:8765/api/agents-md {"space": "<id>", "claude": true}
+    GET  http://127.0.0.1:8765/api/agents-md?space=<space-id>
+    POST http://127.0.0.1:8765/api/agents-md {"space": "<space-id>"}
+    POST http://127.0.0.1:8765/api/agents-md {"space": "<space-id>", "claude": true}
 
 `GET` reports the state of the space's `AGENTS.md` (`exists`, `hasBlock`, `outdated`, `newer`, the text) and of `CLAUDE.md`
 (`claude.state`: `ok`, `missing`, `no-import`, `unreadable`), plus `paths` of this installation: `deai`, `inbox`, `authoring`, `agents`.
@@ -48,7 +48,7 @@ absent is not created, and a block the person removed is not put back.
 
     GET http://127.0.0.1:8765/api/agent-guide?path=/abs/folder&have=<guide mark>
     GET http://127.0.0.1:8765/api/agent-guide?topic=<topic>
-    GET http://127.0.0.1:8765/api/agent-guide?space=<id>&format=json
+    GET http://127.0.0.1:8765/api/agent-guide?space=<space-id>&format=json
 
 Answers in markdown (`format=json` gives an object). Without `topic`: the `guide` mark of this canvas, its version, the
 space (`space` id, or the one whose folder holds `path`, or the current one) with the state of its `AGENTS.md`, the current

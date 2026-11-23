@@ -23,7 +23,7 @@ The named (or current) task: `id`, `title`, `jira`, `tags`, `track`, `space`, `i
 
 ## Create
 
-    POST http://127.0.0.1:8765/api/task-new {"id": "<task-id>", "title": "<title>", "space": "<id>", "from": "/abs/path"}
+    POST http://127.0.0.1:8765/api/task-new {"id": "<task-id>", "title": "<title>", "space": "<space-id>", "from": "/abs/path"}
 
 `id`: letters, digits, `_` and `-`. `title` keeps 200 characters. `space` is the space id; without it the new task goes to the
 default space of this computer, and `400 unknown-space` if the id is wrong. `from` is optional: an absolute path (or `~/…`)
@@ -49,8 +49,8 @@ list (`[]` clears it; `400 bad-tags`); answer `{"ok", "tags"}`.
 ## Trash
 
     POST http://127.0.0.1:8765/api/task-delete  {"id": "<task-id>"}
-    POST http://127.0.0.1:8765/api/task-restore {"id": "<task-id>", "space": "<id>"}
-    POST http://127.0.0.1:8765/api/task-purge   {"id": "<task-id>", "space": "<id>"}
+    POST http://127.0.0.1:8765/api/task-restore {"id": "<task-id>", "space": "<space-id>"}
+    POST http://127.0.0.1:8765/api/task-purge   {"id": "<task-id>", "space": "<space-id>"}
 
 `task-delete` moves the task folder to the trash of its space: answer `{"ok", "id", "current", "trash"}`; if it was the
 current task, `current` moves to another one. `task-restore` brings it back (`404 not-in-trash`, `409 task-exists`,

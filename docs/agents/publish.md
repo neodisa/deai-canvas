@@ -23,7 +23,7 @@ deploy. Refusals: `400` when no iteration is marked («toggle the green dot firs
 has no module with the role `publish`; `409 publish-busy` (folder modules) when another publish of the same task is running. The answer
 starts with `"ok": true` and then depends on the kind of publisher:
 
-- a module that publishes to a folder: `{"local": {"path", "url": "/published/<space>/<task>/"}, "iterations", "frames"}`;
+- a module that publishes to a folder: `{"local": {"path", "url": "/published/<space-id>/<task-id>/"}, "iterations", "frames"}`;
   the canvas shows the page at that address;
 - the Vercel module: `url` (the preview link), `deploy_url`, `verified`; a failed deploy still answers `200` with
   `deploy_error` (and `deploy_blocked: "no-node"` when Node is missing). The `deploy_*` keys exist only on this path;

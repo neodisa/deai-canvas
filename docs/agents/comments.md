@@ -16,7 +16,7 @@ without that module there are none). By default you see the local pins and the t
     python3 <deai>/bin/inbox.py reply <comment-id> --text "question or note"
     python3 <deai>/bin/inbox.py --task <task-id> reply <comment-id> --text "..." --dry-run
 
-Without arguments it lists the open pins; each shows `[<id> · author]`, the iteration `[itN]`, the text and the replies under
+Without arguments it lists the open pins; each shows `[<comment-id> · author]`, the iteration `[itN]`, the text and the replies under
 it. `--task` names a task instead of the current one (put it before the subcommand; use it when several sessions work in
 parallel). `--all` shows all team comments, not only those assigned to Claude. `--where` adds, for each open pin, the widget
 and how many identical elements are on the page; it needs the canvas running and a browser (Node and Playwright), and when it
@@ -56,5 +56,5 @@ asks for the team channel and gives `409` when the space has no `comments` modul
     node <deai>/bin/pin-where.mjs --url http://127.0.0.1:8765   (reads a JSON list of pins on stdin)
 
 `inbox.py --where` runs `<deai>/bin/pin-where.mjs` for you: it opens the page without the comment layer and finds the pin's
-element the same way the layer does. It answers `{"<id>": {"found", "widget", "twins"}}`: the widget the element is in and
+element the same way the layer does. It answers `{"<comment-id>": {"found", "widget", "twins"}}`: the widget the element is in and
 the widgets that hold an identical element. Use it when one comment may concern several copies of a component.

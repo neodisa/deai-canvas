@@ -14,7 +14,9 @@
 /api/gitlab-sync — legacy alias of /api/vcs-push
 /api/gitlab-pull — legacy alias of /api/vcs-pull
 /api/gitlab-status — legacy alias of /api/vcs-status
-bin/shoot.mjs — run by the canvas for /api/shoot
+/api/module-client — files a module's own page code loads from the canvas (served by prefix; the canvas fetches them)
+/api/module-ui — the panel of a module's tool, loaded by the canvas into a sandboxed frame (served by prefix)
+/api/module-ui-kit — `kit.css` and `bridge.js` the canvas adds to every tool panel (served by prefix)
 bin/shots-geo.mjs — helper of bin/shoot.mjs
 bin/shots-manifest.mjs — helper of bin/shoot.mjs
 bin/shots-progress.mjs — helper of bin/shoot.mjs

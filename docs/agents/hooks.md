@@ -21,7 +21,7 @@ the status. It lives in memory only, so a canvas restart forgets it.
 
 `GET /api/claude-status` answers for the task named by `X-Canvas-Task` (or the current one): `{"state": "working" | "waiting" |
 "blocked" | "done" | null, "phase", "note", "age_s"}`; `state` is `null` when there is no fresh heartbeat.
-`GET /api/claude-statuses` lists all tasks with a fresh heartbeat: `{"tasks": {"<task>": {"state", "age_s"}}}`; it does not
+`GET /api/claude-statuses` lists all tasks with a fresh heartbeat: `{"tasks": {"<task-id>": {"state", "age_s"}}}`; it does not
 take the task header (or the prefix).
 
 ## Autosync

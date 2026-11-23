@@ -22,8 +22,8 @@ without it `400 missing-rev`, and when the file changed since you read it `409 s
 
 ## Create, rename
 
-    POST http://127.0.0.1:8765/api/page-new    {"it": "itN", "name": "Pricing", "parent": "<id>", "kind": "page"}
-    POST http://127.0.0.1:8765/api/page-rename {"it": "itN", "page": "<id>", "name": "New name"}
+    POST http://127.0.0.1:8765/api/page-new    {"it": "itN", "name": "Pricing", "parent": "<page-id>", "kind": "page"}
+    POST http://127.0.0.1:8765/api/page-rename {"it": "itN", "page": "<page-id>", "name": "New name"}
 
 `page-new`: `parent` (optional, else the root) and `kind` (`page` or `state`) are optional; answer `{"ok": true, "page":
 {"id", "name", "kind", "published"}}`; the id comes from the name, and the new page gets a starter `index.html` that you
@@ -31,17 +31,17 @@ then overwrite. `page-rename` answers `{"ok": true}`.
 
 ## Delete
 
-    POST http://127.0.0.1:8765/api/page-delete {"it": "itN", "page": "<id>", "mode": "all", "rev": "<rev>"}
+    POST http://127.0.0.1:8765/api/page-delete {"it": "itN", "page": "<page-id>", "mode": "all", "rev": "<rev>"}
 
 `mode` is `all` (the node with everything under it; the default) or `unwrap` (the children stay in its place). With `mode`
 a `rev` is required; answer `{"ok": true, "rev", "failed"?}`, where `failed` lists page folders that could not be erased.
 
 ## Move, nest, order
 
-    POST http://127.0.0.1:8765/api/page-move     {"it": "itN", "ids": ["a", "b"], "parent": "<id>|null", "index": 0, "rev": "<rev>"}
-    POST http://127.0.0.1:8765/api/page-move     {"it": "itN", "page": "<id>", "index": 2}
-    POST http://127.0.0.1:8765/api/page-move     {"it": "itN", "page": "<id>", "delta": -1}
-    POST http://127.0.0.1:8765/api/page-reparent {"it": "itN", "page": "<id>", "parent": "<id>|null"}
+    POST http://127.0.0.1:8765/api/page-move     {"it": "itN", "ids": ["a", "b"], "parent": "<page-id>|null", "index": 0, "rev": "<rev>"}
+    POST http://127.0.0.1:8765/api/page-move     {"it": "itN", "page": "<page-id>", "index": 2}
+    POST http://127.0.0.1:8765/api/page-move     {"it": "itN", "page": "<page-id>", "delta": -1}
+    POST http://127.0.0.1:8765/api/page-reparent {"it": "itN", "page": "<page-id>", "parent": "<page-id>|null"}
 
 The first form moves nodes under `parent` (`null` is the root) at `index` among its children, after lifting them out; it
 needs `rev` and answers `{"ok": true, "rev"}`; a node cannot go into itself (`cycle`) or into a state. The short forms only
@@ -50,7 +50,7 @@ reorder among siblings: `index`, or `delta` of `-1` or `1` (one place up or down
 
 ## Folders and groups
 
-    POST http://127.0.0.1:8765/api/folder-add {"it": "itN", "name": "Flows", "parent": "<id>", "index": 0, "rev": "<rev>"}
+    POST http://127.0.0.1:8765/api/folder-add {"it": "itN", "name": "Flows", "parent": "<page-id>", "index": 0, "rev": "<rev>"}
     POST http://127.0.0.1:8765/api/page-group {"it": "itN", "ids": ["a", "b"], "name": "Flows", "rev": "<rev>"}
     POST http://127.0.0.1:8765/api/page-ungroup {"it": "itN", "id": "<folder id>", "rev": "<rev>"}
 
@@ -60,8 +60,8 @@ folder can be ungrouped (`bad-kind`).
 
 ## Kind, visibility, restore
 
-    POST http://127.0.0.1:8765/api/page-kind {"it": "itN", "id": "<id>", "kind": "page|state", "rev": "<rev>"}
-    POST http://127.0.0.1:8765/api/page-publish-toggle {"it": "itN", "page": "<id>"}
+    POST http://127.0.0.1:8765/api/page-kind {"it": "itN", "id": "<page-id>", "kind": "page|state", "rev": "<rev>"}
+    POST http://127.0.0.1:8765/api/page-publish-toggle {"it": "itN", "page": "<page-id>"}
     POST http://127.0.0.1:8765/api/page-restore {"it": "itN", "prev": [<tree>], "rev": "<rev>"}
 
 `page-kind` turns a page into a state or back (not a folder). `page-publish-toggle` flips whether the page goes to the
