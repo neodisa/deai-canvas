@@ -14,6 +14,18 @@ export function shotsBlock(setupShots) {
   return null;
 }
 
+/** Ключ тосту після «Підключити»/«Оновити» за відповіддю `POST /api/agents-md`: збій хука (`hookError`, 200) сильніший за
+    все; хук `ok` — «Підключено»; решта (старий сервер, elsewhere, unreadable) — тост про CLAUDE.md. */
+export function claudeToastKey(data) {
+  if (data?.hookError) return "frHookFailed";
+  return data?.hook?.state === "ok" ? "frHookConnected" : "frClaudeConnected";
+}
+
+/** Ключ тосту після «Відключити»: збій хука — `frHookFailed`, інакше «Хук відключено». */
+export function unhookToastKey(data) {
+  return data?.hookError ? "frHookFailed" : "frHookDisconnected";
+}
+
 const WILL_MD = { code: "CLAUDE.md", textKey: "frClaudeWillMd" };
 const WILL_HOOK = { code: ".claude/settings.local.json", textKey: "frClaudeWillHook" };
 const HOOK_STATES = ["ok", "missing", "stale", "unreadable", "elsewhere"];

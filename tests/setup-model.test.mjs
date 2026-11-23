@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DICT } from "../app/i18n.js";
-import { PW_STATE_KEY, claudeRow, pwItem, pwLine, runCommand, shotsBlock, shq } from "../app/setup-model.js";
+import { PW_STATE_KEY, claudeRow, claudeToastKey, unhookToastKey, pwItem, pwLine, runCommand, shotsBlock, shq } from "../app/setup-model.js";
 
 test("shotsBlock: бракує Playwright чи Chromium — рядок, причина й команда; без Node — без команди; решта — нічого не блокує", () => {
   const cmd = "cd /d && npm install && npx playwright install chromium";
@@ -98,4 +98,18 @@ test("pwItem: поле простору publish_password; нема поля — 
   assert.equal(pwItem({ id: "p" }), null);
   assert.equal(pwItem(null), null);
   assert.deepEqual(PW_STATE_KEY, { set: "frPwSet", unset: "frPwUnset", unknown: "frPwUnknown" });
+});
+
+test("claudeToastKey: збій хука (hookError) сильніший за ok; старий сервер і elsewhere/unreadable — тост CLAUDE.md", () => {
+  assert.equal(claudeToastKey({ hookError: "changed", hook: { state: "ok" } }), "frHookFailed");
+  assert.equal(claudeToastKey({ hookError: "unreadable", hook: { state: "missing" } }), "frHookFailed");
+  assert.equal(claudeToastKey({ hook: { state: "ok" } }), "frHookConnected");
+  assert.equal(claudeToastKey({ claude: { state: "ok" } }), "frClaudeConnected", "старий сервер без hook");
+  for (const state of ["elsewhere", "unreadable", "missing", "stale"]) assert.equal(claudeToastKey({ hook: { state } }), "frClaudeConnected", state);
+});
+
+test("unhookToastKey: з hookError — збій, без нього — «Хук відключено»", () => {
+  assert.equal(unhookToastKey({ hookError: "changed" }), "frHookFailed");
+  assert.equal(unhookToastKey({ hook: { state: "missing" } }), "frHookDisconnected");
+  assert.equal(unhookToastKey({}), "frHookDisconnected");
 });

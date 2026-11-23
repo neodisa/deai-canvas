@@ -235,3 +235,15 @@ test("рядок «Claude Code»: англійською ті самі стан�
   assert.match(withHook("ok", "ok"), /data-v="unhook"[^>]*>Disconnect</);
   assert.match(withHook("ok", "stale"), /data-v="claude"[^>]*>Update</);
 });
+
+test("рядок «Claude Code»: «Підключити» і «Оновити» заблоковані, поки busy", () => {
+  assert.match(withHook("ok", "missing", true), /data-v="claude" disabled/);
+  assert.match(withHook("missing", "missing", true), /data-v="claude" disabled/);
+  assert.match(withHook("ok", "stale", true), /data-v="claude" disabled/);
+});
+
+test("рядок «Claude Code»: ворожі state не потрапляють у розмітку сирими", () => {
+  for (const [c, h] of [['"><x', "ok"], ["ok", '"><x'], ['"><x', '"><x']]) {
+    assert.doesNotMatch(withHook(c, h), /<x/, `${c}/${h}`);
+  }
+});

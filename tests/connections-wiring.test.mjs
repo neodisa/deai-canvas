@@ -625,11 +625,10 @@ test("етап Е, «Застосунок»: мова — той самий swit
 test("AGENTS.md, рядок «Claude Code»: «Підключити»/«Оновити» — POST {claude:true}, «Відключити» — POST {hook:false}; тост залежить від відповіді", () => {
   const c = fnc("agentsClaude");
   assert.match(c, /claude: true/);
-  assert.match(c, /d\.hookError \? 'frHookFailed'/, "збій хука при підключеному CLAUDE.md — тост збою");
-  assert.match(c, /d\.hook\?\.state === 'ok' \? 'frHookConnected' : 'frClaudeConnected'/);
+  assert.match(c, /claudeToastKey/, "вибір тосту — у чистій функції setup-model.js");
   const u = fnc("agentsUnhook");
   assert.match(u, /hook: false/);
-  assert.match(u, /'frHookDisconnected'/);
+  assert.match(u, /unhookToastKey/);
   assert.match(fnc("agentsAction"), /v === 'unhook'\) agentsUnhook\(\)/);
   assert.match(fnc("agentsRowCall"), /agentsSt\.seq \+= 1;/, "читання, що летіло до запису, застаріло");
   assert.doesNotMatch(fnc("agentsAction"), /await/, "writeText — у тому ж такті, що й клік");

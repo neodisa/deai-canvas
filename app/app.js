@@ -82,7 +82,7 @@ import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
 import { introCardHTML } from './first-run.js';
-import { runCommand } from './setup-model.js';
+import { claudeToastKey, runCommand, unhookToastKey } from './setup-model.js';
 import {
   formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
   verdictText, writePayload,
@@ -5110,13 +5110,12 @@ async function agentsRowCall(extra, okKey, failKey) {
 /** «Підключити» / «Оновити» (0.33.0, хук — 23.11.2026): `{claude: true}` — CLAUDE.md і Stop-хук Claude Code. Збій хука при
     підключеному CLAUDE.md сервер віддає як `hookError` (200): тост збою. */
 function agentsClaude() {
-  return agentsRowCall({ claude: true },
-    (d) => (d.hookError ? 'frHookFailed' : d.hook?.state === 'ok' ? 'frHookConnected' : 'frClaudeConnected'), 'frClaudeFailed');
+  return agentsRowCall({ claude: true }, claudeToastKey, 'frClaudeFailed');
 }
 
 /** «Відключити»: `{hook: false}` — знімає лише хук (CLAUDE.md лишається). */
 function agentsUnhook() {
-  return agentsRowCall({ hook: false }, () => 'frHookDisconnected', 'frHookFailed');
+  return agentsRowCall({ hook: false }, unhookToastKey, 'frHookFailed');
 }
 
 /** Кнопки розділу «AGENTS.md» (`data-th="ag"`, `data-v`). */
