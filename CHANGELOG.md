@@ -46,6 +46,11 @@ iteration has a change history built from the task folder's git — including wh
 - Commit subjects: a publish names its iterations (`publish: 2 iteration(s) · it1 it2`) so their history shows it; the
   autosync commit carries the `Deai-Actor: ai` trailer. `git_autocommit` can commit only given paths.
 
+### Known limits
+- «Повернути» lives only in the 8-second toast; a new delete replaces it. A list of deleted iterations comes in the next
+  patch; until then a deleted iteration stays in `.trash/iterations/` for 7 days.
+- The trash is local: it exists only on the machine where the iteration was deleted.
+
 ## [0.35.1] — 23.11.2026
 
 Pin screenshots: readable, and on every page. The commenter used to keep a 360-px JPEG rendered at half the screen's
