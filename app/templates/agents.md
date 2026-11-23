@@ -36,7 +36,7 @@ Add an iteration; the canvas copies `itN` (a folder created by hand is not regis
     header: X-Canvas-Task: <task-id>
 
 After finishing edits to an iteration, call `POST http://127.0.0.1:8765/api/autosync {}` with `X-Canvas-Task: <task-id>`.
-The canvas commits them as an AI edit (`itN: зміни AI`, `Deai-Actor: ai`) and, if vcs autosync is on, sends them; do not commit.
+The canvas commits them as an AI edit (`itN: зміни AI`, `Deai-Actor: ai`), pushed if vcs autosync is on; never commit them yourself.
 
 ## Comments
 
