@@ -386,6 +386,88 @@ class Elsewhere(Base):
     def test_a_plain_space_without_any_repository_above_is_not_elsewhere(self):
         self.assertEqual(self.state(), 'missing')
 
+class Lossless(Base):
+    """Файл, який не можна перезаписати без втрат, — `unreadable`: не пишемо, байти ті самі, `.claude/` не створюємо."""
+
+    def check(self, raw):
+        _put(self.f, raw)
+        self.assertEqual(self.state(), 'unreadable', raw)
+        with self.assertRaises(OSError):
+            claude_hook.connect(self.space, PORT)
+        with self.assertRaises(OSError):
+            claude_hook.disconnect(self.space, PORT)
+        self.assertEqual(_get(self.f), raw if isinstance(raw, bytes) else raw.encode('utf-8'))
+        self.assertEqual(self.tmp_files(), [])
+
+    def test_values_and_keys_json_cannot_round_trip(self):
+        for raw in ('{"a":"\\ud800"}', '{"a": 1e999}', '{"a": NaN}', '{"a": Infinity}', '{"a": -Infinity}',
+                    '{"a":1,"a":2}', '{"x": {"a":1,"a":2}}', '{"x": [{"b": {"k":1,"k":1}}]}'):
+            with self.subTest(raw=raw):
+                self.check(raw)
+
+    def test_a_refused_write_leaves_no_claude_folder(self):
+        doc = {'a': '\ud800'}
+        with self.assertRaises(OSError):
+            claude_hook._dump(doc)
+        with mock.patch.object(claude_hook, '_dump', side_effect=OSError('x')):
+            with self.assertRaises(OSError):
+                claude_hook._write(self.space, {'a': 1}, None)
+        self.assertFalse(os.path.exists(self.dir))
+
+    def test_normal_output_format_is_unchanged(self):
+        self.assertEqual(claude_hook._dump({'б': [1]}), ('{\n  "б": [\n    1\n  ]\n}\n').encode('utf-8'))
+
+
+class MarkAtTheEnd(Base):
+    MID = "echo '# deai-autosync' > /dev/null"
+
+    def test_a_foreign_command_with_the_mark_inside_is_never_touched(self):
+        foreign = {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': self.MID}]}]}}
+        _put(self.f, json.dumps(foreign))
+        self.assertEqual(self.state(), 'missing')
+        claude_hook.connect(self.space, PORT)
+        self.assertEqual(self.state(), 'ok')
+        self.assertEqual(_json(self.f)['hooks']['Stop'][0], foreign['hooks']['Stop'][0])
+        claude_hook.disconnect(self.space, PORT)
+        self.assertEqual(_json(self.f), foreign)
+
+    def test_trailing_whitespace_after_the_mark_is_still_ours(self):
+        _put(self.f, json.dumps({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'x # deai-autosync \n'}]}]}}))
+        self.assertEqual(self.state(), 'stale')
+
+
+class MixedGroup(Base):
+    def test_extra_keys_of_a_group_survive(self):
+        foreign = {'type': 'command', 'command': 'echo keep'}
+        _put(self.f, json.dumps({'hooks': {'Stop': [{'matcher': 'x', 'hooks': [_ours(OTHER), foreign]}]}}))
+        self.assertEqual(self.state(), 'stale')
+        claude_hook.connect(self.space, PORT)
+        self.assertEqual(self.state(), 'ok')
+        self.assertEqual(_json(self.f)['hooks']['Stop'],
+                         [{'matcher': 'x', 'hooks': [foreign]}, {'hooks': [_ours(PORT)]}])
+        claude_hook.disconnect(self.space, PORT)
+        self.assertEqual(_json(self.f)['hooks']['Stop'], [{'matcher': 'x', 'hooks': [foreign]}])
+
+
+class ElsewherePrecedence(Base):
+    def test_the_space_that_is_the_home_is_never_elsewhere(self):
+        os.makedirs(os.path.join(self.root, '.git'))
+        with mock.patch.object(claude_hook, '_home', return_value=self.space):
+            self.assertEqual(self.state(), 'missing')
+
+    def test_elsewhere_wins_over_unreadable_and_connect_writes_nothing(self):
+        home = os.path.join(self.root, 'home')
+        outer = os.path.join(home, 'outer')
+        space = os.path.join(outer, 'space')
+        os.makedirs(os.path.join(outer, '.git'))
+        f = os.path.join(space, '.claude', 'settings.local.json')
+        _put(f, b'{not json')
+        with mock.patch.object(claude_hook, '_home', return_value=home):
+            self.assertEqual(claude_hook.status(space, PORT)['state'], 'elsewhere')
+            self.assertEqual(claude_hook.connect(space, PORT)['state'], 'elsewhere')
+        self.assertEqual(_get(f), b'{not json')
+        self.assertEqual(os.listdir(os.path.dirname(f)), ['settings.local.json'])
+
 
 if __name__ == '__main__':
     unittest.main()

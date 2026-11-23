@@ -57,12 +57,35 @@ def _read_raw(space_dir):
         return None
 
 
+def _dump(doc):
+    """Байти файла для `doc`: відступ 2, без `\\u`-екранування, з кінцевим переводом рядка. Те, що не серіалізується без втрат
+    (самотній сурогат, `inf`/`NaN`), — `OSError`: такий файл ми не пишемо."""
+    try:
+        return (json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False) + '\n').encode('utf-8')
+    except (ValueError, RecursionError):      # UnicodeEncodeError — теж ValueError
+        raise OSError('settings.local.json: cannot be rewritten losslessly') from None
+
+
+def _no_const(name):
+    raise ValueError(name)
+
+
+def _no_dupes(pairs):
+    """Повтор ключа обʼєкта (на будь-якому рівні) загубився б при перезаписі — такий файл не чіпаємо."""
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            raise ValueError('duplicate key')
+        out[k] = v
+    return out
+
+
 def _parse(raw):
-    """Обʼєкт налаштувань з байтів (`None` → `{}`); усе, з чим ми не вміємо зливати, — `OSError`."""
+    """Обʼєкт налаштувань з байтів (`None` → `{}`); усе, з чим ми не вміємо зливати чи що не перезаписати без втрат, — `OSError`."""
     if raw is None:
         return {}
     try:
-        doc = json.loads(raw.decode('utf-8'))
+        doc = json.loads(raw.decode('utf-8'), parse_constant=_no_const, object_pairs_hook=_no_dupes)
     except (UnicodeDecodeError, ValueError, RecursionError):
         raise OSError('settings.local.json: not JSON') from None
     if not isinstance(doc, dict):
@@ -73,11 +96,12 @@ def _parse(raw):
             raise OSError('settings.local.json: hooks is not an object')
         if 'Stop' in hooks and not isinstance(hooks['Stop'], list):
             raise OSError('settings.local.json: hooks.Stop is not a list')
+    _dump(doc)      # не перезаписується без втрат (`1e999`, самотній сурогат) → нечитне вже тут
     return doc
 
 
 def _is_ours(h):
-    return isinstance(h, dict) and isinstance(h.get('command'), str) and HOOK_MARK in h['command']
+    return isinstance(h, dict) and isinstance(h.get('command'), str) and h['command'].rstrip().endswith(HOOK_MARK)
 
 
 def _our_hooks(doc):
@@ -125,9 +149,9 @@ def _elsewhere(space_dir):
     if _WINDOWS:
         return False
     cur = os.path.realpath(space_dir)
-    if os.path.lexists(os.path.join(cur, '.git')):
-        return False
     home = os.path.realpath(_home())
+    if cur == home or os.path.lexists(os.path.join(cur, '.git')):
+        return False
     cur = os.path.dirname(cur)
     while True:
         if cur == home:
@@ -161,10 +185,10 @@ def status(space_dir, port):
 
 def _write(space_dir, doc, before):
     """Атомарний запис `doc`; `before` — байти, які ми читали (`None` — файла не було). Інакше `ValueError('changed')`."""
+    data = _dump(doc)      # раніше за `makedirs`: відмова не лишає порожнього `.claude/`
     d = _dir(space_dir)
     os.makedirs(d, exist_ok=True)
     path = _path(space_dir)
-    text = json.dumps(doc, indent=2, ensure_ascii=False) + '\n'
     try:
         mode = os.stat(path).st_mode & 0o777
     except OSError:
@@ -172,8 +196,8 @@ def _write(space_dir, doc, before):
     tmp = os.path.join(d, f'.settings.local.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp')
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)     # права нового файла — за umask
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8', newline='') as f:
-            f.write(text)
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
         if mode is not None:
