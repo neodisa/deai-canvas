@@ -97,3 +97,15 @@ Tell the person:
 The island shows what the agent is doing only from a heartbeat: `POST /api/claude-status {"task", "phase", "status",
 "note", "session"}`. Without it everything else works. Add hooks that send it to the person's Claude Code only if the
 person asks for it.
+
+Agents read `AGENTS.md` once, when a session starts. To also give Claude Code the live state of the canvas (the space,
+the current task, modules, and the current guide when the file is out of date), add a `SessionStart` hook — again only if
+the person asks for it — to `.claude/settings.json` of the space folder (merge it into existing `hooks` instead of
+replacing the file):
+
+```json
+{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "curl -sfG --max-time 2 http://127.0.0.1:8765/api/agent-guide --data-urlencode \"path=$CLAUDE_PROJECT_DIR\" -d \"have=$(grep -o 'guide [0-9a-f]\\{8\\}' \"$CLAUDE_PROJECT_DIR/AGENTS.md\" 2>/dev/null | head -1 | cut -c7-)\" || true"}]}]}}
+```
+
+Claude Code adds what the hook prints to the session's context; with the canvas stopped the hook prints nothing.
+`$CLAUDE_PROJECT_DIR` is the folder the session started in, so the hook works from any working directory.

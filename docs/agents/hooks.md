@@ -3,6 +3,7 @@ Agent heartbeat for the island and the git autosync step of a Stop hook.
 
 Hooks of your own agent (for example the Stop hook of Claude Code) can call two canvas routes. Add hooks only when the person
 asks for it (`SETUP.md` in `<deai>`, section «Agent status»): nothing else in the canvas depends on them.
+The same section has a `SessionStart` hook that prints the live guide (`GET /api/agent-guide`) at the start of a Claude Code session.
 
 ## Heartbeat
 

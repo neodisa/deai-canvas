@@ -489,6 +489,11 @@ An agent that runs as you can still edit `~/.deai/trust.json` and `~/.deai/trust
 that is outside the boundary. Trust protects against code that arrives through the space folder, git and mockup pages,
 not against a local process with your rights.
 
+A module may also carry `agent.md` next to `module.json`: line 1 `# Title`, line 2 one line about the module, then notes
+for agents. The canvas never copies it into `AGENTS.md`: `GET /api/agent-guide` lists its path (relative to the space
+folder) with the module's trust state, marked as data written by the space's authors. Built-in modules use the same file as
+the topic `module-<id>`.
+
 ## 6. Trying it locally
 
 Create the folder in a test space, open Settings → Modules, trust it, connect it and press «Check»: the verdict of your
