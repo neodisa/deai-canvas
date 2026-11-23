@@ -37,6 +37,7 @@ import isolation  # закон ізоляції й шви тестів (4d-4b; �
 import task_trash  # кошик задач простору (етап Д, 0.30.0): видалення без стирання, повернення, знищення
 import feedback  # відгук (0.23.0): кільце помилок, збирач діагностики, черга відправки
 import agents_md  # AGENTS.md простору (етап Е, 0.31.0): блок з шаблону + «Ваше»
+import agent_guide  # живий гайд агента й автооновлення блоків AGENTS.md (23.11.2026)
 import updater  # оновлення інструмента (0.23.0): перевірка тегів у remote, `update.json`, `GET /api/update`
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
 import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
@@ -6291,6 +6292,15 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_text(self, text, status=200, ctype='text/markdown; charset=utf-8'):
+        """Текстова відповідь (живий гайд агента): та сама форма заголовків, що `_send_json`."""
+        body = text.encode('utf-8', 'replace')
+        self.send_response(status)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     #: Відповідь цього запиту вже почата (рядок статусу пішов). Виставляє `send_response_only`;
     #: скидає `_guarded` на вході кожного запиту.
     _resp_started = False
@@ -6477,7 +6487,7 @@ class Handler(SimpleHTTPRequestHandler):
                         '/api/modules', '/api/module-ext', '/api/module-enable', '/api/module-disable',
                         '/api/module-settings', '/api/module-check', '/api/ds-tokens',
                         '/api/module-tool', '/api/module-action',
-                        '/api/module-trust', '/api/module-untrust', '/api/agents-md', '/api/demo-task')
+                        '/api/module-trust', '/api/module-untrust', '/api/agents-md', '/api/agent-guide', '/api/demo-task')
 
     #: Маршрути МАШИНИ (оновлення, відгук): потрібні саме тоді, коли щось зламано (порожня машина, битий реєстр, нечитабельний
     #: `tasks.json`). `_take_task` для них НЕ фіксує простір і не читає задач; префіксна форма `/t/<id>/api/…` відхиляється 400.
@@ -6653,6 +6663,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path.split('?')[0] == '/api/agents-md':
             self._agents_md(parse_qs(urlparse(self.path).query).get('space', [None])[0], False)
+            return
+        if self.path.split('?')[0] == '/api/agent-guide':
+            self._agent_guide_get()
             return
         if self.path.split('?')[0] == '/api/ds-tokens':
             self._ds_tokens_get()
@@ -9194,7 +9207,67 @@ class Handler(SimpleHTTPRequestHandler):
         deai = UPDATER_ROOT
         self._send_json({'ok': True, 'space': sp['id'], **st, 'claude': agents_md.claude_status(folder),
                          'paths': {'deai': deai, 'inbox': os.path.join(deai, 'bin', 'inbox.py'),
-                                   'authoring': os.path.join(deai, 'docs', 'modules', 'authoring.md')}})
+                                   'authoring': os.path.join(deai, 'docs', 'modules', 'authoring.md'),
+                                   'agents': os.path.join(deai, 'docs', 'agents')}})
+
+    def _agent_guide_get(self):
+        """`GET /api/agent-guide[?path=|space=][&have=][&topic=][&format=json]` (`agent_guide`, 23.11.2026): чи актуальна мітка
+        `guide` файла агента, версія, простір (за `space` чи найдовшим префіксом `path`; без обох — поточний) і стан його AGENTS.md,
+        поточна задача, увімкнені модулі, свої модулі (ЛИШЕ шлях до `agent.md`), теми, поточний блок. `topic` — текст теми (невідома
+        — 404 `unknown-topic`). Лише читання; чужа сторінка — 403 (абсолютні шляхи цієї машини). Типово markdown, `format=json` — обʼєкт."""
+        if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin')):
+            self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+            return
+        q = parse_qs(urlparse(self.path).query)
+
+        def arg(k):
+            return q.get(k, [None])[0]
+        as_json = arg('format') == 'json'
+        topic = arg('topic')
+        if topic is not None:
+            text = agents_md.topic_text(topic)
+            if text is None:
+                self._space_error(404, 'unknown-topic', 'unknown topic')
+            elif as_json:
+                self._send_json({'ok': True, 'topic': topic, 'text': text})
+            else:
+                self._send_text(text)
+            return
+        version = updater.current_version(UPDATER_ROOT)
+        try:
+            sp = agent_guide.find_space(spaces.read_registry()['spaces'], space=arg('space'), path=arg('path'),
+                                        current=spaces.active_space())
+        except KeyError:
+            self._space_error(404, 'unknown-space', 'unknown space')
+            return
+        space = task = None
+        modules, own = [], []
+        if sp is not None and not spaces._is_implicit(sp):
+            folder = sp.get('path') or ''
+            name, _ = spaces.space_meta(sp)
+            space = {'id': sp['id'], 'name': name,
+                     'file': agent_guide.file_state(folder, version) if folder and os.path.isdir(folder) else None}
+            tid = spaces.space_current_task(sp['id'])
+            if tid:
+                row = spaces._space_tasks(sp).get(tid)
+                task = {'id': tid, 'title': str((row or {}).get('title') or tid)}
+            try:
+                entries = module_list(sp)
+            except deai_modules.ModuleError:
+                entries, modules = [], None
+            if modules is not None:
+                modules = [{'id': e['id'], 'roles': list(e['roles'])} for e in entries if e.get('enabled')]
+            for e in entries:
+                if e.get('custom'):
+                    doc = f"modules/{e['id']}/agent.md"
+                    own.append({'id': e['id'], 'trust': e.get('trust'),
+                                'doc': doc if os.path.isfile(os.path.join(folder, 'modules', e['id'], 'agent.md')) else None})
+        d = agent_guide.live(version=version, have=arg('have'), space=space, task=task, modules=modules, own=own,
+                             docs=agents_md.DOCS)
+        if as_json:
+            self._send_json(d)
+        else:
+            self._send_text(agent_guide.render_live(d))
 
     def _space_switch(self, payload):
         """Зробити простір поточним; відповідь — його поточна задача (`null`, коли її нема).

@@ -374,7 +374,8 @@ class Routes(base.Fixture):
         self.assertEqual(body['version'], self.jget('/api/update')[1]['current'])
         self.assertEqual(body['version'], updater.current_version(serve.UPDATER_ROOT))
         self.assertEqual(body['paths'], {'deai': serve.ROOT, 'inbox': os.path.join(serve.ROOT, 'bin', 'inbox.py'),
-                                         'authoring': os.path.join(serve.ROOT, 'docs', 'modules', 'authoring.md')})
+                                         'authoring': os.path.join(serve.ROOT, 'docs', 'modules', 'authoring.md'),
+                                         'agents': os.path.join(serve.ROOT, 'docs', 'agents')})
         self.assertFalse(os.path.exists(self.agents))       # GET нічого не пише
 
     def test_post_creates_then_updates_and_keeps_own_text(self):
