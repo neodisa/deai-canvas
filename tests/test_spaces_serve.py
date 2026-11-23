@@ -1308,7 +1308,7 @@ class SpaceRoutes(Fixture):
         self.assertNotIn('off', body)
         for s in body['spaces']:
             # `capabilities` (етап 2а, Task 6) додає `serve.spaces_listing`; `spaces.listing()` і `describe` — без нього
-            self.assertEqual(set(s) - {'compat'}, {'id', 'name', 'color', 'path', 'tasks', 'available',
+            self.assertEqual(set(s) - {'compat', 'publish_password'}, {'id', 'name', 'color', 'path', 'tasks', 'available',
                                                    'legacy', 'capabilities', 'tracks', 'default_track', 'tools'})   # `tracks` — 4d-1, `tools` — етап Е
             self.assertEqual('compat' in s, s['id'] == self.legacy_id, s['id'])      # `compat` — лише простір з явним `vercel-publish` у режимі ЛІГА (4d-3c)
         legacy, p, e = body['spaces']
@@ -1568,16 +1568,19 @@ class TaskResponses(Fixture):
         st, body = self.jget('/api/task')
         self.assertEqual(st, 200)
         # `capabilities` — поле відповіді (етап 2а, Task 6), його додає `serve.space_view`, а не `spaces.describe`
-        self.assertEqual(body['space'], {'id': self.legacy_id, 'name': os.path.basename(os.path.dirname(self.a_dir)),
-                                         'color': 'space-1', 'path': os.path.dirname(self.a_dir),
-                                         'legacy': True,
-                                         'capabilities': LIGA_CAPABILITIES, 'compat': LIGA_COMPAT,
-                                         'tools': {'figma': True}})   # `tools` — етап Е (0.31.0): вимикачі інструментів простору
+        # `publish_password` (0.33.0) — стан пароля превʼю для меню «Опублікувати» у виді задачі; його значення перевіряє `PublishPassword`
+        self.assertEqual({k: v for k, v in body['space'].items() if k != 'publish_password'},
+                         {'id': self.legacy_id, 'name': os.path.basename(os.path.dirname(self.a_dir)),
+                          'color': 'space-1', 'path': os.path.dirname(self.a_dir),
+                          'legacy': True,
+                          'capabilities': LIGA_CAPABILITIES, 'compat': LIGA_COMPAT,
+                          'tools': {'figma': True}})   # `tools` — етап Е (0.31.0): вимикачі інструментів простору
         self.assertEqual(body['comment_channel'], 'dc/a')
         # задача іншого простору — його простір, і без інтеграцій каналу коментарів немає
         st, body = self.jget('/t/x/api/task')
         self.assertEqual((st, body['id'], body['space']['id']), (200, 'x', self.p_id))
         self.assertNotIn('integrations', body['space'])
+        self.assertIs(body['space']['publish_password'], False, 'простір задачі несе стан пароля превʼю: меню читає його звідси')
         self.assertEqual((body['space']['name'], body['space']['color']), ('P', 'space-2'))
         self.assertIsNone(body['comment_channel'])
 

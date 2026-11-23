@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -298,6 +299,138 @@ def _node_bin(name='npx'):
 # 4b-1: модулі (режим `cli` у `vercel-publish`) шукають `npx` так само, як ядро (див. докстрінг вище). Лише реєстрація:
 # `_node_bin` не кличеться при імпорті (login-shell повільний) — тільки коли модуль сам попросить `ctx['find_tool']`.
 deai_modules.set_tool_finder(_node_bin)
+
+
+#: «Перший запуск» (0.33.0, `GET /api/setup`): чи знімає «Огляд» на цій машині. Один `node -e` у корені установки друкує
+#: `{v: версія node, pw: чи є пакет playwright, browser: чи є файл chromium.executablePath()}`.
+_SHOTS_PROBE = ("const o={v:process.versions.node,pw:false,browser:false};"
+                "try{const p=require('playwright');o.pw=true;"
+                "try{o.browser=require('fs').existsSync(p.chromium.executablePath())}catch(e){}}catch(e){}"
+                "process.stdout.write(JSON.stringify(o))")
+_SETUP_TTL = 30
+_SETUP_TIMEOUT = 10
+_SETUP_CACHE = {}           # шлях node → (monotonic, shots)
+_SETUP_LOCK = threading.Lock()
+
+
+def _shots_node(fresh=False):
+    """Node для перевірки знімків: `DEAI_SHOTS_NODE` (абсолютний шлях до виконуваного; тести й нестандартні машини),
+    інакше `_node_bin('node')`. Не той шлях — `None` (стан `no-node`). Сам пошук кешується на `_SETUP_TTL` під ключем
+    `('node', значення DEAI_SHOTS_NODE)` (без Node `_node_bin` щоразу ганяє `zsh -lic` до 15 с); `fresh` кеш обходить."""
+    forced = os.environ.get('DEAI_SHOTS_NODE')
+    key = ('node', forced)
+    now = time.monotonic()
+    if not fresh:
+        with _SETUP_LOCK:
+            hit = _SETUP_CACHE.get(key)
+        if hit and now - hit[0] < _SETUP_TTL:
+            return hit[1]
+    if forced:
+        found = forced if os.path.isabs(forced) and os.access(forced, os.X_OK) else None
+    else:
+        found = _node_bin('node')
+    with _SETUP_LOCK:
+        _SETUP_CACHE[key] = (now, found)
+    return found
+
+
+def shots_command():
+    """Команда, що ставить знімки «Огляду» в цій установці (копіюється людиною в термінал)."""
+    return f'cd {shlex.quote(ROOT)} && npm install && npx playwright install chromium'
+
+
+def shots_setup(fresh=False):
+    """`{state, node, command}`: `ok | no-node | no-playwright | no-browser | unknown`. Кеш 30 с на шлях node; `fresh` — без
+    кешу. Збій чи тайм-аут перевірки — `unknown` (UI тоді нічого не блокує)."""
+    node = _shots_node(fresh)
+    if node is None:
+        return {'state': 'no-node', 'node': None, 'command': None}
+    now = time.monotonic()
+    with _SETUP_LOCK:
+        hit = _SETUP_CACHE.get(node)
+        if hit and not fresh and now - hit[0] < _SETUP_TTL:
+            return dict(hit[1])
+    try:
+        r = subprocess.run([node, '-e', _SHOTS_PROBE], cwd=ROOT, capture_output=True, text=True, timeout=_SETUP_TIMEOUT)
+        o = json.loads(r.stdout or '')
+        if r.returncode != 0 or not isinstance(o, dict):
+            raise ValueError('bad probe')
+    except (OSError, subprocess.SubprocessError, ValueError):
+        out = {'state': 'unknown', 'node': None, 'command': None}
+    else:
+        pw, browser = o.get('pw') is True, o.get('browser') is True
+        state = 'ok' if pw and browser else ('no-browser' if pw else 'no-playwright')
+        out = {'state': state, 'node': o['v'] if isinstance(o.get('v'), str) else None,
+               'command': None if state == 'ok' else shots_command()}
+    with _SETUP_LOCK:
+        _SETUP_CACHE[node] = (now, out)
+    return dict(out)
+
+
+def shoot_failure(err, report):
+    """Людська причина провалу зʼємки: `{'code': 'no-browser', 'command': …}` або `None`. Playwright без завантаженого
+    Chromium падає з «Executable doesn't exist» — канвас тоді каже, чого бракує, і яку команду виконати, а не дамп."""
+    raw = report.get('raw') if isinstance(report, dict) and isinstance(report.get('raw'), str) else ''
+    if "Executable doesn't exist" in f'{err or ""}\n{raw}':
+        return {'code': 'no-browser', 'command': shots_command()}
+    return None
+
+
+#: Демо-задача «Tally» (0.33.0): шаблон у репо, згенерований `node ops/demo-task.mjs`.
+DEMO_DIR = os.path.join(ROOT, 'app', 'templates', 'demo')
+DEMO_PINS = os.path.join(ROOT, 'app', 'templates', 'demo-pins.json')
+DEMO_ID = 'tally-demo'
+_HOST_RE = re.compile(r'^[A-Za-z0-9.\-\[\]:]{1,100}$')
+
+
+def demo_task_id():
+    """Вільний id демо-задачі на машині: `tally-demo`, далі `tally-demo-2`, `-3`… (`find_task` дивиться в усі простори)."""
+    n = 1
+    while True:
+        tid = DEMO_ID if n == 1 else f'{DEMO_ID}-{n}'
+        try:
+            if spaces.find_task(tid) is None:
+                return tid
+        except spaces.AmbiguousTask:
+            pass
+        n += 1
+
+
+def demo_task_in(space_id):
+    """Id найнижчої за НОМЕРОМ (не за рядком) демо-задачі, що живе рівно в просторі `space_id` і більше ніде: `tally-demo`, далі
+    `tally-demo-2`, `-3`… Нема такої чи реєстр не прочитати → `None` (тоді `reuse` створює нову, як і раніше). Шар вимкнено —
+    стара поведінка: `find_task(DEMO_ID)` проти id простору."""
+    try:
+        if not spaces.layer_on():
+            home = spaces.find_task(DEMO_ID)
+            return DEMO_ID if home is not None and home.get('id') == space_id else None
+        found = []
+        for tid, where in spaces.task_ids_by_space(spaces.load_registry()).items():
+            m = re.fullmatch(re.escape(DEMO_ID) + r'(?:-(\d+))?', tid)
+            if m and where == [space_id]:
+                found.append((int(m.group(1) or 1), tid))
+        return min(found)[1] if found else None
+    except (spaces.SpacesError, spaces.AmbiguousTask, OSError, ValueError):
+        return None
+
+
+def demo_comments(origin, pins_file=DEMO_PINS):
+    """Піни шаблону → записи локального каналу задачі (та сама форма, що пише `/api/local-comments`), з адресою `origin`."""
+    with open(pins_file, encoding='utf-8') as f:
+        data = json.load(f)
+    ts = time.strftime('%d.%m.%Y %H:%M')
+    out = []
+    for seq, p in enumerate(data.get('pins', []), 1):
+        page = p['page']
+        c = {'id': f'demo-{seq}', 'author': p.get('who') or 'Designer', 'text': p['text'], 'status': p['status'],
+             'fp': p['fp'], 'htmlSnapshot': None, 'bornV': 1, 'ts': ts,
+             'meta': {'url': f'{origin}/commented?it=it1&page={page}&ch=local', 'route': '/commented',
+                      'version': f'1/{page}', 'iteration': '1', 'viewport': {'w': 1440, 'h': 900}, 'seq': seq,
+                      'sel': p['sel']}}
+        if p['status'] == 'resolved':
+            c.update(resolvedV=1, resolveReason=p.get('reason') or '')
+        out.append(c)
+    return out
 
 
 def _file_hash(path):
@@ -3973,6 +4106,7 @@ LAYER_BUNDLE = 'comment-layer.min.js'
 #: `ext-inspect.js` (власний модуль превʼю), `shell-inspect.js`, `insp-panel.js`, `insp-model.js` — панель інспектора лише для
 #: перегляду (0.32.0). `insp-model.js` імпортує `./vendor/inspector-core.js`, тож `shell/vendor/` (`SHELL_VENDOR`) — частина
 #: того самого замикання; сам оверлей з `shell/vendor/` бере `../i18n.js` і `../esc.js` звідси.
+#: `setup-model.js` — `shotsBlock` (0.33.0): `shell-panel.js` і `shell-palette.js` беруть звідти причину «знімати нема чим».
 #: Модулі їдуть звідси байт у байт. Опція «під зовнішній режим» у спільному модулі допустима, лише коли ДЕФОЛТНИЙ вихід
 #: приколений золотими тестами (так 0.32.0 додав `readonly` панелі інспектора); гілка «а в превʼю інакше» без цього ламала б
 #: інструмент.
@@ -3981,7 +4115,8 @@ SHELL_MODULES = ('i18n.js', 'icons.js', 'shell-panel.js', 'viewport.js',
                  'styles.css', 'ask.js', 'esc.js', 'ext-shell.js', 'ext-bar.js',
                  'tree-model.js', 'clean-view.js', 'island.js',
                  'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js', 'cmt-form.js',
-                 'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js', 'ext-follow.js')
+                 'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js', 'ext-follow.js',
+                 'setup-model.js')
 
 #: Типова ширина кадру. МУСИТЬ дорівнювати `CANVAS_W` у app/viewport.js:
 #: саме на ній тримається правило ключа («типова ширина суфікса не додає»), і
@@ -5615,13 +5750,35 @@ def space_view(sp):
         compat = deai_modules.compat_view(sp, out['capabilities'])
         if compat:                       # ключ лише коли непорожній (Поправка 4): точні тести `describe`/`listing` не зачеплені
             out['compat'] = compat
+        pw = _publish_password(sp, out['capabilities'])
+        if pw is not _NO_PW:             # пароль превʼю (0.33.0): смуга задачі читає простір із `/api/task`, а не зі списку
+            out['publish_password'] = pw
     return out
+
+
+_NO_PW = object()
+
+
+def _publish_password(sp, caps):
+    """Пароль превʼю простору (0.33.0): `True|False|None` — задано / не задано / не прочитати (`_secret_flags`); `_NO_PW` —
+    публікації нема чи її постачальник пароля не має (поля в списку тоді нема). Тотальна: збій — `_NO_PW`, список не падає."""
+    pid = (caps or {}).get('publish')
+    if not pid:
+        return _NO_PW
+    try:
+        m = deai_modules.provider('publish', sp)
+        if m is None or m.id != pid or 'password' not in m.secret_keys():
+            return _NO_PW
+        flags, _err = _secret_flags(sp['id'], m)
+    except Exception:  # noqa: BLE001 — один простір не ламає список (як `capabilities`)
+        return _NO_PW
+    return flags.get('password')
 
 
 def spaces_listing():
     """`spaces.listing()` + `capabilities` і `tracks`/`default_track` у кожному записі. Запис реєстру відновлюється з самого запису
     списку (вдруге реєстр не читаємо — списку вистачає одного знімка). Один збій простору не ламає список:
-    `capabilities` і напрямки не кидають.
+    `capabilities` і напрямки не кидають. `publish_password` (0.33.0) — див. `_publish_password`.
 
     `tracks` (4d-1) — `[{id, label}]` напрямків простору й `default_track`; ⛔ БЕЗ `root` і `repo`: шляхи й адреси репо не їдуть у
     браузер (форма «Нова задача» вибирає напрямок за назвою, а теку й репо додає сервер). Напрямки простору — ОДНЕ `_TrackView`
@@ -5632,6 +5789,9 @@ def spaces_listing():
     for e in out['spaces']:
         sp = {'id': e['id'], 'path': e['path']}
         e['capabilities'] = deai_modules.capabilities(sp)
+        pw = _publish_password(sp, e['capabilities'])
+        if pw is not _NO_PW:
+            e['publish_password'] = pw              # пароль превʼю (0.33.0): меню «Опублікувати» показує стан
         e['tools'] = spaces.space_tools(sp)         # вимикачі інструментів («В Figma»): смуга й ⌘K читають їх зі списку
         compat = deai_modules.compat_view(sp, e['capabilities'])
         if compat:
@@ -5772,6 +5932,34 @@ def module_check_verdict(space, mid):
         if e.code in CHECK_NOT_A_VERDICT:
             raise
         return {'ok': False, 'error': e.code, 'detail': e.message}
+
+
+#: Тіло `POST /api/module-tool|module-action` — не більше (байтів): панель шле короткі аргументи.
+MODULE_CALL_BODY_MAX = 64 * 1024
+
+
+def module_action_target(frm, tid, iid):
+    """`target` дії модуля: `{'from', 'task': {'id', 'name', 'dir'}, 'iteration': {'id', 'name'} | None}`. Задача — лише з реєстру
+    ЦЬОГО простору (`load_tasks()` читає файл простору запиту, його вже зафіксував `_module_space`): id — точний ключ, тека є на
+    машині (`dir` — абсолютний шлях), інакше `unknown-task`. Ітерація — `None` чи id з `iterations.json` задачі, інакше
+    `unknown-iteration`. Нечитабельний `iterations.json` — «ітерації нема»."""
+    err = deai_modules.ModuleError
+    tasks = load_tasks().get('tasks')
+    task = tasks.get(tid) if isinstance(tid, str) and isinstance(tasks, dict) else None
+    d = task.get('dir') if isinstance(task, dict) else None
+    if not isinstance(d, str) or not os.path.isdir(d):
+        raise err('unknown-task', message='unknown task')
+    task = dict(task, dir=os.path.abspath(d))
+    it = None
+    if iid is not None:
+        try:
+            found = next((i for i in task_iterations(task) if isinstance(i, dict) and isinstance(iid, str) and i.get('id') == iid), None)
+        except (OSError, ValueError, RecursionError, AttributeError):
+            found = None
+        if found is None:
+            raise err('unknown-iteration', message='unknown iteration')
+        it = {'id': iid, 'name': iteration_note(found) or iid}
+    return {'from': frm, 'task': {'id': tid, 'name': str(task.get('title') or tid), 'dir': task['dir']}, 'iteration': it}
 
 
 #: «Ключа `replace` у тілі не було» — відмінне від явного JSON `null` (той — помилка клієнта: `bad-settings`).
@@ -6286,15 +6474,16 @@ class Handler(SimpleHTTPRequestHandler):
                         '/api/task-restore', '/api/task-purge', '/api/spaces',
                         '/api/space-peek', '/api/space-new', '/api/space-update', '/api/space-tool',
                         '/api/space-switch',
-                        '/api/modules', '/api/module-enable', '/api/module-disable',
+                        '/api/modules', '/api/module-ext', '/api/module-enable', '/api/module-disable',
                         '/api/module-settings', '/api/module-check', '/api/ds-tokens',
-                        '/api/module-trust', '/api/module-untrust', '/api/agents-md')
+                        '/api/module-tool', '/api/module-action',
+                        '/api/module-trust', '/api/module-untrust', '/api/agents-md', '/api/demo-task')
 
     #: Маршрути МАШИНИ (оновлення, відгук): потрібні саме тоді, коли щось зламано (порожня машина, битий реєстр, нечитабельний
     #: `tasks.json`). `_take_task` для них НЕ фіксує простір і не читає задач; префіксна форма `/t/<id>/api/…` відхиляється 400.
     #: Обробники самі й тотально збирають контекст (простір, задача). Точна відповідність (шлях без query), кожен маршрут окремо.
     _MACHINE_ROUTES = ('/api/update', '/api/update-check', '/api/update-apply', '/api/update-notes',
-                       '/api/feedback', '/api/feedback-preview', '/api/claude-statuses')
+                       '/api/feedback', '/api/feedback-preview', '/api/claude-statuses', '/api/setup')
 
     def _pin_current_space(self):
         """Не названа задача: простір запиту — поточний простір машини НА ВХОДІ. Запит дочитує
@@ -6428,6 +6617,18 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.split('?')[0] == '/api/update':
             self._send_json(_updater().status())
             return
+        if self.path.split('?')[0] == '/api/setup':
+            # Запускає `node` (перевірка знімків): чужа сторінка (`<img src=…>`) не сміє його смикати — та сама варта, що в
+            # `update-notes`. Абсолютні шляхи — лише цієї машини й лише у відповіді (як `/api/agents-md`).
+            if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin')):
+                self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+                return
+            fresh = parse_qs(urlparse(self.path).query).get('fresh', ['0'])[0] == '1'
+            self._send_json({'ok': True, 'version': updater.current_version(UPDATER_ROOT),
+                             'python': '.'.join(str(x) for x in sys.version_info[:3]), 'platform': sys.platform,
+                             'paths': {'deai': ROOT, 'setup': os.path.join(ROOT, 'SETUP.md')},
+                             'shots': shots_setup(fresh)})
+            return
         if self.path.split('?')[0] == '/api/update-notes':
             # ⛔ GET, що може піти в мережу (`fetch` тега): чужа сторінка (`<img src=…>`) не сміє його смикати. `Sec-Fetch-Site` cross-/same-site
             # або чужий `Origin` → 403 до будь-якого `git`; без обох заголовків (curl, старі рушії) — пускаємо.
@@ -6443,6 +6644,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path.split('?')[0] == '/api/modules':
             self._modules_get()
+            return
+        if self.path.split('?')[0] == '/api/module-ext':
+            self._module_ext_get()
             return
         if self.path.split('?')[0] == '/api/module-trust':
             self._module_trust_get()
@@ -7248,6 +7452,11 @@ class Handler(SimpleHTTPRequestHandler):
         # сторінок знялась і вже лежить на диску. Той, хто малює тост, мусить
         # дивитись на `report.shot` і `report.failed` ОКРЕМО, інакше скаже «не знято
         # нічого» там, де знято сім із восьми.
+        fail = None if child.returncode == 0 else shoot_failure(err, report)
+        if fail:
+            self._send_json({'ok': False, **fail, 'error': "Chromium for Playwright is not installed",
+                             'report': report, 'stderr': (err or '')[-2000:]})
+            return
         self._send_json({'ok': child.returncode == 0, 'report': report,
                          'stderr': (err or '')[-2000:]})
 
@@ -7547,9 +7756,20 @@ class Handler(SimpleHTTPRequestHandler):
         if not self._take_task():
             return
         try:
+            if self.path in ('/api/module-tool', '/api/module-action'):
+                try:
+                    length = int(self.headers.get('Content-Length', 0))
+                except ValueError:
+                    length = -1
+                if length < 0:                  # ⛔ від'ємна/сміттєва довжина: `rfile.read(-1)` чекала б кінця потоку
+                    self._refuse_unread(400, 'bad-request', 'bad Content-Length')
+                    return
             length = int(self.headers.get('Content-Length', 0))
             if length > feedback.BODY_MAX and self.path in ('/api/feedback', '/api/feedback-preview'):
                 self._space_error(413, 'body-too-large', 'feedback body is too large')       # ДО читання: пам'ять не роздуваємо
+                return
+            if length > MODULE_CALL_BODY_MAX and self.path in ('/api/module-tool', '/api/module-action'):
+                self._refuse_unread(413, 'body-too-large', 'module call body is too large')   # так само: ДО читання
                 return
             raw_body = self.rfile.read(length) if length else b''
             self._body_read = True      # далі центральна відмова тіло вже не вичитує
@@ -7645,6 +7865,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._task_purge(payload)
         elif self.path == '/api/task-new':
             self._task_new(payload)
+        elif self.path == '/api/demo-task':
+            self._demo_task(payload)
         elif self.path == '/api/space-new':
             self._space_new(payload)
         elif self.path == '/api/space-update':
@@ -7663,6 +7885,10 @@ class Handler(SimpleHTTPRequestHandler):
             self._module_settings(payload)
         elif self.path == '/api/module-check':
             self._module_check(payload)
+        elif self.path == '/api/module-tool':
+            self._module_tool(payload)
+        elif self.path == '/api/module-action':
+            self._module_action(payload)
         elif self.path == '/api/module-trust':
             self._module_trust_post(payload)
         elif self.path == '/api/module-untrust':
@@ -8650,7 +8876,7 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         return AdoptPlan(real, files, total, links)
 
-    def _task_new(self, payload):
+    def _task_new(self, payload, after=None):
         """Нова задача. Простір: `space` з тіла (є, але такого нема — 400, НЕ відкат у простір ЛІГА:
         мовчки завести «особисту» задачу в реєстр ЛІГА гірше за відмову); без `space` — простір
         із `legacy: true`, якщо він є, інакше поточний (4d-4c: ознак потоку ЛІГА більше нема —
@@ -8685,7 +8911,9 @@ class Handler(SimpleHTTPRequestHandler):
         ІГНОРУЄТЬСЯ (задача — у напрямок за замовчуванням), а `track` суворий; поля нема — `default_track`.
 
         ⚠️ Порядок: простір запиту фіксується ПЕРЕД `load_tasks()` — конфіг ЦІЛЬОВОГО простору, а не
-        поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі."""
+        поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі.
+
+        `after(out)` (0.33.0, демо-задача) перетворює відповідь успіху перед відправкою."""
         profile = payload.get('profile')
         if profile is not None and not isinstance(profile, str):
             self._space_error(400, 'bad-profile', 'profile must be a string')
@@ -8831,7 +9059,35 @@ class Handler(SimpleHTTPRequestHandler):
             # Що скопійовано НАСПРАВДІ (`adopt_copy`), а не що бачив обхід: підмінене між ними — теж у пропущених.
             out['copied'] = {'files': done['files'], 'bytes': done['bytes'],
                              'skipped_links': adopt.links + done['skipped']}
-        self._send_json(out)
+        self._send_json(after(out) if after else out)
+
+    def _demo_task(self, payload):
+        """`POST /api/demo-task {space, title?, reuse?}` → `{ok, id, space[, existed]}` (0.33.0): демо-задача «Tally» у просторі
+        `space` — той самий `_task_new` з `from` = шаблон (`DEMO_DIR`), далі два піни (`DEMO_PINS`) у локальний канал задачі з
+        адресою цього сервера. `reuse: true` (⌘K «Відкрити демо»): демо вже в цьому просторі (`demo_task_in`: найнижчий номер із
+        `tally-demo`, `tally-demo-2`… , що живе лише тут) — віддати його, нічого не створюючи. Відмови — ті самі, що в `task-new` з `from`; `space` не рядок чи порожній — 400 `bad-request`."""
+        want = payload.get('space')
+        if not isinstance(want, str) or not want:
+            self._space_error(400, 'bad-request', 'space must be a non-empty string')
+            return
+        if payload.get('reuse') is True:
+            have = demo_task_in(want)
+            if have is not None:
+                self._send_json({'ok': True, 'id': have, 'space': want, 'existed': True})
+                return
+        title = payload.get('title')
+        title = title.strip()[:200] if isinstance(title, str) and title.strip() else 'Tally — demo'
+        host = self.headers.get('Host') or ''
+        origin = f'http://{host}' if _HOST_RE.fullmatch(host) else f'http://127.0.0.1:{self.server.server_address[1]}'
+
+        def seed(out):
+            try:
+                atomic_write_json(os.path.join(out['dir'], '.dc-local-comments.json'), demo_comments(origin), indent=1)
+            except (OSError, ValueError, KeyError) as e:      # піни — додаток до задачі, не її умова
+                print(f'demo-task: pins not written: {type(e).__name__}', file=sys.stderr)
+            return {'ok': True, 'id': out['id'], 'space': out['space']}
+
+        self._task_new({'id': demo_task_id(), 'title': title, 'space': want, 'from': DEMO_DIR}, after=seed)
 
     # ---------- Простори (реєстр машини: `spaces.py`) ----------
 
@@ -8868,10 +9124,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     @staticmethod
     def _write_space_agents_md(sid):
-        """Новий простір дістає AGENTS.md одразу; збій запису НЕ валить створення простору — лише лог (stderr)."""
+        """Новий простір дістає AGENTS.md і (коли його нема) CLAUDE.md з `@AGENTS.md` одразу; збій запису НЕ валить створення простору — лише лог (stderr)."""
         try:
             sp = next(s for s in spaces.read_registry()['spaces'] if s['id'] == sid)
             agents_md.write(sp['path'], version=updater.current_version(UPDATER_ROOT))
+            agents_md.claude_ensure(sp['path'])     # CLAUDE.md з `@AGENTS.md` — лише коли його нема (0.33.0)
         except Exception as e:    # noqa: BLE001 — навмисно: AGENTS.md — додаток до простору, не його умова
             print(f'agents-md: not written for new space {sid}: {type(e).__name__}', file=sys.stderr)
 
@@ -8897,12 +9154,14 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'space': sid, 'tools': tools})
 
     def _agents_md_post(self, payload):
-        """`POST /api/agents-md {space}`: створити/оновити блок."""
-        self._agents_md(payload.get('space'), True)
+        """`POST /api/agents-md {space[, claude: true]}`: створити/оновити блок; з `claude: true` — лише підключити CLAUDE.md
+        (`agents_md.claude_connect`: дописати `@AGENTS.md` на початок чи створити файл), AGENTS.md не чіпається."""
+        self._agents_md(payload.get('space'), 'claude' if payload.get('claude') is True else True)
 
     def _agents_md(self, want, write):
         """`GET|POST /api/agents-md[?space=]` → `{ok, space, …agents_md.status, paths}`. POST створює/оновлює блок (`ValueError('newer')` →
-        409 `newer`, файл цілий). Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
+        409 `newer`, файл цілий). `claude` — стан CLAUDE.md теки простору (`agents_md.claude_status`); `write='claude'` —
+        лише підключити його. Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
         у відповіді, у файл вони не потрапляють. Версія — та сама, що `current` у `GET /api/update`."""
         sp = self._module_space(want)
         if sp is None:
@@ -8913,8 +9172,17 @@ class Handler(SimpleHTTPRequestHandler):
             return
         version = updater.current_version(UPDATER_ROOT)
         try:
-            if write:
+            if write == 'claude':
+                agents_md.claude_connect(folder)
+                st = agents_md.status(folder, version=version)
+            elif write:
+                existed = os.path.lexists(os.path.join(folder, agents_md.NAME))
                 st = agents_md.write(folder, version=version)
+                if not existed:
+                    try:
+                        agents_md.claude_ensure(folder)   # «Створити»: CLAUDE.md лише коли його нема; збій — не збій AGENTS.md
+                    except OSError:
+                        pass
             else:
                 st = agents_md.status(folder, version=version)
         except ValueError as e:
@@ -8924,7 +9192,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_error(503, 'unreadable', 'unreadable')
             return
         deai = UPDATER_ROOT
-        self._send_json({'ok': True, 'space': sp['id'], **st,
+        self._send_json({'ok': True, 'space': sp['id'], **st, 'claude': agents_md.claude_status(folder),
                          'paths': {'deai': deai, 'inbox': os.path.join(deai, 'bin', 'inbox.py'),
                                    'authoring': os.path.join(deai, 'docs', 'modules', 'authoring.md')}})
 
@@ -8973,6 +9241,14 @@ class Handler(SimpleHTTPRequestHandler):
         if sp is None:
             return
         self._send_json(modules_payload(sp))
+
+    def _module_ext_get(self):
+        """`GET /api/module-ext?space=` → `{tools: [...], actions: [...]}` (`deai_modules.extensions`): простір і відмови — ті самі, що в
+        `GET /api/modules` (`_module_space`; `space-json-unreadable` — 409 центрально). Шар просторів вимкнено — неявний простір, порожні списки."""
+        sp = self._module_space(parse_qs(urlparse(self.path).query).get('space', [None])[0])
+        if sp is None:
+            return
+        self._send_json(deai_modules.extensions(sp))
 
     def _ds_tokens_get(self):
         """`GET /api/ds-tokens?space=` → `ds_tokens_view`: завжди 200 для відомого простору (інспектор мусить
@@ -9029,6 +9305,39 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _module_check(self, payload):
         self._module_post(payload, 'check')
+
+    def _refuse_unread(self, status, code, error):
+        """Відмова БЕЗ читання тіла (лише маршрути викликів модулів): `Connection: close` і закрите зʼєднання — тіло, яке клієнт
+        обіцяв (`Content-Length: 99999999999`), не вичитуємо й не чекаємо."""
+        self._body_read = True                  # центральна відмова тіло теж не вичитує
+        self.close_connection = True
+        body = json.dumps({'ok': False, 'code': code, 'error': error}).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _module_tool(self, payload):
+        """`POST /api/module-tool {space?, module, fn, args?}` → `{value}` (`deai_modules.call_tool`: лише `tool_*` модуля з
+        інструментами, ≤ 256 КіБ JSON, стеля `TOOL_TIMEOUT`). Тіло ≤ 64 КіБ (`MODULE_CALL_BODY_MAX`, 413 до читання); відмови —
+        `ModuleError` → `_guarded` (`{ok: false, code, error}`)."""
+        sp = self._module_space(payload.get('space'))
+        if sp is None:
+            return
+        self._send_json({'value': deai_modules.call_tool(sp, payload.get('module'), payload.get('fn'), payload.get('args'))})
+
+    def _module_action(self, payload):
+        """`POST /api/module-action {space?, module, action, from, task, iteration}` → `{ok, text?, url?}`. Модуль і дію перевіряє ядро
+        (`action_module`), задачу й ітерацію — `module_action_target` (лише задачі ЦЬОГО простору)."""
+        sp = self._module_space(payload.get('space'))
+        if sp is None:
+            return
+        mid, aid, frm = payload.get('module'), payload.get('action'), payload.get('from')
+        deai_modules.action_module(sp, mid, aid)                  # 404 модуля/дії — раніше за задачу
+        target = module_action_target(frm, payload.get('task'), payload.get('iteration'))
+        self._send_json(deai_modules.run_action(sp, mid, aid, target, where=frm))
 
     def _module_post(self, payload, action):
         """`POST /api/module-enable|disable|settings|check` `{space?, id, settings?, secrets?, replace?}`:
@@ -9653,6 +9962,131 @@ def open_module_client(mod, name):
         return None
 
 
+# ---------------------------------------------------------------------------------------------------
+# Роздача панелей інструментів модулів (M1, Task 3): `GET /api/module-ui/<простір>/<модуль>/<шлях>` і набір панелі
+# `GET /api/module-ui-kit/<імʼя>`. Панель — сторінка стороннього модуля в `<iframe sandbox>` оболонки: непрозорий origin, скрипти
+# без доступу до оболонки, мережа закрита (`connect-src 'none'`), а все спілкування — через `postMessage` мосту (`bridge.js`).
+# Віддаємо лише теку панелі якогось ІНСТРУМЕНТА модуля (префікс директорій його `panel`) і лише дозволені розширення — `server.py`,
+# `module.json` і решта теки недосяжні. Свій модуль — зі знімка довіри (`m.dir`), тож правка теки після довіри сторінок не
+# досягає. Маршрути стоять ДО `_take_task`, як `/api/module-client/`: заголовок задачі й реєстр на них не діють; усі відмови —
+# той самий 404 зі сталим тілом. Лише GET (HEAD, як і для module-client, окремо не обробляється).
+MODULE_UI_PREFIX = '/api/module-ui/'
+MODULE_UI_KIT_PREFIX = '/api/module-ui-kit/'
+MODULE_UI_TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
+                   '.png': 'image/png', '.json': 'application/json', '.woff2': 'font/woff2'}
+MODULE_UI_SEG_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}')
+MODULE_UI_HEADERS = (
+    ('Content-Security-Policy', "sandbox allow-scripts allow-forms; default-src 'self' 'unsafe-inline' data:; "
+                                "connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'"),
+    ('X-Content-Type-Options', 'nosniff'),
+    ('Access-Control-Allow-Origin', '*'),
+    ('Referrer-Policy', 'no-referrer'),
+)
+MODULE_KIT_FILES = ('kit.css', 'bridge.js')
+MODULE_KIT_DIR = os.path.join(APP_DIR, 'module-kit')
+#: Підключення набору — одразу після `<!doctype …>` (чи на початок): панель отримує мост і стилі без жодного коду автора.
+KIT_TAGS = ('<link rel="stylesheet" href="/api/module-ui-kit/kit.css">'
+            '<script src="/api/module-ui-kit/bridge.js"></script>')
+_DOCTYPE_RE = re.compile(rb'\A(?:\xef\xbb\xbf)?\s*<!doctype[^>]*>', re.IGNORECASE)
+
+
+def module_ui_target(path):
+    """`(Module, [складові], вид)` для `path` (БЕЗ `?query`) виду `/api/module-ui/<простір>/<модуль>/<складова>/…` або `None`.
+    НІКОЛИ не кидає. Кожна складова розкодована суворо (`%ff` → відмова; `%2f`, `%5c`, `%00` усередині складової, порожня — відмова),
+    придатна за шаблонами (простір `SPACE_ID_RE` і є в реєстрі, модуль `ID_RE`, файлові складові `MODULE_UI_SEG_RE`: ні `.`/`..`,
+    ні прихованих). Файлових складових 2..6. Модуль — `deai_modules.ext_module` (справний, api 2, явно увімкнений, з
+    інструментами) у просторі з URL. Дозволено лише шлях у теці панелі якогось інструмента й розширення з `MODULE_UI_TYPES`;
+    вид — `'html'` чи `'asset'`."""
+    try:
+        if not path.startswith(MODULE_UI_PREFIX):
+            return None
+        parts = [unquote(p, errors='strict') for p in path[len(MODULE_UI_PREFIX):].split('/')]
+        if any(p == '' or '/' in p or '\\' in p or '\0' in p for p in parts) or not 4 <= len(parts) <= 8:
+            return None
+        sid, mid, segs = parts[0], parts[1], parts[2:]
+        if not spaces.SPACE_ID_RE.fullmatch(sid) or not deai_modules.ID_RE.fullmatch(mid):
+            return None
+        if not all(MODULE_UI_SEG_RE.fullmatch(p) for p in segs):
+            return None
+        ext = os.path.splitext(segs[-1])[1].lower()
+        if ext not in MODULE_UI_TYPES:
+            return None
+        sp = next((s for s in spaces.read_registry()['spaces'] if s['id'] == sid), None)
+        if sp is None:
+            return None
+        # як у `module_client_target`: маршрут до `_take_task`, а завантаження довіреного знімка виконує код модуля — у його просторі
+        with spaces.request_space(sp['id']):
+            mod = deai_modules.ext_module(sp, mid)
+        if mod is None:
+            return None
+        for t in mod.tools:
+            d = t['panel'].split('/')[:-1]
+            if len(segs) > len(d) and segs[:len(d)] == d:
+                return mod, segs, ('html' if ext == '.html' else 'asset')
+        return None
+    except Exception:  # noqa: BLE001 — статичний файл не розповідає, що саме зламалось
+        return None
+
+
+def open_module_ui(mod, segs):
+    """`(fd, fstat)` відкритого файла `segs` теки модуля `mod` або `None` (404). НЕ кидає. ОС з `dir_fd`: кожну теку шляху
+    відкрито `O_DIRECTORY|O_NOFOLLOW` відносно попередньої (тека-посилання — відмова), файл — `_published_open_file` відносно
+    останньої (звичайний файл, `nlink == 1`, `O_NOFOLLOW`); проміжні дескриптори закриваються. Без `dir_fd` (Windows) — запасний
+    `open_published_file` ПІСЛЯ перевірки, що кожна тека шляху — справжня тека, а не посилання. Власність дескриптора — викликачу."""
+    try:
+        if _PUBLISHED_DIRFD:
+            fds = []
+            try:
+                cur = _published_openat(mod.dir, _PUBLISHED_OPEN_DIR)
+                fds.append(cur)
+                for seg in segs[:-1]:
+                    if not _published_name_ok(seg):
+                        return None
+                    cur = _published_openat(seg, _PUBLISHED_OPEN_DIR, cur)
+                    fds.append(cur)
+                if not _published_name_ok(segs[-1]):
+                    return None
+                return _published_open_file(segs[-1], cur)
+            finally:
+                for fd in fds:
+                    os.close(fd)
+        walk = mod.dir
+        for seg in segs[:-1]:
+            walk = os.path.join(walk, seg)
+            if not stat.S_ISDIR(os.lstat(walk).st_mode):
+                return None
+        return open_published_file(os.path.join(mod.dir, *segs), _published_real_dir(mod.dir))
+    except OSError:
+        return None
+
+
+def open_module_kit(name):
+    """`(fd, fstat)` файла набору панелі `name` (рівно з `MODULE_KIT_FILES`) або `None`. НЕ кидає."""
+    if name not in MODULE_KIT_FILES:
+        return None
+    return open_module_ui(deai_modules.Module('kit', dir=MODULE_KIT_DIR), [name])
+
+
+def module_ui_html(opened):
+    """Тіло html-панелі з набором: читає відкритий дескриптор (≤ `MAX_PANEL_BYTES`, більше — `None`) і вставляє `KIT_TAGS`
+    після початкового `<!doctype …>` (BOM лишається першим), інакше — на початок (після BOM). Закриває дескриптор."""
+    fd, st = opened
+    try:
+        with os.fdopen(fd, 'rb') as f:
+            fd = None
+            if st.st_size > deai_modules.MAX_PANEL_BYTES:
+                return None
+            data = f.read(deai_modules.MAX_PANEL_BYTES + 1)
+    finally:
+        if fd is not None:
+            os.close(fd)
+    if len(data) > deai_modules.MAX_PANEL_BYTES:
+        return None
+    m = _DOCTYPE_RE.match(data)
+    at = m.end() if m else (3 if data.startswith(b'\xef\xbb\xbf') else 0)
+    return data[:at] + KIT_TAGS.encode('ascii') + data[at:]
+
+
 def trust_seam_warning():
     """Рядок для журналу старту, коли діє тестовий шов `DEAI_TRUST_CONFIRM` (довіра без системного вікна), інакше `None`."""
     v = module_trust.seam_value()
@@ -9665,7 +10099,7 @@ def make_server(port=0):
     handler = Handler
     # /it-assets/<it>/... — статика итераций текущей задачи
     class Routed(handler):
-        def _send_iter_file(self, target, extra_headers=(), utf8=False, opened=None):
+        def _send_iter_file(self, target, extra_headers=(), utf8=False, opened=None, ctype=None):
             # `extra_headers` — пари (імʼя, значення) на КОЖНУ відповідь цього файла, і на 304 теж (`/published`:
             # захисні заголовки сторінки в пісочниці; 304 без них лишив би кеш без захисту). `utf8` — текстовим
             # типам дописати `; charset=utf-8` (`/published`: сторінки збірка пише в UTF-8, а без `<meta charset>`
@@ -9715,12 +10149,12 @@ def make_server(port=0):
                     with open(target, 'rb') as f:
                         data = f.read()
                 self._send_iter_body(target, st, etag, data if stream is None else None, stream,
-                                     extra_headers, utf8)
+                                     extra_headers, utf8, ctype)
             finally:
                 if stream is not None:
                     stream.close()
 
-        def _send_iter_body(self, target, st, etag, data, stream, extra_headers, utf8):
+        def _send_iter_body(self, target, st, etag, data, stream, extra_headers, utf8, forced=None):
             """200 для `_send_iter_file`: заголовки й тіло — з пам'яті (`data`) або шматками зі `stream`."""
             self.send_response(200)
             if etag:
@@ -9729,10 +10163,10 @@ def make_server(port=0):
             # the browser without a JS content-type. guess_type covers
             # .js/.css/.json/.svg/.otf/.woff2 → multi-file builds (Angular)
             # render, not just single-file HTML mockups.
-            ctype = self.guess_type(target)
+            ctype = forced or self.guess_type(target)       # `forced` — точний тип від виклику (панелі модулів)
             if isinstance(ctype, tuple):  # py<3.11 returns (type, enc)
                 ctype = ctype[0]
-            if target.endswith('.js') or target.endswith('.mjs'):
+            if not forced and (target.endswith('.js') or target.endswith('.mjs')):
                 ctype = 'text/javascript'
             if utf8 and ctype and ctype.startswith('text/'):
                 ctype += '; charset=utf-8'
@@ -9792,6 +10226,72 @@ def make_server(port=0):
                     self.close_connection = True
                 else:
                     self._send_module_client_404()
+
+        def _send_module_ui_404(self):
+            """404 `/api/module-ui…`: СТАЛЕ тіло, `nosniff` і решта захисних заголовків — без шляху й причини."""
+            self.send_response(404)
+            for key, value in MODULE_UI_HEADERS:
+                self.send_header(key, value)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(MODULE_CLIENT_NOT_FOUND)))
+            self.end_headers()
+            self.wfile.write(MODULE_CLIENT_NOT_FOUND)
+
+        def _send_module_ui_file(self, opened, target, ctype):
+            """Віддати відкритий файл `target` з типом `ctype` і `MODULE_UI_HEADERS` (ETag/304 — `_send_iter_file`); обрив до початку
+            відповіді — 404, посеред — закрити зʼєднання."""
+            try:
+                self._send_iter_file(target, extra_headers=MODULE_UI_HEADERS, utf8=True, opened=opened, ctype=ctype)
+            except OSError:
+                if self._resp_started:
+                    self.close_connection = True
+                else:
+                    self._send_module_ui_404()
+
+        def _serve_module_ui(self):
+            """`GET /api/module-ui/<простір>/<модуль>/<шлях>` (`module_ui_target` → `open_module_ui`). html — з набором, без кешу;
+            решта — `_send_iter_file` з точним типом із `MODULE_UI_TYPES`."""
+            found = module_ui_target(self.path.partition('?')[0])
+            opened = open_module_ui(found[0], found[1]) if found else None
+            if opened is None:
+                self._send_module_ui_404()
+                return
+            mod, segs, kind = found
+            if kind != 'html':
+                self._send_module_ui_file(opened, os.path.join(mod.dir, *segs),
+                                          MODULE_UI_TYPES[os.path.splitext(segs[-1])[1].lower()])
+                return
+            try:
+                body = module_ui_html(opened)
+                if body is None:
+                    self._send_module_ui_404()
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(body)))
+                for key, value in MODULE_UI_HEADERS:
+                    self.send_header(key, value)
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                if self._resp_started:
+                    self.close_connection = True
+                else:
+                    self._send_module_ui_404()
+
+        def _serve_module_ui_kit(self):
+            """`GET /api/module-ui-kit/<імʼя>`: лише `MODULE_KIT_FILES` з `app/module-kit/`."""
+            try:
+                name = unquote(self.path.partition('?')[0][len(MODULE_UI_KIT_PREFIX):], errors='strict')
+            except UnicodeDecodeError:
+                name = None
+            opened = open_module_kit(name) if name else None
+            if opened is None:
+                self._send_module_ui_404()
+                return
+            self._send_module_ui_file(opened, os.path.join(MODULE_KIT_DIR, name),
+                                      'text/css' if name.endswith('.css') else 'text/javascript')
 
         def _serve_published(self):
             """`GET /published/…` (рішення — `published_target`; кожна відмова — `_send_published_404`).
@@ -9894,6 +10394,13 @@ def make_server(port=0):
             # (див. `MODULE_CLIENT_PREFIX`). Заголовок задачі й зіпсований реєстр на них не діють. Адреса — без `/t/<id>/`.
             if self.path.startswith(MODULE_CLIENT_PREFIX):
                 self._serve_module_client()
+                return
+            # І панелі інструментів модулів та їхній набір (див. `MODULE_UI_PREFIX`): теж ДО `_take_task`, простір бере URL.
+            if self.path.startswith(MODULE_UI_PREFIX):
+                self._serve_module_ui()
+                return
+            if self.path.startswith(MODULE_UI_KIT_PREFIX):
+                self._serve_module_ui_kit()
                 return
             # Задача запиту береться ТУТ, раз на запит: `super().do_GET()` нижче
             # вдруге її не бере (префікс уже знято з `self.path`).

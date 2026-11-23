@@ -571,6 +571,7 @@ function mkEnv(over = {}) {
     glCache: { configured: true, label: "GitHub", behind: 0, unpushed: 0 },
     glKey: null, glSeq: 0, glBusyTimer: null, glBusyFor: null, glBusyTries: 0,
     homeOpen: false,
+    closeModTool: () => {},
     picked: "it3",
     noVcs: () => false,
     status: {},

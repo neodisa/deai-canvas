@@ -2,11 +2,13 @@
  * Розділ «AGENTS.md» у «Налаштуваннях» (етап Е, 0.31.0): чисті рядки розмітки для шести станів — ні DOM, ні мережі.
  * Стан `a` — відповідь `GET /api/agents-md` ({exists, hasBlock, outdated, newer, version, fileVersion, block, own, path}) або
  * `{loading: true}` / `{failed: {code}}`. Кнопки — `data-th="ag"` + `data-v` (`copy`, `copypath`, `update`, `create`, `retry`);
- * поводження — в `app.js`. Увесь вміст файла екранується.
+ * поводження — в `app.js`. Увесь вміст файла екранується. (0.33.0) Над файлом — рядки «Запуск агента» і «Claude Code»
+ * (`agentRowsHTML`, `first-run.js`); кнопки `runcopy`, `claude`.
  */
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
+import { agentRowsHTML } from "./first-run.js";
 
 /** «Оновити з шаблону» активна лише коли шаблон новіший або файл є, а блока в ньому нема (і файл не з новішого Deai). */
 export const canUpdate = (a) => !!a && !a.newer && (a.outdated === true || (a.exists === true && a.hasBlock === false));
@@ -49,7 +51,7 @@ export function agentsBodyHTML(a, busy = false) {
       + `<button type="button" class="ctl ctl--out" data-th="ag" data-v="retry">${ico("refresh")}${esc(t("retry"))}</button></div>`;
   }
   if (k === "nofile") {
-    return `<div class="ag-empty"><p>${esc(t("agNoFile"))}</p>`
+    return agentRowsHTML(a, busy) + `<div class="ag-empty"><p>${esc(t("agNoFile"))}</p>`
       + `<button type="button" class="ctl ctl--pri" data-th="ag" data-v="create"${busy ? " disabled" : ""}>${esc(t("agCreate"))}</button></div>`;
   }
   const dis = busy ? " disabled" : "";
@@ -57,5 +59,5 @@ export function agentsBodyHTML(a, busy = false) {
   let note = "";
   if (a.newer) note = plate(t("agNewerNote", a.fileVersion), `<button type="button" class="ctl ctl--pri" data-th="ag" data-v="update" disabled>${ico("refresh", 14)}${esc(t("agUpdate"))}</button>`);
   else if (a.outdated) note = plate(t("agOutdatedNote", a.version, a.fileVersion), upd);
-  return note + viewerHTML(a);
+  return agentRowsHTML(a, busy) + note + viewerHTML(a);
 }

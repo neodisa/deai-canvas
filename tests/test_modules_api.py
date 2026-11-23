@@ -63,7 +63,7 @@ _REAL = None
 
 SECRET = 'S3cr3t-пароль-Zq91!'
 ROUTES_POST = ('/api/module-enable', '/api/module-disable', '/api/module-settings', '/api/module-check')
-ROUTES_GET = ('/api/modules', '/api/ds-tokens')
+ROUTES_GET = ('/api/modules', '/api/ds-tokens', '/api/module-ext')
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
 #: Вбудовані модулі справжнього `app/modules` за абеткою: новий вбудований модуль — тут і лише тут.
 BUILTIN_IDS = ['css-tokens', 'git-sync', 'jira-tracker', 'static-publish', 'supabase-comments', 'supabase-dashboard', 'supabase-teams', 'vercel-publish']
@@ -440,6 +440,53 @@ class Routes(World):
             st, body = self.get(r)
             self.refused(st, body, 404, 'unknown-space')
         st, body = self.post('/api/module-check', {'id': 'css-tokens'})
+        self.refused(st, body, 404, 'unknown-space')
+
+
+# ================================================================================================== GET /api/module-ext
+
+class ModuleExt(World):
+    """Інструменти й дії модулів api 2 для оболонки (M1, Task 2)."""
+
+    def tools_module(self, enable=True, space=None):
+        d = self.modules(copy=())
+        _write(os.path.join(d, 'tl', 'module.json'), json.dumps(dict(
+            _manifest('tl'), api=2, tools=[{'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/p.html'}],
+            actions=[{'id': 'go', 'label': 'Go', 'where': ['palette']}])))
+        _write(os.path.join(d, 'tl', 'server.py'), "def check(ctx):\n    return {'ok': True}\n"
+               "def action_go(ctx):\n    return {}\n")
+        _write(os.path.join(d, 'tl', 'ui', 'p.html'), '<p>x</p>')
+        dm.reset_caches()
+        if enable:
+            p = os.path.join((space or self.off)['path'], 'space.json')
+            data = _json(p)
+            data['modules'] = {'tl': {'enabled': True}}
+            _write(p, json.dumps(data))
+
+    def test_the_route_returns_extensions_of_the_space(self):
+        self.tools_module()
+        st, body = self.get('/api/module-ext?space=off')
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body, dm.extensions(self.off))
+        self.assertEqual(body['tools'][0]['panel'], '/api/module-ui/off/tl/ui/p.html')
+        self.assertEqual([a['id'] for a in body['actions']], ['go'])
+
+    def test_the_default_space_is_the_pinned_one_and_other_space_is_empty(self):
+        self.tools_module()
+        self.assertEqual(len(self.get('/api/module-ext')[1]['tools']), 1)
+        self.assertEqual(self.get('/api/module-ext?space=on'), (200, {'tools': [], 'actions': []}))
+
+    def test_a_disabled_module_is_absent(self):
+        self.tools_module(enable=False)
+        self.assertEqual(self.get('/api/module-ext'), (200, {'tools': [], 'actions': []}))
+
+    def test_an_unreadable_space_json_is_409_like_modules(self):
+        _write(os.path.join(self.off_path, 'space.json'), '{not json')
+        st, body = self.get('/api/module-ext')
+        self.refused(st, body, 409, 'space-json-unreadable')
+
+    def test_unknown_space_is_404(self):
+        st, body = self.get('/api/module-ext?space=ghost')
         self.refused(st, body, 404, 'unknown-space')
 
 
@@ -1314,6 +1361,10 @@ class LayerOff(Http, unittest.TestCase):
         self.assertEqual((mods['css-tokens']['enabled'], mods['static-publish']['enabled']), (False, False))
         st, body = self.post('/api/module-check', {'id': 'css-tokens'})
         self.assertEqual((st, body['check']['error']), (200, 'bad-settings'))
+        self.assert_nothing_written()
+
+    def test_module_ext_is_empty_when_the_layer_is_off(self):
+        self.assertEqual(self.get('/api/module-ext'), (200, {'tools': [], 'actions': []}))
         self.assert_nothing_written()
 
     def test_ds_tokens_and_the_listing_of_spaces_stay_as_they_were(self):

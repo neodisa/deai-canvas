@@ -118,7 +118,9 @@ test("крок 4: друга відправка, поки перелік id ще
   const b = fn(W, "submit4");
   assert.match(b, /if \(mine\.checking\) return;/);
   assert.ok(b.indexOf("mine.checking = true") < b.indexOf("taskFormError("), "прапорець — до перевірки");
-  assert.ok(b.indexOf("mine.checking = false") < b.indexOf("setBusy(form, true"), "прапорець знято до зайнятості (далі тримає wz.busy)");
+  /* Демо гілка (0.33.0) має власний `setBusy` ДО перевірки — перелік id їй не потрібен; для звичайного шляху — перший `setBusy` ПІСЛЯ зняття прапорця. */
+  const off = b.indexOf("mine.checking = false");
+  assert.ok(off > 0 && b.indexOf("setBusy(form, true", off) > off, "прапорець знято до зайнятості (далі тримає wz.busy)");
 });
 
 test("перемальовка під час запиту кроків 1 і 4 не лишає форму вимкненою й не губить відмову (`setBusy`/`showError` бачать відчеплену форму)", () => {
@@ -358,4 +360,11 @@ test("3c: стан майстра й вʼю несуть `waits`; відмова
   const b = fn(W, "submit3");
   assert.match(b, /\.wz-wait \.cn-res--err/);
   assert.match(b, /closest\("\.wz-card, \.wz-off, \.wz-wait"\)/);
+});
+
+test("крок 4, демо: submit4 шле /api/demo-task з простором майстра; радіо вмикає/вимикає назву й id", () => {
+  const s4 = fn(W, "submit4");
+  assert.match(s4, /mine\.s4\.source === "demo"/);
+  assert.match(s4, /deps\.post\("\/api\/demo-task", \{ space: mine\.spaceId, title: t\("frDemoTaskTitle"\) \}\)/);
+  assert.match(W, /for \(const sel of \["#tf-title", "#tf-id"\]\)/);
 });

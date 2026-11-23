@@ -83,7 +83,9 @@ omit a key to keep it, `null` deletes it. `module-disable` turns the module off 
 through the `secrets` field and stay on this computer.
 
 Own modules live in `modules/<id>/` of this space; see `<deai>/docs/modules/authoring.md`. Their code does not run
-until a human trusts the module in the canvas.
+until a human trusts the module in the canvas. With `"api": 2` a module can also add tools to the island (a panel in a
+sandbox) and actions (⌘K and the menus of a task or iteration); details are in the same document, a working example is
+`<deai>/docs/modules/examples/page-notes/`.
 
 ## Settings
 

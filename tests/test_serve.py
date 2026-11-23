@@ -409,6 +409,28 @@ class ServeTest(unittest.TestCase):
                 post(self.base + '/api/publish-toggle', {'id': 'it1'})))
         return shots, keys
 
+    def test_publish_carries_no_module_panel_machinery(self):
+        """Інструменти модулів — лише робочий канвас: публікація не везе ні хоста мосту, ні набору панелі, ні розмітки панелі.
+
+        Дивимось ВЕСЬ артефакт: жоден файл із такими іменами й жодного рядка `mod-panel` / `/api/module-ui` у тому, що їде
+        в `publish/shell/` (інакше глядач превʼю отримав би ввімкнену панель стороннього коду)."""
+        self._fixture_with_shots()
+        pub = json.load(post(self.base + '/api/publish', {'build_only': True}))['dir']
+        names, texts = [], {}
+        for root, dirs, files in os.walk(pub):
+            names += list(dirs) + list(files)
+            for f in files:
+                if f.endswith(('.js', '.css', '.html')):
+                    with open(os.path.join(root, f), encoding='utf-8', errors='replace') as fh:
+                        texts[os.path.join(root, f)] = fh.read()
+        for bad in ('module-host.js', 'module-kit', 'kit-vars.js', 'kit.css', 'bridge.js'):
+            self.assertNotIn(bad, names, f'{bad} їде в публікацію')
+        self.assertTrue(texts, 'перевірка порожня: у публікації нема текстових файлів')
+        for path, body in texts.items():
+            # `styles.css` оболонки несе СЕЛЕКТОРИ панелі (спільна таблиця стилів) — це не машинерія; скрипти й розмітка — ні
+            for bad in (('mod-panel', '/api/module-ui') if path.endswith(('.js', '.html')) else ('/api/module-ui',)):
+                self.assertNotIn(bad, body, f'{bad} у {os.path.relpath(path, pub)}')
+
     def test_5c_publish_carries_shell_frames_and_manifest(self):
         """Зовнішня оболонка в артефакті: `shell/`, кадри під фільтром, маніфест.
 

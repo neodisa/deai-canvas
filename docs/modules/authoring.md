@@ -1,7 +1,8 @@
 # Writing your own module
 
-For Deai Canvas **0.31.0**. A module adds one capability — a *role* — to a space: publishing previews, design-system
-tokens, team comments, syncing mockups with git. Built-in modules live in `app/modules/`; **your own modules live in the space**, in
+A module adds capabilities to a
+space: a *role* — publishing previews, design-system tokens, team comments, syncing mockups with git — and, with `api: 2`,
+its own *tools* in the island and *actions* in ⌘K and the menus. Built-in modules live in `app/modules/`; **your own modules live in the space**, in
 `<space>/modules/<id>/`, so they travel with the space through git. Their code runs on your computer only after **you**
 trust it.
 
@@ -10,6 +11,8 @@ trust it.
 вікно ОС. Довіра — до точних байтів: канвас копіює їх у знімок `~/.deai/trusted/<відбиток>/` і виконує лише знімок. Зміна
 теки не діє до повторної довіри. Агент може написати модуль, але довіритись — ні; межа — код, що приходить крізь теку
 простору, git і сторінки макетів, а не локальний процес із вашими правами (він може сам правити `~/.deai/trust.json`).
+Модуль може ще й додати **свої інструменти в острівець** (панель у пісочниці) і **дії** (⌘K, меню задачі та ітерації) — див.
+розділ 7; приклад — `docs/modules/examples/page-notes/`.
 
 ## 1. The folder
 
@@ -18,6 +21,7 @@ trust it.
   module.json      the manifest
   server.py        the functions of the role (standard library only)
   adapter.js       browser files — only for the comments role, listed in "client"
+  panel/           the HTML, scripts and styles of a tool panel (api 2) — see section 7
 ```
 
 * The folder name is the module `id`: `[a-z0-9][a-z0-9-]{0,39}`, the same as `id` in the manifest. A subfolder with any
@@ -42,8 +46,9 @@ trust it.
  ]}
 ```
 
-* `api` — `1`. `name` and `version` — strings shown to people.
-* `roles` — the roles the module provides: `publish`, `tokens`, `comments`, `vcs`, `dashboard`, `tracker`, `notify` (all of
+* `api` — `1` or `2`. `2` adds `tools` and `actions` (section 7); an older Deai does not trust such a manifest («a newer
+  Deai is needed») instead of silently ignoring a part of it. `name` and `version` — strings shown to people.
+* `roles` — **always present, as a list** (a module with only tools and actions has `"roles": []`); the roles the module provides: `publish`, `tokens`, `comments`, `vcs`, `dashboard`, `tracker`, `notify` (all of
   them are called by the core; no role name is reserved any more, and a role the core does not know makes the manifest
   invalid). One provider per role per space.
 * `publish_target` (publish only) — `folder` (default) or `url`. The canvas serves the local copy of a published preview
@@ -54,6 +59,7 @@ trust it.
   `null`) makes the manifest invalid. The canvas lets the request of «Check» / «Enable» wait for this long plus a margin, so
   keep your own limit below it. The same time is not given to `client_config` or to `validate`.
 * `client` (comments only) — the browser files; see [comments.md](comments.md).
+* `tools`, `actions` (`api: 2`) — own tools in the island and actions in ⌘K and the menus; see section 7.
 * `settings` — what the module asks for: `text`, `path`, `bool`, `select` (with `options`) or `secret`; `required`,
   `default` and (secret only) `public` as in the built-in modules. Settings are stored in the space's `space.json`;
   secrets — in `~/.deai/secrets.json`, never in the space.
@@ -469,7 +475,7 @@ Three things concern the in-house LIGA setup and what its migration (0.17.0 to 0
 
 The module's top level gets **5 s** to load; a module that hangs is shown as broken (its thread lives until the server
 restarts, and if it loops it may slow the canvas down). Browser code of a trusted `comments` module runs in canvas pages and published previews with the canvas's
-own access — that is part of what you trust.
+own access — that is part of what you trust. The panel of a tool (section 7) does not: it runs in a sandbox without that access.
 
 ## 5. The agent
 
@@ -487,3 +493,154 @@ not against a local process with your rights.
 
 Create the folder in a test space, open Settings → Modules, trust it, connect it and press «Check»: the verdict of your
 `check` is shown on the card. After every edit, trust again — that is the point.
+
+## 7. Tools and actions (`api: 2`)
+
+Besides a role, a module with `"api": 2` can add **tools** (a button in the island that opens a right-hand panel with the
+module's own HTML) and **actions** (items in ⌘K and in the «⋯» menus of a task or an iteration). `api: 2` needs a Deai
+Canvas that knows it; an older one refuses the manifest. **Tools** show only in the working canvas of a task, in «Layout»
+(the island, up to 3, and ⌘K). **Actions** show in ⌘K on an open task, in «Layout» and in «Overview» alike, in the «⋯» menu of
+a task card (the task list and the home screen) and in the iteration dropdown. Neither is in a published preview. A small working example is
+`docs/modules/examples/page-notes/` («Page notes»): copy the folder to `<space>/modules/page-notes/`, trust it, enable
+it. It is also the fixture of the live test of this contract.
+
+### The manifest: `tools` and `actions`
+
+```json
+{"api": 2, "id": "page-notes", "name": "Нотатки сторінок", "version": "1.0.0", "roles": [],
+ "tools": [{"id": "notes", "label": "Нотатки", "icon": "doc", "panel": "panel/index.html", "key": "N"}],
+ "actions": [{"id": "summary", "label": "Нотатки задачі", "where": ["palette", "task"]}]}
+```
+
+**`tools`** — a list of 1 to **4** objects (an empty list or more than 4 is refused). Fields:
+
+| field | rule |
+|---|---|
+| `id` | `[a-z0-9][a-z0-9-]{0,39}`, unique in the module |
+| `label` | a non-empty string of at most **40** characters (the text of the button, its tooltip and the ⌘K item) |
+| `icon` | a name from the core's icon set (`app/icons.js`); an unknown name is refused. Your own SVG is not supported yet |
+| `panel` | a relative path to an `.html` file of **2 to 4 segments** (the panel always lives in a subfolder, not next to `server.py`); a regular file of at most **256 KiB**; each segment `[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}` (no hidden names, no `..`) |
+| `key` | optional: one ASCII letter, case-insensitive (it is upper-cased). A core letter (**C, I, H, M, P**) or a letter repeated by two tools of the **same** module **refuses the manifest** (`tools[i].key: 'C' is reserved by Deai` / `duplicate 'N'`). The same letter claimed by tools of **different** modules: neither gets a key (⌘K still works) |
+| `frame` | **not supported**: a manifest with this key is refused with `tools[i].frame: not supported yet` (a script inside the mockup — see section 8) |
+
+Any other key is refused (`unknown key`). The island shows the built-in tools first, then up to **3** tools of modules (in
+the order of the space's modules); the rest are reachable through ⌘K and the key only.
+
+**`actions`** — a list of 1 to **8** objects: `id` (as above), `label` (at most **60** characters), `where` — a non-empty
+list without repeats of `palette` (⌘K), `task` (the «⋯» menu of a task card), `iteration` (the iteration dropdown), and an
+optional `timeout_s`, an integer from 1 to 150 (default 15). Any other key or value is refused.
+
+A refusal reads like `tools[0].icon: unknown icon 'nope'` or `tools: requires api 2` (with `api: 1` the keys `tools` and
+`actions` are refused); the module's card in Settings shows the reason and nothing of the module runs. A module with only
+tools and actions has `"roles": []` — the key cannot be left out.
+
+### The tool panel
+
+The panel is the module's HTML in an `<iframe sandbox="allow-scripts allow-forms">` **without** `allow-same-origin`: it
+has an opaque origin.
+
+* No cookies, no `localStorage` or other storage of the canvas, no access to `/api/*` or to the shell itself.
+* The network is closed by the content policy (`connect-src 'none'`, also `frame-src`, `form-action`, `object-src`):
+  `fetch` and `XMLHttpRequest` are rejected. Anything that needs the network or secrets is done by the module's
+  `server.py`; the panel reaches it through `deai.call`.
+* The server serves only files from the **panel's folder** (the folder of the `panel` path: `panel/` for
+  `panel/index.html`) and only with the extensions `.html`, `.js`, `.css`, `.svg`, `.png`, `.json`, `.woff2`; `server.py`,
+  `module.json` and the rest of the folder are unreachable. Link scripts and styles with relative paths
+  (`<script src="notes.js">`); inline ones are allowed too. Files come from the trusted snapshot, not from the live folder.
+* The core adds `kit.css` (the `dk-*` classes) and `bridge.js` (`window.deai`) to every panel page itself — there is
+  nothing to include. If the panel navigates elsewhere or loads another page, the tool is closed.
+* There is one right-hand panel: comments, the inspector and a tool panel push each other out. A tool is closed by «×»,
+  `deai.close()`, the same key again, or leaving «Layout».
+
+**`window.deai`** (a bridge over `postMessage`; replies are accepted only from the shell):
+
+| call | what it gives |
+|---|---|
+| `await deai.ready` | the first `init`: `{context, theme, vars}` |
+| `deai.hello()` | the handshake (`bridge.js` does it itself) |
+| `deai.context()` | `{space: {id, name}, task: {id, name}, iteration: {id, name} \| null, page: {id, title} \| null, lang, theme}` |
+| `deai.selection()` | the element selected in the inspector on the current page: `{selector, tag, styles}` or `null` |
+| `deai.call(fn, args)` | a `tool_*` function of the module (below); resolves with its result |
+| `deai.toast(text)` | a shell toast «Tool name: text» (at most 200 characters) |
+| `deai.close()` | close the panel |
+| `deai.on(event, fn)` | subscribe; returns an unsubscribe function |
+
+Events: `init` (together with `ready`), `context` (the task, iteration or page changed — `data` as in `deai.context()`),
+`theme` (`{theme, vars}`: the theme or the space colour changed), `close` (the panel is about to be closed). A change of
+the inspector selection is not an event — read `deai.selection()` when you need it.
+
+A rejected promise is an `Error` with a `code`. Bridge-local codes: `too-big` (a message over **64 KiB**), `busy` (more than
+**64** pending requests in the panel, or more than **4** concurrent `call`s), `timeout` (the shell did not answer in
+**60 s**; the pending request is then dropped), `unknown-method`, `bad-message`, `bad-args`. For `call`, the codes of the
+server that can reach the panel: `unknown-module` (the module is gone or trust was revoked), `unknown-function`,
+`module-busy`, `check-timeout`, `module-error`, `isolated`, `bad-request`, `body-too-large`. A `ModuleError` of the module
+with a code unknown to Deai arrives as `module-error` (only the codes of the core's own table pass as they are). A `call` sent before the panel was closed **still
+runs**, but its result is dropped.
+
+**Styles.** `kit.css` gives `dk-btn` (+ `dk-btn--primary`), `dk-field` (input, textarea, select), `dk-list` and `dk-row`,
+`dk-muted`, `dk-empty`. The theme and colours of the shell arrive in `init` and `theme`: the bridge sets `data-theme` and
+the CSS variables (`--s1`, `--s2`, `--s3`, `--line`, `--line2`, `--hi`, `--mid`, `--dim`, `--sel`, `--sel-hover`,
+`--on-sel`, `--bad`, `--r`, `--r-sm`, `--h-ctl`) on `<html>`. Your own styles are fine, preferably built on these variables.
+
+### The functions of `server.py` for tools and actions
+
+A module with `tools` or `actions` has `check(ctx)` like any other; the rest is below. `ctx` is the same as for roles
+(section 3), including `ctx["cache_dir"]` for the module's files and `ctx["ModuleError"]`.
+
+* **`tool_<name>(ctx, args)`** — the panel calls `deai.call("tool_<name>", args)`. The core lets through only top-level
+  functions matching `tool_[a-z0-9_]{1,40}`: `check`, `action_*`, the functions of roles and any other names are
+  unreachable from a panel. Any `tool_*` function is available to any panel of the same module; `args` is what the panel
+  passed (it may be `None`). The result is any JSON up to **256 KiB** (otherwise `module-error`: `result is not JSON` or
+  `result is too big`). The timeout is **15 s** (`check-timeout`). At most **4** calls of `tool_*`/`action_*` of one module
+  run at once (otherwise `module-busy`, 429); a thread that outlived its timeout still counts until it finishes. A code of
+  your own that the core does not know reaches the panel as `module-error`. ⚠️ The result of a tool is **not** scrubbed of
+  the module's own secrets: never return secrets to a panel.
+* **`action_<id>(ctx, target)`** — required for every action of the manifest: without it the module is broken
+  (`server.py: no callable action_…()`). Hyphens of the action `id` become underscores (`my-action` → `action_my_action`).
+  `target` is `{"from": "palette" | "task" | "iteration", "task": {"id", "name", "dir"}, "iteration": {"id", "name"} | None}`;
+  `dir` is the absolute path of the task folder, `iteration` is set only when the action was called from the iteration
+  dropdown. The result is `{"ok": bool, "text"?: str, "url"?: str}`; `ok` must be a real `bool`, otherwise `module-error`.
+  The core normalizes it: `text` loses control (Cc) and format (Cf) characters, except the newline, and is then cut to **300**; `url` must be `http(s)://`,
+  at most **2048** characters, with a host, without spaces, invisible characters, `\` or `user@` (an unfit address is dropped
+  silently); other keys are dropped. The shell shows a toast: the text of the reply (or «Done»), and for `ok: false`
+  «Action name: text»; with a `url` the toast has an «Open» button. The timeout is the action's `timeout_s` or **15 s**;
+  starting the same action again while the first is still running is ignored.
+* The body of `POST /api/module-tool` and `/api/module-action` is at most **64 KiB**: a larger one is refused with `413`
+  **without being read**, so a large `fetch` body may surface as a network error. Pass short arguments from the panel.
+
+Storage in `ctx["cache_dir"]`: create the folder yourself (`os.makedirs(…, mode=0o700, exist_ok=True)`), write atomically
+(a temporary file plus `os.replace`), and never build paths from strings you do not control (a task id, a page title) —
+keep them as keys inside a JSON file, as `page-notes` does.
+
+### Trust for tools
+
+What is trusted are the exact bytes of the **whole folder**, including the HTML, scripts and styles of the panel: editing
+any file means trusting again. The trust dialog lists the tools (name and icon) and the actions (name) of the module next to
+the list of files. A newer version that did not get trust (the folder changed after trust, or it breaks a folder rule) does
+not run: the module keeps running from its last trusted snapshot — its `server.py`, panels and actions — so its tools do not
+disappear. The sandbox of a panel is a boundary of stability and of an explicit API, not protection from the module itself:
+its `server.py` runs with your rights after trust, so the security boundary is the trust dialog.
+
+## 8. Limits
+
+What a module can and cannot do — three layers.
+
+1. **The frame is fixed.** Only a release of Deai changes it; a module can neither replace, hide nor move: the shell (the
+   tab row, the task bar, the left page panel, the right panel as a place, the island, ⌘K, the key help), the data model
+   (`tasks.json`, `iterations.json`, `pages.json`, `flow.json`, `space.json`, the preview manifest), the «Layout» and
+   «Overview» modes, the camera, the snapshots, the inspector, the comments panel, the preview wrapper, Settings, updates,
+   the trust model, the `AGENTS.md` generator and the keys of the core.
+2. **Extension points.** A role (functions of `server.py` under the role's contract), the `settings` fields, a **tool**
+   (an icon, a name, its own panel, an optional key) and an **action** (a name and a function) — all in one manifest if
+   needed.
+3. **«No».** Your own buttons or markup outside the tool panel; changes to the layout, the theme, the colours or the keys of
+   the core; scripts in a published preview (except the adapter of the `comments` role); writing directly into the core's
+   data formats (only through the canvas's public API, like an agent); other modules' secrets (`ctx["secrets"]` holds only
+   your own); replacing built-in tools (comments, the inspector — a module adds its own beside them). A wish that runs into
+   a «no» is a request to the core, not a module.
+
+**A script inside the mockup — not yet.** The idea of a tool that works inside the mockup (`frame`) is postponed: the
+mockup document has the origin of the canvas itself, so such a script could do everything the canvas can (publish, GitLab,
+tasks), and it cannot be restricted on the same origin. Until a separate origin for mockups is decided, a panel works with
+the mockup only through the core — `deai.context()` and `deai.selection()` (the element selected in the inspector). A
+working illustration of these limits is `docs/modules/examples/page-notes/`.

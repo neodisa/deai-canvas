@@ -395,11 +395,11 @@ class ManifestTest(Env):
         self.assertTrue(callable(m.fn('check')) and callable(m.fn('publish')) and callable(m.fn('tokens')))
         self.assertIsNone(m.fn('comments'))
 
-    def test_api_must_be_exactly_one(self):
-        for mid, api in (('api-two', 2), ('api-zero', 0), ('api-str', '1'), ('api-true', True),
+    def test_api_must_be_one_of_known(self):
+        for mid, api in (('api-three', 3), ('api-zero', 0), ('api-str', '1'), ('api-true', True),
                          ('api-float', 1.0), ('api-null', None), ('api-list', [1]), ('api-none', _DEL)):
             self.mk(mid, patch={'api': api})
-        for mid in ('api-two', 'api-zero', 'api-str', 'api-true', 'api-float', 'api-null', 'api-list',
+        for mid in ('api-three', 'api-zero', 'api-str', 'api-true', 'api-float', 'api-null', 'api-list',
                     'api-none'):
             self.assertIn('api', self.error_of(mid), mid)
 
@@ -574,7 +574,7 @@ class ManifestTest(Env):
     def test_invalid_manifest_never_executes_server(self):
         marker = os.path.join(self.tmp, 'marker')
         code = f'open({marker!r}, "w").close()\n' + ALL_FNS
-        self.mk('bad-api', patch={'api': 2}, server=code)
+        self.mk('bad-api', patch={'api': 3}, server=code)
         self.assertEqual(dm.catalog()['bad-api'].status, 'error')
         self.assertFalse(os.path.exists(marker), 'server.py модуля з поганим маніфестом не мусить виконуватись')
         self.mk('good', server=code)                         # контроль: валідний — виконується
@@ -607,6 +607,259 @@ COMMENTS_FNS = (CHECK_ONLY
                 + 'def resolve(ctx, channel, id, reason):\n    return None\n')
 CLIENT_JS = 'window.DeaiComments = { create(cfg) { return {}; } };\n'
 MAX_CLIENT = 512 * 1024            # межа розміру одного файла адаптера (спека 2b-2): рівно 512 КіБ ще можна
+
+
+# ----------------------------------------------------------------------------- маніфест api 2: tools і actions
+
+API2_SERVER = ALL_FNS + """
+
+def action_run_it(ctx):
+    return {}
+
+
+def tool_ping(ctx, args):
+    return {}
+
+
+def tool_two_more(ctx, args):
+    return {}
+
+
+def toolx(ctx):
+    return {}
+
+
+tool_Bad = lambda ctx: 1
+tool_notcallable = 5
+"""
+TOOL = {'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'panel/index.html', 'key': 'b'}
+ACTION = {'id': 'run-it', 'label': 'Run it', 'where': ['palette', 'task']}
+
+
+class ManifestApi2(Env):
+    def api2(self, mid='tl', tools=_DEL, actions=_DEL, panel=True, server=API2_SERVER, api=2, **extra):
+        d = self.mk(mid, server=server, patch=dict({'api': api, 'tools': tools, 'actions': actions}, **extra))
+        if panel:
+            _write(os.path.join(d, 'panel', 'index.html'), '<p>hi</p>')
+        return d
+
+    def bad(self, mid, needle):
+        dm.reset_caches()      # відбиток кешу не бачить файлів панелі: фікстури добудовуються між перевірками
+        m = dm.catalog()[mid]
+        self.assertEqual((m.status, m.error_code), ('error', 'bad-manifest'), m.error)
+        self.assertIn(needle, m.error)
+        self.assertEqual((m.tools, m.actions), ((), ()))
+        return m
+
+    def tool(self, **kw):
+        t = dict(TOOL)
+        for k, v in kw.items():
+            if v is _DEL:
+                t.pop(k, None)
+            else:
+                t[k] = v
+        return t
+
+    def test_valid_api2_with_tool_and_action(self):
+        self.api2(tools=[TOOL], actions=[dict(ACTION, timeout_s=30)])
+        m = dm.catalog()['tl']
+        self.assertEqual((m.status, m.api), ('ok', 2), m.error)
+        self.assertEqual(m.tools, ({'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'panel/index.html', 'key': 'B'},))
+        self.assertEqual(m.actions, ({'id': 'run-it', 'label': 'Run it', 'where': ('palette', 'task'), 'timeout_s': 30},))
+        self.assertTrue(callable(m.fn('action_run_it')))
+
+    def test_api2_without_tools_is_plain_and_api1_stays_api1(self):
+        self.api2(mid='plain', panel=False)
+        self.mk('old')
+        p, o = dm.catalog()['plain'], dm.catalog()['old']
+        self.assertEqual((p.status, p.api, p.tools, p.actions), ('ok', 2, (), ()))
+        self.assertEqual((o.status, o.api, o.tools, o.actions), ('ok', 1, (), ()))
+
+    def test_api3_rejected(self):
+        self.api2(api=3, tools=[TOOL])
+        self.bad('tl', 'api: must be one of 1, 2')
+
+    def test_tools_and_actions_need_api2(self):
+        self.api2('t1', api=1, tools=[TOOL])
+        self.bad('t1', 'tools: requires api 2')
+        self.api2('a1', api=1, actions=[ACTION])
+        self.bad('a1', 'actions: requires api 2')
+
+    def test_tools_list_shape(self):
+        for mid, v in (('t-empty', []), ('t-five', [dict(TOOL, id=f't{i}', key=None) for i in range(5)]),
+                       ('t-str', 'x'), ('t-nonobj', ['x'])):
+            self.api2(mid, tools=v)
+            self.bad(mid, 'tools')
+        four = [dict(TOOL, id=f't{i}') for i in range(4)]
+        for t, k in zip(four, 'abde'):
+            t['key'] = k
+        self.api2('t-four', tools=four)
+        self.assertEqual(dm.catalog()['t-four'].status, 'ok')
+
+    def test_tool_unknown_key_and_frame(self):
+        self.api2('t-unk', tools=[dict(TOOL, color='red')])
+        self.bad('t-unk', "tools[0]: unknown key 'color'")
+        self.api2('t-long', tools=[dict(TOOL, **{'k' * 100: 1})])
+        m = self.bad('t-long', 'unknown key')
+        self.assertLess(len(m.error), 80)
+        self.api2('t-frame', tools=[dict(TOOL, frame='x.js')])
+        self.bad('t-frame', 'tools[0].frame: not supported yet')
+
+    def test_tool_id_label_icon(self):
+        for mid, kw, needle in (('t-id1', {'id': 'Up'}, 'tools[0].id'), ('t-id2', {'id': 5}, 'tools[0].id'),
+                                ('t-id3', {'id': _DEL}, 'tools[0].id'),
+                                ('t-l1', {'label': '  '}, 'tools[0].label'), ('t-l2', {'label': 'x' * 41}, 'tools[0].label'),
+                                ('t-l3', {'label': 7}, 'tools[0].label'), ('t-l4', {'label': _DEL}, 'tools[0].label'),
+                                ('t-i1', {'icon': 'nope'}, "tools[0].icon: unknown icon 'nope'"),
+                                ('t-i2', {'icon': 3}, 'tools[0].icon'), ('t-i3', {'icon': _DEL}, 'tools[0].icon')):
+            self.api2(mid, tools=[self.tool(**kw)])
+            self.bad(mid, needle)
+        self.api2('t-l40', tools=[self.tool(label='x' * 40)])
+        self.assertEqual(dm.catalog()['t-l40'].status, 'ok')
+
+    def test_tool_duplicate_id(self):
+        self.api2('t-dup', tools=[TOOL, dict(TOOL, key='x')])
+        self.bad('t-dup', "tools[1].id: duplicate 'board'")
+
+    def test_tool_key_rules(self):
+        for mid, k, needle in (('k-c', 'c', "tools[0].key: 'C' is reserved by Deai"),
+                               ('k-i', 'I', 'reserved'), ('k-h', 'h', 'reserved'), ('k-m', 'M', 'reserved'),
+                               ('k-p', 'P', 'reserved'), ('k-two', 'ab', 'tools[0].key'), ('k-dig', '1', 'tools[0].key'),
+                               ('k-uni', 'é', 'tools[0].key'), ('k-num', 5, 'tools[0].key'), ('k-empty', '', 'tools[0].key')):
+            self.api2(mid, tools=[self.tool(key=k)])
+            self.bad(mid, needle)
+        self.api2('k-dup', tools=[TOOL, dict(TOOL, id='other', key='B')])
+        self.bad('k-dup', "tools[1].key: duplicate 'B'")
+        self.api2('k-none', tools=[self.tool(key=_DEL)])
+        self.assertIsNone(dm.catalog()['k-none'].tools[0]['key'])
+        self.api2('k-low', tools=[self.tool(key='z')])
+        self.assertEqual(dm.catalog()['k-low'].tools[0]['key'], 'Z')
+
+    def test_panel_path_shape(self):
+        for mid, panel, needle in (('p-root', 'index.html', 'tools[0].panel'), ('p-dots', '../index.html', 'tools[0].panel'),
+                                   ('p-dots2', 'panel/../index.html', 'tools[0].panel'),
+                                   ('p-abs', '/etc/x.html', 'tools[0].panel'), ('p-ext', 'panel/index.htm', 'tools[0].panel'),
+                                   ('p-deep', 'a/b/c/d/e.html', 'tools[0].panel'), ('p-back', 'panel\\index.html', 'tools[0].panel'),
+                                   ('p-nonstr', 5, 'tools[0].panel'), ('p-nl', 'panel/index.html\n', 'tools[0].panel')):
+            self.api2(mid, tools=[self.tool(panel=panel)])
+            self.bad(mid, needle)
+
+    def test_panel_file_checks(self):
+        self.api2('p-miss', tools=[self.tool(panel='panel/nope.html')])
+        self.bad('p-miss', 'tools[0].panel: nope.html is not in the module folder')
+        d = self.api2('p-link')
+        os.remove(os.path.join(d, 'panel', 'index.html'))
+        outside = os.path.join(self.tmp, 'outside.html')
+        _write(outside, 'x')
+        os.symlink(outside, os.path.join(d, 'panel', 'index.html'))
+        _write(os.path.join(d, 'module.json'), {'api': 2, 'id': 'p-link', 'roles': ['publish'], 'tools': [TOOL]})
+        self.bad('p-link', 'must be a regular file')
+        d = self.api2('p-dir')
+        real = os.path.join(self.tmp, 'realdir')
+        _write(os.path.join(real, 'index.html'), 'x')
+        os.symlink(real, os.path.join(d, 'sub'))
+        _write(os.path.join(d, 'module.json'), {'api': 2, 'id': 'p-dir', 'roles': ['publish'],
+                                                'tools': [self.tool(panel='sub/index.html')]})
+        self.bad('p-dir', 'must be a real folder')
+        d = self.api2('p-hard', tools=[TOOL])
+        os.link(os.path.join(d, 'panel', 'index.html'), os.path.join(self.tmp, 'twin.html'))
+        self.bad('p-hard', 'must be a regular file')
+        d = self.api2('p-big', tools=[TOOL])
+        _write(os.path.join(d, 'panel', 'index.html'), 'x' * (dm.MAX_PANEL_BYTES + 1))
+        self.bad('p-big', 'is bigger than')
+        d = self.api2('p-edge', tools=[self.tool(panel='a/b/c/d.html')], panel=False)
+        _write(os.path.join(d, 'a', 'b', 'c', 'd.html'), 'x' * dm.MAX_PANEL_BYTES)
+        self.assertEqual(dm.catalog()['p-edge'].status, 'ok')
+        d = self.api2('p-isdir', tools=[self.tool(panel='panel/dir.html')])
+        os.makedirs(os.path.join(d, 'panel', 'dir.html'))
+        self.bad('p-isdir', 'must be a regular file')
+
+    def test_panel_name_must_match_disk_exactly(self):
+        d = self.api2('p-case', tools=[self.tool(panel='panel/Index.html')])    # на диску — `panel/index.html`
+        self.bad('p-case', 'tools[0].panel: Index.html is not in the module folder')
+        self.api2('p-case2', tools=[self.tool(panel='Panel/index.html')])
+        self.bad('p-case2', 'tools[0].panel: Panel is not in the module folder')
+
+    def test_actions_rules(self):
+        for mid, a, needle in (('a-unk', dict(ACTION, x=1), "actions[0]: unknown key 'x'"),
+                               ('a-id', dict(ACTION, id='Up'), 'actions[0].id'),
+                               ('a-l1', dict(ACTION, label=' '), 'actions[0].label'),
+                               ('a-l2', dict(ACTION, label='x' * 61), 'actions[0].label'),
+                               ('a-w0', dict(ACTION, where=[]), 'actions[0].where'),
+                               ('a-w1', dict(ACTION, where='palette'), 'actions[0].where'),
+                               ('a-w2', dict(ACTION, where=['menu']), 'actions[0].where'),
+                               ('a-w3', dict(ACTION, where=['task', 'task']), 'actions[0].where'),
+                               ('a-t0', dict(ACTION, timeout_s=0), 'actions[0].timeout_s'),
+                               ('a-t1', dict(ACTION, timeout_s=dm.MAX_CHECK_TIMEOUT + 1), 'actions[0].timeout_s'),
+                               ('a-t2', dict(ACTION, timeout_s='5'), 'actions[0].timeout_s'),
+                               ('a-t3', dict(ACTION, timeout_s=True), 'actions[0].timeout_s')):
+            self.api2(mid, actions=[a], panel=False)
+            self.bad(mid, needle)
+        self.api2('a-dup', actions=[ACTION, dict(ACTION)], panel=False)
+        self.bad('a-dup', "actions[1].id: duplicate 'run-it'")
+        for mid, v in (('a-empty', []), ('a-nine', [dict(ACTION, id=f'a{i}') for i in range(9)]), ('a-str', 'x')):
+            self.api2(mid, actions=v, panel=False)
+            self.bad(mid, 'actions')
+        self.api2('a-ok', actions=[dict(ACTION, where=['iteration'], timeout_s=dm.MAX_CHECK_TIMEOUT)], panel=False)
+        m = dm.catalog()['a-ok']
+        self.assertEqual((m.status, m.actions[0]['timeout_s']), ('ok', dm.MAX_CHECK_TIMEOUT))
+        self.api2('a-def', actions=[ACTION], panel=False)
+        self.assertIsNone(dm.catalog()['a-def'].actions[0]['timeout_s'])
+        self.assertEqual(dm.ACTION_TIMEOUT, 15)
+
+    def test_action_needs_server_function(self):
+        self.api2('a-nofn', actions=[dict(ACTION, id='other-one')], panel=False)
+        m = dm.catalog()['a-nofn']
+        self.assertEqual((m.status, m.error_code), ('error', 'bad-manifest'))
+        self.assertIn('server.py: no callable action_other_one()', m.error)
+
+    def test_tool_functions_collected(self):
+        self.api2(tools=[TOOL])
+        m = dm.catalog()['tl']
+        self.assertTrue(callable(m.fn('tool_ping')) and callable(m.fn('tool_two_more')))
+        for n in ('toolx', 'tool_Bad', 'tool_notcallable'):
+            self.assertIsNone(m.fn(n), n)
+        self.api2('no-tools', panel=False)
+        self.assertIsNone(dm.catalog()['no-tools'].fn('tool_ping'))      # без `tools` у маніфесті — не збираємо
+
+    def test_tool_functions_not_required(self):
+        self.api2('bare', tools=[TOOL], server=ALL_FNS)
+        self.assertEqual(dm.catalog()['bare'].status, 'ok')
+
+    def test_failed_module_with_meta_keeps_api_and_lists(self):
+        self.api2('late', tools=[TOOL], actions=[ACTION], server=ALL_FNS)       # без action_run_it
+        m = dm.catalog()['late']
+        self.assertEqual((m.status, m.api), ('error', 2))
+        self.assertEqual((len(m.tools), len(m.actions)), (1, 1))
+
+    def test_clone_does_not_share_tool_and_action_dicts(self):
+        self.api2(tools=[TOOL], actions=[ACTION])
+        m = dm.catalog()['tl']
+        c = dm._clone(m)
+        self.assertEqual((c.tools, c.actions), (m.tools, m.actions))
+        self.assertIsNot(c.tools[0], m.tools[0])
+        self.assertIsNot(c.actions[0], m.actions[0])
+        c.tools[0]['label'] = 'changed'
+        c.actions[0]['label'] = 'changed'
+        self.assertEqual((m.tools[0]['label'], m.actions[0]['label']), ('Board', 'Run it'))
+
+    def test_module_constructor_copies(self):
+        src = {'id': 'x', 'label': 'X', 'icon': 'task', 'panel': 'p/i.html', 'key': None}
+        m = dm.Module('x', tools=[src])
+        src['label'] = 'changed'
+        self.assertEqual(m.tools[0]['label'], 'X')
+        self.assertEqual((dm.Module('y').tools, dm.Module('y').actions), ((), ()))
+
+    def test_core_icons_unreadable_means_all_unknown(self):
+        dm.reset_caches()
+        with mock.patch('builtins.open', side_effect=OSError('x')):
+            self.assertEqual(dm.core_icons(), frozenset())
+        dm.reset_caches()
+        self.assertIn('task', dm.core_icons())
+        self.api2(tools=[TOOL])
+        dm.reset_caches()
+        with mock.patch.object(dm, 'core_icons', return_value=frozenset()):
+            self.bad('tl', 'tools[0].icon: unknown icon')
 
 
 class ManifestClientTest(Env):
@@ -1398,7 +1651,7 @@ class CallTest(Env):
         with self.assertRaises(dm.ModuleError) as cm:
             dm.call(self.m, 'tokens', self.ctx)             # роль, якої модуль не має
         self.assertEqual(cm.exception.code, 'module-error')
-        self.mk('broken', patch={'api': 2})
+        self.mk('broken', patch={'api': 3})
         with self.assertRaises(dm.ModuleError) as cm:
             dm.call(dm.catalog()['broken'], 'check', self.ctx)
         self.assertEqual(cm.exception.code, 'bad-manifest')

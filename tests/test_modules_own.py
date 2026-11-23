@@ -466,7 +466,10 @@ class CatalogExtraTest(OwnEnv):
 
     def test_core_codes_have_their_statuses_and_a_module_cannot_throw_them(self):
         want = {'module-untrusted': 409, 'module-changed': 409, 'module-refused': 409, 'trust-needs-ui': 403,
-                'trust-declined': 409, 'trust-no-confirm': 409, 'trust-busy': 409, 'trust-unreadable': 409}
+                'trust-declined': 409, 'trust-no-confirm': 409, 'trust-busy': 409, 'trust-unreadable': 409,
+                # виклики інструментів і дій (M1, Task 4)
+                'unknown-function': 404, 'unknown-action': 404, 'unknown-task': 404, 'unknown-iteration': 404,
+                'bad-request': 400, 'body-too-large': 413, 'isolated': 409, 'module-busy': 429}
         self.assertEqual(dm.CORE_STATUS, want)
         for code, status in want.items():
             self.assertEqual(dm.ModuleError(code).status, status, code)
@@ -1647,3 +1650,179 @@ class TrustCoreTest(OwnEnv):
         self.assertIsNotNone(dm.last_check(self.sp['id'], 'acme'))
         self.assertTrue(dm.revoke_trust(self.sp, 'acme'))
         self.assertIsNone(dm.last_check(self.sp['id'], 'acme'))
+
+
+class OwnToolsTest(OwnEnv):
+    SERVER = OWN_SERVER + """
+
+def action_go(ctx):
+    return {}
+
+
+def tool_ping(ctx, args):
+    return {}
+"""
+
+    def test_own_module_with_tool_is_trusted_and_loaded_from_snapshot(self):
+        d = self.own('acme', server=self.SERVER, extra={
+            'api': 2, 'tools': [{'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/panel.html', 'key': 'q'}],
+            'actions': [{'id': 'go', 'label': 'Go', 'where': ['palette']}]})
+        _write(os.path.join(d, 'ui', 'panel.html'), '<p>hi</p>')
+        h = self.trust('acme')
+        snap = mt.snapshot_dir(h)
+        self.assertTrue(os.path.isfile(os.path.join(snap, 'ui', 'panel.html')))
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual((m.status, m.trust, m.api), ('ok', 'trusted', 2), m.error)
+        self.assertEqual(m.dir, snap)
+        self.assertEqual(m.tools[0]['key'], 'Q')
+        self.assertEqual(m.actions[0]['where'], ('palette',))
+        self.assertTrue(callable(m.fn('tool_ping')) and callable(m.fn('action_go')))
+
+    def test_untrusted_own_module_still_carries_manifest_lists(self):
+        d = self.own('acme', server=self.SERVER, extra={
+            'api': 2, 'tools': [{'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/panel.html'}]})
+        _write(os.path.join(d, 'ui', 'panel.html'), '<p>hi</p>')
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual((m.status, m.api, len(m.tools)), ('untrusted', 2, 1))
+        self.assertIsNone(m.fn('tool_ping'))
+
+    def test_own_module_with_bad_panel_is_bad_manifest(self):
+        self.own('acme', server=self.SERVER, extra={
+            'api': 2, 'tools': [{'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/missing.html'}]})
+        self.trust('acme')
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual((m.status, m.error_code), ('error', 'bad-manifest'))
+
+
+class ExtensionsTest(OwnEnv):
+    """`extensions(space)` (M1, Task 2): інструменти й дії лише справних, явно увімкнених модулів api 2."""
+    SERVER = OwnToolsTest.SERVER
+    TOOL = {'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/panel.html'}
+
+    def mod(self, mid, tools=None, actions=None, api=2, trusted=True, enabled=True, server=None):
+        extra = {'api': api}
+        if tools is not None:
+            extra['tools'] = tools
+        if actions is not None:
+            extra['actions'] = actions
+        d = self.own(mid, server=server or self.SERVER, extra=extra)
+        _write(os.path.join(d, 'ui', 'panel.html'), '<p>hi</p>')
+        if trusted:
+            self.trust(mid)
+        if enabled:
+            self.enable_raw(mid)
+        return d
+
+    def test_enabled_trusted_api2_module_is_listed(self):
+        self.mod('acme', [dict(self.TOOL, key='q')], [{'id': 'go', 'label': 'Go', 'where': ['palette']}])
+        ext = dm.extensions(self.sp)
+        self.assertEqual(ext['tools'], [{'module': 'acme', 'module_name': 'Acme', 'id': 'board', 'label': 'Board',
+                                         'icon': 'task', 'key': 'Q',
+                                         'panel': '/api/module-ui/%s/acme/ui/panel.html' % self.sp['id']}])
+        self.assertEqual(ext['actions'], [{'module': 'acme', 'module_name': 'Acme', 'id': 'go', 'label': 'Go',
+                                           'where': ['palette']}])
+
+    def test_disabled_untrusted_api1_and_broken_are_absent(self):
+        self.mod('off', [self.TOOL], enabled=False)
+        self.mod('raw', [self.TOOL], trusted=False)
+        self.mod('old', None, api=1)
+        self.mod('bad', [dict(self.TOOL, panel='ui/none.html')])
+        self.assertEqual(dm.extensions(self.sp), {'tools': [], 'actions': []})
+        self.assertEqual(dm.catalog(self.sp)['bad'].status, 'error')
+
+    def test_enabled_must_be_explicit_true(self):
+        self.mod('acme', [self.TOOL], enabled=False)
+        p = self.space_json(self.sp)
+        data = _read(p)
+        data.setdefault('modules', {})['acme'] = {'enabled': 'yes'}
+        _write(p, data)
+        self.assertEqual(dm.extensions(self.sp)['tools'], [])
+
+    def test_changed_trust_lists_the_old_trusted_snapshot(self):
+        """`changed`: код і панель — з ТРУСТОВАНОГО знімка (`m.dir` — знімок), тож модуль лишається в списку; нову версію теки
+        людина ще не бачила, тож вона НЕ віддається (панель роздається зі знімка, Task 3)."""
+        d = self.mod('acme', [self.TOOL])
+        _write(os.path.join(d, 'ui', 'panel.html'), '<p>new</p>')
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual((m.status, m.trust), ('ok', 'changed'))
+        self.assertEqual([t['id'] for t in dm.extensions(self.sp)['tools']], ['board'])
+
+    def test_order_is_by_module_id_then_manifest_order(self):
+        t2 = dict(self.TOOL, id='zeta', label='Zeta')
+        self.mod('beta', [t2, self.TOOL])
+        self.mod('alpha', [dict(self.TOOL, id='one')], [{'id': 'go', 'label': 'Go', 'where': ['palette']}])
+        ext = dm.extensions(self.sp)
+        self.assertEqual([(t['module'], t['id']) for t in ext['tools']],
+                         [('alpha', 'one'), ('beta', 'zeta'), ('beta', 'board')])
+        self.assertEqual([a['module'] for a in ext['actions']], ['alpha'])
+
+    def test_key_declared_twice_is_dropped_for_both_and_unique_kept(self):
+        self.mod('alpha', [dict(self.TOOL, key='q'), dict(self.TOOL, id='two', key='w')])
+        self.mod('beta', [dict(self.TOOL, key='Q')])
+        keys = {(t['module'], t['id']): t['key'] for t in dm.extensions(self.sp)['tools']}
+        self.assertEqual(keys, {('alpha', 'board'): None, ('alpha', 'two'): 'W', ('beta', 'board'): None})
+
+    def test_key_of_an_unlisted_module_does_not_conflict(self):
+        self.mod('alpha', [dict(self.TOOL, key='q')])
+        self.mod('beta', [dict(self.TOOL, key='q')], enabled=False)
+        self.assertEqual(dm.extensions(self.sp)['tools'][0]['key'], 'Q')
+
+    def test_panel_path_is_quoted(self):
+        with mock.patch.object(dm, 'quote', lambda p, safe='': 'Q<%s|%s>' % (p, safe)):
+            self.mod('acme', [self.TOOL])
+            self.assertEqual(dm.extensions(self.sp)['tools'][0]['panel'],
+                             '/api/module-ui/Q<%s|>/Q<acme|>/Q<ui/panel.html|/>' % self.sp['id'])
+
+    def test_trust_view_carries_tools_and_actions_of_the_folder(self):
+        d = self.mod('acme', [self.TOOL, dict(self.TOOL, id='two', label='Two', icon='doc')],
+                     [{'id': 'go', 'label': 'Go', 'where': ['palette']}], trusted=False, enabled=False)
+        v = dm.trust_view(self.sp, 'acme')
+        self.assertEqual(v['tools'], [{'label': 'Board', 'icon': 'task'}, {'label': 'Two', 'icon': 'doc'}])
+        self.assertEqual(v['actions'], [{'label': 'Go'}])
+
+    def test_trust_view_without_tools_has_empty_lists(self):
+        self.own('acme')
+        v = dm.trust_view(self.sp, 'acme')
+        self.assertEqual((v['tools'], v['actions']), ([], []))
+
+    def test_trust_view_refused_has_no_tools_keys(self):
+        d = self.own('acme', extra={'api': 2, 'tools': [self.TOOL]})        # панелі нема → bad-manifest
+        v = dm.trust_view(self.sp, 'acme')
+        self.assertEqual(v['state'], 'refused')
+        self.assertNotIn('tools', v)
+
+
+class PanelSigTest(OwnEnv):
+    """Кеш завантаження бачить файли панелей: створення/підміна панелі без зміни `module.json` не лишає застарілий вердикт."""
+
+    def tool_module(self):
+        d = self.mk('acme', roles=('publish',), server=OWN_SERVER, patch={
+            'api': 2, 'tools': [{'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'ui/panel.html'}]})
+        return d
+
+    def test_creating_and_swapping_a_panel_updates_the_verdict(self):
+        d = self.tool_module()
+        self.assertEqual(dm.catalog()['acme'].status, 'error')              # панелі нема
+        p = os.path.join(d, 'ui', 'panel.html')
+        _write(p, '<p>x</p>')
+        self.assertEqual(dm.catalog()['acme'].status, 'ok', dm.catalog()['acme'].error)
+        os.unlink(p)
+        _write(os.path.join(d, 'real.html'), '<p>y</p>')
+        os.symlink(os.path.join(d, 'real.html'), p)
+        self.assertEqual((dm.catalog()['acme'].status, dm.catalog()['acme'].error_code), ('error', 'bad-manifest'))
+        os.unlink(p)
+        _write(p, '<p>x</p>')
+        self.assertEqual(dm.catalog()['acme'].status, 'ok')
+        self.assertEqual(dm._catalog_sig(), dm._catalog_sig())
+        before = dm._catalog_sig()
+        os.unlink(p)
+        self.assertNotEqual(dm._catalog_sig(), before)
+
+    def test_a_directory_segment_swap_is_seen(self):
+        d = self.tool_module()
+        _write(os.path.join(d, 'ui', 'panel.html'), '<p>x</p>')
+        self.assertEqual(dm.catalog()['acme'].status, 'ok')
+        real = os.path.join(d, 'ui2')
+        os.rename(os.path.join(d, 'ui'), real)
+        os.symlink(real, os.path.join(d, 'ui'))
+        self.assertEqual(dm.catalog()['acme'].status, 'error')

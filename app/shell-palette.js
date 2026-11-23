@@ -78,6 +78,7 @@
 import { figmaWhyKey, flowWhyKey, linkWhyKey } from "./bar-model.js";
 import { figmaOff, hasPublish, hasVcs } from "./spaces-model.js";
 import { pillModel } from "./update-model.js";
+import { shotsBlock } from "./setup-model.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
@@ -163,6 +164,8 @@ function appActions(s) {
   /* «Баг / ідея» (0.23.0): відкриває діалог відгуку на будь-якому екрані (тому лежить тут, де є і `homeOpen`-гілка). */
   const out = [
     { id: "feedback", group: "gSet", labelKey: "fbOpen", icon: "comment", act: "feedback" },
+    /* «Знайомство з канвасом» (0.33.0): карта робочого місця, цикл роботи, демо-задача — скрізь, де «Баг / ідея». */
+    { id: "intro", group: "gSet", labelKey: "frTour", icon: "help", act: "intro" },
     { id: "update-check", group: "gSet", labelKey: "upCheck", icon: "refresh", act: "updatecheck" },
   ];
   if (pillModel(s.update)) out.push({ id: "update-notes", group: "gSet", labelKey: "upWhatsNew", icon: "down", act: "updatenotes" });
@@ -283,6 +286,19 @@ export function paletteActions(state) {
   }
   out.push({ id: "panel", group: "gView", labelKey: "layers", icon: "panel", kbd: "⌘\\", act: "panel" });
   out.push({ id: "clean", group: "gView", labelKey: "cleanView", icon: "eye", kbd: "⇧⌘\\", act: "clean" });
+  /* Інструменти модулів (api 2): лише «Макет» (ті самі межі, що острівець); `label` — сирий текст з маніфесту, не ключ i18n. */
+  if (s.mode === "layout" && Array.isArray(s.modTools)) {
+    for (const x of s.modTools) {
+      out.push({ id: `modtool:${x.key}`, group: "modules", label: String(x.label ?? ""), icon: x.icon || "puzzle",
+        kbd: x.letter || undefined, act: "modtool", val: x.key });
+    }
+  }
+  /* Дії модулів (api 2): над відкритою задачею, у будь-якому режимі; ціль — задача й ітерація з `app.js` (`execPaletteAction`). */
+  if (s.hasTask && Array.isArray(s.modActs)) {
+    for (const x of s.modActs) {
+      out.push({ id: `modact:${x.key}`, group: "modules", label: String(x.label ?? ""), icon: "puzzle", act: "modact", val: x.key });
+    }
+  }
 
   /* ── gIter: існує лише разом з ітерацією — ОМІТ, а не «вимкнено», той
      самий вибір, що для крихти ітерації в смузі (не «є, вимкнена», а немає
@@ -366,12 +382,13 @@ export function paletteActions(state) {
     const { running, have, stale, bad } = s.shots;
     const staleKnown = stale !== null && stale !== undefined;
     const allFresh = !running && have > 0 && staleKnown && stale === 0 && !bad;
+    const blk = running ? null : shotsBlock(s.shots.setup);   // 0.33.0: знімати нема чим — причина з `/api/setup`
     out.push({
       id: "shoot", group: "gFrames",
       labelKey: running ? "shotsStop" : (have > 0 ? "shotsUpdateBare" : "shotsTakeBare"),
       icon: running ? "stop" : (have > 0 ? "refresh" : "camera"),
       act: "shoot",
-      disabled: allFresh, whyKey: allFresh ? "whyFresh" : "",
+      disabled: allFresh || !!blk, whyKey: blk ? blk.whyKey : (allFresh ? "whyFresh" : ""),
     });
   }
 
@@ -480,7 +497,10 @@ const ALIASES = {
 /* Підпис дії мовою інтерфейсу: аргументи — `labelArgs` (ім'я простору), інакше
    `val` (номер ітерації для `glpush`/`glpull`). Одне місце на розмітку й пошук:
    розійдись вони — пошук знаходив би пункт за текстом, якого людина не бачить. */
-const labelOf = (a) => t(a.labelKey, ...(a.labelArgs ?? [a.val]));
+const labelOf = (a) => (typeof a.label === "string" ? a.label : t(a.labelKey, ...(a.labelArgs ?? [a.val])));
+
+/** Група → ключ i18n її заголовка; усі інші групи самі є ключами (`gGo`, `gView`…). */
+const GROUP_KEY = { modules: "palGroupModules" };
 
 /* Пошукові псевдоніми. Пункти просторів мають динамічні id (`space-<id>`), тож
    для них — за `act`: «space»/«простір» знаходять їх обома мовами. */
@@ -520,7 +540,7 @@ export function paletteListHTML(actions, query, cursor) {
   let out = "";
   let g = null;
   list.forEach((a, i) => {
-    if (a.group !== g) { g = a.group; out += `<div class="pal-grp">${esc(t(g))}</div>`; }
+    if (a.group !== g) { g = a.group; out += `<div class="pal-grp">${esc(t(GROUP_KEY[g] || g))}</div>`; }
     out += itemHTML(a, i, cur);
   });
   return out;

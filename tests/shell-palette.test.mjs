@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { DICT, setLang, t } from "../app/i18n.js";
 import { ico } from "../app/icons.js";
+import { CORE_KEYS, modKeyMap, paletteModTools } from "../app/module-host.js";
 import {
   KEYS, filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from "../app/shell-palette.js";
@@ -449,6 +450,38 @@ test("кожна kbd-підказка (довідка + реєстр) має о�
   assert.deepEqual(orphans, [],
     "підказка клавіші без обробника — рівно та брехня, від якої застерігає "
     + `докстрінг keysHTML():\n${orphans.join("\n")}`);
+});
+
+/* Підказки пунктів модулів (`kbd` = літера з маніфесту) обслуговує `modKeyMap` — не `app.js` буквально: літера — дані. Тож тест
+   звіряє два кінці: кожна показана літера є в `modKeyMap` (ядро її не відібрало й дубль не поглинув), а обидва обробники
+   клавіш в `app.js` справді його кличуть. Літера ядра (C) — не підказка: її пункту не дають. */
+test("kbd пунктів модулів: кожна показана літера — у modKeyMap; обидва обробники app.js кличуть modKeyMap", () => {
+  const mk = (i, key) => ({ module: "m", module_name: "M", id: `t${i}`, label: `Tool ${i}`, icon: "puzzle", key, panel: "/p" });
+  const ext = { tools: [mk(1, "J"), mk(2, "C"), mk(3, "J"), mk(4, null), mk(5, "K")], actions: [] };
+  const items = paletteActions(S({ modTools: paletteModTools(ext) })).filter((a) => a.group === "modules");
+  assert.equal(items.length, 5);
+  const map = modKeyMap(ext, CORE_KEYS);
+  const shown = items.filter((a) => a.kbd);
+  assert.deepEqual(shown.map((a) => a.kbd), ["J", "J", "K"], "літера ядра C не показується");
+  for (const a of shown) assert.ok(Object.hasOwn(map, a.kbd), `kbd «${a.kbd}» без запису в modKeyMap`);
+  const appSrc = src("app.js");
+  assert.ok(/function modKeyOf\(ev\)[\s\S]*?modKeyMap\(/.test(appSrc), "modKeyOf мусить брати літеру з modKeyMap");
+  assert.ok((appSrc.match(/modKeyOf\(ev\)/g) || []).length >= 2, "документний і рамковий обробники мусять кликати modKeyOf");
+});
+
+test("пункти модулів: лише «Макет», сирий підпис, група «Модулі», act/val для BAR_ACTIONS.modtool", () => {
+  const mods = [{ key: "m/t", label: "A <i>x</i>", icon: "puzzle", letter: "J" }];
+  const lay = paletteActions(S({ modTools: mods })).filter((a) => a.group === "modules");
+  assert.deepEqual(lay, [{ id: "modtool:m/t", group: "modules", label: "A <i>x</i>", icon: "puzzle", kbd: "J", act: "modtool", val: "m/t" }]);
+  assert.equal(paletteActions(S({ mode: "overview", modTools: mods })).some((a) => a.group === "modules"), false);
+  assert.equal(paletteActions(S({ homeOpen: true, modTools: mods })).some((a) => a.group === "modules"), false);
+  assert.equal(paletteActions(S()).some((a) => a.group === "modules"), false);
+  const html = paletteListHTML(lay, "", 0);
+  assert.match(html, /<div class="pal-grp">Модулі<\/div>/);
+  assert.ok(html.includes("A &lt;i&gt;x&lt;/i&gt;") && !html.includes("<i>x</i>"));
+  assert.equal(filterActions(lay, "<i>").length, 1);
+  setLang("en");
+  assert.match(paletteListHTML(lay, "", 0), /<div class="pal-grp">Modules<\/div>/);
 });
 
 /* ── гейти станів (той самий принцип, що bar-model.js) ───────────────────── */
@@ -1086,4 +1119,50 @@ test("«В Figma» вимкнено в просторі — пункту в ⌘K
   assert.equal(has({ id: "p", tools: { figma: true } }), true);
   assert.equal(has({ id: "p" }), true);
   assert.equal(has(null), true);
+});
+
+test("дії модулів у ⌘K: лише на екрані задачі, в обох режимах, сирий підпис, act/val для modact", () => {
+  const acts = [{ key: "m/a", label: "Ping <i>", module: "m", id: "a", moduleName: "M" }];
+  const want = [{ id: "modact:m/a", group: "modules", label: "Ping <i>", icon: "puzzle", act: "modact", val: "m/a" }];
+  const pick = (o) => paletteActions(S({ hasTask: true, modActs: acts, ...o })).filter((a) => a.id.startsWith("modact:"));
+  assert.deepEqual(pick({}), want);
+  assert.deepEqual(pick({ mode: "overview" }), want);
+  assert.deepEqual(pick({ homeOpen: true }), []);
+  assert.deepEqual(pick({ hasTask: false }), []);
+  assert.deepEqual(pick({ modActs: [] }), []);
+  assert.deepEqual(paletteActions(S({ hasTask: true })).filter((a) => a.id.startsWith("modact:")), []);
+});
+
+/* ── «Знайомство з канвасом» (0.33.0): є там само, де «Баг / ідея» (і на екрані «Задачі») ─────────────── */
+test("знайомство: пункт є на екрані задачі, «Задачі», «Підключення» й у майстрі; без ключа update (еталони) — нема", () => {
+  const ids = (st) => paletteActions(S(st)).filter((a) => a.id === "intro").map((a) => a.act);
+  for (const homeOpen of [true, false]) {
+    for (const homePage of homeOpen ? [undefined, "tasks", "conn", "wiz"] : [undefined]) {
+      assert.deepEqual(ids({ homeOpen, homePage, update: null }), ["intro"], `homeOpen=${homeOpen} ${homePage}`);
+    }
+  }
+  assert.deepEqual(ids({}), []);
+});
+
+test("знайомство: група gSet, іконка зі спрайта, підпис в обох словниках, обробник у BAR_ACTIONS; знаходиться в ⌘K", () => {
+  const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "app", "app.js"), "utf8");
+  const a = paletteActions(S({ update: null })).find((x) => x.id === "intro");
+  assert.equal(a.group, "gSet");
+  assert.ok(ico(a.icon));
+  for (const lang of ["uk", "en"]) assert.ok(DICT[lang][a.labelKey] !== undefined, `${lang}.${a.labelKey}`);
+  assert.match(src, /\n  intro: \(\) =>/);
+  setLang("uk");
+  assert.ok(filterActions(paletteActions(S({ update: null })), "знайомство").some((x) => x.id === "intro"));
+  setLang("en");
+  assert.ok(filterActions(paletteActions(S({ update: null, lang: "en" })), "tour").some((x) => x.id === "intro"));
+  setLang("uk");
+});
+
+test("«Зняти кадри» у ⌘K: знімати нема чим — вимкнено з причиною зі `/api/setup`; прогін — зупинка доступна", () => {
+  const shoot = (setup, running = false) => paletteActions(S({ shots: { have: 0, stale: null, total: 5, running, bad: false, done: 0, setup } }))
+    .find((a) => a.id === "shoot");
+  assert.deepEqual([shoot({ state: "no-browser", command: "x" }).disabled, shoot({ state: "no-browser", command: "x" }).whyKey], [true, "frShotsNoBrowserWhy"]);
+  assert.deepEqual([shoot({ state: "no-node" }).disabled, shoot({ state: "no-node" }).whyKey], [true, "frShotsNoNodeWhy"]);
+  assert.equal(shoot({ state: "ok" }).disabled, false);
+  assert.equal(shoot({ state: "no-browser", command: "x" }, true).disabled, false, "зупинка прогону не блокується");
 });

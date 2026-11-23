@@ -84,8 +84,9 @@ import stat
 import threading
 import time
 import types
+import unicodedata
 from collections import OrderedDict
-from urllib.parse import quote, unquote, unquote_plus
+from urllib.parse import quote, unquote, unquote_plus, urlsplit
 
 import isolation
 import module_trust
@@ -94,7 +95,31 @@ from atomic_io import atomic_write_json
 
 APP = os.path.dirname(os.path.abspath(__file__))
 
-API_VERSION = 1
+#: Версії API маніфесту, які розуміє ядро; `API_VERSION` — найновіша. `api: 2` додає `tools` і `actions`.
+API_VERSIONS = (1, 2)
+API_VERSION = 2
+#: Інструменти (`tools`) і дії (`actions`) модуля api 2: скільки їх буває, куди дії можна повісити, типовий тайм-аут дії.
+MAX_TOOLS = 4
+MAX_ACTIONS = 8
+ACTION_WHERE = ('palette', 'task', 'iteration')
+ACTION_TIMEOUT = 15
+#: Стеля виклику `tool_*` з панелі (`call_tool`), секунд; і розмір відповіді (серіалізований JSON), байтів.
+TOOL_TIMEOUT = 15
+MAX_TOOL_RESULT = 256 * 1024
+#: Рядки відповіді дії (`run_action`): `text` ≤ 300, `url` ≤ 2048 і лише http(s).
+ACTION_TEXT_MAX = 300
+ACTION_URL_MAX = 2048
+#: Скільки викликів `tool_*`/`action_*` одного модуля простору може бути в польоті одночасно (потік, що пережив тайм-аут, теж рахується).
+MAX_INFLIGHT = 4
+#: Клавіші, зайняті самим Deai (інструмент модуля їх не бере).
+RESERVED_KEYS = frozenset('CIHMP')
+#: Шлях панелі інструмента: 2..4 сегменти (панель — завжди в підтеці, не поряд із `server.py`), останній — `.html`.
+UI_PATH_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}(?:/[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}){0,2}/'
+                        r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.html')
+MAX_PANEL_BYTES = 256 * 1024
+#: Функції `server.py`, що їх модуль із `tools` віддає панелям: усі викликані верхньорівневі `tool_*`.
+TOOL_FN_RE = re.compile(r'tool_[a-z0-9_]{1,40}')
+_ICON_LINE = re.compile(r'^  ([a-z][a-zA-Z0-9]*): `', re.M)
 ROLES_CALLED = ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker', 'notify')
 #: Зарезервованих імен ролей не лишилось (4c-3: `notify` — остання — стала викликаною). Порожній кортеж лишено, щоб
 #: `ROLES_CALLED + ROLES_RESERVED` у перевірці маніфесту й `space.json` працювало без змін; невідома роль, як і раніше,
@@ -161,7 +186,9 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
 
 #: Коди ЯДРА для своїх модулів і довіри (етап 3c). Окремо від `STATUS`: `_run` пропускає як є лише коди `STATUS`, тож
 #: модуль не кине «module-untrusted» від свого імені.
-CORE_STATUS = {'module-untrusted': 409, 'module-changed': 409, 'module-refused': 409, 'trust-needs-ui': 403,
+CORE_STATUS = {'unknown-function': 404, 'unknown-action': 404, 'unknown-task': 404, 'unknown-iteration': 404,
+               'bad-request': 400, 'body-too-large': 413, 'isolated': 409, 'module-busy': 429,     # виклики інструментів і дій (M1, Task 4)
+               'module-untrusted': 409, 'module-changed': 409, 'module-refused': 409, 'trust-needs-ui': 403,
                'trust-declined': 409, 'trust-no-confirm': 409, 'trust-busy': 409, 'trust-unreadable': 409}
 #: Своїх модулів у просторі — не більше (за абеткою); решта — примітки `too-many-modules`.
 MAX_OWN_MODULES = 32
@@ -208,11 +235,12 @@ class Module:
     Свій модуль простору (`origin='space'`) без робочого знімка — `status='untrusted'` чи `'error'` (`refused`) з
     `error_code='module-untrusted'`: функцій нема, ролі й налаштування — з маніфесту теки."""
     __slots__ = ('id', 'name', 'version', 'api', 'roles', 'settings', 'publish_target', 'client', 'status', 'error',
-                 'error_code', 'dir', '_fns', 'origin', 'trust', 'record', 'source', 'trust_error', 'check_timeout_s')
+                 'error_code', 'dir', '_fns', 'origin', 'trust', 'record', 'source', 'trust_error', 'check_timeout_s', 'tools', 'actions')
 
     def __init__(self, mid, *, name=None, version='', api=None, roles=(), settings=(), status='ok',
                  error=None, error_code=None, dir='', fns=None, publish_target='folder', client=(),
-                 origin='builtin', trust=None, record=False, source='', trust_error=None, check_timeout_s=None):
+                 origin='builtin', trust=None, record=False, source='', trust_error=None, check_timeout_s=None,
+                 tools=(), actions=()):
         self.id = mid
         self.name = name if isinstance(name, str) and name.strip() else mid
         self.version = version if isinstance(version, str) else ''
@@ -223,6 +251,8 @@ class Module:
         # `None` — ключа в маніфесті нема: `check` бере `CHECK_TIMEOUT` у момент виклику (тести його підміняють)
         self.check_timeout_s = check_timeout_s if type(check_timeout_s) is int else None
         self.client = tuple(client)
+        self.tools = tuple(dict(t) for t in tools)          # api 2: `{id, label, icon, panel, key}`
+        self.actions = tuple(dict(a) for a in actions)      # api 2: `{id, label, where: tuple, timeout_s}`
         self.status = status
         self.error = error
         self.error_code = error_code
@@ -279,7 +309,24 @@ def reset_caches():
         _LAST_CHECK.clear()
         _CAPS.clear()
         _FOLDER_INPUTS.clear()
+        _ICONS[0] = None
     module_trust.reset_cache()
+
+
+_ICONS = [None]
+
+
+def core_icons():
+    """Імена іконок ядра з `app/icons.js` (кеш процесу). Файл не читається — порожня множина: кожна іконка невідома
+    (відмова, а не тихий пропуск)."""
+    with _STATE_LOCK:
+        if _ICONS[0] is None:
+            try:
+                with open(os.path.join(APP, 'icons.js'), encoding='utf-8') as f:
+                    _ICONS[0] = frozenset(_ICON_LINE.findall(f.read()))
+            except (OSError, ValueError):
+                return frozenset()
+        return _ICONS[0]
 
 
 def _sig(path):
@@ -464,14 +511,135 @@ def _check_client(man, roles, d):
     return tuple(names), None
 
 
+def _panel_ok(rel, d):
+    """Причина (без префікса) чи `None`: панель `rel` (уже за `UI_PATH_RE`) — звичайний файл у теці `d`; кожна тека шляху —
+    справжня тека (не посилання), кожне імʼя — РІВНО як у `listdir` батька (ФС без урахування регістру)."""
+    parts = rel.split('/')
+    cur = d
+    for i, n in enumerate(parts):
+        try:
+            if n not in os.listdir(cur):
+                return f'{n} is not in the module folder'
+            st = os.lstat(os.path.join(cur, n))
+        except OSError:
+            return f'{n} is not in the module folder'
+        last = i == len(parts) - 1
+        if not last:
+            if not stat.S_ISDIR(st.st_mode):
+                return f'{n} must be a real folder (no symlink)'
+            cur = os.path.join(cur, n)
+            continue
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return f'{n} must be a regular file (no symlink, no hard link)'
+        if st.st_size > MAX_PANEL_BYTES:
+            return f'{n} is bigger than {MAX_PANEL_BYTES} bytes'
+    return None
+
+
+def _check_tools(man, api, d):
+    """`tools` маніфесту: `(кортеж словників, None)` чи `(None, причина)`. Лише для api 2; 1..`MAX_TOOLS` елементів."""
+    if 'tools' not in man:
+        return (), None
+    if api < 2:
+        return None, 'tools: requires api 2'
+    raw = man['tools']
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_TOOLS:
+        return None, f'tools: must be a list of 1 to {MAX_TOOLS} objects'
+    out, ids, keys = [], set(), set()
+    icons = None
+    for i, t in enumerate(raw):
+        at = f'tools[{i}]'
+        if not isinstance(t, dict):
+            return None, f'{at}: must be an object'
+        for k in t:
+            if k == 'frame':
+                return None, f'{at}.frame: not supported yet'
+            if k not in ('id', 'label', 'icon', 'panel', 'key'):
+                return None, f'{at}: unknown key {str(k)[:40]!r}'
+        tid = t.get('id')
+        if not isinstance(tid, str) or not ID_RE.fullmatch(tid):
+            return None, f'{at}.id: must match [a-z0-9][a-z0-9-]{{0,39}}'
+        if tid in ids:
+            return None, f'{at}.id: duplicate {tid!r}'
+        ids.add(tid)
+        label = t.get('label')
+        if not isinstance(label, str) or not label.strip() or len(label.strip()) > 40:
+            return None, f'{at}.label: must be a non-empty string of at most 40 characters'
+        icon = t.get('icon')
+        if icons is None:
+            icons = core_icons()
+        if not isinstance(icon, str) or icon not in icons:
+            return None, f'{at}.icon: unknown icon {str(icon)[:40]!r}'
+        panel = t.get('panel')
+        if not isinstance(panel, str) or not UI_PATH_RE.fullmatch(panel):
+            return None, f'{at}.panel: must be a relative path of 2 to 4 segments ending in .html'
+        why = _panel_ok(panel, d)
+        if why:
+            return None, f'{at}.panel: {why}'
+        key = None
+        if 'key' in t:
+            key = t['key']
+            if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z]', key):
+                return None, f'{at}.key: must be one ASCII letter'
+            key = key.upper()
+            if key in RESERVED_KEYS:
+                return None, f'{at}.key: {key!r} is reserved by Deai'
+            if key in keys:
+                return None, f'{at}.key: duplicate {key!r}'
+            keys.add(key)
+        out.append({'id': tid, 'label': label.strip(), 'icon': icon, 'panel': panel, 'key': key})
+    return tuple(out), None
+
+
+def _check_actions(man, api):
+    """`actions` маніфесту: `(кортеж словників, None)` чи `(None, причина)`. Лише для api 2; 1..`MAX_ACTIONS` елементів."""
+    if 'actions' not in man:
+        return (), None
+    if api < 2:
+        return None, 'actions: requires api 2'
+    raw = man['actions']
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_ACTIONS:
+        return None, f'actions: must be a list of 1 to {MAX_ACTIONS} objects'
+    out, ids = [], set()
+    for i, a in enumerate(raw):
+        at = f'actions[{i}]'
+        if not isinstance(a, dict):
+            return None, f'{at}: must be an object'
+        for k in a:
+            if k not in ('id', 'label', 'where', 'timeout_s'):
+                return None, f'{at}: unknown key {str(k)[:40]!r}'
+        aid = a.get('id')
+        if not isinstance(aid, str) or not ID_RE.fullmatch(aid):
+            return None, f'{at}.id: must match [a-z0-9][a-z0-9-]{{0,39}}'
+        if aid in ids:
+            return None, f'{at}.id: duplicate {aid!r}'
+        ids.add(aid)
+        label = a.get('label')
+        if not isinstance(label, str) or not label.strip() or len(label.strip()) > 60:
+            return None, f'{at}.label: must be a non-empty string of at most 60 characters'
+        where = a.get('where')
+        if not isinstance(where, list) or not where:
+            return None, f'{at}.where: must be a non-empty list'
+        for w in where:
+            if not isinstance(w, str) or w not in ACTION_WHERE:
+                return None, f'{at}.where: items must be one of {", ".join(ACTION_WHERE)}'
+        if len(set(where)) != len(where):
+            return None, f'{at}.where: listed twice'
+        ts = a.get('timeout_s')
+        if 'timeout_s' in a and (type(ts) is not int or not 1 <= ts <= MAX_CHECK_TIMEOUT):
+            return None, f'{at}.timeout_s: must be an integer 1..{MAX_CHECK_TIMEOUT}'
+        out.append({'id': aid, 'label': label.strip(), 'where': tuple(where), 'timeout_s': ts if 'timeout_s' in a else None})
+    return tuple(out), None
+
+
 def _check_manifest(man, folder, d):
     """(метадані, None) або (None, причина) — перевірка маніфесту (і файлів `client` у теці `d`) без виконання
     `server.py`."""
     if not isinstance(man, dict):
         return None, 'module.json: not an object'
     api = man.get('api')
-    if type(api) is not int or api != API_VERSION:
-        return None, f'api: must be {API_VERSION}'
+    if type(api) is not int or api not in API_VERSIONS:
+        return None, f'api: must be one of {", ".join(map(str, API_VERSIONS))}'
     mid = man.get('id')
     if not isinstance(mid, str) or not ID_RE.fullmatch(mid):
         return None, 'id: must match [a-z0-9][a-z0-9-]{0,39}'
@@ -508,17 +676,25 @@ def _check_manifest(man, folder, d):
     client, why = _check_client(man, roles, d)
     if why:
         return None, why
-    return {'name': name, 'version': version, 'roles': roles,
+    tools, why = _check_tools(man, api, d)
+    if why:
+        return None, why
+    actions, why = _check_actions(man, api)
+    if why:
+        return None, why
+    return {'name': name, 'version': version, 'api': api, 'roles': roles,
             'settings': settings, 'publish_target': target, 'client': client,
+            'tools': tools, 'actions': actions,
             'check_timeout_s': cts if 'check_timeout_s' in man else None}, None
 
 
 def _failed(folder, d, code, text, man=None, meta=None):
     base = dict(status='error', error=str(text)[:MAX_MESSAGE], error_code=code, dir=d)
     if meta:
-        return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
+        return Module(folder, name=meta['name'], version=meta['version'], api=meta['api'],
                       roles=meta['roles'], settings=meta['settings'],
                       publish_target=meta['publish_target'], check_timeout_s=meta['check_timeout_s'],
+                      tools=meta['tools'], actions=meta['actions'],
                       **base)           # `client` не передаємо: помилковий модуль нічого не віддає
     man = man if isinstance(man, dict) else {}
     api = man.get('api')
@@ -564,9 +740,20 @@ def _build(d, folder):
         f = ns.__dict__.get(opt)
         if callable(f):                                 # необовʼязкова: немає чи не функція — не помилка, `fn()` дасть `None`
             fns[opt] = f
-    return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
+    for a in meta['actions']:
+        need = 'action_' + a['id'].replace('-', '_')
+        f = ns.__dict__.get(need)
+        if not callable(f):
+            return _failed(folder, d, 'bad-manifest', f'server.py: no callable {need}()', meta=meta)
+        fns[need] = f
+    if meta['tools']:
+        for n, f in list(ns.__dict__.items()):
+            if TOOL_FN_RE.fullmatch(n) and callable(f):
+                fns[n] = f
+    return Module(folder, name=meta['name'], version=meta['version'], api=meta['api'],
                   roles=meta['roles'], settings=meta['settings'], publish_target=meta['publish_target'],
-                  check_timeout_s=meta['check_timeout_s'], client=meta['client'], status='ok', dir=d, fns=fns)
+                  check_timeout_s=meta['check_timeout_s'], client=meta['client'],
+                  tools=meta['tools'], actions=meta['actions'], status='ok', dir=d, fns=fns)
 
 
 def _client_sig(d):
@@ -587,8 +774,37 @@ def _client_sig(d):
     return tuple(sorted(out))
 
 
+def _panel_sig(d):
+    """Відбиток файлів панелей, названих у `tools[*].panel` маніфесту теки `d`, і КОЖНОЇ теки їхніх шляхів (`lstat`: створення,
+    видалення, підміна посиланням чи жорстким посиланням — інший відбиток). Тотальна: що б не було з маніфестом чи диском — `()`/`None`,
+    не виняток. Без цього кеш лишав би вердикт `_panel_ok` застарілим, бо `module.json` не змінювався."""
+    try:
+        with open(os.path.join(d, 'module.json'), 'rb') as f:
+            raw = f.read(spaces.MAX_JSON_BYTES + 1)
+        if len(raw) > spaces.MAX_JSON_BYTES:
+            return ()
+        tools = json.loads(raw.decode('utf-8')).get('tools')
+        panels = sorted({t['panel'] for t in tools[:MAX_TOOLS]
+                         if isinstance(t, dict) and isinstance(t.get('panel'), str) and UI_PATH_RE.fullmatch(t['panel'])}
+                        ) if isinstance(tools, list) else []
+    except (OSError, ValueError, RecursionError, AttributeError, TypeError):
+        return ()
+    out = []
+    for rel in panels:
+        cur = d
+        for n in rel.split('/'):
+            cur = os.path.join(cur, n)
+            try:
+                st = os.lstat(cur)
+                out.append((cur, st.st_mode, st.st_nlink, st.st_size, st.st_mtime_ns, st.st_ino))
+            except OSError:
+                out.append((cur, None))
+                break
+    return tuple(out)
+
+
 def _load_dir(d, folder):
-    sig = (_sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')), _client_sig(d))
+    sig = (_sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')), _client_sig(d), _panel_sig(d))
     with _LOAD_LOCK:
         hit = _CACHE.get(d)
         if hit is not None and hit[0] == sig:
@@ -617,6 +833,8 @@ def _clone(m, **kw):
         setattr(c, s, getattr(m, s))
     c.roles = list(m.roles)
     c.settings = [dict(s) for s in m.settings]
+    c.tools = tuple(dict(t) for t in m.tools)
+    c.actions = tuple(dict(a) for a in m.actions)
     for k, v in kw.items():
         setattr(c, k, v)
     return c
@@ -652,9 +870,9 @@ def _manifest_from_bytes(raw, folder, d):
 def _meta_kw(meta):
     if not meta:
         return {}
-    return dict(name=meta['name'], version=meta['version'], api=API_VERSION, roles=meta['roles'],
+    return dict(name=meta['name'], version=meta['version'], api=meta['api'], roles=meta['roles'],
                 settings=meta['settings'], publish_target=meta['publish_target'],
-                check_timeout_s=meta['check_timeout_s'])
+                check_timeout_s=meta['check_timeout_s'], tools=meta['tools'], actions=meta['actions'])
 
 
 def _own_base(space):
@@ -834,7 +1052,7 @@ def catalog(space=None):
 def _catalog_sig():
     bases, items, _ = _scan()
     return (bases, tuple((n, d, _sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')),
-                          _client_sig(d)) for n, d in items))
+                          _client_sig(d), _panel_sig(d)) for n, d in items))
 
 
 # ------------------------------------------------------------------------------- простір і space.json
@@ -908,6 +1126,189 @@ def space_modules(space):
     if path is None:
         return {}
     return _normalize(_raw_modules(_load_space_json(path)))
+
+
+def _ext_modules(space):
+    """`[(id, Module)]` модулів, що дають інструменти чи дії: `status == 'ok'`, api 2, ЯВНО увімкнені (`enabled is True`). Єдине
+    джерело правди для `extensions` і `ext_module`. ⚠️ Може виконати код (завантаження каталогу)."""
+    explicit = space_modules(space)
+    return [(mid, m) for mid, m in catalog(space).items()
+            if m.status == 'ok' and m.api == 2 and explicit.get(mid, {}).get('enabled') is True]
+
+
+def ext_module(space, mid):
+    """`Module` з непорожніми `tools`, що проходить ті самі умови, що й `extensions` (справний, api 2, явно увімкнений), або `None`.
+    З нього роздаються панелі (`/api/module-ui/…`); незнайомий чи вимкнений модуль — `None`."""
+    return next((m for i, m in _ext_modules(space) if i == mid and m.tools), None)
+
+
+def _check_isolation(space, mid):
+    """⛔ Закон ізоляції (як `serve.module_check_verdict`): запис із `shared_state` в ізольованому прогоні (`DC_TASKS_FILE`/
+    `DC_NO_OVERVIEW`) не кличеться — ні секрети справжнього дому, ні код модуля. Відмова `isolated` (409)."""
+    if isolation.isolated() and shared_state(space, mid):
+        raise ModuleError('isolated', message='calling a shared-state module is refused in an isolated run')
+
+
+def call_tool(space, mid, fn, args):
+    """`POST /api/module-tool` без HTTP: `tool_*` модуля `mid` (`ext_module`: справний, api 2, явно увімкнений, з інструментами).
+    `fn` — лише рядок за `TOOL_FN_RE`, що є серед функцій модуля: `check`, `action_*`, `__init__`, ролі недосяжні (`unknown-function`).
+    Результат — JSON (`allow_nan=False`) ≤ `MAX_TOOL_RESULT`, інакше `module-error`. Помилки модуля — `call` (текст без секретів)."""
+    m = ext_module(space, mid) if isinstance(mid, str) else None
+    if m is None:
+        raise ModuleError('unknown-module', message='unknown module')
+    if not isinstance(fn, str) or not TOOL_FN_RE.fullmatch(fn) or m.fn(fn) is None:
+        raise ModuleError('unknown-function', message='unknown function')
+    _check_isolation(space, mid)
+    val = _call_limited(space, m, fn, module_ctx(space, m), (args,), TOOL_TIMEOUT)
+    return _plain_json(val)
+
+
+_inflight = {}
+_inflight_lock = threading.Lock()
+
+
+def _call_limited(space, m, name, ctx, args, timeout):
+    """`call` з ліміном `MAX_INFLIGHT` одночасних викликів на (простір, модуль): лічильник росте перед викликом і спадає РІВНО раз у
+    `finally` обгортки — тобто коли завершиться сам потік модуля, навіть якщо HTTP-сторона вже отримала `check-timeout`."""
+    key = (_space_id(space), m.id)
+    f = m.fn(name)
+    with _inflight_lock:
+        if _inflight.get(key, 0) >= MAX_INFLIGHT:
+            raise ModuleError('module-busy', message='too many calls of this module are running')
+        _inflight[key] = _inflight.get(key, 0) + 1
+    state = {'started': False, 'released': False}
+
+    def release():
+        with _inflight_lock:
+            if state['released']:
+                return
+            state['released'] = True
+            n = _inflight.get(key, 0) - 1
+            if n > 0:
+                _inflight[key] = n
+            else:
+                _inflight.pop(key, None)
+
+    def wrapper(c, *a):
+        state['started'] = True
+        try:
+            return f(c, *a)
+        finally:
+            release()
+    wrapper.__name__ = name
+    try:
+        return call(m, wrapper, ctx, *args, timeout=timeout)
+    except BaseException:
+        if not state['started']:
+            release()                       # потік не стартував: звільнити саме тут (`release` ідемпотентний)
+        raise
+
+
+def _plain_json(val, limit=MAX_TOOL_RESULT):
+    """Відповідь модуля → ЧИСТА копія (`json.loads(json.dumps(val))`): підклас `dict` з підступним `items()` чи `NaN` не доживає до
+    відповіді. Будь-який виняток (`Exception`) при серіалізації — `module-error` «result is not JSON»; >`limit` байтів — «too big»."""
+    try:
+        text = json.dumps(val, allow_nan=False)
+        out = json.loads(text)
+    except Exception:  # noqa: BLE001 — код модуля міг підсунути що завгодно; текст винятку не віддаємо
+        raise ModuleError('module-error', message='result is not JSON') from None
+    if len(text.encode('utf-8')) > limit:
+        raise ModuleError('module-error', message='result is too big')
+    return out
+
+
+def action_module(space, mid, aid):
+    """`(Module, опис дії)` для дії `aid` модуля `mid` (справний, api 2, явно увімкнений — `tools` НЕ потрібні) або `ModuleError`
+    `unknown-module`/`unknown-action`."""
+    m = next((m for i, m in _ext_modules(space) if i == mid), None) if isinstance(mid, str) else None
+    if m is None:
+        raise ModuleError('unknown-module', message='unknown module')
+    act = next((a for a in m.actions if a['id'] == aid), None) if isinstance(aid, str) else None
+    if act is None:
+        raise ModuleError('unknown-action', message='unknown action')
+    return m, act
+
+
+_BAD_CATEGORIES = ('Cc', 'Cf', 'Zs', 'Zl', 'Zp')
+
+
+def _clean_url(v):
+    """`v`, коли це рядок ≤ `ACTION_URL_MAX` зі схемою http/https (без урахування регістру), НЕПОРОЖНІМ хостом і без символів категорій
+    Cc/Cf/Zs/Zl/Zp (керівні, невидимі, пробіли, bidi), без `\\` і без userinfo (`@` в authority); інакше `None`. Адреса лишається як є."""
+    if not isinstance(v, str) or not 0 < len(v) <= ACTION_URL_MAX:
+        return None
+    if any(unicodedata.category(c) in _BAD_CATEGORIES for c in v):
+        return None
+    if '\\' in v:                       # браузер читає `\` як `/`: `https://evil\@good` веде на evil
+        return None
+    try:
+        sp = urlsplit(v)
+        host = sp.hostname
+        if '@' in sp.netloc or sp.username is not None or sp.password is not None:   # userinfo — маскування хоста
+            return None
+    except ValueError:
+        return None
+    if sp.scheme.lower() not in ('http', 'https') or not v.lower().startswith(sp.scheme.lower() + '://') or not host:
+        return None
+    return v
+
+
+def _clean_text(v):
+    """`text` дії: без символів Cc/Cf (крім `\\n`), потім ≤ `ACTION_TEXT_MAX`."""
+    return ''.join(c for c in v if c == '\n' or unicodedata.category(c) not in ('Cc', 'Cf'))[:ACTION_TEXT_MAX]
+
+
+def run_action(space, mid, aid, target, where=None):
+    """`POST /api/module-action` без HTTP: `action_<id>` модуля з `target` (`{'from', 'task', 'iteration'}`, його збирає викликач).
+    `where` — звідки викликано: мусить бути в `where` дії (інакше `bad-request`). Відповідь модуля СПЕРШУ проходить круговий JSON
+    (`_plain_json`), далі лише прості типи: `{'ok', 'text'?, 'url'?}` — `ok` лише `bool` (інакше `module-error`), `text` — рядок без
+    Cc/Cf ≤ 300, `url` — безпечний (`_clean_url`), решта відкидається мовчки."""
+    m, act = action_module(space, mid, aid)
+    if where is None:
+        where = target.get('from') if isinstance(target, dict) else None
+    if not isinstance(where, str) or where not in act['where']:
+        raise ModuleError('bad-request', message='the action is not available from there')
+    _check_isolation(space, mid)
+    val = _call_limited(space, m, 'action_' + act['id'].replace('-', '_'), module_ctx(space, m), (target,),
+                        act['timeout_s'] or ACTION_TIMEOUT)
+    val = _plain_json(val, MAX_TOOL_RESULT)
+    ok = val.get('ok') if type(val) is dict else None
+    if type(ok) is not bool:
+        raise ModuleError('module-error', message='action result must be {"ok": bool, ...}')
+    out = {'ok': ok}
+    text, url = val.get('text'), _clean_url(val.get('url'))
+    if type(text) is str:
+        out['text'] = _clean_text(text)
+    if url is not None:
+        out['url'] = url
+    return out
+
+
+def extensions(space):
+    """`{'tools': [...], 'actions': [...]}` для `GET /api/module-ext`: лише модулі каталогу простору зі `status == 'ok'`, api 2 і
+    ЯВНО увімкнені (`enabled is True` у `space.json`). Порядок — за id модуля, далі як у маніфесті. Модуль у стані `changed`
+    лишається в списку: його код і панелі — з довіреного знімка, а не з нової теки; недовірений/`refused` без знімка — `error`/
+    `untrusted`, тож сюди не потрапляє. Клавіша, заявлена двома інструментами (між УСІМА переліченими модулями), — `None` в обох.
+    ⚠️ Може виконати код (завантаження каталогу) — НЕ під `WRITE_LOCK`."""
+    sid = _space_id(space)
+    tools, actions = [], []
+    for mid, m in _ext_modules(space):
+        for t in m.tools:
+            tools.append({'module': mid, 'module_name': m.name, 'id': t['id'], 'label': t['label'], 'icon': t['icon'],
+                          'key': t['key'],
+                          'panel': '/api/module-ui/%s/%s/%s' % (quote(sid, safe=''), quote(mid, safe=''),
+                                                                 quote(t['panel'], safe='/'))})
+        for a in m.actions:
+            actions.append({'module': mid, 'module_name': m.name, 'id': a['id'], 'label': a['label'],
+                            'where': list(a['where'])})
+    count = {}
+    for t in tools:
+        if t['key']:
+            count[t['key']] = count.get(t['key'], 0) + 1
+    for t in tools:
+        if t['key'] and count[t['key']] > 1:
+            t['key'] = None
+    return {'tools': tools, 'actions': actions}
 
 
 def _enabled_in(m, space, explicit):
@@ -2273,7 +2674,7 @@ def trust_view(space, mid):
     m = _own_module(space, mid, src, records, rec_err)
     rec = records.get(module_trust.key_for(_space_path(space), mid)) if m.record else None   # аліас і так без `record`
     out = {'id': mid, 'name': m.name, 'version': m.version, 'roles': list(m.roles), 'settings': [],
-           'path': module_trust.tilde(src), 'record': rec is not None}
+           'path': module_trust.tilde(src), 'record': rec is not None}   # `tools`/`actions` — лише в нерефьюзнутого (з маніфесту теки)
     try:
         sc = module_trust.scan(src)
     except module_trust.Refused as e:
@@ -2289,7 +2690,9 @@ def trust_view(space, mid):
         state = 'trusted' if sc.hash == rec['hash'] else 'changed'
     files, removed = module_trust.diff(sc.files, rec['files'] if rec else None)
     out.update(state=state, name=meta['name'], version=meta['version'], roles=list(meta['roles']),
-               settings=[_trust_setting(s) for s in meta['settings']], hash=sc.hash, files=files, removed=removed,
+               settings=[_trust_setting(s) for s in meta['settings']],
+               tools=[{'label': t['label'], 'icon': t['icon']} for t in meta['tools']],
+               actions=[{'label': a['label']} for a in meta['actions']], hash=sc.hash, files=files, removed=removed,
                total={'files': len(sc.files), 'bytes': sc.total})
     return out
 

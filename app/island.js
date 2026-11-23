@@ -5,7 +5,7 @@
  * Дії — ті самі `BAR_ACTIONS` (`comments`, `inspector`, `feedback`): делегація з `#hud` в `app.js`.
  */
 import { esc } from "./esc.js";
-import { ico } from "./icons.js";
+import { ICONS, ico } from "./icons.js";
 import { t } from "./i18n.js";
 
 /** Режим коментатора → іконка (форми ті самі, що в його власній смужці). Невідомий режим кнопки не отримує. */
@@ -27,6 +27,15 @@ function inspectorBtn(inspectorOn) {
     + ` aria-label="${esc(t("inspector"))}" title="${esc(t("inspectorKey"))}">${ico("inspect")}</button>`;
 }
 
+/** Кнопка інструмента модуля (api 2): назва й іконка — з маніфесту (екрануються); невідома іконка → `puzzle`, ніколи не кидає. */
+function modToolBtn(x, on) {
+  const label = String(x?.label ?? "");
+  const tip = esc(x?.letter ? `${label} (${x.letter})` : label);
+  const icon = typeof x?.icon === "string" && Object.hasOwn(ICONS, x.icon) ? x.icon : "puzzle";
+  return `<button class="isl-btn${on ? " isl-btn--on" : ""}" data-act="modtool" data-val="${esc(x?.key)}" aria-pressed="${on}"`
+    + ` aria-label="${esc(label)}" title="${tip}">${ico(icon)}</button>`;
+}
+
 /** «Сховати інтерфейс» — лише в превʼю (0.32.0): чистий перегляд макета, підказка з акордом. */
 function cleanBtn() {
   const tip = esc(t("islandCleanKey"));
@@ -40,7 +49,7 @@ const PREVIEW_TOOLS = ["cmt", "insp", "clean"];
  * `tools` (0.32.0): явний набір для ЗОВНІШНЬОГО превʼю — `['cmt', 'insp', 'clean']` (невідоме ігнорується). Без нього — набір
  * Deai, як і було (коментарі | інспектор | баг), байт у байт. Роздільник — лише між «коментарі+інспектор» і «сховати».
  */
-export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn = false, commentsOn = false, commentsCount = 0, commentsNew = 0, commentTool = null, tools = null } = {}) {
+export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn = false, commentsOn = false, commentsCount = 0, commentsNew = 0, commentTool = null, tools = null, modTools = [] } = {}) {
   if (Array.isArray(tools)) {
     const want = PREVIEW_TOOLS.filter((k) => tools.includes(k));
     const head = want.filter((k) => k !== "clean").map((k) => (k === "cmt"
@@ -74,6 +83,7 @@ export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn 
     }
     if (mode === "layout") {
       parts.push(inspectorBtn(inspectorOn));
+      if (Array.isArray(modTools)) for (const x of modTools) parts.push(modToolBtn(x, !!x?.on));
     }
     parts.push('<span class="isl-sep" aria-hidden="true"></span>');
   }
