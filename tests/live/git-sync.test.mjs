@@ -254,7 +254,7 @@ test("1: без модуля — зони синку в смузі нема, с�
   assert.deepEqual(await (await fetch(`${s.url}/api/vcs-status`)).json(), { configured: false });
   assert.deepEqual(await (await fetch(`${s.url}/api/gitlab-status`)).json(), { configured: false });
   const auto = await (await postJson(s.url, "/api/autosync", {})).json();
-  assert.deepEqual(auto, { ok: true, changed: false, reason: "no-gitlab" });
+  assert.deepEqual(auto, { ok: true, changed: false, reason: "no-gitlab", ai: null });
   assert.equal((await postJson(s.url, "/api/vcs-push", { it: "it1" })).status, 400, "push без ролі — 400");
   assert.deepEqual(s.outside, []);
   assert.deepEqual(s.errors, []);
@@ -382,7 +382,7 @@ test("5: автосинк — autosync-off за замовчуванням (orig
   const s = await boot(t);
   const { page } = s;
   const off = await (await postJson(s.url, "/api/autosync", {})).json();
-  assert.deepEqual(off, { ok: true, changed: false, reason: "autosync-off" });
+  assert.deepEqual(off, { ok: true, changed: false, reason: "autosync-off", ai: null });
   assert.equal(s.originRefs(), "", "вимкнений автосинк нічого не відправив");
 
   await openConnections(page);

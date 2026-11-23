@@ -183,7 +183,7 @@ export function trashCardHTML(x, ui) {
   const when = Number.isFinite(ms) ? (() => { const r = relTime(ms, ui.now); return t(r.key, r.n); })() : "";
   const meta = [esc((x.tags || []).join(", ")), when ? esc(t("thDeleted", when)) : ""].filter(Boolean).join(" · ");
   const more = asking ? "" : `<button class="th-more" data-th="menu" data-id="${esc(x.id)}" data-trash="1" aria-haspopup="menu"`
-    + ` aria-expanded="false" aria-label="${esc(t("thMenuAria", x.id))}" title="${esc(t("thMenuTitle"))}">${ico("dots")}</button>`;
+    + ` aria-expanded="false" aria-label="${esc(t("thMenuAria", x.title || x.id))}" title="${esc(t("thMenuTitle"))}">${ico("dots")}</button>`;
   const tail = asking
     ? confirmHTML({ title: t("taskPurgeAsk", x.title || x.id), no: t("askCancel"), yes: t("taskPurge"),
       noAttrs: `data-th="askno" data-id="${esc(x.id)}"`, yesAttrs: `data-th="askyes" data-id="${esc(x.id)}"` })
@@ -231,7 +231,7 @@ export function cardHTML(x, ui, cur) {
   const asking = !team && edit.ask && edit.ask.id === x.id ? edit.ask : null;
   const more = team || asking ? ""
     : `<button class="th-more" data-th="menu" data-id="${esc(x.id)}" aria-haspopup="menu" aria-expanded="false"`
-      + ` aria-label="${esc(t("thMenuAria", taskKey(x)))}" title="${esc(t("thMenuTitle"))}">${ico("dots")}</button>`;
+      + ` aria-label="${esc(t("thMenuAria", cleanTitle(x)))}" title="${esc(t("thMenuTitle"))}">${ico("dots")}</button>`;
   const ttl = !team && edit.ren === x.id
     ? `<input id="th-ren" class="th-ren" type="text" value="${esc(cleanTitle(x))}" aria-label="${esc(t("newTaskTitle"))}"`
       + ` autocomplete="off" spellcheck="false">`
@@ -243,17 +243,24 @@ export function cardHTML(x, ui, cur) {
       noAttrs: `data-th="askno" data-id="${esc(x.id)}"`, yesAttrs: `data-th="askyes" data-id="${esc(x.id)}"`,
     })
     : `<div class="th-badges">${status}${comments}${gone}${actionHTML(x, team)}</div>`;
+  /* Фаза И (Р1): ідентифікатора на картці немає. Ключ видно лише коли пошук збігся з ним, а не з назвою. Рядок стоїть
+     завжди (мін. висота в CSS): назви карток на одній лінії. */
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const titleL = cleanTitle(x).toLowerCase();
+  const keyL = taskKey(x).toLowerCase();
+  const keyHit = words.some((w) => keyL.includes(w) && !titleL.includes(w));
+  const krow = (keyHit ? `<span class="th-key">${mark(taskKey(x), q)}</span>` : "")
+    + (isCur ? `<span class="th-curb">${keyHit ? "· " : ""}${esc(t("thCurrent"))}</span>` : "");
   const cls = `th-card${isCur ? " th-card--cur" : ""}${missing ? " th-card--miss" : ""}${asking ? " th-card--ask" : ""}`;
   const renaming = !team && edit.ren === x.id;
   const open = actionable && !asking && !renaming;
   /* Група без імені в фокусі нічого не каже скрінрідеру: питання й перейменування називаємо «ключ — назва». */
-  const name = !open && !team ? ` aria-label="${esc(taskKey(x))} — ${esc(cleanTitle(x))}"` : "";
+  const name = !open && !team ? ` aria-label="${esc(cleanTitle(x))}"` : "";
   return `<div class="${cls}" tabindex="0" role="${open ? "button" : "group"}"${name}`
     + `${open ? ` data-th="open"` : ""} data-id="${esc(x.id)}"${missing ? ' aria-disabled="true"' : ""}>
     <div class="th-thumb">${thumb}${more}</div>
     <div class="th-cbody">
-      <div class="th-krow"><span class="th-key">${mark(taskKey(x), q)}</span>${isCur
-    ? `<span class="th-curb">· ${esc(t("thCurrent"))}</span>` : ""}</div>
+      <div class="th-krow">${krow}</div>
       ${ttl}
       <div class="th-meta">${parts.filter(Boolean).join(" · ")}</div>
       ${tail}

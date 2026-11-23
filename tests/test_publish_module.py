@@ -60,6 +60,7 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # пакета `tests` нема — охоронець поруч
 import deai_modules as dm  # noqa: E402
 import fake_npx  # noqa: E402
+from phase_i_subjects import amend_subjects  # noqa: E402
 import liga_fixture  # noqa: E402
 import sbconf  # noqa: E402
 import serve  # noqa: E402
@@ -878,7 +879,7 @@ class LegacyPublishViaModule(TaskFixture):
 
     def test_1_differential_against_the_0_8_0_snapshot(self):
         with open(BEFORE_4B1, encoding='utf-8') as fh:
-            before = json.load(fh)['scenarios']
+            before = amend_subjects(json.load(fh))['scenarios']
         self.assertEqual([n for n, *_ in LP_SCENARIOS], list(before), 'сценарії тесту й знімка розійшлись')
         for name, sc, extra, mode in LP_SCENARIOS:
             with self.subTest(scenario=name):
@@ -1038,7 +1039,7 @@ class LegacyPublishViaModule(TaskFixture):
                 obs = self._legacy(LP_OK, extra_patches=patches)          # `_post` кидає на не-200: статус 200 доведено
                 self.assertEqual([k for k, _ in obs['response']], keys)
                 self.assertEqual(self._resp(obs)['deploy_error'], text)
-                self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s)']])
+                self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s) · it1 it2']])
                 self.assertEqual(obs['spies']['overview_sync'], 1)
                 self.assertEqual('publish_url' in obs['iterations_json'], wrote)
 
@@ -1169,7 +1170,7 @@ class LegacyPublishViaModule(TaskFixture):
         obs = self._legacy({**LP_OK, 'deploy': {'code': 1, 'stderr': 'boom'}})
         self.assertNotIn('publish_url', obs['iterations_json'])
         self.assertEqual(obs['spies']['registry_push'], [])
-        self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s)']])
+        self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s) · it1 it2']])
 
 
 # ============================================================================== Task 4b: диспетчер ролі `publish`

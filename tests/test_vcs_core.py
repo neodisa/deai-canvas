@@ -1893,17 +1893,24 @@ class Http(Core):
     # ---------------------------------------------------------------- автосинк
     NO_GITLAB = {'ok': True, 'changed': False, 'reason': 'no-gitlab'}
 
+    def no_ai(self, resp):
+        """Відповідь `/api/autosync` без `ai` (фаза И: ключ є завжди — `None` або `{it, sha}`): решту звіряємо дослівно."""
+        st, body = resp
+        self.assertIn('ai', body)
+        return st, {k: v for k, v in body.items() if k != 'ai'}
+
     def test_autosync_without_a_role_or_without_a_target_is_the_quiet_no_gitlab_verbatim(self):
         self.bare_space()
-        self.assertEqual(self.post('/api/autosync', {}, 'b'), (200, self.NO_GITLAB))
+        self.assertEqual(self.no_ai(self.post('/api/autosync', {}, 'b')), (200, self.NO_GITLAB))
         dm.write_module_state(self.plain, 'git-sync', settings={'repo': None})
-        self.assertEqual(self.post('/api/autosync', {}, 'p'), (200, self.NO_GITLAB))
+        self.assertEqual(self.no_ai(self.post('/api/autosync', {}, 'p')), (200, self.NO_GITLAB))
 
     def test_autosync_switched_off_in_the_module_does_nothing_and_says_so(self):
         """`git-sync` за замовчуванням має `autosync: false`: відповідь `autosync-off`, жодного коміту ні в origin, ні в теці задачі."""
         before = self.heads()
         write(os.path.join(self.p_dir, 'iterations', 'it1', 'index.html'), '<h1>брудна</h1>')
-        self.assertEqual(self.post('/api/autosync', {}, 'p'), (200, {'ok': True, 'changed': False, 'reason': 'autosync-off'}))
+        # Фаза И: ключ `ai` є завжди; тека без `.git` (початковий імпорт) — не AI, тож локального коміту й тут нема.
+        self.assertEqual(self.post('/api/autosync', {}, 'p'), (200, {'ok': True, 'changed': False, 'reason': 'autosync-off', 'ai': None}))
         self.assertEqual(self.heads(), before, 'вимкнений автосинк відправив')
         self.assertFalse(os.path.isdir(os.path.join(self.p_dir, '.git')), 'вимкнений автосинк зробив локальний коміт')
         self.assertNotIn('mockup/p/index.html', self.out(self.origin, 'ls-tree', '-r', '--name-only', 'main'))
@@ -1913,7 +1920,7 @@ class Http(Core):
         st, body = self.post('/api/autosync', {}, 'p')
         self.assertEqual((st, body['ok'], body['changed'], body['synced'], body['it']), (200, True, True, True, 'it1'), body)
         self.assertEqual(self.log1(), 'deai: sync mockup/p (Пе) · it1')
-        self.assertEqual(self.post('/api/autosync', {}, 'p'), (200, {'ok': True, 'changed': False, 'reason': 'clean', 'it': 'it1'}))
+        self.assertEqual(self.post('/api/autosync', {}, 'p'), (200, {'ok': True, 'changed': False, 'reason': 'clean', 'it': 'it1', 'ai': None}))
 
     def test_autosync_of_the_liga_space_is_on_as_it_was(self):
         st, body = self.post('/api/autosync', {}, 'a')
@@ -1932,9 +1939,9 @@ class Http(Core):
 
     def test_autosync_of_a_refusing_provider_is_the_quiet_no_gitlab_with_the_code(self):
         self.break_space_json()
-        self.assertEqual(self.post('/api/autosync', {}, 'p'), (200, {**self.NO_GITLAB, 'code': 'space-json-unreadable'}))
+        self.assertEqual(self.no_ai(self.post('/api/autosync', {}, 'p')), (200, {**self.NO_GITLAB, 'code': 'space-json-unreadable'}))
         with mock.patch.object(dm, 'catalog', side_effect=RuntimeError('boom')):
-            self.assertEqual(self.post('/api/autosync', {}, 'a'), (200, {**self.NO_GITLAB, 'code': 'vcs-error'}))
+            self.assertEqual(self.no_ai(self.post('/api/autosync', {}, 'a')), (200, {**self.NO_GITLAB, 'code': 'vcs-error'}))
 
     # ---------------------------------------------------------------- тип `it` (ревʼю Task 5, I1)
     BAD_IT = (5, None, [], {}, True, 1.5, 'it1\n', '../x', 'a b', '')
@@ -2121,6 +2128,7 @@ class Http(Core):
             with self.subTest(task=tid):
                 st, body = self.post('/api/autosync', {}, tid)
                 self.assertEqual((st, body['ok'], body['synced']), (200, True, True), body)
+                # теки без `.git` AI-коміту не отримують (фаза И): підпис простору ставить автокоміт `autosync()`
                 self.assertEqual(self.out(d, 'log', '-1', '--format=%s'), f'it1: автосинк ({tool})')
 
     # ---------------------------------------------------------------- маска адреси

@@ -83,3 +83,11 @@ test("tabsModel: news — число за id, нуль без запису аб�
   assert.deepEqual(m.items.map((x) => x.news), [0, 3, 0]);
   assert.deepEqual(tabsModel({ tabs, activeId: "A" }).items.map((x) => x.news), [0, 0, 0]);
 });
+
+test("фаза И: модель вкладки несе чисту назву (без префікса ключа) і ключ Jira", () => {
+  const m = tabsModel({ tabs: [{ id: "LIGA-10001", title: "LIGA-10001 · Фільтр", jira: "LIGA-10001", space: null, color: null },
+    { id: "x", title: "", jira: null, space: null, color: null }], activeId: "x" });
+  assert.equal(m.items[0].title, "Фільтр");
+  assert.equal(m.items[0].jira, "LIGA-10001");
+  assert.equal(m.items[1].title, "x");
+});

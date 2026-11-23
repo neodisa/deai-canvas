@@ -136,7 +136,7 @@ function tagsEnv(over = {}) {
     log,
     homeData: { current: "t1", mine: [{ id: "t1", tags: ["alpha", "Beta"] }, { id: "t2", tags: ["alpha"] }, { id: "t3", tags: [] }], team: null },
     homeUi: { tags: new Set(), designers: new Set() },
-    homeOpen: true,
+    homeOpen: true, curTaskList: null, bar: { querySelector: (s) => { log.barFocus = s; return null; } },
     homeReady: () => Array.isArray(env.homeData && env.homeData.mine),
     homeNode: () => ({ querySelector: (s) => { log.focusBack = s; return null; } }),
     CSS: { escape: (x) => x },
@@ -273,4 +273,19 @@ test("локальна зміна екрана: applyTaskTitle позначає 
   assert.match(body, /const mut = homeMutGen;/);
   assert.match(body, /if \(homeMutGen !== mut\) \{/);
   assert.equal((body.match(/api\(`\/api\/tasks-overview/g) || []).length, 2, "рівно два запити: перший і один повтор");
+});
+
+test("фаза И: «Мітки…» з дропдауна крошки (екран «Задачі» закритий) — рядок із переліку поточного простору, фокус вертається на крошку", async () => {
+  const { env, submit } = await open("t9", {
+    homeOpen: false, homeData: null,
+    curTaskList: { tasks: [{ id: "t9", tags: ["delta"] }, { id: "t8", tags: [] }] },
+  });
+  assert.equal(env.ask ?? env.log.ask, 1);
+  assert.match(env.html, /delta/);
+  env.opts.focusBack();
+  assert.equal(env.log.barFocus, '[data-dd="task"]');
+  env.reply = { ok: true, tags: ["gamma"] };
+  await submit("gamma");
+  assert.deepEqual(env.curTaskList.tasks.map((y) => y.tags), [["gamma"], []]);
+  assert.equal(env.log.paint, 0, "екран закритий — не малюємо");
 });

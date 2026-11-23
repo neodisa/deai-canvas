@@ -36,6 +36,8 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 import isolation  # закон ізоляції й шви тестів (4d-4b; раніше `implicit.py`)
+import iter_trash  # кошик ітерацій задачі (фаза И)
+import iter_history  # історія ітерації з git теки задачі (фаза И)
 import task_trash  # кошик задач простору (етап Д, 0.30.0): видалення без стирання, повернення, знищення
 import feedback  # відгук (0.23.0): кільце помилок, збирач діагностики, черга відправки
 import agents_md  # AGENTS.md простору (етап Е, 0.31.0): блок з шаблону + «Ваше»
@@ -164,7 +166,7 @@ def _ssl_context():
 #: дзеркало їх теж не бере; статична публікація крапкові теки не возить (`_is_tool_junk`).
 TASK_IGNORE = ('publish/', '*.bak', '*.tmp', '.DS_Store', 'comments-for-ai*',
                '.vercel/', '.dc-tuner.json', '.dc-local-comments.json',
-               '.pages.lock', '.dc-local-shots/')
+               '.pages.lock', '.dc-local-shots/', '.trash/')
 
 
 def ensure_task_gitignore(task_dir):
@@ -226,7 +228,7 @@ def registry_allowed():
     return bool(sp) and sp.get('legacy') is True and deai_modules.vcs_outbound(sp)
 
 
-def git_autocommit(task_dir, msg, push=None):
+def git_autocommit(task_dir, msg, push=None, paths=None):
     """Автосохранение папки задачи в git — скриптом, без участия AI.
     init при первом вызове; push best-effort, если настроен remote (GitLab).
 
@@ -236,14 +238,18 @@ def git_autocommit(task_dir, msg, push=None):
 
     ⚠️ Питаємо простір ЛІНИВО й лише коли `origin` є: автокоміт без `origin` (кожна нова задача,
     кожна правка сторінки) не читає реєстр просторів. Реєстр, що не читається, — «не пушимо»
-    (`_vcs_outbound_here`): коміт уже вийшов, і 503 після нього був би гіршим за пропущений пуш."""
+    (`_vcs_outbound_here`): коміт уже вийшов, і 503 після нього був би гіршим за пропущений пуш.
+
+    `paths` (фаза И) — коміт ЛИШЕ цих шляхів: `git add -A -- <шляхи>` і `git commit -- <шляхи>`; решта брудного й навіть уже
+    застейдженого лишається як є (так комітить `ai_commit`: свою ітерацію, а не весь стан теки)."""
     try:
         if not os.path.isdir(os.path.join(task_dir, '.git')):
             subprocess.run(['git', 'init', '-q'], cwd=task_dir, check=True, timeout=20)
         # ПЕРЕД `add -A` і на КОЖНОМУ виклику, не лише при `init`: див. докстрінг.
         ensure_task_gitignore(task_dir)
-        subprocess.run(['git', 'add', '-A'], cwd=task_dir, check=True, timeout=30)
-        subprocess.run(['git', 'commit', '-q', '-m', msg],
+        only = ['--', *paths] if paths else []
+        subprocess.run(['git', 'add', '-A', *only], cwd=task_dir, check=True, timeout=30)
+        subprocess.run(['git', 'commit', '-q', '-m', msg, *only],
                        cwd=task_dir, capture_output=True, text=True, timeout=30)
         h = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
                            cwd=task_dir, capture_output=True, text=True, timeout=10)
@@ -1431,6 +1437,38 @@ def _record_sync(task, it, sha):
     return meta
 
 
+def _git_head(task_dir):
+    """Повний sha HEAD або `None` (нема коміту / збій git)."""
+    r = subprocess.run(['git', 'rev-parse', '--verify', '-q', 'HEAD'], cwd=task_dir, capture_output=True, text=True, timeout=10)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def ai_commit(task):
+    """Правки AI окремими комітами (фаза И, Р9). Кличе `/api/autosync` (Stop-хук після кожної відповіді Claude): кожна СВОЯ брудна
+    ітерація (найстаріша за mtime першою, тож найсвіжіша — останній коміт) → `itN: зміни AI` з трейлером `Deai-Actor: ai`, лише
+    шляхи `iterations/<itN>/` (`paths`): чужі ітерації й інші файли теки лишаються незакоміченими. Без пушу: пуш — справа
+    автосинку GitLab нижче. Коміт рахується, лише коли HEAD справді зсунувся. Теки без `.git` не чіпаємо (репо створює перша дія
+    канваса; початковий імпорт не можна підписувати як AI). Нічого не закомічено → `None`; інакше `{'it', 'sha', 'its'}`
+    (`it`/`sha` — найсвіжіша)."""
+    if not os.path.exists(os.path.join(task['dir'], '.git')):
+        return None
+    meta = load_meta(task)
+    _, my_key = machine_identity()
+    by_id = {x['id']: x for x in meta.get('iterations', []) if isinstance(x, dict) and 'id' in x}
+    dirty = [i for i in iter_history.dirty_iterations(task['dir'])
+             if i in by_id and iteration_is_mine(by_id[i], my_key) and os.path.isdir(_iter_dir(task, i))]
+    done = []
+    for it in sorted(dirty, key=lambda i: (_dir_mtime(_iter_dir(task, i)), i)):
+        before = _git_head(task['dir'])
+        g = git_autocommit(task['dir'], f'{it}: зміни AI\n\n{iter_history.AI_TRAILER}', push=False, paths=[f'iterations/{it}/'])
+        after = _git_head(task['dir'])
+        if after is not None and after != before:
+            done.append((it, g['sha']))
+    if not done:
+        return None
+    return {'it': done[-1][0], 'sha': done[-1][1], 'its': [it for it, _ in done]}
+
+
 def autosync(tid, task, gl, vcs=None):
     """Один крок автосинку: брудна ітерація → локальний коміт → пуш на GitLab.
 
@@ -1474,7 +1512,7 @@ def autosync(tid, task, gl, vcs=None):
             v = vcs_provider()
         except OSError:
             v = None
-    local = git_autocommit(task['dir'], f'{it}: автосинк ({"deai" if v is not None and not v[2] else "design-canvas"})')
+    local = git_autocommit(task['dir'], f'{it}: автосинк ({"deai" if v is not None and not v[2] else "design-canvas"})\n\n{iter_history.AI_TRAILER}')
     try:
         r = gitlab_sync(tid, task, gl, it, vcs=v)
     except OSError as e:
@@ -1596,8 +1634,7 @@ def _pull_into_task(task, src, last_commit, src_name):
             meta['gitlab'] = {**(meta.get('gitlab') or {}), 'synced_hash': remote_hash}
             save_meta(task, meta)
             return {'ok': True, 'unchanged': True, 'iteration': None, 'same_as': i['id']}
-    nums = [int(m.group(1)) for i in its if (m := re.match(r'^it(\d+)$', i['id']))]
-    new_id = f'it{max(nums, default=0) + 1}'
+    new_id = iter_trash.next_id(task['dir'], [i['id'] for i in its])
     copy_mockup(src, os.path.join(task['dir'], 'iterations', new_id))
     entry = {'id': new_id, 'date': time.strftime('%d.%m.%Y %H:%M'),
              'note': note, 'published': bool(state.get('published')),
@@ -6852,6 +6889,27 @@ class Handler(SimpleHTTPRequestHandler):
                 beats = dict(CLAUDE_BEATS)
             self._send_json(claude_view(beats, time.time(), tid, (task.get('jira'),)))
             return
+        if self.path.startswith('/api/iteration-history'):
+            q = parse_qs(urlparse(self.path).query)
+            it = self._iteration_or_400(q.get('id', [''])[0])
+            if it is None:
+                return
+            _, task = self._current_task()
+            try:
+                entry = next((i for i in load_meta(task).get('iterations', []) if isinstance(i, dict) and i.get('id') == it), None)
+            except (OSError, ValueError, AttributeError, TypeError):      # `iterations.json` не читається чи не тієї форми
+                self._send_json({'ok': False, 'error': 'meta-unreadable', 'entries': [], 'pending': None, 'degraded': True})
+                return
+            if entry is None:
+                self._send_json({'ok': False, 'error': 'iteration-not-found'}, status=404)
+                return
+            try:
+                names = {p['page'].get('id'): p['page'].get('name') or p['page'].get('id')
+                         for p in pm.flatten(pm.read_pages(_iter_dir(task, it)))}
+            except (pm.TreeError, OSError, ValueError):
+                names = {}
+            self._send_json({'ok': True, 'id': it, **iter_history.history(task['dir'], entry, names)})
+            return
         if self.path.startswith('/api/iteration-pages'):
             q = parse_qs(urlparse(self.path).query)
             it = self._iteration_or_400(q.get('it', [''])[0])
@@ -7907,6 +7965,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._iteration_rename(payload)
         elif self.path == '/api/iteration-delete':
             self._iteration_delete(payload)
+        elif self.path == '/api/iteration-restore':
+            self._iteration_restore(payload)
         elif self.path == '/api/publish-toggle':
             self._publish_toggle(payload)
         elif self.path == '/api/page-new':
@@ -8119,8 +8179,8 @@ class Handler(SimpleHTTPRequestHandler):
         tid, task = self._current_task()
         meta = load_meta(task)
         its = meta.setdefault('iterations', [])
-        nums = [int(m.group(1)) for i in its if (m := re.match(r'^it(\d+)$', i['id']))]
-        new_id = f'it{max(nums, default=0) + 1}'
+        # Фаза И: номер видаленої (у кошику) не повторюємо — інакше історія нової `itN` змішалась би зі старою.
+        new_id = iter_trash.next_id(task['dir'], [i['id'] for i in its])
         dst = os.path.join(task['dir'], 'iterations', new_id)
         src_id = payload.get('from')
         if src_id and any(i['id'] == src_id for i in its):
@@ -8149,24 +8209,85 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'iteration': entry, 'git': g})
 
     def _iteration_delete(self, payload):
-        """Видалити ітерацію (папку + запис). Git-коміт зберігає слід."""
+        """Видалити ітерацію: тека й запис — у кошик задачі (`iter_trash`, 7 днів), відповідь несе слот для «Повернути».
+        Останню ітерацію не видаляємо (409): задача без ітерацій лишилась би без макета."""
         tid, task = self._current_task()
         iid = payload.get('id', '')
-        if not NAME_RE.match(iid):
+        if not isinstance(iid, str) or not NAME_RE.fullmatch(iid):
             self.send_error(400, 'bad id')
             return
         meta = load_meta(task)
         its = meta.get('iterations', [])
-        if not any(i['id'] == iid for i in its):
+        entry = next((i for i in its if i['id'] == iid), None)
+        if entry is None:
             self.send_error(404, 'iteration not found')
             return
+        if len(its) <= 1:
+            self._send_json({'ok': False, 'error': 'last-iteration'}, status=409)
+            return
+        now = iter_trash.utcnow()
+        try:
+            slot = iter_trash.move_to_trash(task['dir'], entry, now)
+        except (OSError, iter_trash.IterTrashError) as e:
+            self._send_json({'ok': False, 'error': 'trash-failed', 'message': str(e)}, status=500)
+            return
         meta['iterations'] = [i for i in its if i['id'] != iid]
-        folder = os.path.join(task['dir'], 'iterations', iid)
-        if os.path.isdir(folder):
-            shutil.rmtree(folder)
-        save_meta(task, meta)
+        try:
+            save_meta(task, meta)
+        except Exception as e:         # запис не вдався — теку повертаємо: ітерація або жива, або в кошику, не навпіл
+            rolled_back = True
+            try:
+                iter_trash.undo_move(task['dir'], slot)
+            except Exception:
+                rolled_back = False
+                sys.stderr.write(traceback.format_exc())
+            self._send_json({'ok': False, 'error': 'delete-failed', 'message': str(e),
+                             'rolled_back': rolled_back}, status=500)
+            return
+        try:
+            iter_trash.purge(task['dir'], now)
+        except Exception:
+            pass                       # прибирання — не умова видалення
         git_autocommit(task['dir'], f'delete iteration {iid}')
-        self._send_json({'ok': True, 'deleted': iid})
+        self._send_json({'ok': True, 'deleted': iid, 'trash': slot})
+
+    def _iteration_restore(self, payload):
+        """`POST /api/iteration-restore {trash}` — повернути ітерацію з кошика. Зайнятий id → наступний вільний номер."""
+        tid, task = self._current_task()
+        slot = payload.get('trash')
+        if not isinstance(slot, str) or not iter_trash.SLOT_RE.fullmatch(slot):
+            self.send_error(400, 'bad trash slot')
+            return
+        meta = load_meta(task)
+        its = meta.setdefault('iterations', [])
+        try:
+            entry, renamed = iter_trash.restore_prepare(task['dir'], slot, [i['id'] for i in its])
+        except iter_trash.IterTrashError as e:
+            self._send_json({'ok': False, 'error': e.code}, status=404 if e.code == 'not-in-trash' else 400)
+            return
+        except OSError as e:
+            self._send_json({'ok': False, 'error': 'restore-failed', 'message': str(e)}, status=500)
+            return
+        iter_trash.insert_ordered(its, entry)
+        try:
+            save_meta(task, meta)
+        except Exception as e:         # запис не вдався — теку назад у слот: лишається в кошику
+            rolled_back = True
+            try:
+                iter_trash.restore_rollback(task['dir'], slot, entry)
+            except Exception:
+                rolled_back = False
+                sys.stderr.write(traceback.format_exc())
+            self._send_json({'ok': False, 'error': 'restore-failed', 'message': str(e),
+                             'rolled_back': rolled_back}, status=500)
+            return
+        try:
+            iter_trash.restore_finish(task['dir'], slot)
+        except Exception:
+            pass                       # слот-залишок без `files` нешкідливий, знищиться через 7 днів
+        git_autocommit(task['dir'], f'restore iteration {entry["id"]}')
+        self._send_json({'ok': True, 'id': entry['id'], 'renamed': renamed,
+                         'iteration': {**entry, 'label_text': iteration_label(entry)}})
 
     def _iteration_rename(self, payload):
         """Перейменувати ітерацію: `label` — короткий підпис на пілюлі,
@@ -8547,9 +8668,7 @@ class Handler(SimpleHTTPRequestHandler):
         if len(src_its) < 2:
             self.send_error(400, 'need >= 2 iterations')
             return
-        nums = [int(m.group(1)) for i in meta['iterations']
-                if (m := re.match(r'^it(\d+)$', i['id']))]
-        new_id = f'it{max(nums, default=0) + 1}'
+        new_id = iter_trash.next_id(task['dir'], [i['id'] for i in meta['iterations']])
         new_dir = _iter_dir(task, new_id)
         pages = []
         for it in src_its:
@@ -8644,7 +8763,7 @@ class Handler(SimpleHTTPRequestHandler):
     def _autosync(self, payload):
         """Тихий крок автосинку для Stop-хука. Задача без цілі чи простір без ролі — не помилка, а нормальний стан:
         `reason: "no-gitlab"` (контракт хука; відмова постачальника — те саме, з `code`). `autosync` вимкнений у модулі —
-        `reason: "autosync-off"` і ні відправки, ні локального автокоміту. Хук мовчить на причинах, яких не знає: реагує лише на
+        `reason: "autosync-off"` і ніякої відправки; локальний коміт правок AI (`ai_commit`, фаза И) робиться завжди. Хук мовчить на причинах, яких не знає: реагує лише на
         `blocked`, `foreign-only`, `offline`, `changed`/`catchup`. Далі — `autosync()`: `no-iterations`, `foreign-only`, `clean`,
         а будь-який `OSError` навколо `gitlab_sync` — `reason: "offline"` (з `code` для `VcsError`).
 
@@ -8662,12 +8781,17 @@ class Handler(SimpleHTTPRequestHandler):
         Єдиний виняток — центральні стани простору (`NoTask`, `SpaceUnavailable`, `SpacesError`, `AmbiguousTask`): вони йдуть далі
         в `_guarded` і дають ті самі 404/409/503, що й будь-який маршрут."""
         tid, task, vcs, err = self._vcs_ctx()
+        try:
+            ai = ai_commit(task) if task is not None else None
+        except Exception:  # noqa: BLE001 — локальний збій коміту AI не валить хук: історія просто без цього запису
+            sys.stderr.write(_mask_repo(traceback.format_exc()))
+            ai = None
         if err is not None or vcs is None or vcs[3] is None:
-            out = {'ok': True, 'changed': False, 'reason': 'no-gitlab'}
+            out = {'ok': True, 'changed': False, 'reason': 'no-gitlab', 'ai': ai}
             self._send_json({**out, 'code': err.code} if err is not None else out)
             return
         if not (vcs[1].get('settings') or {}).get('autosync'):
-            self._send_json({'ok': True, 'changed': False, 'reason': 'autosync-off'})
+            self._send_json({'ok': True, 'changed': False, 'reason': 'autosync-off', 'ai': ai})
             return
         try:
             r = autosync(tid, task, vcs[3], vcs=vcs[:3])
@@ -8680,11 +8804,11 @@ class Handler(SimpleHTTPRequestHandler):
             if not offline:
                 # Причину бачить той, хто дивиться в лог сервера: у відповіді хука лише короткий `error`.
                 sys.stderr.write(_mask_repo(traceback.format_exc()))
-            self._send_json({**_vcs_failure(e), 'synced': False, 'changed': False, 'reason': 'offline' if offline else 'error'})
+            self._send_json({**_vcs_failure(e), 'synced': False, 'changed': False, 'reason': 'offline' if offline else 'error', 'ai': ai})
             return
         if r.get('changed'):
             self._overview_sync()
-        self._send_json(r)
+        self._send_json({**r, 'ai': ai})
 
     def _gitlab_pull(self, payload):
         """`POST /api/vcs-pull` (і `/api/gitlab-pull`): ті самі відмови, що в `_gitlab_sync`."""
@@ -9621,7 +9745,7 @@ class Handler(SimpleHTTPRequestHandler):
                 # ⛔ Не мовчазний Errno 2: дизайнер має зрозуміти, що робити.
                 result['deploy_error'] = NODE_MISSING_HINT
                 result['deploy_blocked'] = 'no-node'
-                git_autocommit(task['dir'], f'publish: {len(its)} iteration(s)')
+                git_autocommit(task['dir'], f'publish: {len(its)} iteration(s) · {" ".join(str(i.get("id", "")) for i in its)}')
                 self._overview_sync()
                 self._send_json(result)
                 return
@@ -9671,7 +9795,7 @@ class Handler(SimpleHTTPRequestHandler):
                         result['cleanup_warning'] = res['cleanup_warning']
             except OSError as e:
                 result['deploy_error'] = str(e)
-            git_autocommit(task['dir'], f'publish: {len(its)} iteration(s)')
+            git_autocommit(task['dir'], f'publish: {len(its)} iteration(s) · {" ".join(str(i.get("id", "")) for i in its)}')
         self._overview_sync()
         self._send_json(result)
 

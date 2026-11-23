@@ -178,6 +178,8 @@ export function barModel(s) {
   }
 
   const zone1 = [];
+  /* Фаза И (Р2): «задача / ітерація» — задача першою. Назва без префікса ключа; кнопка з дропдауном. */
+  zone1.push({ id: "title", tier: 0, label: s.taskTitle || s.taskId || "" });
   if (s.hasIteration) {
     /* `items` — ПЕРЕЛІК ітерацій, а не лише поточна. Без нього дропдаун несе
        самі дії, і обрати НЕ-останню ітерацію в інструменті стає нічим: у
@@ -202,8 +204,6 @@ export function barModel(s) {
       })),
     });
   }
-  /* Назва задачі — без префікса; «де я» каже вкладка, а тут лише приглушена назва. */
-  zone1.push({ id: "title", tier: 0, label: s.taskTitle || s.taskId || "" });
 
   const zone2 = [
     {

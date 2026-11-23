@@ -69,7 +69,7 @@ const openSpaceDd = async (page) => {
 for (const width of [320, 375, 520]) {
   test(`смуга сторінок оверлею на ${width}px: логотип цілий, підпис видно, іконка поступається першою, без переповнення`, async (t) => {
     const X = taskFixture({ html: () => "<!doctype html><html><body><h1>m</h1></body></html>" });
-    const spaces = [{ name: "Studio", id: "studio", color: "space-2", tasks: { t1: { dir: X.dir, title: "Задача" } } }];
+    const spaces = [{ name: "Studio", id: "studio", color: "space-2", tasks: { t1: { dir: X.dir, title: "Довга назва задачі для вузької смуги" } } }];
     const server = await startServer(null, { portBase: PORT_BASE, spaces });
     t.after(() => stop(server.child));
     const context = await browser.newContext({ viewport: { width, height: 800 } });
@@ -106,7 +106,7 @@ const LONG_ID = "fb-19102026-5882a8-very-long-slug-for-narrow-bar";
 for (const width of [320, 375]) {
   test(`довгий id задачі у вкладці на ${width}px: ті самі цілі (логотип, підпис, без переповнення)`, async (t) => {
     const X = taskFixture({ html: () => "<!doctype html><html><body><h1>m</h1></body></html>" });
-    const spaces = [{ name: "Studio", id: "studio", color: "space-2", tasks: { [LONG_ID]: { dir: X.dir, title: "Задача" } } }];
+    const spaces = [{ name: "Studio", id: "studio", color: "space-2", tasks: { [LONG_ID]: { dir: X.dir, title: "Довга назва задачі для вузької смуги" } } }];
     const server = await startServer(null, { portBase: PORT_BASE, spaces });
     t.after(() => stop(server.child));
     const context = await browser.newContext({ viewport: { width, height: 800 } });
@@ -125,7 +125,7 @@ for (const width of [320, 375]) {
 
     for (const [name, m] of Object.entries(seen)) {
       const why = `${name}@${width}: ${JSON.stringify(m)}`;
-      assert.ok(m.tab.text.includes("fb-"), `вкладка мусить показувати id задачі: ${why}`);
+      assert.ok(m.tab.text.startsWith("Довга назва") && !m.tab.text.includes("fb-"), `вкладка мусить показувати назву задачі, не id: ${why}`);
       assert.ok(m.logo >= 28, `(1) логотип стиснуто: ${why}`);
       assert.ok(m.gear.w >= 28 && m.gear.right <= m.vw + 1, `(1) шестірня стиснута або поза вікном: ${why}`);
       assert.ok(m.tabsOverflow <= 0, `(4) рядок вкладок переповнений: ${why}`);

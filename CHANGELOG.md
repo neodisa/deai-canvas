@@ -3,6 +3,54 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.36.0] — 23.11.2026
+
+Tasks and iterations. A task is called by its name everywhere, the bar reads «task / iteration», and the iteration list
+is managed in place: every row has a «⋯» menu, a deleted iteration goes to the task's trash with «Повернути», and every
+iteration has a change history built from the task folder's git — including what the agent changed after each reply.
+
+### Додано
+- Iteration list with a «⋯» menu per row (also right-click and Shift+F10), opening to the right of the list: Rename (F2,
+  inline field; writes the iteration's `label`, up to 40 characters, an empty field removes it), Duplicate, Change
+  history, the modules' actions for THAT iteration, Delete (disabled when the task has one iteration; the reason is in the
+  tooltip). «Нова ітерація» copies the selected iteration and opens the new row in rename mode. A colleague's iteration
+  shows the author's initials with the author in the tooltip.
+- Iteration trash. Delete asks in the row, then `POST /api/iteration-delete` moves `iterations/<id>` and its entry from
+  `iterations.json` into `<task>/.trash/iterations/<id>--<stamp>/` (kept 7 days, never committed or published) and
+  answers with the slot; a toast offers «Повернути» for 8 seconds (`POST /api/iteration-restore {trash}` → `{ok, id,
+  renamed, iteration}`; a taken number is replaced by the next free one). The only iteration cannot be deleted (409
+  `last-iteration`). A deleted iteration's number is never handed out again — by «Нова ітерація», by a GitLab pull or by
+  building an iteration from pages. A failure in the middle of a delete or restore rolls back: the iteration is either live
+  or in the trash, never half.
+- Change history panel (a fourth right panel, in «Макет»): `GET /api/iteration-history?id=itN` reads the task folder's git
+  — who, when, what (created, copied from, renamed, page added/renamed/moved, published, restored, moved to trash, AI
+  edit) and up to five files per entry, grouped by day, with «Незаписані зміни» on top. Opened from the row menu or ⌘K
+  «Історія ітерації». A task folder without git shows only the creation entry.
+- The agent's edits get their own commits: `/api/autosync` (the Stop hook after every Claude reply) first commits each of
+  this machine's dirty iterations separately as `itN: зміни AI` with the trailer `Deai-Actor: ai` — only that iteration's
+  folder, never a colleague's iteration or other files, never pushed by itself, and also when autosync is off. The answer
+  carries `ai` (`{it, sha, its}` or `null`). A task folder without git gets no AI commit.
+- Task dropdown in the bar: Rename (F2), Tags, the preview link when there is one, the modules' task actions. No Delete —
+  tasks are deleted from «Задачі».
+- AGENTS.md: the trash and the history route are described for agents, and any agent is asked to call
+  `POST /api/autosync` when it has finished editing an iteration. Deai does not install a hook itself: Claude with the
+  dev-pipeline Stop hook already calls it after every reply; without the call an agent's edits land in the designer's next
+  canvas commit.
+
+### Змінено
+- The task's title replaces its id: tabs (the Jira key moves to the tooltip), cards on «Задачі» (the key shows only when
+  the search matched the key and not the title), the bar, the «folder is missing» message.
+- The bar shows the task first, then «/», then the iteration.
+- ⌘K «Перейменувати / Дублювати / Видалити ітерацію» act in the iteration list (field, new row, question in the row)
+  instead of dialogs; «Видалити ітерацію» is disabled for a single iteration.
+- Commit subjects: a publish names its iterations (`publish: 2 iteration(s) · it1 it2`) so their history shows it; the
+  autosync commit carries the `Deai-Actor: ai` trailer. `git_autocommit` can commit only given paths.
+
+### Known limits
+- «Повернути» lives only in the 8-second toast; a new delete replaces it. A list of deleted iterations comes in the next
+  patch; until then a deleted iteration stays in `.trash/iterations/` for 7 days.
+- The trash is local: it exists only on the machine where the iteration was deleted.
+
 ## [0.35.1] — 23.11.2026
 
 Pin screenshots: readable, and on every page. The commenter used to keep a 360-px JPEG rendered at half the screen's

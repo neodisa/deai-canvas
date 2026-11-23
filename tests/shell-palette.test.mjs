@@ -646,7 +646,7 @@ test("groupsel: вибір є — дозволено навіть без ціл�
 test("екран «Задачі»: палітра не пропонує жодної дії над задачею", () => {
   const ids = paletteActions(S({ homeOpen: true })).map((a) => a.id);
   const taskScoped = ["mode", "view-grid", "view-flow", "vp-desktop", "vp-tablet", "vp-mobile",
-    "inspector", "comments", "panel", "clean", "newit", "renit", "dupit", "newfolder", "renpage", "hidepage",
+    "inspector", "comments", "panel", "clean", "newit", "renit", "dupit", "ithist", "newfolder", "renpage", "hidepage",
     "groupsel", "ungroup", "outdent", "focusbranch", "togglekind", "shoot", "figma", "publish",
     "togglepub", "copylink", "openpreview", "glpush", "glpull", "glsetup",
     "delit", "delpage", "go-iter", "go-pages"];
@@ -1165,4 +1165,18 @@ test("«Зняти кадри» у ⌘K: знімати нема чим — ви
   assert.deepEqual([shoot({ state: "no-node" }).disabled, shoot({ state: "no-node" }).whyKey], [true, "frShotsNoNodeWhy"]);
   assert.equal(shoot({ state: "ok" }).disabled, false);
   assert.equal(shoot({ state: "no-browser", command: "x" }, true).disabled, false, "зупинка прогону не блокується");
+});
+
+test("«Історія ітерації»: є лише з ітерацією й поза «Оглядом»", () => {
+  const find = (o) => paletteActions(S(o)).find((a) => a.id === "ithist");
+  assert.deepEqual({ id: find({}).id, act: find({}).act, group: find({}).group }, { id: "ithist", act: "histcur", group: "gIter" });
+  assert.equal(find({ hasIteration: false }), undefined);
+  assert.equal(find({ mode: "overview" }), undefined, "у «Огляді» (реальне значення режиму — `overview`) історії нема");
+});
+
+test("⌘K «Видалити ітерацію»: єдина ітерація — вимкнено з причиною; кілька — доступне", () => {
+  const del = (o) => paletteActions(S(o)).find((a) => a.id === "delit");
+  assert.deepEqual([del({ iterCount: 1 }).disabled, del({ iterCount: 1 }).whyKey], [true, "iterDelOnly"]);
+  assert.equal(del({ iterCount: 2 }).disabled, undefined);
+  assert.equal(del({ iterCount: 2 }).whyKey, undefined);
 });

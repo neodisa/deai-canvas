@@ -173,7 +173,7 @@ body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);
 /* Чистий перегляд макета (fb-01102026-7f7b6d): лише макет, без оболонки й пінів.
    !important — бо розкладку сцени ставлять правила `body.with-panel…` вищої
    специфічності; чистий режим мусить перекрити їх усі разом. */
-html.cv-clean #tabs,html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean #cmt-panel,html.cv-clean #mod-panel,html.cv-clean .cv-notice,
+html.cv-clean #tabs,html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean #cmt-panel,html.cv-clean #mod-panel,html.cv-clean #hist-panel,html.cv-clean .cv-notice,
 html.cv-clean .errbar,html.cv-clean .cv-zoom,html.cv-clean .cv-canvas-hint,html.cv-clean .cv-hud,
 html.cv-clean [data-comment-layer],html.cv-clean .cn-drawer{display:none!important}
 html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!important;width:100%!important}
@@ -786,6 +786,26 @@ body.with-panel.with-mod .cv-stage,
 body.with-panel.with-mod .cv-canvas{width:calc(100% - var(--panel-w) - var(--insp-w))}
 body.with-panel.panel-collapsed.with-mod .cv-stage,
 body.with-panel.panel-collapsed.with-mod .cv-canvas{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
+/* ── Фаза И: панель «Історія змін» — четверта права панель (ширина `--insp-w`, як у решти) ── */
+body.with-hist .cv-stage,body.with-hist .cv-canvas{width:calc(100% - var(--insp-w))}
+body.with-panel.with-hist .cv-stage,
+body.with-panel.with-hist .cv-canvas{width:calc(100% - var(--panel-w) - var(--insp-w))}
+body.with-panel.panel-collapsed.with-hist .cv-stage,
+body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
+.hist-day{padding:14px 4px 6px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim)}
+.hist-day:first-child,.hist-deg+.hist-day,.hist-e--pending+.hist-day{padding-top:2px}
+.hist-e{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:start;padding:8px 6px;border-radius:var(--r-sm)}
+.hist-e:hover{background:var(--s3)}
+.hist-e--pending .hist-t{color:var(--open)}
+.hist-av{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:600;
+  background:var(--s4);color:var(--hi)}
+.hist-av--ai{background:var(--local-pin);color:#fff}
+.hist-b{min-width:0}
+.hist-t{font-size:13px;line-height:1.35;color:var(--hi);overflow-wrap:anywhere}
+.hist-m{margin-top:2px;font-size:12px;color:var(--dim)}
+.hist-files{margin-top:4px;font:11.5px/1.45 var(--mono);color:var(--dim);overflow-wrap:anywhere}
+.hist-time{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;padding-top:1px}
+.hist-deg{margin:0 0 8px;font-size:12px;color:var(--dim)}
 /* `.pages-panel`/`.pp-*` нижче — розмітка старої панелі (План B Task 4 її
    замінив на `.panel`/`.panel--rail`/`.row*`/`.shots*`, кінець файла).
    Лишені НЕ вживаними свідомо, тим самим рядком думки, що вже стоїть для
@@ -891,9 +911,10 @@ body.with-panel.panel-collapsed.with-mod .cv-canvas{width:calc(100% - var(--pane
 .crumb--flat{display:inline-flex;align-items:center;gap:6px;
   height:var(--h-ctl);padding:0 9px;border:1px solid transparent;
   color:var(--mid);white-space:nowrap}
-/* Назва задачі в смузі — приглушена: «де я» каже вкладка. `.txt` усередині тримає колір крошки (`.crumb .txt` нижче дав би `--hi`). */
-.crumb--title{color:var(--dim)}
-.crumb--title .txt{color:inherit}
+/* Фаза И (Р2): задача — кнопка першою в смузі; назва яскрава (`--hi`), як у прототипі. */
+.crumb--title{color:var(--hi)}
+.crumb--title .txt{color:var(--hi)}
+#bar .crumbs>.crumb-sep{padding:0 2px}
 /* Етап А (0.25.0): у зоні 1 смуги задачі лишились тільки ітерація й назва, тож вільне місце (~450px на 1280) — їхнє, а не ліміт 110px
    крошок дерева шарів (`.crumb{max-width:110px}` нижче у файлі різав обидві; знайдено перевіркою проти живого канвасу, живий тест
    `tabs` 12). Два класи — щоб перемагати незалежно від порядку, як `.crumb.crumb--page`. Стискається першою назва (еліпсис, повна —
@@ -938,6 +959,10 @@ body.with-panel.panel-collapsed.with-mod .cv-canvas{width:calc(100% - var(--pane
    «Онбординг клієнта» обрізалась). `.crumb--task` є лише в `ext-bar.js` (зовнішня оболонка); смуга інструмента не зачеплена.
    Два класи — щоб перемагати `.crumb{max-width:110px}` незалежно від порядку. */
 .crumb.crumb--task{max-width:none}
+/* Смуга ІНСТРУМЕНТА (фаза И): хост крошки задачі — `div.crumb-h.crumb--task`, назву там обмежує вільне місце зони 1
+   (`#bar .crumb--title .txt`), а не 240px. ⛔ Лише `.crumb-h`: оболонка превʼю теж монтується в `#bar`, і там
+   `span.crumb--flat.crumb--task` мусить лишатись у 240px (живий `ext-shell` «назва не малює нічого праворуч»). */
+#bar .crumb-h.crumb--task .txt{max-width:none}
 .crumb--iter .txt--soft{max-width:112px;min-width:2.5em}
 .crumb-marks{display:inline-flex;gap:3px;flex:none}
 /* Чужа ітерація — ВИДИМА ознака, а не лише текст у title: про межу («тут
@@ -1012,6 +1037,28 @@ body.with-panel.panel-collapsed.with-mod .cv-canvas{width:calc(100% - var(--pane
    Стереже tests/live/task-dropdown.test.mjs. */
 .dd>*{flex-shrink:0}
 .dd--right{left:auto;right:0}
+/* ── Фаза И: перелік ітерацій з «⋯» (після `.dd`: інакше його `top/left` перекрили б меню рядка) ── */
+.dd--iters{width:330px;max-width:330px}
+.it-row{position:relative}
+.it-row>.dd-item{padding-right:40px}
+.dd-marks{display:inline-flex;align-items:center;gap:6px;flex:none}
+.it-more{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:var(--h-sm);height:var(--h-sm);
+  border:0;background:none;border-radius:var(--r-sm);color:var(--mid);display:grid;place-items:center;opacity:0;cursor:pointer}
+.it-row:hover .it-more,.it-row:focus-within .it-more,.it-row:has(.dd-item--on) .it-more,.it-more[aria-expanded=true]{opacity:1}
+.it-more:hover,.it-more[aria-expanded=true]{background:var(--s4);color:var(--hi)}
+.it-more:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
+.it-who{flex:none;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;
+  font-size:10px;font-weight:600;background:var(--s4);color:var(--hi)}
+.it-ren{display:flex;align-items:center;gap:8px;padding:4px 6px 4px 10px;min-height:var(--h-ctl);
+  border-radius:var(--r-sm);background:var(--s3)}
+.it-ren .ico{flex:none;color:var(--mid)}
+.it-ren b{flex:none;font-weight:600;color:var(--hi);font-size:13px}
+.it-ren-in{flex:1;min-width:0;height:var(--h-sm);padding:0 8px;border:1px solid var(--line2);border-radius:var(--r-sm);
+  background:var(--s0);color:var(--hi);font:inherit;font-size:13px;outline:none}
+.it-ren-in:focus{border-color:var(--sel)}
+.it-cfm{padding:2px 0}
+/* Меню рядка — fixed, позицію ставить `app.js` (праворуч від переліку на висоті рядка). */
+.dd--itmenu{position:fixed;top:0;left:0;min-width:210px;max-width:280px}
 /* Навмисно ЛИШЕ transform, без opacity: headless-рендер `bin/shoot.mjs` не
    чекає кадр анімації так, як людське око, і дропдаун приїжджав би порожнім
    у знімку. Не «покращуй» додаванням прозорості — це стереже
@@ -1593,6 +1640,8 @@ body.home-open .cv-notice{display:none!important}
 .th-cbody{padding:10px 12px 12px;display:flex;flex-direction:column;gap:4px;min-height:96px}
 .th-krow{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
 .th-curb{color:var(--sel-text);font-weight:500}
+/* Фаза И: рядок над назвою стоїть завжди (часто порожній) — назви сусідніх карток на одній лінії. */
+.th-krow{min-height:16px}
 .th-ttl{font-weight:500;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;
   -webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .th-meta{font-size:12px;color:var(--dim)}

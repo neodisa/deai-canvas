@@ -7,6 +7,7 @@
  * Ключ вкладки — `id` задачі, бо сервер перемикає задачу саме за `id`.
  */
 import { SPACE_COLORS } from "./spaces-model.js";
+import { cleanTitle } from "./tasks-model.js";
 
 export const TABS_KEY = "dc-tabs";
 export const TABS_MAX = 12;
@@ -88,7 +89,7 @@ export function tabsModel({ tabs, activeId, homeOpen = false, homePage = "tasks"
     gearOn: !!homeOpen && homePage === "conn",
     update,
     items: tabs.map((t) => ({
-      id: t.id, title: t.title, color: t.color,
+      id: t.id, title: cleanTitle(t), jira: t.jira || null, color: t.color,
       active: !homeOpen && t.id === activeId,
       claude: stateOf(t),
       news: news && Number(news[t.id]) > 0 ? Number(news[t.id]) : 0,

@@ -64,3 +64,16 @@ test("вкладка з news: tab-news із числом і aria-label; без n
   assert.match(h, /<span class="tab-news" role="img" aria-label="Нових командних коментарів: 4">4<\/span>/);
   assert.match(h, />99\+<\/span>/);
 });
+
+test("фаза И: вкладка показує назву, а не ідентифікатор; підказка — назва · ключ Jira", () => {
+  setLang("uk");
+  const h = tabsHTML({ logoOn: false, gearOn: false, update: null, items: [
+    { id: "landing-week", title: "Лендінг тижня", jira: null, active: true },
+    { id: "LIGA-10001", title: "Фільтр компаній у медіа", jira: "LIGA-10001", active: false },
+  ] });
+  assert.match(h, /<span class="tab-id">Лендінг тижня<\/span>/);
+  assert.doesNotMatch(h, /<span class="tab-id">landing-week<\/span>/);
+  assert.match(h, /title="Фільтр компаній у медіа · LIGA-10001"/);
+  assert.match(h, /title="Лендінг тижня"/);
+  assert.match(h, /aria-label="Закрити вкладку Лендінг тижня"/);
+});

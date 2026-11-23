@@ -15,6 +15,7 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), 'app'))
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), 'bin'))
 BEFORE = os.path.join(_HERE, 'fixtures', 'liga-migration', 'before-4d4b.json')
+from phase_i_subjects import amend_subjects  # noqa: E402
 STANDS = ('regular', 'differs', 'partial', 'unmigrated', 'plain')
 ABSENT = '<absent>'
 #: Розділи, що порівнюються окремо буквальними списками (позиційні), а не листками.
@@ -540,7 +541,7 @@ class OlderParityLeaves4d4b(unittest.TestCase):
         cls.tb, cls.tc = tb, tc
         # 4d-3c: ті самі два стенди, що в `AfterMigrationParity4d3c`, але ПОВНИЙ ланцюг A–E.
         with open(tc.BEFORE, encoding='utf-8') as f:
-            cls.before_c = json.load(f)
+            cls.before_c = amend_subjects(json.load(f))
         orig = gc._stand
 
         def migrated(tmp, name, migrate):
@@ -560,7 +561,7 @@ class OlderParityLeaves4d4b(unittest.TestCase):
             pass
         Holder.mock, Holder.g, Holder.lm = mock, gb, lm
         with open(tb.BEFORE, encoding='utf-8') as f:
-            cls.before_b = json.load(f)
+            cls.before_b = amend_subjects(json.load(f))
         cls.after_b = {n: tb.AfterMigrationParity4d3b._build.__func__(Holder, n)[0] for n in ('snapshot', 'shared')}
 
     @staticmethod

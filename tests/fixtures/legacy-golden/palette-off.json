@@ -107,6 +107,13 @@
     "act": "dupit"
   },
   {
+    "id": "ithist",
+    "group": "gIter",
+    "labelKey": "iterHistoryPal",
+    "icon": "refresh",
+    "act": "histcur"
+  },
+  {
     "id": "newfolder",
     "group": "gPage",
     "labelKey": "newFolder",

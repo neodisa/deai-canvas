@@ -148,7 +148,7 @@ test("задача без теки: причина і мітка на картц
      причиною, а не мовчанням. */
   await card.click({ force: true });
   await page.waitForSelector("#cv-toast.show");
-  assert.match(await page.textContent("#cv-toast"), /LIGA-7021.*теки немає на цій машині/);
+  assert.match(await page.textContent("#cv-toast"), /Привид без теки.*теки немає на цій машині/);
   assert.equal(await cur(url), "fixture", "задача без теки стала поточною");
   assert.equal(await homeShown(page), true, "екран закрився після відмови");
 
@@ -552,7 +552,7 @@ test("мова: перемикання з ⌘K на екрані «Задачі�
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => /Mine/.test(document.querySelector("#tasks-home .th-tab--on")?.textContent || ""));
   assert.match(await page.textContent("#tasks-home h1"), /Tasks/);
-  assert.match(await page.getAttribute("#th-q", "placeholder"), /Key, title/);
+  assert.match(await page.getAttribute("#th-q", "placeholder"), /Title, number, status/);
 });
 
 test("гонка: поточну переключили карткою «Задач», екран ще вантажиться — клік по картці старої задачі ПЕРЕКЛЮЧАЄ", async (t) => {
