@@ -8,6 +8,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -229,6 +231,120 @@ class AutosyncByPath(base.Fixture):
         st, body = self.post('/api/autosync', {'cwd': self.p_path}, {'Origin': 'http://evil.example'})
         self.assertEqual((st, body), (403, {'ok': False, 'error': 'foreign origin'}))
         self.assertIn('iterations/it2/index.html', self.status(self.x_dir))
+
+    # ---- відправка лише для поточної задачі (S1)
+
+    def test_push_step_runs_once_for_the_current_task_only(self):
+        self.dirty(self.x_dir)
+        self.dirty(self.y_dir)
+        vcs = ('git-sync', {'settings': {'autosync': True}}, False, {'repo': 'https://example.invalid/r.git'})
+        pushed = {'ok': True, 'changed': True, 'synced': True, 'reason': 'pushed'}
+        with mock.patch.object(serve, 'vcs_task', return_value=vcs), \
+                mock.patch.object(serve, 'autosync', return_value=pushed) as push:
+            st, body = self.post('/api/autosync', {'cwd': self.p_path})
+        self.assertEqual(st, 200)
+        self.assertEqual(push.call_count, 1)
+        self.assertEqual(push.call_args.args[0], 'x', 'пуш — лише для поточної задачі простору, не для y')
+        self.assertEqual(sorted(body['ai_tasks']), ['x', 'y'])
+        self.assertEqual((body['reason'], body['synced'], body['changed']), ('pushed', True, True))
+        self.assertEqual(body['ai'], body['ai_tasks']['x'])
+
+    # ---- крайні випадки режиму «за шляхом» (S2)
+
+    def test_cwd_with_a_nul_byte_is_no_space(self):
+        st, body = self.post('/api/autosync', {'cwd': self.p_path + '\x00/x'})
+        self.assertEqual((st, body['reason']), (200, 'no-space'))
+
+    def test_a_symlinked_cwd_resolves_to_the_real_space(self):
+        self.dirty(self.y_dir)
+        link = os.path.join(self.tmp, 'link-to-p')
+        os.symlink(self.p_path, link)
+        self.addCleanup(os.unlink, link)
+        st, body = self.post('/api/autosync', {'cwd': link})
+        self.assertEqual((st, sorted(body.get('ai_tasks', {}))), (200, ['y']))
+        inner = os.path.join(self.p_path, 'inner-link')
+        os.symlink(self.e_path, inner)                       # посилання всередині P на ІНШИЙ простір: рахується реальний шлях
+        self.addCleanup(os.unlink, inner)
+        st, body = self.post('/api/autosync', {'cwd': inner})
+        self.assertEqual((st, body['reason']), (200, 'no-task'))
+
+    def test_a_broken_tasks_file_of_the_matched_space_is_503_not_500(self):
+        self.restore_bytes(self.p_file)
+        with open(self.p_file, 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        st, body = self.post('/api/autosync', {'cwd': self.p_path})
+        self.assertEqual(st, 503)
+        self.assertEqual(body['ok'], False)
+        self.assertIn('code', body)
+
+    def test_a_broken_registry_is_503_not_500(self):
+        reg = spaces.registry_path()
+        self.restore_bytes(reg)
+        with open(reg, 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        st, body = self.post('/api/autosync', {'cwd': self.p_path})
+        self.assertEqual(st, 503)
+        self.assertEqual(body['ok'], False)
+        self.assertIn('code', body)
+
+    # ---- серіалізація git (N1): два одночасні `ai_commit` однієї теки — власний хук і чужий глобальний, що б'є `/api/autosync` тієї ж миті
+
+    def run_two(self, task):
+        out, errs = [None, None], []
+        gate = threading.Barrier(2)
+
+        def work(i):
+            try:
+                gate.wait(5)
+                out[i] = serve.ai_commit(task)
+            except Exception as e:  # noqa: BLE001
+                errs.append(e)
+        ts = [threading.Thread(target=work, args=(i,)) for i in (0, 1)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(60)
+        return out, errs
+
+    def test_two_parallel_calls_never_overlap_and_only_one_returns_a_result(self):
+        self.dirty(self.x_dir)
+        wrapped, state = _git_regions(self)
+        with mock.patch.object(serve, 'git_autocommit', wrapped):
+            out, errs = self.run_two({'title': 'x', 'dir': self.x_dir, 'track': 'tool'})
+        self.assertEqual(errs, [])
+        self.assertEqual(state['max'], 1, 'git-частини двох викликів не мають перекриватись')
+        self.assertEqual(sorted(o is None for o in out), [False, True], out)
+
+    def test_real_git_two_threads_commit_each_iteration_exactly_once(self):
+        d = self.x_dir
+        for it in ('it1', 'it2'):
+            self.dirty(d, it)
+        before = int(_git(d, 'rev-list', '--count', 'HEAD').strip())
+        out, errs = self.run_two({'title': 'x', 'dir': d, 'track': 'tool'})
+        self.assertEqual(errs, [])
+        got = sorted(it for o in out if o for it in o['its'])
+        self.assertEqual(got, ['it1', 'it2'], out)
+        self.assertEqual(int(_git(d, 'rev-list', '--count', 'HEAD').strip()), before + 2)
+        self.assertEqual(self.status(d), '')
+        self.assertFalse(os.path.exists(os.path.join(d, '.git', 'index.lock')))
+
+def _git_regions(test):
+    """Підміна `git_autocommit`, що міряє перекриття локальних частин: `(обгортка, стан)`; сама робота — справжня, зі сном усередині."""
+    state = {'now': 0, 'max': 0}
+    guard = threading.Lock()
+    real = serve.git_autocommit
+
+    def wrapped(*a, **kw):
+        with guard:
+            state['now'] += 1
+            state['max'] = max(state['max'], state['now'])
+        try:
+            time.sleep(0.15)
+            return real(*a, **kw)
+        finally:
+            with guard:
+                state['now'] -= 1
+    return wrapped, state
 
 
 if __name__ == '__main__':

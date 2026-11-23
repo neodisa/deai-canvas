@@ -228,6 +228,23 @@ def registry_allowed():
     return bool(sp) and sp.get('legacy') is True and deai_modules.vcs_outbound(sp)
 
 
+#: Замки локальної частини git по теках задач (ключ — `realpath`): паралельні `git add`/`git commit` в одному репо б'ються за
+#: `.git/index.lock` (коміт тихо губиться, а `ai_commit` міг би присвоїти собі чужий коміт). Власний Stop-хук і чужий глобальний
+#: б'ють `/api/autosync` тієї ж миті. `RLock`: `ai_commit` тримає замок і кличе `git_autocommit`. Пуш (до 60 с) під замком НЕ йде.
+#: Усередині замка — лише git-процеси й читання файлів задачі; жодного `WRITE_LOCK`/`TASK_CRUD_LOCK`/замків публікації.
+_GIT_LOCKS = {}
+_GIT_LOCKS_GUARD = threading.Lock()
+
+
+def _git_lock(task_dir):
+    key = os.path.realpath(task_dir)
+    with _GIT_LOCKS_GUARD:
+        lock = _GIT_LOCKS.get(key)
+        if lock is None:
+            lock = _GIT_LOCKS[key] = threading.RLock()
+        return lock
+
+
 def git_autocommit(task_dir, msg, push=None, paths=None):
     """Автосохранение папки задачи в git — скриптом, без участия AI.
     init при первом вызове; push best-effort, если настроен remote (GitLab).
@@ -243,17 +260,18 @@ def git_autocommit(task_dir, msg, push=None, paths=None):
     `paths` (фаза И) — коміт ЛИШЕ цих шляхів: `git add -A -- <шляхи>` і `git commit -- <шляхи>`; решта брудного й навіть уже
     застейдженого лишається як є (так комітить `ai_commit`: свою ітерацію, а не весь стан теки)."""
     try:
-        if not os.path.isdir(os.path.join(task_dir, '.git')):
-            subprocess.run(['git', 'init', '-q'], cwd=task_dir, check=True, timeout=20)
-        # ПЕРЕД `add -A` і на КОЖНОМУ виклику, не лише при `init`: див. докстрінг.
-        ensure_task_gitignore(task_dir)
-        only = ['--', *paths] if paths else []
-        subprocess.run(['git', 'add', '-A', *only], cwd=task_dir, check=True, timeout=30)
-        subprocess.run(['git', 'commit', '-q', '-m', msg, *only],
-                       cwd=task_dir, capture_output=True, text=True, timeout=30)
-        h = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
-                           cwd=task_dir, capture_output=True, text=True, timeout=10)
-        sha = h.stdout.strip() if h.returncode == 0 else None
+        with _git_lock(task_dir):               # лише локальна частина; `remote`/`push` нижче — поза замком
+            if not os.path.isdir(os.path.join(task_dir, '.git')):
+                subprocess.run(['git', 'init', '-q'], cwd=task_dir, check=True, timeout=20)
+            # ПЕРЕД `add -A` і на КОЖНОМУ виклику, не лише при `init`: див. докстрінг.
+            ensure_task_gitignore(task_dir)
+            only = ['--', *paths] if paths else []
+            subprocess.run(['git', 'add', '-A', *only], cwd=task_dir, check=True, timeout=30)
+            subprocess.run(['git', 'commit', '-q', '-m', msg, *only],
+                           cwd=task_dir, capture_output=True, text=True, timeout=30)
+            h = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                               cwd=task_dir, capture_output=True, text=True, timeout=10)
+            sha = h.stdout.strip() if h.returncode == 0 else None
         pushed = False
         rem = subprocess.run(['git', 'remote'], cwd=task_dir,
                              capture_output=True, text=True, timeout=10)
@@ -1452,18 +1470,19 @@ def ai_commit(task):
     (`it`/`sha` — найсвіжіша)."""
     if not os.path.exists(os.path.join(task['dir'], '.git')):
         return None
-    meta = load_meta(task)
-    _, my_key = machine_identity()
-    by_id = {x['id']: x for x in meta.get('iterations', []) if isinstance(x, dict) and 'id' in x}
-    dirty = [i for i in iter_history.dirty_iterations(task['dir'])
-             if i in by_id and iteration_is_mine(by_id[i], my_key) and os.path.isdir(_iter_dir(task, i))]
     done = []
-    for it in sorted(dirty, key=lambda i: (_dir_mtime(_iter_dir(task, i)), i)):
-        before = _git_head(task['dir'])
-        g = git_autocommit(task['dir'], f'{it}: зміни AI\n\n{iter_history.AI_TRAILER}', push=False, paths=[f'iterations/{it}/'])
-        after = _git_head(task['dir'])
-        if after is not None and after != before:
-            done.append((it, g['sha']))
+    with _git_lock(task['dir']):    # скан брудного І весь цикл комітів — одним махом: другий паралельний виклик бачить чисто, а HEAD до/після правдиві
+        meta = load_meta(task)
+        _, my_key = machine_identity()
+        by_id = {x['id']: x for x in meta.get('iterations', []) if isinstance(x, dict) and 'id' in x}
+        dirty = [i for i in iter_history.dirty_iterations(task['dir'])
+                 if i in by_id and iteration_is_mine(by_id[i], my_key) and os.path.isdir(_iter_dir(task, i))]
+        for it in sorted(dirty, key=lambda i: (_dir_mtime(_iter_dir(task, i)), i)):
+            before = _git_head(task['dir'])
+            g = git_autocommit(task['dir'], f'{it}: зміни AI\n\n{iter_history.AI_TRAILER}', push=False, paths=[f'iterations/{it}/'])
+            after = _git_head(task['dir'])
+            if after is not None and after != before:
+                done.append((it, g['sha']))
     if not done:
         return None
     return {'it': done[-1][0], 'sha': done[-1][1], 'its': [it for it, _ in done]}
@@ -8792,9 +8811,7 @@ class Handler(SimpleHTTPRequestHandler):
         `.git` (`_ai_commit_space`), далі крок відправки — для ПОТОЧНОЇ задачі цього простору, лише коли в модулі ввімкнено autosync.
         Відповідь додатково несе `ai_tasks`. `cwd` поза просторами — `reason: "no-space"`; простір без поточної задачі — `reason:
         "no-task"` (хук мовчить на обох). З тіла береться лише `cwd`."""
-        # Режим «за шляхом» (Stop-хук від «Підключити»): задачу запит НЕ назвав (`_task_override is None`: ні заголовка, ні `/t/<id>/`),
-        # у тілі абсолютний `cwd`. Тіло розібрано вище; звідси береться ЛИШЕ `cwd` — решту (текст відповіді, `session_id`) не читаємо й
-        # нікуди не пишемо. Простір запиту стає знайденим, тож далі все — рівно як у режимі задачі (`_vcs_ctx` читає ЙОГО файл задач).
+        # Режим «за шляхом» (див. докстрінг): задачу запит не назвав, у тілі є `cwd`. З тіла — лише `cwd`; простір запиту стає знайденим.
         cwd = payload.get('cwd')
         by_path = self._task_override is None and isinstance(cwd, str) and bool(cwd)
         extra, ai_tasks = {}, None
@@ -8807,7 +8824,7 @@ class Handler(SimpleHTTPRequestHandler):
             ai_tasks = self._ai_commit_space(sp)
             extra = {'ai_tasks': ai_tasks}
         try:
-            tid, task, vcs, err = self._vcs_ctx()
+            tid, task, vcs, err = self._vcs_ctx()       # може кинути й ПІСЛЯ комітів AI: це свідомо — коміти лишаються, хук мовчить
         except spaces.NoTask:
             if not by_path:
                 raise
