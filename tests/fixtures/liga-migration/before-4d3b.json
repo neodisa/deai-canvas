@@ -562,7 +562,7 @@
     "texts": {
       "autosync": {
         "commit_messages": [
-          "it1: автосинк (design-canvas)"
+          "it1: автосинк (design-canvas)\n\nDeai-Actor: ai"
         ],
         "outcome": {
           "result": {

@@ -35,6 +35,7 @@ import pages_model as pm  # чиста модель сторінок ітера�
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 import isolation  # закон ізоляції й шви тестів (4d-4b; раніше `implicit.py`)
 import iter_trash  # кошик ітерацій задачі (фаза И)
+import iter_history  # історія ітерації з git теки задачі (фаза И)
 import task_trash  # кошик задач простору (етап Д, 0.30.0): видалення без стирання, повернення, знищення
 import feedback  # відгук (0.23.0): кільце помилок, збирач діагностики, черга відправки
 import agents_md  # AGENTS.md простору (етап Е, 0.31.0): блок з шаблону + «Ваше»
@@ -1424,6 +1425,23 @@ def _record_sync(task, it, sha):
     return meta
 
 
+def ai_commit(task):
+    """Правки AI окремим комітом (фаза И, Р9). Кличе `/api/autosync` (Stop-хук після кожної відповіді Claude): найсвіжіша
+    СВОЯ брудна ітерація → `itN: зміни AI` з трейлером `Deai-Actor: ai`. Без пушу: пуш — справа автосинку GitLab нижче.
+    Чужі ітерації не комітимо під своїм підписом (той самий принцип, що в `autosync`). Чисто → `None`.
+    ⚠️ `git_autocommit` робить `add -A`: коміт забирає й інші брудні файли теки задачі (як і сам автосинк)."""
+    meta = load_meta(task)
+    _, my_key = machine_identity()
+    by_id = {x['id']: x for x in meta.get('iterations', [])}
+    dirty = [i for i in iter_history.dirty_iterations(task['dir'])
+             if i in by_id and iteration_is_mine(by_id[i], my_key) and os.path.isdir(_iter_dir(task, i))]
+    if not dirty:
+        return None
+    it = max(dirty, key=lambda i: _dir_mtime(_iter_dir(task, i)))
+    g = git_autocommit(task['dir'], f'{it}: зміни AI\n\n{iter_history.AI_TRAILER}', push=False)
+    return {'it': it, 'sha': g['sha']}
+
+
 def autosync(tid, task, gl, vcs=None):
     """Один крок автосинку: брудна ітерація → локальний коміт → пуш на GitLab.
 
@@ -1467,7 +1485,7 @@ def autosync(tid, task, gl, vcs=None):
             v = vcs_provider()
         except OSError:
             v = None
-    local = git_autocommit(task['dir'], f'{it}: автосинк ({"deai" if v is not None and not v[2] else "design-canvas"})')
+    local = git_autocommit(task['dir'], f'{it}: автосинк ({"deai" if v is not None and not v[2] else "design-canvas"})\n\n{iter_history.AI_TRAILER}')
     try:
         r = gitlab_sync(tid, task, gl, it, vcs=v)
     except OSError as e:
@@ -6727,6 +6745,23 @@ class Handler(SimpleHTTPRequestHandler):
                 beats = dict(CLAUDE_BEATS)
             self._send_json(claude_view(beats, time.time(), tid, (task.get('jira'),)))
             return
+        if self.path.startswith('/api/iteration-history'):
+            q = parse_qs(urlparse(self.path).query)
+            it = self._iteration_or_400(q.get('id', [''])[0])
+            if it is None:
+                return
+            _, task = self._current_task()
+            entry = next((i for i in load_meta(task).get('iterations', []) if i['id'] == it), None)
+            if entry is None:
+                self._send_json({'ok': False, 'error': 'iteration-not-found'}, status=404)
+                return
+            try:
+                names = {p['page'].get('id'): p['page'].get('name') or p['page'].get('id')
+                         for p in pm.flatten(pm.read_pages(_iter_dir(task, it)))}
+            except (pm.TreeError, OSError, ValueError):
+                names = {}
+            self._send_json({'ok': True, 'id': it, **iter_history.history(task['dir'], entry, names)})
+            return
         if self.path.startswith('/api/iteration-pages'):
             q = parse_qs(urlparse(self.path).query)
             it = self._iteration_or_400(q.get('it', [''])[0])
@@ -8477,7 +8512,7 @@ class Handler(SimpleHTTPRequestHandler):
     def _autosync(self, payload):
         """Тихий крок автосинку для Stop-хука. Задача без цілі чи простір без ролі — не помилка, а нормальний стан:
         `reason: "no-gitlab"` (контракт хука; відмова постачальника — те саме, з `code`). `autosync` вимкнений у модулі —
-        `reason: "autosync-off"` і ні відправки, ні локального автокоміту. Хук мовчить на причинах, яких не знає: реагує лише на
+        `reason: "autosync-off"` і ніякої відправки; локальний коміт правок AI (`ai_commit`, фаза И) робиться завжди. Хук мовчить на причинах, яких не знає: реагує лише на
         `blocked`, `foreign-only`, `offline`, `changed`/`catchup`. Далі — `autosync()`: `no-iterations`, `foreign-only`, `clean`,
         а будь-який `OSError` навколо `gitlab_sync` — `reason: "offline"` (з `code` для `VcsError`).
 
@@ -8495,12 +8530,17 @@ class Handler(SimpleHTTPRequestHandler):
         Єдиний виняток — центральні стани простору (`NoTask`, `SpaceUnavailable`, `SpacesError`, `AmbiguousTask`): вони йдуть далі
         в `_guarded` і дають ті самі 404/409/503, що й будь-який маршрут."""
         tid, task, vcs, err = self._vcs_ctx()
+        try:
+            ai = ai_commit(task) if task is not None else None
+        except Exception:  # noqa: BLE001 — локальний збій коміту AI не валить хук: історія просто без цього запису
+            sys.stderr.write(_mask_repo(traceback.format_exc()))
+            ai = None
         if err is not None or vcs is None or vcs[3] is None:
-            out = {'ok': True, 'changed': False, 'reason': 'no-gitlab'}
+            out = {'ok': True, 'changed': False, 'reason': 'no-gitlab', 'ai': ai}
             self._send_json({**out, 'code': err.code} if err is not None else out)
             return
         if not (vcs[1].get('settings') or {}).get('autosync'):
-            self._send_json({'ok': True, 'changed': False, 'reason': 'autosync-off'})
+            self._send_json({'ok': True, 'changed': False, 'reason': 'autosync-off', 'ai': ai})
             return
         try:
             r = autosync(tid, task, vcs[3], vcs=vcs[:3])
@@ -8513,11 +8553,11 @@ class Handler(SimpleHTTPRequestHandler):
             if not offline:
                 # Причину бачить той, хто дивиться в лог сервера: у відповіді хука лише короткий `error`.
                 sys.stderr.write(_mask_repo(traceback.format_exc()))
-            self._send_json({**_vcs_failure(e), 'synced': False, 'changed': False, 'reason': 'offline' if offline else 'error'})
+            self._send_json({**_vcs_failure(e), 'synced': False, 'changed': False, 'reason': 'offline' if offline else 'error', 'ai': ai})
             return
         if r.get('changed'):
             self._overview_sync()
-        self._send_json(r)
+        self._send_json({**r, 'ai': ai})
 
     def _gitlab_pull(self, payload):
         """`POST /api/vcs-pull` (і `/api/gitlab-pull`): ті самі відмови, що в `_gitlab_sync`."""
@@ -9391,7 +9431,7 @@ class Handler(SimpleHTTPRequestHandler):
                 # ⛔ Не мовчазний Errno 2: дизайнер має зрозуміти, що робити.
                 result['deploy_error'] = NODE_MISSING_HINT
                 result['deploy_blocked'] = 'no-node'
-                git_autocommit(task['dir'], f'publish: {len(its)} iteration(s)')
+                git_autocommit(task['dir'], f'publish: {len(its)} iteration(s) · {" ".join(str(i.get("id", "")) for i in its)}')
                 self._overview_sync()
                 self._send_json(result)
                 return
@@ -9441,7 +9481,7 @@ class Handler(SimpleHTTPRequestHandler):
                         result['cleanup_warning'] = res['cleanup_warning']
             except OSError as e:
                 result['deploy_error'] = str(e)
-            git_autocommit(task['dir'], f'publish: {len(its)} iteration(s)')
+            git_autocommit(task['dir'], f'publish: {len(its)} iteration(s) · {" ".join(str(i.get("id", "")) for i in its)}')
         self._overview_sync()
         self._send_json(result)
 

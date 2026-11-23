@@ -200,7 +200,7 @@ class Before4d3cShape(unittest.TestCase):
                 self.assertEqual(sc['iterations_after']['publish_remote'], 'absent', '%s/%s' % (name, sid))
             ok = st['publish']['first']['spies']['calls']
             self.assertEqual([c[0] for c in ok], ['registry_push', 'git_autocommit', 'overview_sync'], name)
-            self.assertEqual(ok[1][2], 'publish: 2 iteration(s)', name)
+            self.assertEqual(ok[1][2], 'publish: 2 iteration(s) · it1 it2', name)
             self.assertEqual([c[0] for c in st['publish']['build_only']['spies']['calls']], ['overview_sync'], name)
             self.assertEqual(st['publish']['build_only']['npx_argv'], [], name)
             self.assertEqual([c[0] for c in st['publish']['no_node']['spies']['calls']], ['git_autocommit', 'overview_sync'], name)
@@ -1813,7 +1813,7 @@ class RealPublishNonIsolated(unittest.TestCase):
             self.assertEqual((alpha['comment_layer'], alpha['channel'], alpha['supabase_url']), (True, 'dc/a-1', g.SB_URL))
             self.assertEqual(alpha['supabase_key'], '<secret:%d>' % len(g.SB_KEY))
             # побічні дії НЕізольованого шляху — ВСІ три, у цьому порядку й з цими аргументами (`registry_push` → автокоміт → огляд)
-            self.assertEqual(sc['spies']['calls'], [['registry_push', 'a-1'], ['git_autocommit', '~/work/a-1', 'publish: 2 iteration(s)'],
+            self.assertEqual(sc['spies']['calls'], [['registry_push', 'a-1'], ['git_autocommit', '~/work/a-1', 'publish: 2 iteration(s) · it1 it2'],
                                                     ['overview_sync']])
         # пароль задачі змінює гейт; 4d-4b: пароль у КОРЕНІ більше не читається (було `('pw_root', g.PW_ROOT)`: гейт ставав паролем кореня) —
         # типовий `1100`, поки спільний пароль не заданий секретом запису (`test_publish_module`, `PreviewPasswordFromTheRecord`)

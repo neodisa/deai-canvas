@@ -12,6 +12,7 @@ import subprocess
 LOG_LIMIT = 300
 FILES_MAX = 5
 TEXT_MAX = 120
+AI_TRAILER = 'Deai-Actor: ai'  # трейлер коміту правок AI: за ним історія впізнає актора
 _AI_RX = re.compile(r'(?m)^Deai-Actor:\s*ai\s*$')
 _RS, _FS = '\x1e', '\x1f'
 

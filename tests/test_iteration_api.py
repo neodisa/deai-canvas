@@ -161,5 +161,63 @@ class IterationApi(_Base):
         self.assertEqual((st, body['rolled_back']), (500, True))
 
 
+class HistoryAndAi(_Base):
+    def test_history_route(self):
+        self.post('/api/iteration-rename', {'id': 'it2', 'label': 'Фільтри'})
+        st, body = self.jget('/api/iteration-history?id=it2')
+        self.assertEqual(st, 200)
+        self.assertEqual(body['id'], 'it2')
+        self.assertEqual([e['kind'] for e in body['entries']][:2], ['rename', 'copy'])
+        self.assertIn('pending', body)
+
+    def test_history_route_errors(self):
+        st, _ = self.jget('/api/iteration-history?id=../x')
+        self.assertEqual(st, 400)
+        st, body = self.jget('/api/iteration-history?id=it9')
+        self.assertEqual((st, body['error']), (404, 'iteration-not-found'))
+
+    def test_autosync_commits_ai_edits_without_gitlab(self):
+        with open(os.path.join(self.x_dir, 'iterations', 'it2', 'index.html'), 'a', encoding='utf-8') as f:
+            f.write('<p>AI</p>')
+        st, body = self.post('/api/autosync', {})
+        self.assertEqual((st, body['reason']), (200, 'no-gitlab'))
+        self.assertEqual(body['ai']['it'], 'it2')
+        log = _git(self.x_dir, 'log', '-1', '--format=%s%n%b')
+        self.assertIn('it2: зміни AI', log)
+        self.assertIn('Deai-Actor: ai', log)
+        _, h = self.jget('/api/iteration-history?id=it2')
+        self.assertEqual(h['entries'][0]['actor'], {'kind': 'ai', 'name': 'AI'})
+
+    def test_autosync_clean_tree_makes_no_commit(self):
+        before = _git(self.x_dir, 'rev-parse', 'HEAD')
+        _, body = self.post('/api/autosync', {})
+        self.assertIsNone(body['ai'])
+        self.assertEqual(_git(self.x_dir, 'rev-parse', 'HEAD'), before)
+
+    def test_ai_commit_failure_does_not_break_hook(self):
+        with mock.patch.object(serve, 'ai_commit', side_effect=OSError('boom')), \
+                mock.patch.object(sys, 'stderr', new=mock.MagicMock()):
+            st, body = self.post('/api/autosync', {})
+        self.assertEqual((st, body['reason'], body['ai']), (200, 'no-gitlab', None))
+
+    def test_publish_subject_carries_iteration_ids(self):
+        """Тема коміту публікації несе id опублікованих ітерацій (власність для історії). Драйвимо `/api/publish`
+        без node: гілка `no-node` комітить так само, як і основна."""
+        meta = _meta(self.x_dir)
+        for i in meta['iterations']:
+            i['published'] = True
+        with open(os.path.join(self.x_dir, 'iterations.json'), 'w', encoding='utf-8') as f:
+            json.dump(meta, f)
+        subjects = []
+        real = serve.git_autocommit
+        with mock.patch.object(serve.deai_modules, 'provider', return_value=mock.MagicMock()), \
+                mock.patch.object(serve.deai_modules, 'publish_legacy_path', return_value=True), \
+                mock.patch.object(serve, '_node_bin', return_value=None), \
+                mock.patch.object(serve, 'git_autocommit', side_effect=lambda d, m, *a, **k: subjects.append(m) or real(d, m, *a, **k)):
+            self.post('/api/publish', {})
+        pub = [m for m in subjects if m.startswith('publish:')]
+        self.assertEqual(pub, ['publish: 2 iteration(s) · it1 it2'])
+
+
 if __name__ == '__main__':
     unittest.main()

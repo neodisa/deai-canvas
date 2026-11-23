@@ -294,6 +294,35 @@ class Ownership(unittest.TestCase):
         commit(self.d, 'щось в it3')
         self.assertEqual(self.hist('it3')['entries'][0]['files'], ['файл.html'])
 
+    def test_non_utf8_subject_is_not_degraded(self):
+        write(self.d, 'iterations/it1/raw.css', 'x')
+        git(self.d, 'add', '-A')
+        tree, head = git(self.d, 'write-tree'), git(self.d, 'rev-parse', 'HEAD')
+        who = b'A <a@example.com> 1700000000 +0000'
+        # `commit`/`commit-tree` самі перекодовують повідомлення; сирі не-UTF-8 байти в темі дає лише ручний обʼєкт
+        raw = (b'tree ' + tree.encode() + b'\nparent ' + head.encode() + b'\nauthor ' + who + b'\ncommitter ' + who
+               + b'\n\nit1: \xff\xfe raw\n')
+        sha = subprocess.run(['git', 'hash-object', '-t', 'commit', '-w', '--literally', '--stdin'], cwd=self.d, input=raw,
+                             capture_output=True).stdout.decode().strip()
+        git(self.d, 'reset', '-q', '--soft', sha)
+        out = self.hist('it1')
+        self.assertFalse(out['degraded'])
+        self.assertIn('\ufffd', out['entries'][0]['text'])
+
+    def test_value_error_from_git_run_is_oserror(self):
+        def boom(cmd, **kw):
+            raise ValueError('embedded null')
+        with self.assertRaises(OSError):
+            ih.dirty_iterations(self.d, run=boom)
+
+    def test_dirty_iterations_pathspec_is_literal(self):
+        """Поведінкою `:(literal)` не довести: шлях `iterations/` без метасимволів, а глоб із косою рискою в кінці git у `status` не
+        матчить узагалі (перевірено вручну). Тому стережемо сам аргумент: він захищає від майбутньої зміни шляху."""
+        calls = []
+        real = subprocess.run
+        ih.dirty_iterations(self.d, run=lambda c, **kw: calls.append(c) or real(c, **kw))
+        self.assertTrue(any(':(literal)iterations/' in c for c in calls))
+
     def test_files_sorted(self):
         for n in ('c', 'a', 'b'):
             write(self.d, f'iterations/it1/{n}.css', n)

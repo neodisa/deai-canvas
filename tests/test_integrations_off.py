@@ -943,8 +943,9 @@ class Routes(World):
         st, body = self.post('/api/gitlab-pull', {})
         self.assertEqual(st, 400)
         self.assertIn('no gitlab configured', body)
-        self.assertEqual(self.jpost('/api/autosync', {}),
-                         (200, {'ok': True, 'changed': False, 'reason': 'no-gitlab'}))
+        st, body = self.jpost('/api/autosync', {})      # фаза И: `ai` — локальний коміт правок AI, назовні нічого
+        body.pop('ai', None)
+        self.assertEqual((st, body), (200, {'ok': True, 'changed': False, 'reason': 'no-gitlab'}))
         self.assertEqual(self.trip.hits, [])
         # контроль: ті самі маршрути в просторі з інтеграціями б'ють у git (розтяжка ловить)
         st, body = self.jget('/api/gitlab-status?it=it1', self.A)

@@ -1038,7 +1038,7 @@ class LegacyPublishViaModule(TaskFixture):
                 obs = self._legacy(LP_OK, extra_patches=patches)          # `_post` кидає на не-200: статус 200 доведено
                 self.assertEqual([k for k, _ in obs['response']], keys)
                 self.assertEqual(self._resp(obs)['deploy_error'], text)
-                self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s)']])
+                self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s) · it1 it2']])
                 self.assertEqual(obs['spies']['overview_sync'], 1)
                 self.assertEqual('publish_url' in obs['iterations_json'], wrote)
 
@@ -1169,7 +1169,7 @@ class LegacyPublishViaModule(TaskFixture):
         obs = self._legacy({**LP_OK, 'deploy': {'code': 1, 'stderr': 'boom'}})
         self.assertNotIn('publish_url', obs['iterations_json'])
         self.assertEqual(obs['spies']['registry_push'], [])
-        self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s)']])
+        self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s) · it1 it2']])
 
 
 # ============================================================================== Task 4b: диспетчер ролі `publish`
