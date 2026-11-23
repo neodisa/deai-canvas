@@ -153,4 +153,42 @@ test("4: «Скопіювати» кладе файл як на диску в б
   assert.deepEqual(errors, []);
 });
 
+test("5: «Claude Code» — «Підключити» ставить CLAUDE.md і хук, галочка; «Відключити» знімає хук, кнопка знову", async (t) => {
+  const server = await boot(t, PORT_BASE + 40, null);
+  const { page, errors } = server;
+  const space = server.spaces[0].path;
+  const settings = path.join(space, ".claude", "settings.local.json");
+  const claude = path.join(space, "CLAUDE.md");
+  const port = new URL(server.url).port;
+  await gear(page);
+  await toAgents(page);
+  await page.waitForSelector('[data-claude="missing"][data-hook="missing"]', { timeout: 15000 });
+  assert.equal(await page.locator(".fr-will li").count(), 2, "список «що буде записано»: CLAUDE.md і хук");
+  assert.match(await page.locator(".fr-will").textContent(), /CLAUDE\.md.*\.claude\/settings\.local\.json/);
+  assert.equal((await page.locator('[data-claude] [data-v="claude"]').textContent()).trim(), "Підключити");
+  assert.equal(existsSync(settings), false, "до згоди нічого не записано");
+
+  await page.click('[data-claude] [data-v="claude"]');
+  await page.waitForSelector('[data-claude="ok"][data-hook="ok"]', { timeout: 15000 });
+  assert.equal((await toastText(page)).trim(), "Підключено · правки Claude Code в історії — як AI");
+  assert.equal(readFileSync(claude, "utf8"), "@AGENTS.md\n");
+  const cmd = JSON.parse(readFileSync(settings, "utf8")).hooks.Stop[0].hooks[0].command;
+  assert.ok(cmd.endsWith("# deai-autosync"), "наша мітка");
+  assert.ok(cmd.includes(`:${port}/api/autosync`), "порт цього канваса");
+  assert.equal(await page.locator(".fr-will").count(), 0, "підключено — списку нема");
+  assert.match(await page.locator("[data-claude]").textContent(), /Читає AGENTS\.md; його правки в історії — як AI\./);
+  assert.equal((await page.locator('[data-claude] [data-v="unhook"]').textContent()).trim(), "Відключити");
+  assert.equal((await api(server)).hook.state, "ok");
+
+  await page.waitForFunction(() => !document.querySelector("#cv-toast.show"), null, { timeout: 15000 });
+  await page.click('[data-claude] [data-v="unhook"]');
+  await page.waitForSelector('[data-claude="ok"][data-hook="missing"]', { timeout: 15000 });
+  assert.equal((await toastText(page)).trim(), "Хук відключено");
+  assert.equal(existsSync(settings), false, "файл, що став порожнім, видалено");
+  assert.equal(readFileSync(claude, "utf8"), "@AGENTS.md\n", "CLAUDE.md не зачеплено");
+  assert.equal(await page.locator(".fr-will li").count(), 1, "знову один пункт — хук");
+  assert.equal((await page.locator('[data-claude] [data-v="claude"]').textContent()).trim(), "Підключити", "кнопка повернулась");
+  assert.deepEqual(errors, []);
+});
+
 guardRealDeai();
