@@ -5,6 +5,8 @@
 Ядро: итерации (замороженные копии), публикация на Vercel со свитчером,
 comment-layer с каналами: internal (локально, для Claude) / external (Vercel).
 """
+import base64
+import binascii
 import collections
 import contextlib
 import errno
@@ -155,9 +157,14 @@ def _ssl_context():
 #: пушити ні те, ні те. Колезі вони шум, а записка тюнера писалась не для
 #: чужих очей. Обидва лежать у КОРЕНІ теки задачі, тобто рівно там, куди
 #: дивиться `git add -A`.
+#:
+#: `.dc-local-shots/` (0.35.1) — повні знімки локальних пінів (`POST /api/local-shots`):
+#: ті самі «робоче листування з Клодом», що й `.dc-local-comments.json` (знімок — тієї ж розмови), а не частина макета.
+#: Рішення власника 18.09.2026 поширюється й на них. Git-sync копіює теку задачі разом із її `.gitignore`, тож
+#: дзеркало їх теж не бере; статична публікація крапкові теки не возить (`_is_tool_junk`).
 TASK_IGNORE = ('publish/', '*.bak', '*.tmp', '.DS_Store', 'comments-for-ai*',
                '.vercel/', '.dc-tuner.json', '.dc-local-comments.json',
-               '.pages.lock')
+               '.pages.lock', '.dc-local-shots/')
 
 
 def ensure_task_gitignore(task_dir):
@@ -3582,6 +3589,7 @@ def _agent_meta(meta):
     """`meta` піна для агента. Усе, що `inbox` друкує чи розбирає, — у строгій формі (одним рядком, малі цілі, обмежені
     списки); решта — безпечна копія JSON (`_agent_json`). `shot` не беремо: ні `inbox`, ні агентові він не потрібен, а
     обрізаний base64 гірший за відсутній."""
+    shot = isinstance(meta, dict) and any(isinstance(meta.get(k), str) and meta.get(k).strip() for k in ('shot', 'shotUrl'))
     meta = (_agent_json(meta, [300]) if isinstance(meta, dict) else None) or {}
     meta.pop('shot', None)
     if 'version' in meta:                                           # друкується тегом `[itN]` і розбирається `pin_target`
@@ -3596,7 +3604,7 @@ def _agent_meta(meta):
     if 'shotMiss' in meta:                                          # код причини, чому нема знімка (`inbox` друкує його словом)
         miss = agent_line(meta['shotMiss'], 41) if isinstance(meta['shotMiss'], str) else ''
         miss = miss if len(miss) <= 40 else ''                      # довший за код — не код: відкидаємо, а не обрізаємо
-        if miss:
+        if miss and not shot:                                       # знімок є — причина хибна (0.35.0 писав 'upload' локальним пінам)
             meta['shotMiss'] = miss
         else:
             del meta['shotMiss']
@@ -5937,6 +5945,12 @@ def module_check_verdict(space, mid):
 
 #: Тіло `POST /api/module-tool|module-action` — не більше (байтів): панель шле короткі аргументи.
 MODULE_CALL_BODY_MAX = 64 * 1024
+#: `POST /api/local-shots` (0.35.1): тіло JSON ≤ 12 МіБ (413 ДО читання), декодований JPEG ≤ 8 МіБ.
+LOCAL_SHOT_BODY_MAX = 12 * 1024 * 1024
+LOCAL_SHOT_MAX = 8 * 1024 * 1024
+#: Імʼя знімка — id піна коментатора (UUID чи `c-<цифри>-<base36>`): без крапок і скісних, не з дефіса.
+LOCAL_SHOT_ID_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,99}')
+LOCAL_SHOT_DIR = '.dc-local-shots'
 
 
 def module_action_target(frm, tid, iid):
@@ -6808,6 +6822,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.startswith('/api/local-comments'):
             self._local_comments_get()
             return
+        if self.path.startswith('/api/local-shots/'):
+            self._local_shots_get()
+            return
         if self.path.startswith('/api/tuner'):
             self._tuner_get()
             return
@@ -7636,6 +7653,87 @@ class Handler(SimpleHTTPRequestHandler):
         atomic_write_json(self._local_file(task), comments, indent=1)
         self._send_json({'ok': True, 'count': len(comments)})
 
+    # ---------- Повні знімки локальних пінів (0.35.1): `.dc-local-shots/<id>.jpg` у теці задачі ----------
+    @staticmethod
+    def _local_shots_dir(task):
+        """Тека знімків задачі, або `None`, коли вона (чи її батько) — симлінк, що веде геть із теки задачі."""
+        d = os.path.join(task['dir'], LOCAL_SHOT_DIR)
+        if os.path.islink(d):
+            return None
+        return d if os.path.realpath(os.path.dirname(d)) == os.path.realpath(task['dir']) else None
+
+    def _local_shots_post(self, payload):
+        """`POST /api/local-shots {id, dataUrl}` → `{ok, url}`. Лише `data:image/jpeg;base64,…` зі СТРОГИМ base64, ≤ 8 МіБ
+        після декодування й із сигнатурою JPEG (FF D8 FF); `id` — як у коментатора. Запис атомарний (tmp → replace) у теку
+        задачі запиту (так само, як `/api/local-comments`)."""
+        def refuse(status, msg):
+            self._send_json({'ok': False, 'error': msg}, status=status)
+        sid, url = payload.get('id'), payload.get('dataUrl')
+        if not isinstance(sid, str) or not LOCAL_SHOT_ID_RE.fullmatch(sid):
+            return refuse(400, 'bad id')
+        head = 'data:image/jpeg;base64,'
+        if not isinstance(url, str) or not url.startswith(head):
+            return refuse(400, 'dataUrl must be data:image/jpeg;base64')
+        b64 = url[len(head):]
+        if len(b64) > (LOCAL_SHOT_MAX // 3 + 2) * 4:         # раніше за декодування: сміттєвого розміру не роздуваємо
+            return refuse(413, 'screenshot is too large')
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except (ValueError, binascii.Error):
+            return refuse(400, 'bad base64')
+        if len(raw) > LOCAL_SHOT_MAX:
+            return refuse(413, 'screenshot is too large')
+        if raw[:3] != b'\xff\xd8\xff':
+            return refuse(400, 'not a JPEG')
+        tid, task = self._current_task()
+        d = self._local_shots_dir(task)
+        if d is None:
+            return refuse(400, 'screenshot folder is not usable')
+        os.makedirs(d, exist_ok=True)
+        if os.path.realpath(d) != os.path.join(os.path.realpath(task['dir']), LOCAL_SHOT_DIR):
+            return refuse(400, 'screenshot folder is not usable')
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=sid + '.', suffix=TMP_SUFFIX)
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(raw)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, os.path.join(d, sid + '.jpg'))
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            return refuse(500, 'cannot write screenshot')
+        self._send_json({'ok': True, 'url': f'/api/local-shots/{sid}.jpg'})
+
+    def _local_shots_get(self):
+        """`GET /api/local-shots/<id>.jpg` — байти знімка поточної задачі запиту. Справжній шлях файла мусить лишитись у
+        `.dc-local-shots` (симлінк назовні — 404)."""
+        name = unquote(self.path.split('?', 1)[0][len('/api/local-shots/'):])
+        m = re.fullmatch(r'(.+)\.jpg', name, re.S)
+        if not m or not LOCAL_SHOT_ID_RE.fullmatch(m.group(1)):
+            self.send_error(400, 'bad screenshot name')
+            return
+        tid, task = self._current_task()
+        d = self._local_shots_dir(task)
+        f = os.path.join(d, name) if d else None
+        body = None
+        if f and os.path.isfile(f):
+            if os.path.realpath(f) == os.path.join(os.path.realpath(d), name):
+                try:
+                    with open(f, 'rb') as fh:
+                        body = fh.read()
+                except OSError:
+                    body = None
+        if body is None:
+            self.send_error(404, 'no screenshot')
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', 'image/jpeg')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+        self.wfile.write(body)
+
     # ---------- Пакет ТЮНЕРА (рекомендації Клоду, НЕ правки макета) ----------
     def _tuner_file(self, task):
         """⛔ ОКРЕМИЙ файл ПОРУЧ із `.dc-local-comments.json`, а не всередині нього.
@@ -7784,6 +7882,9 @@ class Handler(SimpleHTTPRequestHandler):
             if length > MODULE_CALL_BODY_MAX and self.path in ('/api/module-tool', '/api/module-action'):
                 self._refuse_unread(413, 'body-too-large', 'module call body is too large')   # так само: ДО читання
                 return
+            if length > LOCAL_SHOT_BODY_MAX and self.path in ('/api/local-shots',):   # кортеж, не `==`: охоронець `bad-body` збирає маршрути за `== '…'` разом з обробником
+                self._refuse_unread(413, 'body-too-large', 'screenshot body is too large')    # так само: ДО читання
+                return
             raw_body = self.rfile.read(length) if length else b''
             self._body_read = True      # далі центральна відмова тіло вже не вичитує
             payload = json.loads(raw_body) if length else {}
@@ -7842,6 +7943,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._teams_mute(payload)
         elif self.path == '/api/local-comments':
             self._local_comments_post(payload)
+        elif self.path == '/api/local-shots':
+            self._local_shots_post(payload)
         elif self.path == '/api/tuner':
             self._tuner_post(payload)
         elif self.path == '/api/shoot':

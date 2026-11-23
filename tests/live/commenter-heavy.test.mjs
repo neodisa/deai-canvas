@@ -166,6 +166,8 @@ test("3в. гонка скидання: запізнілий очікувач н
   // Chrome зливає другий запит тієї ж адреси з першим, що висить, — тож віддаємо єдиний утриманий: його чекають і E2
   await held[0].fulfill({ contentType: "application/javascript", body: SPY_SRC });
   await waitSaved(page, "B");
+  // B уже лежить у сховищі (його туди віднесли persist-и A і C), тож чекаємо на ЗАВЕРШЕНИЙ запис B: знімок (кодується асинхронно, toBlob) чи код пропуску
+  await page.waitForFunction(() => { const x = window.__mem.find((c) => c.text === "B"); return x && (x.meta.shot || x.meta.shotMiss); });
   const b = await cm(page, "B");
   assert.ok(b.meta.shot, "B мав отримати знімок");
   assert.equal(b.meta.shotMiss, undefined);

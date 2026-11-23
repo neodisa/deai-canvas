@@ -2,7 +2,9 @@
  * Local file storage adapter for comment-layer (Design Canvas «Локальні · мені»).
  * НЕ Supabase: коментарі-фідбек Claude живуть у локальному файлі задачі через
  * ендпоінт сервера канваса (GET/POST /api/local-comments). Реалізує той самий
- * контракт сховища, що й supabase-adapter: { ready, load, subscribe, save, remove }.
+ * контракт сховища, що й supabase-adapter: { ready, load, subscribe, save, remove, uploadShot }.
+ * `uploadShot(id, dataUrl)` (0.35.1): повний знімок піна → POST /api/local-shots → файл поруч із задачею → абсолютна адреса
+ * (`meta.shotUrl`); не кидає, невдача — null.
  * Attaches window.CommentLayerLocal. Serializable fields only (drops _el/_pending).
  */
 (function () {
@@ -138,6 +140,9 @@
 
   function LocalStore(opts) {
     var endpoint = (opts && opts.endpoint) || '/api/local-comments';
+    /* Файли повних знімків: `opts.shotsEndpoint` або `endpoint` із хвостом `/api/local-comments` (і query) → `/api/local-shots`. */
+    var shotsEndpoint = (opts && opts.shotsEndpoint) || (/\/api\/local-comments(\?.*)?$/.test(endpoint)
+      ? endpoint.replace(/\/api\/local-comments(\?.*)?$/, '/api/local-shots') : '/api/local-shots');
     var cache = [];
     /* БАЗА злиття: що ця вкладка ЗНАЛА на момент останнього узгодження з
        сервером. Саме вона дає різницю між «клієнт змінив пін» і «клієнт про
@@ -225,6 +230,23 @@
          вкладка «Огляду» не бачила пінів, лишених у живому виді (ревʼю T-45, D2). */
       refresh: function () {
         return fetchServer().then(function (rows) { base = snap(rows); cache = rows; notify(); });
+      },
+      /* Повний знімок локального піна → `POST <shotsEndpoint>` `{id, dataUrl}` → сервер кладе файл поруч із задачею й дає `url`.
+         Повертає АБСОЛЮТНУ адресу (оболонка приймає лише data:image чи http(s)). Не кидає: будь-яка невдача — `null`. */
+      uploadShot: function (id, dataUrl) {
+        try {
+          return fetch(shotsEndpoint, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: id, dataUrl: dataUrl }),
+          }).then(function (r) {
+            if (!r || !r.ok) return null;
+            return r.json().then(function (d) {
+              if (!d || d.ok === false || typeof d.url !== 'string' || !d.url) return null;
+              var base = typeof location !== 'undefined' && location && location.href ? location.href : undefined;
+              try { return new URL(d.url, new URL(shotsEndpoint, base)).href; } catch (e) { return null; }
+            });
+          }).catch(function () { return null; });
+        } catch (e) { return Promise.resolve(null); }
       },
       close: function () { subs.length = 0; },   // інстанс знищено — сповіщати нікого
       subscribe: function (f) { if (typeof f === 'function') subs.push(f); },
