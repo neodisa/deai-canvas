@@ -6947,9 +6947,11 @@ class CurrentTaskReadGuard(unittest.TestCase):
 
     #: Функції serve.py, яким дозволено питати `spaces` про `current` реєстру, і ЩО саме. Кожна — не
     #: обробник даних задачі: `_pin_current_space` фіксує простір запиту на вході, `task_anywhere`
-    #: — CLI-шлях без запиту, `_space_switch` віддає поточну задачу щойно перемкненого простору.
+    #: — CLI-шлях без запиту, `_space_switch` віддає поточну задачу щойно перемкненого простору,
+    #: `_agent_guide_get` лише називає поточну задачу знайденого простору в живому гайді (читання, без дій над задачею).
     SPACES_CURRENT_ALLOWED = {('_pin_current_space', 'current_id'), ('task_anywhere', 'current_id'),
-                              ('_space_switch', 'space_current_task')}
+                              ('_space_switch', 'space_current_task'),
+                              ('_agent_guide_get', 'space_current_task')}
 
     def _spaces_violations(self, source):
         return [(line, func, name) for line, func, name in spaces_current_uses(source)

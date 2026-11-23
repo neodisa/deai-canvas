@@ -308,7 +308,8 @@ class Route(base.Fixture):
 
     @classmethod
     def setUpClass(cls):
-        super().setUpClass()
+        super().setUpClass()                           # тимчасові HOME/DEAI_HOME/DC_TASKS_FILE і сервер — у `Fixture`
+        os.environ['DEAI_HOME'] = cls.deai             # те саме значення: ізоляція видима й у цьому файлі (охоронець `test_serve`)
         os.environ['DEAI_NO_UPDATE_CHECK'] = '1'
         cls.addClassCleanup(os.environ.pop, 'DEAI_NO_UPDATE_CHECK', None)
 

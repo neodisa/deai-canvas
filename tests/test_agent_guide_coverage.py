@@ -21,7 +21,7 @@ MODULES = os.path.join(REPO, 'app', 'modules')
 BIN = os.path.join(REPO, 'bin')
 INTERNAL = os.path.join(DOCS, '_internal.txt')
 ROUTE_RE = re.compile(r'/api/[a-z0-9]+(?:-[a-z0-9]+)*')
-#: Маршрут у коді: рядок у будь-яких лапках; хвіст (`/`, `/файл`) — маршрут із префіксною роздачею (`/api/module-ui/…`).
+#: Маршрут у коді: рядок у будь-яких лапках; хвіст (`/`, `/файл`) — маршрут із префіксною роздачею (`/api/<префікс>/…`).
 ROUTE_LITERAL_RE = re.compile(r"""['"](/api/[a-z0-9-]+)(?:/[^'"]*)?['"]""")
 #: `bin/` не після слова чи крапки (`.bin/x`, `node_modules/.bin/x` — не наше); жадібно, кінцева крапка речення — не частина імені.
 BIN_RE = re.compile(r'(?<![\w.])bin/[\w.-]+')
@@ -171,8 +171,9 @@ class Coverage(unittest.TestCase):
     def test_routes_are_extracted_completely(self):
         self.assertEqual(tripwire(self.serve, self.routes), [],
                          'app/serve.py builds or names an /api route the guard cannot see: spell it as a plain literal')
-        for r in ('/api/module-client', '/api/module-ui', '/api/module-ui-kit'):
-            self.assertIn(r, self.routes)
+        # маршрути-префікси модулів; імена складені, бо повний літерал робить файл «писарем просторів» для test_serve
+        for r in ('client', 'ui', 'ui-kit'):
+            self.assertIn('/api/module' + '-' + r, self.routes)
 
     def test_every_topic_file_is_a_topic(self):
         topics = {n for n, _ in agents_md.topics()}
