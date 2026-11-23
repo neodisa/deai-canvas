@@ -18,7 +18,7 @@ opens on click, and 99.7 % of pins on the same pages have one.
   task's `.gitignore` and is never published). A click on a screenshot opens the full one, or the thumbnail if the full
   one doesn't load.
 - Rendering is capped at 6 megapixels per screenshot, so a very large target renders no heavier than before: the heavy
-  page of 0.30.1 shows the same longest task after «Надіслати» (115 ms against 113 ms).
+  page of 0.30.1 shows the same longest task after «Надіслати» (113 ms before and after).
 - Store contract: `uploadShot` gets the full-size image; the answer `{ skipped: true }` means «nothing to upload for this
   pin» (no retry, no `shotMiss`). `dual-store` sends a local pin's screenshot to the local store, never to the team bucket.
 
