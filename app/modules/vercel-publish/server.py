@@ -974,8 +974,9 @@ def _cli_cleanup(npx, project, scope, current_urls, cwd):
         notes.append(f'Старі публікації прибрано не всі: не вдалося {failed} з {len(doomed)}'
                      + (' (вичерпано ліміт часу).' if timed_out else '.'))
     if kept:
-        notes.append(f'Лишено старих публікацій: {kept} з {len(doomed)} — на них ще вказує alias (Vercel такі не видаляє; '
-                     'перелік — `vercel alias ls`).')
+        # «unaliased» CLI пише і тоді, коли публікації вже нема (зникла між `list` і `remove`): причину не стверджуємо.
+        notes.append(f'Лишено старих публікацій: {kept} з {len(doomed)} — Vercel їх не видалив (ймовірно, на них ще вказує '
+                     'alias; перелік — `vercel alias ls`).')
     return ' '.join(notes) or None
 
 

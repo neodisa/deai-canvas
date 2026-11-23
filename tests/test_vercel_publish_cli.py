@@ -699,6 +699,23 @@ class Cleanup(CliBase):
         self.assertEqual(res['cleanup_warning'].count('Лишено старих публікацій: 2 з 2'), 1)   # і в stdout теж
         self.assertNotIn('не вдалося', res['cleanup_warning'])
 
+    def test_6ab_a_timeout_and_a_kept_deployment_in_one_run(self):
+        """Тайм-аут одного `remove` — збій, «unaliased» іншого (будь-яким регістром) — «лишено»: обидва рядки, і причина
+        «лишено» не стверджується (CLI пише те саме, коли публікація вже зникла)."""
+        self.ok_sc(list=page([entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)]))
+
+        def handler(argv, kw):
+            if argv[3] == 'remove' and argv[4] == host(2):
+                raise subprocess.TimeoutExpired(argv, 60)
+            if argv[3] == 'remove':
+                return subprocess.CompletedProcess(argv, 1, '', 'COULD NOT FIND UNALIASED DEPLOYMENTS or projects matching "x".')
+            return None
+        res = self.run_cli(spy=_SubSpy(handler))
+        w = res['cleanup_warning']
+        self.assertTrue(w.startswith('Старі публікації прибрано не всі: не вдалося 1 з 2.'), w)
+        self.assertIn('Лишено старих публікацій: 1 з 2 — Vercel їх не видалив (ймовірно', w)
+        self.assertLessEqual(len(w), 300)
+
     def test_6b_a_remove_that_cannot_run_counts_as_failed(self):
         self.ok_sc(list=page([entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)]))
 

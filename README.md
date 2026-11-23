@@ -342,8 +342,8 @@ a warning says so) and the team always comes from the setting, never from that s
 with its output. «Check» may take a while on the first run (a cold `npx` downloads the CLI): it is given up to 130 seconds. **Cleanup:** after a publish the 3 newest deployments of the project are kept (the current one
 among them) and the older ones are removed by address — only `*.vercel.app` deployments of that project, with `--safe`,
 never the project itself; each removal is approved by naming that address (`--confirm-name`), not with `--yes`, which the
-CLI ignores when it runs under an AI agent. A deployment that `--safe` keeps because an alias still points to it is reported
-on its own line, not as a failure (`vercel alias ls` lists such aliases). If the cleanup cannot finish, the publish still
+CLI ignores when it runs under an AI agent. A deployment that `--safe` keeps (most likely because an alias still points to
+it) is reported on its own line, not as a failure (`vercel alias ls` lists such aliases). If the cleanup cannot finish, the publish still
 succeeds and shows a warning. Limits: a publish that fails after `link` can leave an empty `pv-` project in your account
 (delete it in the Vercel dashboard); the cleanup reads up to 5 pages of the list and needs a CLI that has `list --json`,
 `remove --safe` and `remove --confirm-name` (checked with 66.6).
