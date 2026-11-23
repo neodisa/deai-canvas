@@ -10560,8 +10560,9 @@ def serve_main(port):
     try:
         if not (isolation.isolated() and isolation.real_home(spaces.home())):
             # AGENTS.md просторів: застарілий блок → поточний (лише блок; «Ваше» й CLAUDE.md цілі). Оновлення Deai перезапускає
-            # `serve`, тож «після оновлення» — цей самий крок. У фоні: повільна тека простору не затримує старт.
-            threading.Thread(target=agent_guide.refresh_spaces, args=(updater.current_version(UPDATER_ROOT),),
+            # `serve`, тож «після оновлення» — цей самий крок. У фоні: повільна тека простору не затримує старт. На старті простору запиту
+            # нема (`request_space_id()` — None); `_in_space` лишає файлове правило: кожен потік serve.py — через нього.
+            threading.Thread(target=_in_space(agent_guide.refresh_spaces), args=(updater.current_version(UPDATER_ROOT),),
                              name='agents-md-refresh', daemon=True).start()
     except Exception as e:  # noqa: BLE001 — крок не валить старт
         print('agents-md: крок пропущено (%s)' % type(e).__name__, file=sys.stderr)

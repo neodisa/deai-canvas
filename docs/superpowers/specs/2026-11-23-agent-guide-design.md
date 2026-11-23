@@ -69,6 +69,8 @@ Deai — AI-first: агент (Claude Code, Codex, інший) мусить ЗА
 - імʼя теми — імʼя файла без `.md`; файли з `_` на початку — не теми.
 - орієнтовний перелік (план уточнить): `tasks`, `iterations`, `pages`, `comments`, `publish`, `vcs`, `shots`, `modules`,
   `spaces`, `hooks` (heartbeat `claude-status`, `autosync`), `cli` (`state.py`, `pages.py`, `import_preview.py` тощо).
+  Відхилення (реалізація): окремої теми `cli` нема — інструменти `bin/` описані в темах, яким служать (`inbox.py` і `pin-where.mjs` → `comments`,
+  `pages.py` → `pages`, `state.py` → `tasks`, `import_preview.py` → `publish`, `shoot.mjs` → `flow`); решта — у `docs/agents/_internal.txt`; сторож покриття перевіряє кожен файл `bin/`.
 
 **Теми модулів** — необовʼязковий `app/modules/<id>/agent.md` у вбудованому модулі, той самий формат; тема `module-<id>`.
 Свої модулі простору (`<простір>/modules/<id>/agent.md`) у блок НЕ потрапляють ніколи (див. розділ 3).

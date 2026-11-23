@@ -104,8 +104,9 @@ the person asks for it — to `.claude/settings.json` of the space folder (merge
 replacing the file):
 
 ```json
-{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "curl -sfG --max-time 2 http://127.0.0.1:8765/api/agent-guide --data-urlencode \"path=$CLAUDE_PROJECT_DIR\" -d \"have=$(grep -o 'guide [0-9a-f]\\{8\\}' \"$CLAUDE_PROJECT_DIR/AGENTS.md\" 2>/dev/null | head -1 | cut -c7-)\" || true"}]}]}}
+{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "curl -sfG --max-time 2 http://127.0.0.1:8765/api/agent-guide --data-urlencode \"path=$CLAUDE_PROJECT_DIR\" -d \"have=$(grep -o '(guide [0-9a-f]\\{8\\})' \"$CLAUDE_PROJECT_DIR/AGENTS.md\" 2>/dev/null | head -1 | cut -c8-15)\" || true"}]}]}}
 ```
 
-Claude Code adds what the hook prints to the session's context; with the canvas stopped the hook prints nothing.
+Claude Code adds what the hook prints to the session's context; with the canvas stopped the hook prints nothing. The port is
+8765 unless the canvas runs on another one (then change it in the command).
 `$CLAUDE_PROJECT_DIR` is the folder the session started in, so the hook works from any working directory.
