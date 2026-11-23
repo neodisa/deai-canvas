@@ -113,6 +113,32 @@ class Topics(unittest.TestCase):
         _w(os.path.join(self.docs, 'flow.md'), '# Flow\nScreens and arrows.\n')
         self.assertTrue(agents_md.status(d, version='1.3.0')['outdated'])
 
+    def test_topic_summary_handles_crlf_and_short_text(self):
+        self.assertEqual(agents_md.topic_summary('# A\r\nsummary\r\nbody\r\n'), 'summary')
+        self.assertEqual(agents_md.topic_summary('# only'), '')
+
+    def test_topics_sort_by_name_not_file_name(self):
+        _w(os.path.join(self.docs, 'a.md'), '# A\nfirst\n')
+        _w(os.path.join(self.docs, 'a-b.md'), '# AB\nsecond\n')
+        self.assertEqual([n for n, _ in agents_md.topics()], ['a', 'a-b', 'comments', 'pages', 'module-zeta'])
+
+    def test_the_module_prefix_is_reserved_for_modules(self):
+        _w(os.path.join(self.docs, 'module-zeta.md'), '# Fake\nfake\n')
+        self.assertEqual([n for n, _ in agents_md.topics()].count('module-zeta'), 1)
+        self.assertEqual(agents_md.topic_text('module-zeta'), '# Zeta\nA module.\n')
+
+    def test_a_name_with_a_newline_is_not_a_topic(self):
+        _w(os.path.join(self.docs, 'bad\n.md'), '# Bad\nx\n')
+        self.assertNotIn('bad\n', [n for n, _ in agents_md.topics()])
+
+    def test_invalid_utf8_in_a_topic_does_not_break_the_block(self):
+        d = tempfile.mkdtemp(prefix='agent-guide-space-')
+        self.addCleanup(shutil.rmtree, d, True)
+        _w(os.path.join(d, 'AGENTS.md'), agents_md.render_block(version='1.2.0'))
+        _wb(os.path.join(self.docs, 'pages.md'), b'# Pages\nbad \xff byte\n')
+        self.assertRegex(agents_md.guide_of(agents_md.render_block(version='1.2.0')), r'^[0-9a-f]{8}$')
+        agents_md.status(d, version='1.3.0')
+
     def test_guide_of_without_a_label(self):
         for text in (None, '', '# no label\n', '(guide XYZ)'):
             with self.subTest(text=text):

@@ -33,21 +33,21 @@ def version_tuple(v):
 
 
 def _text_of(path):
-    with open(path, encoding='utf-8', newline='') as f:
+    with open(path, **_ENC) as f:
         return f.read()
 
 
 def topics():
     """`[(імʼя, шлях)]`: `docs/agents/<тема>.md` за абеткою (імʼя не за `TOPIC_RE`, зокрема з `_` на початку, — не тема), далі
-    `module-<id>` для кожного `app/modules/<id>/agent.md` за абеткою. Теки нема — порожньо."""
+    `module-<id>` для кожного `app/modules/<id>/agent.md` за абеткою. Теки нема — порожньо. Префікс `module-` зарезервовано
+    за модулями: файл `docs/agents/module-*.md` — не тема."""
     out = []
     try:
-        names = sorted(os.listdir(DOCS))
+        names = os.listdir(DOCS)
     except OSError:
         names = []
-    for fn in names:
-        stem = fn[:-3]
-        if fn.endswith('.md') and TOPIC_RE.match(stem) and os.path.isfile(os.path.join(DOCS, fn)):
+    for stem, fn in sorted((fn[:-3], fn) for fn in names if fn.endswith('.md')):
+        if TOPIC_RE.fullmatch(stem) and not stem.startswith('module-') and os.path.isfile(os.path.join(DOCS, fn)):
             out.append((stem, os.path.join(DOCS, fn)))
     try:
         mods = sorted(os.listdir(MODULES))
@@ -55,7 +55,7 @@ def topics():
         mods = []
     for mid in mods:
         p = os.path.join(MODULES, mid, 'agent.md')
-        if TOPIC_RE.match(mid) and os.path.isfile(p):
+        if TOPIC_RE.fullmatch(mid) and os.path.isfile(p):
             out.append((f'module-{mid}', p))
     return out
 
