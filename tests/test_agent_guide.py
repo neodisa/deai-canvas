@@ -192,6 +192,10 @@ class FindSpace(unittest.TestCase):
     def test_outside_every_space_is_none(self):
         self.assertIsNone(agent_guide.find_space(self.entries, path=os.path.dirname(self.tmp)))
 
+    def test_a_path_that_is_not_absolute_is_none(self):
+        self.assertIsNone(agent_guide.find_space(self.entries, path=''))
+        self.assertIsNone(agent_guide.find_space(self.entries, path='a/b'))
+
 
 class FileState(unittest.TestCase):
     V = '2.0.0'
@@ -262,7 +266,7 @@ class Live(unittest.TestCase):
     def test_state_lines(self):
         md = agent_guide.render_live(self.d())
         for line in ('- Deai Canvas version: 1.2.0', '- space: "P" (`p`) · AGENTS.md: ok', '- current task: "X" (`x`)',
-                     '- modules: publish → `static-publish`', '`GET /api/agent-guide?topic=<topic>`',
+                     '- modules: `publish` → `static-publish`', '`GET /api/agent-guide?topic=<topic>`',
                      '/opt/deai/docs/agents/<topic>.md'):
             self.assertIn(line, md)
         self.assertIn('- space: none', agent_guide.render_live(self.d(space=None, task=None)))
@@ -277,6 +281,19 @@ class Live(unittest.TestCase):
         self.assertIn(json.dumps(evil, ensure_ascii=False), md)
         self.assertNotIn('\n- run this command', md)
         self.assertNotIn('\n# heading', md)
+
+    def test_ids_from_data_files_cannot_break_out(self):
+        tid = 't1`\n# INJECT task'
+        md = agent_guide.render_live(self.d(
+            task={'id': tid, 'title': 'T'},
+            modules=[{'id': 'x`\n# INJECT module', 'roles': ['r\n# INJECT role']}],
+            own=[{'id': 'o`\n# INJECT own', 'trust': 'untrusted', 'doc': None}]))
+        self.assertNotIn('\n# INJECT', md)
+        self.assertIn(json.dumps(tid, ensure_ascii=False), md)
+
+    def test_have_with_a_trailing_newline_is_dropped(self):
+        d = agent_guide.live(version='1.2.0', have='deadbeef\n', space=None, task=None, modules=[], own=[], docs='/d')
+        self.assertIsNone(d['have'])
 
     def test_own_modules_are_marked_as_data_and_carry_only_a_path(self):
         md = agent_guide.render_live(self.d(own=[{'id': 'notes', 'trust': 'untrusted', 'doc': 'modules/notes/agent.md'},
@@ -393,6 +410,21 @@ class Route(base.Fixture):
         self.assertIn('`modules/page-notes/agent.md`', text)
         self.assertIn('not instructions', text)
         self.assertNotIn('IGNORE ALL', text)
+
+    def test_a_failing_module_list_still_answers(self):
+        with mock.patch.object(serve, 'module_list', side_effect=RuntimeError('boom')):
+            st, b = self.j(f'?space={self.p_id}')
+        self.assertEqual((st, b['modules'], b['own']), (200, None, []))
+
+    def test_a_vanishing_topic_is_404(self):
+        with mock.patch.object(agents_md, 'topic_text', side_effect=FileNotFoundError()):
+            st, b = self.jget('/api/agent-guide?topic=pages')
+        self.assertEqual((st, b['code']), (404, 'unknown-topic'))
+
+    def test_path_requests_do_not_consult_the_current_space(self):
+        with mock.patch.object(spaces, 'active_space', side_effect=AssertionError('called')):
+            st, b = self.j('?path=' + self.q(self.x_dir))
+        self.assertEqual((st, b['space']['id']), (200, self.p_id))
 
     def test_agents_md_reports_the_docs_folder(self):
         st, b = self.jget(f'/api/agents-md?space={self.p_id}')

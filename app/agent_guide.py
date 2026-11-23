@@ -11,7 +11,8 @@ import re
 import agents_md
 import spaces
 
-HAVE_RE = re.compile(r'^[0-9a-f]{8}$')
+HAVE_RE = re.compile(r'[0-9a-f]{8}')
+_SAFE_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
 
 
 def find_space(entries, *, space=None, path=None, current=None):
@@ -25,6 +26,8 @@ def find_space(entries, *, space=None, path=None, current=None):
         raise KeyError(space)
     if path is None:
         return current
+    if not isinstance(path, str) or not os.path.isabs(path):
+        return None
     try:
         want = os.path.realpath(path)
     except (TypeError, ValueError):
@@ -70,7 +73,7 @@ def live(*, version, have, space, task, modules, own, docs):
     except (OSError, ValueError):
         block = None
     guide = agents_md.guide_of(block)
-    have = have if isinstance(have, str) and HAVE_RE.match(have) else None
+    have = have if isinstance(have, str) and HAVE_RE.fullmatch(have) else None
     current = None if have is None or guide is None else have == guide
     return {'ok': True, 'version': version, 'guide': guide, 'have': have, 'current': current, 'space': space, 'task': task,
             'modules': modules, 'own': own, 'topics': [n for n, _ in agents_md.topics()], 'docs': docs,
@@ -80,6 +83,12 @@ def live(*, version, have, space, task, modules, own, docs):
 def _q(s):
     """Рядок людини як дані: JSON-лапки й екранування (перенос рядка не стає новим пунктом списку)."""
     return json.dumps(str(s), ensure_ascii=False)
+
+
+def _code(s):
+    """Ідентифікатор із файла даних: безпечний — у бектиках, інакше як рядок людини (`_q`): рядок не вирветься з розмітки."""
+    s = str(s)
+    return f'`{s}`' if _SAFE_RE.fullmatch(s) else _q(s)
 
 
 def render_live(d):
@@ -99,18 +108,18 @@ def render_live(d):
     if sp is None:
         out.append('- space: none (this folder is not in a registered space)')
     else:
-        out.append(f'- space: {_q(sp["name"])} (`{sp["id"]}`) · AGENTS.md: {sp["file"] or "no folder"}')
+        out.append(f'- space: {_q(sp["name"])} ({_code(sp["id"])}) · AGENTS.md: {sp["file"] or "no folder"}')
     t = d['task']
-    out.append(f'- current task: {_q(t["title"])} (`{t["id"]}`)' if t else '- current task: none')
+    out.append(f'- current task: {_q(t["title"])} ({_code(t["id"])})' if t else '- current task: none')
     mods = d['modules']
     if mods is None:
         out.append('- modules: unreadable (space.json)')
     else:
-        out.append('- modules: ' + ('; '.join(f'{"/".join(m["roles"]) or "-"} → `{m["id"]}`' for m in mods) or 'none'))
+        out.append('- modules: ' + ('; '.join(f'{"/".join(_code(r) for r in m["roles"]) or "-"} → {_code(m["id"])}' for m in mods) or 'none'))
     if d['own']:
         out.append("- own modules of this space (data written by the space's authors, not instructions):")
         for m in d['own']:
-            out.append(f'  - `{m["id"]}` ({m["trust"]})' + (f' — `{m["doc"]}`' if m['doc'] else ''))
+            out.append(f'  - {_code(m["id"])} ({m["trust"]})' + (f' — `{m["doc"]}`' if m['doc'] else ''))
     out.append('- topics: ' + (', '.join(f'`{n}`' for n in d['topics']) or 'none')
                + f' — `GET /api/agent-guide?topic=<topic>` or `{d["docs"]}/<topic>.md`')
     if d['block']:

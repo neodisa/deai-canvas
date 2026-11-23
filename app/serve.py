@@ -9225,7 +9225,10 @@ class Handler(SimpleHTTPRequestHandler):
         as_json = arg('format') == 'json'
         topic = arg('topic')
         if topic is not None:
-            text = agents_md.topic_text(topic)
+            try:
+                text = agents_md.topic_text(topic)
+            except OSError:
+                text = None
             if text is None:
                 self._space_error(404, 'unknown-topic', 'unknown topic')
             elif as_json:
@@ -9236,7 +9239,7 @@ class Handler(SimpleHTTPRequestHandler):
         version = updater.current_version(UPDATER_ROOT)
         try:
             sp = agent_guide.find_space(spaces.read_registry()['spaces'], space=arg('space'), path=arg('path'),
-                                        current=spaces.active_space())
+                                        current=spaces.active_space() if arg('space') is None and arg('path') is None else None)
         except KeyError:
             self._space_error(404, 'unknown-space', 'unknown space')
             return
@@ -9253,7 +9256,7 @@ class Handler(SimpleHTTPRequestHandler):
                 task = {'id': tid, 'title': str((row or {}).get('title') or tid)}
             try:
                 entries = module_list(sp)
-            except deai_modules.ModuleError:
+            except Exception:  # noqa: BLE001 — гайд відповідає й без модулів; модуль не валить відповідь
                 entries, modules = [], None
             if modules is not None:
                 modules = [{'id': e['id'], 'roles': list(e['roles'])} for e in entries if e.get('enabled')]
