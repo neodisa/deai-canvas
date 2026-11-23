@@ -148,7 +148,7 @@ test("задача без теки: причина і мітка на картц
      причиною, а не мовчанням. */
   await card.click({ force: true });
   await page.waitForSelector("#cv-toast.show");
-  assert.match(await page.textContent("#cv-toast"), /LIGA-7021.*теки немає на цій машині/);
+  assert.match(await page.textContent("#cv-toast"), /Привид без теки.*теки немає на цій машині/);
   assert.equal(await cur(url), "fixture", "задача без теки стала поточною");
   assert.equal(await homeShown(page), true, "екран закрився після відмови");
 
