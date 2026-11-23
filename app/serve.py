@@ -2932,11 +2932,17 @@ def task_iteration_trash(task):
     """Кошик ітерацій для `/api/task` (`iteration_trash`, розділ «Видалені»): найсвіжіше першим, з тим самим `label_text`, що в
     переліку. Будь-який збій читання → `[]`: екран задачі не сміє впасти через кошик."""
     try:
-        return [{'trash': x['trash'], 'id': x['entry']['id'], 'label_text': iteration_label(x['entry']),
-                 'deleted_at': x['deleted_at'], 'expires_at': x['expires_at']}
-                for x in iter_trash.list_slots(task['dir'], iter_trash.utcnow())]
+        slots = iter_trash.list_slots(task['dir'], iter_trash.utcnow())
     except Exception:
         return []
+    rows = []
+    for x in slots:
+        try:        # битий запис пропускаємо сам, решта переліку лишається
+            rows.append({'trash': x['trash'], 'id': x['entry']['id'], 'label_text': iteration_label(x['entry']),
+                         'deleted_at': x['deleted_at'], 'expires_at': x['expires_at']})
+        except Exception:
+            continue
+    return rows
 
 
 def comment_channel(task, tid, internal=False):

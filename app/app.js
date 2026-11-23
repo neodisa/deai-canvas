@@ -232,6 +232,11 @@ let iterUi = { menu: null, ren: null, del: null };
 /* Розділ «Видалені» дропдауна ітерації розгорнутий? Окремо від `iterUi`: меню «⋯», поле назви й питання про видалення його не
    згортають. Живе лише поки дропдаун ітерації відкритий — скидає `paintBar`. */
 let iterGone = false;
+/** Розгорнутий розділ «Видалені» — у видиму частину дропдауна (`.dd` прокручується; довгий перелік ховав би його під краєм). */
+function revealGone() {
+  if (!iterGone) return;
+  (bar.querySelector('.it-gone-list .it-gone:last-child') || bar.querySelector('.it-gone-h'))?.scrollIntoView({ block: 'nearest' });
+}
 const IT_NONE = { menu: null, ren: null, del: null };
 /* Відкритий екран «Задачі» (вхід — логотип у смузі). Прапорець ділять смуга
    (`barState().homeOpen` міняє її склад) і сам екран (`enterHome`/`leaveHome`
@@ -1555,7 +1560,10 @@ async function restoreIteration(slot, label, taskId) {
     });
     if (!taskId || taskId === currentTaskId) { picked = r.id; await render(); }
     if (r.renamed) toast(t('iterRestoredAs', r.iteration?.label_text || t('iterTag', itNum(r.id))));
-  } catch (e) { toast(t('iterRestoreFailed', label)); }
+  } catch (e) {
+    toast(t('iterRestoreFailed', label));
+    if (!taskId || taskId === currentTaskId) await render();   // слот, прибраний чи повернутий деінде, зникає з переліку
+  }
 }
 
 /**
@@ -3212,6 +3220,7 @@ const BAR_ACTIONS = {
     openDd = 'iter';
     iterGone = true;
     paintBar();
+    revealGone();
     bar.querySelector('.it-gone-h')?.focus({ preventScroll: true });
   },
   itmodact: (v) => {
@@ -3859,7 +3868,7 @@ bar.addEventListener('click', (ev) => {
   if (act === 'newit') { createIteration(picked); return; }
   if (act === 'itdup') { createIteration(el.dataset.val); return; }
   /* «Видалені»: розгорнути/згорнути, дропдаун лишається відкритим. */
-  if (act === 'itgone') { iterGone = !iterGone; paintBar(); bar.querySelector('.it-gone-h')?.focus({ preventScroll: true }); return; }
+  if (act === 'itgone') { iterGone = !iterGone; paintBar(); revealGone(); bar.querySelector('.it-gone-h')?.focus({ preventScroll: true }); return; }
   const hadOpenDd = !!openDd;
   /* Рядок дропдауна просторів — фокус після закриття вернемо на фішку (див. нижче). */
   const fromSpaces = openDd === 'space' && !!el.closest('.dd--spaces');
