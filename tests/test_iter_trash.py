@@ -186,5 +186,58 @@ class Boundaries(unittest.TestCase):
         self.assertEqual(c.exception.code, 'not-in-trash')
 
 
+class ListSlots(unittest.TestCase):
+    """Перелік кошика для інтерфейсу («Видалені»): найсвіжіше першим, нічого не пише, пропускає сміття й прострочене."""
+
+    def setUp(self):
+        self.d = _task(['it1', 'it2', 'it3', 'it4'])
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def test_newest_first_with_times(self):
+        a = tr.move_to_trash(self.d, {'id': 'it2', 'note': 'Друга'}, T0)
+        b = tr.move_to_trash(self.d, {'id': 'it3'}, T0 + datetime.timedelta(hours=2))
+        got = tr.list_slots(self.d, T0 + datetime.timedelta(hours=3))
+        self.assertEqual([x['trash'] for x in got], [b, a])
+        self.assertEqual(got[1]['entry'], {'id': 'it2', 'note': 'Друга'})
+        self.assertEqual((got[1]['deleted_at'], got[1]['expires_at']), ('2026-11-23T10:00:00Z', '2026-11-30T10:00:00Z'))
+
+    def test_same_second_suffix_is_newer(self):
+        a = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        os.makedirs(os.path.join(self.d, 'iterations', 'it2'))
+        b = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        self.assertEqual([x['trash'] for x in tr.list_slots(self.d, T0)], [b, a])
+
+    def test_skips_junk_and_expired(self):
+        ok = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        root = os.path.join(self.d, '.trash', 'iterations')
+        os.makedirs(os.path.join(root, 'not a slot'))                             # чуже імʼя
+        os.makedirs(os.path.join(root, 'it5--20261123-090000'))                   # без entry.json (залишок restore_finish)
+        os.makedirs(os.path.join(root, 'it6--20261123-090000'))
+        with open(os.path.join(root, 'it6--20261123-090000', 'entry.json'), 'w', encoding='utf-8') as f:
+            f.write('{не json')                                                  # битий
+        os.makedirs(os.path.join(root, 'it7--20261123-090000'))
+        with open(os.path.join(root, 'it7--20261123-090000', 'entry.json'), 'w', encoding='utf-8') as f:
+            json.dump(['entry'], f)                                               # не тієї форми
+        os.makedirs(os.path.join(root, 'it8--20261123-090000'))
+        with open(os.path.join(root, 'it8--20261123-090000', 'entry.json'), 'w', encoding='utf-8') as f:
+            json.dump({'entry': {'id': '..'}}, f)                                 # небезпечний id
+        tr.move_to_trash(self.d, {'id': 'it3'}, T0 - datetime.timedelta(days=8))  # прострочений
+        self.assertEqual([x['trash'] for x in tr.list_slots(self.d, T0)], [ok])
+
+    def test_seven_day_boundary_matches_purge(self):
+        s = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+        edge = T0 + datetime.timedelta(days=tr.KEEP_DAYS)
+        self.assertEqual([x['trash'] for x in tr.list_slots(self.d, edge)], [s])   # рівно 7 діб — ще є (як у purge)
+        self.assertEqual(tr.list_slots(self.d, edge + datetime.timedelta(seconds=1)), [])
+
+    def test_no_trash_is_empty_and_listing_writes_nothing(self):
+        self.assertEqual(tr.list_slots(self.d, T0), [])
+        self.assertFalse(os.path.exists(os.path.join(self.d, '.trash')))
+        tr.move_to_trash(self.d, {'id': 'it2'}, T0 - datetime.timedelta(days=9))
+        before = sorted(os.listdir(os.path.join(self.d, '.trash', 'iterations')))
+        tr.list_slots(self.d, T0)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.d, '.trash', 'iterations'))), before)  # не прибирає
+
+
 if __name__ == '__main__':
     unittest.main()
