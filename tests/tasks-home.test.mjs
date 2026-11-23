@@ -80,8 +80,13 @@ test("статус «Активні» ховає виконані, «Завер�
 
 test("картка «Моїх»: ключ, назва без ключа, мета, бейджі, кадр, превʼю", () => {
   const h = cardHTML(A, UI(), "other");
-  assert.match(h, /<span class="th-key">LIGA-7019<\/span>/);
+  assert.doesNotMatch(h, /class="th-key"/, "фаза И: без пошуку ключа на картці немає");
+  assert.match(h, /<div class="th-krow"><\/div>/, "рядок над назвою стоїть завжди (вирівнювання)");
   assert.match(h, /class="th-ttl">Очікування оновлення даних із ЄДР</, "ключ у назві не дублюється");
+  const hq = cardHTML(A, UI({ q: "7019" }), "other");
+  assert.match(hq, /<span class="th-key">LIGA-<mark>7019<\/mark><\/span>/, "пошук збігся лише з ключем — ключ видно");
+  const ht = cardHTML(A, UI({ q: "очікування" }), "other");
+  assert.doesNotMatch(ht, /class="th-key"/, "збіг по назві — ключ зайвий");
   assert.match(h, /liga360|LIGA360/);
   assert.match(h, /Іт\. 3 · 5 стор\. · 3 год тому/);
   assert.match(h, /th-bdg--ind">В роботі</);
@@ -94,7 +99,7 @@ test("картка «Моїх»: ключ, назва без ключа, мет�
 test("картка без Jira-статусу й без коментарів не малює порожніх бейджів", () => {
   const h = cardHTML(M({ id: "boss-interface", title: "boss-interface", comments: 0 }), UI(), "x2");
   assert.doesNotMatch(h, /th-bdg/);
-  assert.match(h, /<span class="th-key">boss-interface<\/span>/);
+  assert.doesNotMatch(h, /class="th-key"/, "фаза И: ідентифікатора на картці немає");
   assert.match(h, /без ітерацій/);
   const nul = cardHTML(M({ id: "a", comments: null }), UI(), "z");
   assert.doesNotMatch(nul, /th-bdg--com/, "null = «невідомо», а не нуль коментарів");
@@ -111,7 +116,8 @@ test("кадру нема → камера й «немає кадру»; заг�
 test("поточна задача: клас th-card--cur і «відкрита зараз»", () => {
   const h = cardHTML(A, UI(), "edr");
   assert.match(h, /class="th-card th-card--cur"/);
-  assert.match(h, /· відкрита зараз/);
+  assert.match(h, /<span class="th-curb">відкрита зараз<\/span>/, "фаза И: без ключа немає й «· »");
+  assert.match(cardHTML(A, UI({ q: "7019" }), "edr"), /<\/span><span class="th-curb">· відкрита зараз/, "ключ видно — крапка-роздільник");
 });
 
 test("задача без теки: бейдж «теки немає…», aria-disabled, картка все одно data-th=open", () => {
@@ -211,10 +217,10 @@ test("рядок картки «Моїх»: мітки через «, »; без
 });
 
 test("Д: кнопки «Мітки» на картці нема ні на «Моїх», ні на «Команді» (мітки — в меню «⋯»), а «⋯» є лише на «Моїх»", () => {
-  const mine = cardHTML(M({ id: "a<b", jira: "LIGA-1", tags: ["x"] }), UI(), "z");
+  const mine = cardHTML(M({ id: "a<b", title: "a<b", jira: "LIGA-1", tags: ["x"] }), UI(), "z");
   assert.doesNotMatch(mine, /data-th="tags"/);
-  assert.match(mine, /<button class="th-more" data-th="menu" data-id="a&lt;b"[^>]*aria-label="Дії задачі LIGA-1"/,
-    "«⋯» на кожній картці відрізняє підпис із ключем задачі");
+  assert.match(mine, /<button class="th-more" data-th="menu" data-id="a&lt;b"[^>]*aria-label="Дії задачі a&lt;b"/,
+    "фаза И: підпис «⋯» — назва задачі, а не ключ");
   const team = cardHTML(R({ id: "r", mine: true }), UI({ tab: "team" }), "z");
   assert.doesNotMatch(team, /data-th="tags"|th-more/);
   assert.doesNotMatch(cardHTML(R({ id: "r" }), UI({ tab: "team" }), "z"), /data-th="tags"|th-more/);
@@ -357,7 +363,7 @@ test("підсвітка збігів екранована: теги з назв
 test("поле пошуку: значення екроване, плейсхолдер залежить від вкладки", () => {
   const h = homeHTML(UI({ q: '"><script>' }), DATA);
   assert.doesNotMatch(h, /<script>/);
-  assert.match(h, /id="th-q"[^>]*placeholder="Номер, назва, статус…"/);
+  assert.match(h, /id="th-q"[^>]*placeholder="Назва, номер, статус…"/);
   assert.match(homeHTML(UI({ tab: "team", sort: "changed" }), DATA), /placeholder="Номер, назва, дизайнер…"/);
 });
 
@@ -547,7 +553,7 @@ test("збережена вкладка `team` при `team: null` малюєт�
   const h = homeHTML(ui, D_OFF({ mine: [A, B] }));
   assert.match(h, /aria-selected="true" data-th="tab" data-v="mine"/);
   assert.equal(cards(h), 2, "картки «Моїх» мусять бути видні");
-  assert.match(h, /placeholder="Номер, назва, статус…"/, "плейсхолдер вкладки «Мої»");
+  assert.match(h, /placeholder="Назва, номер, статус…"/, "плейсхолдер вкладки «Мої»");
   assert.doesNotMatch(h, /Відкрити в канвасі/, "картка команди просочилась");
   assert.equal(effectiveTab(ui, D_OFF()), "mine");
   // і нижня частина, що перемальовується окремо, читає вкладку так само
@@ -738,13 +744,13 @@ test("Д: ключі словника етапу Д є в обох мовах, �
 test("Д: картка в режимі перейменування не відкривається (клік у #th-ren не спливає в «open»), має імʼя групи", () => {
   const c = cardHTML(A, ui0({ edit: { ...EDIT0, ren: "edr" } }), "edr");
   assert.ok(!c.includes('data-th="open"'));
-  assert.match(c, /role="group" aria-label="LIGA-7019 — Очікування/);
+  assert.match(c, /role="group" aria-label="Очікування/);
 });
 
 test("Д: картка з питанням і картка кошика мають доступне імʼя; назва в питанні екранується", () => {
   const ask = { ...EDIT0, ask: { id: "e", kind: "del", claude: false } };
   const c = cardHTML(M({ id: "e", title: '<img src=x onerror=1>' }), ui0({ edit: ask }), "z");
-  assert.match(c, /role="group" aria-label="[^"]* — &lt;img/);
+  assert.match(c, /role="group" aria-label="&lt;img/);
   assert.ok(!c.includes("<img src=x"));
   const T = { id: "old", title: "Стара", jira: null, tags: [], at: "2026-10-09T09:00:00Z", thumb: null };
   assert.match(trashCardHTML(T, ui0()), /role="group" aria-label="old — Стара"/);

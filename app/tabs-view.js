@@ -21,11 +21,13 @@ function tabHTML(x) {
     : "";
   const news = x.news
     ? `<span class="tab-news" role="img" aria-label="${esc(t("tabNews", x.news))}">${x.news > 99 ? "99+" : x.news}</span>` : "";
-  const tip = esc(t("tabTitle", x.id, x.title));
+  /* Фаза И (Р1): вкладка — назва задачі; ідентифікатор внутрішній, ключ Jira лише в підказці. Клас `tab-id` лишено. */
+  const name = x.title || x.id;
+  const tip = esc(t("tabTitle", name, x.jira || ""));
   return `<div class="tab${x.active ? " tab--on" : ""}">`
     + `<button class="tab-main" data-act="tab" data-val="${esc(x.id)}" title="${tip}"${cur(x.active)}>`
-    + `${dot}<span class="tab-id">${esc(x.id)}</span>${claude}${news}</button>`
-    + `<button class="tab-x" data-act="tabclose" data-val="${esc(x.id)}" aria-label="${esc(t("tabClose", x.id))}">`
+    + `${dot}<span class="tab-id">${esc(name)}</span>${claude}${news}</button>`
+    + `<button class="tab-x" data-act="tabclose" data-val="${esc(x.id)}" aria-label="${esc(t("tabClose", name))}">`
     + `${ico("x", 12)}</button></div>`;
 }
 

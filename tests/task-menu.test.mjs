@@ -50,3 +50,12 @@ test("дії модулів: перед «Видалити», роздільни
   assert.ok(h.indexOf('data-th="tags"') < h.indexOf('data-th="modact"') && h.indexOf('data-th="modact"') < h.indexOf('data-th="delete"'));
   assert.equal(taskMenuHTML({ id: "t1" }, { trash: true, actions }), taskMenuHTML({ id: "t1" }, { trash: true }));
 });
+
+test("фаза И: меню в смузі (inBar) без «Видалити», aria — назва задачі", () => {
+  setLang("uk");
+  const x = { id: "landing-week", title: "Лендінг тижня", jira: "", published: "https://example.com/p" };
+  const items = taskMenuItems(x, { inBar: true });
+  assert.ok(!items.some((i) => i !== "sep" && i.th === "delete"));
+  assert.notEqual(items[items.length - 1], "sep");
+  assert.match(taskMenuHTML(x), /aria-label="Дії задачі Лендінг тижня"/);
+});

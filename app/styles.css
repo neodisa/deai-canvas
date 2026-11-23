@@ -1593,6 +1593,8 @@ body.home-open .cv-notice{display:none!important}
 .th-cbody{padding:10px 12px 12px;display:flex;flex-direction:column;gap:4px;min-height:96px}
 .th-krow{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
 .th-curb{color:var(--sel-text);font-weight:500}
+/* Фаза И: рядок над назвою стоїть завжди (часто порожній) — назви сусідніх карток на одній лінії. */
+.th-krow{min-height:16px}
 .th-ttl{font-weight:500;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;
   -webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .th-meta{font-size:12px;color:var(--dim)}
