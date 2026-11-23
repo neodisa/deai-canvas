@@ -54,7 +54,8 @@ The designer pins comments on the mockup. Read the open ones and resolve them:
 reason is required: it is what the designer reads.
 
 People's replies under a pin are part of the task: read them with the comment. When the meaning of a comment is
-ambiguous, ask in its thread with `reply` instead of guessing; a reply on a team pin is visible to colleagues.
+ambiguous, ask in its thread with `reply` instead of guessing; a reply on a team pin is visible to colleagues. Write
+`--text="..."` when the text starts with a dash.
 
 ## Modules
 

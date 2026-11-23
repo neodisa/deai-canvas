@@ -774,11 +774,11 @@ class AgentPinUnitTest(unittest.TestCase):
         self.assertEqual(len(row['replies'][0]['text']), 4000)
 
     def test_shot_miss_passes_in_meta_as_one_clean_word_and_junk_is_dropped(self):
-        for given, want in (('too-big', 'too-big'), ('no-lib', 'no-lib'), ('ti\x1bme\nout', 'time out'), ('x' * 100, 'x' * 40)):
+        for given, want in (('too-big', 'too-big'), ('no-lib', 'no-lib'), ('ti\x1bme\nout', 'time out'), ('x' * 40, 'x' * 40)):
             with self.subTest(given=given):
                 row = serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': given}))
                 self.assertEqual(row['meta']['shotMiss'], want)
-        for junk in (None, 5, ['render'], {'a': 1}, '', '\x1b'):
+        for junk in (None, 5, ['render'], {'a': 1}, '', '\x1b', 'x' * 41, 'x' * 100):          # довший за 40 — не код: відкинуто, а не обрізано
             with self.subTest(junk=junk):
                 self.assertNotIn('shotMiss', serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': junk}))['meta'])
 
@@ -1526,13 +1526,13 @@ class CommentNewsRouteTest(ServerEnv):
         self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'Новий'), cl('c0ffee02-bbbb', 'Старе', status='resolved')])
         st, raw = self.news()
         self.assertEqual(st, 200, raw)
-        self.assertEqual(json.loads(raw), {'supported': True, 'items': [
+        self.assertEqual(json.loads(raw), {'supported': True, 'team': True, 'items': [
             {'id': 'c0ffee01-aaaa', 'ts': '19.10.2026 10:00', 'author': 'Олена', 'status': 'open', 'version': '2/me--welcome'}]})
         self.assertNotIn('AAAA', raw)
 
     def test_a_space_without_a_provider_is_unsupported_not_an_error(self):
         st, raw = self.news()
-        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'items': []}))
+        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'team': False, 'items': []}))
 
     def test_an_unknown_task_is_404_and_a_bad_name_is_400(self):
         self.enable_memo_in(self.plain)
@@ -1543,7 +1543,7 @@ class CommentNewsRouteTest(ServerEnv):
     def test_a_module_without_recent_is_unsupported(self):
         self.answer(self.plain, [])
         st, raw = self.news()
-        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'items': []}), 'модуль `answer` не має `recent`')
+        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'team': False, 'items': []}), 'модуль `answer` не має `recent`')
 
     # --- 0.34: відповіді агента на відкриті локальні піни ---
     def lpin(self, pid, status='open', replies=None, version='3/p', **kw):
@@ -1563,7 +1563,7 @@ class CommentNewsRouteTest(ServerEnv):
             self.lpin('33333333-cccc')])
         st, raw = self.news()
         self.assertEqual(st, 200, raw)
-        self.assertEqual(json.loads(raw), {'supported': True, 'items': [
+        self.assertEqual(json.loads(raw), {'supported': True, 'team': False, 'items': [
             {'id': 'r-ai', 'ts': '19.10.2026 11:00', 'author': 'AI', 'status': 'open', 'version': '3/p', 'parent': '11111111-aaaa'}]})
 
     def test_the_local_replies_are_appended_to_the_module_items(self):
@@ -1578,9 +1578,9 @@ class CommentNewsRouteTest(ServerEnv):
 
     def test_a_local_file_alone_makes_the_answer_supported_but_a_module_without_recent_and_no_file_does_not(self):
         self.answer(self.plain, [])
-        self.assertEqual(json.loads(self.news()[1]), {'supported': False, 'items': []})
+        self.assertEqual(json.loads(self.news()[1]), {'supported': False, 'team': False, 'items': []})
         self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa')])
-        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'items': []})
+        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'team': False, 'items': []})
         self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
             {'id': 'r-ai', 'author': 'AI', 'text': 'q', 'ts': '19.10.2026 11:00', 'agent': True}])])
         self.assertEqual([c['id'] for c in json.loads(self.news()[1])['items']], ['r-ai'], 'модуль без `recent` + локальний файл — локальні новини')
@@ -1595,9 +1595,43 @@ class CommentNewsRouteTest(ServerEnv):
 
     def test_an_unreadable_local_file_is_no_source(self):
         tcr._write(os.path.join(self.plain['path'], 'px', '.dc-local-comments.json'), '{broken')
-        self.assertEqual(json.loads(self.news()[1]), {'supported': False, 'items': []})
+        self.assertEqual(json.loads(self.news()[1]), {'supported': False, 'team': False, 'items': []})
         tcr._write(os.path.join(self.plain['path'], 'px', '.dc-local-comments.json'), '{"not": "a list"}')
-        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'items': []})
+        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'team': False, 'items': []})
+
+    def test_team_is_true_only_when_the_module_recent_was_consulted_without_error(self):
+        """`team` каже вкладці, чи є «команда жива» (право писати ГОЛОВНИЙ маркер «бачив»)."""
+        self.answer(self.plain, [])
+        self.assertIs(json.loads(self.news()[1])['team'], False, 'модуль без `recent`')
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa')])
+        self.assertIs(json.loads(self.news()[1])['team'], False, 'модуль без `recent` + локальний файл')
+        self.mkcm('replier', server=REPLY_SERVER, settings=[])
+        dm.write_module_state(self.plain, 'answer', enabled=False)
+        dm.write_module_state(self.plain, 'replier', enabled=True, settings={})
+        tcr._write(os.path.join(self.plain['path'], 'news.json'), '[]')
+        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'team': True, 'items': []}, '`recent` відповів порожнім списком — команда жива')
+        tcr._write(os.path.join(self.plain['path'], 'news.json'), '{"not": "a list"}')
+        got = json.loads(self.news()[1])
+        self.assertEqual((got['supported'], got['team'], got['items']), (True, False, []))
+        self.assertIn('error', got, '`recent` кинув помилку — команда не опитана')
+
+    def test_team_is_false_without_a_module_and_with_a_broken_one(self):
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': 'r-ai', 'author': 'AI', 'ts': 't', 'agent': True}])])
+        got = json.loads(self.news()[1])
+        self.assertEqual((got['supported'], got['team']), (True, False), 'нема модуля')
+        self.break_module(self.plain)
+        got = json.loads(self.news()[1])
+        self.assertEqual((got['supported'], got['team'], [c['id'] for c in got['items']]), (True, False, ['r-ai']), 'зламаний модуль')
+
+    def test_the_merged_list_is_capped_at_max_news(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [cl(f'c0ffee{i:03d}-aaaa', 'x') for i in range(serve.MAX_NEWS)])
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': f'r{i}', 'author': 'AI', 'ts': 't', 'agent': True} for i in range(50)])])
+        items = json.loads(self.news()[1])['items']
+        self.assertEqual(len(items), serve.MAX_NEWS)
+        self.assertTrue(all(c['id'].startswith('c0ffee') for c in items), 'модульні — першими, надлишок локальних відсікається')
 
     def test_the_local_news_are_capped(self):
         self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[

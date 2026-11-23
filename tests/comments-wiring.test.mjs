@@ -193,25 +193,25 @@ function pollHarness({ tabs, current = "T0", space = "s1", visible = true, repli
   const f = new Function(...names, "TABS_KEY", "writeTabs", "localStorage", "let newsBusy = false, newsAgain = false, newsSetKey = null, newsLastAt = 0, newsSoonTimer = null;\nconst NEWS_SOON_MS = 1500;\n"
     + `async function pollTabNews(force = false) ${body}\nfunction saveTabs() ${sbody}\nfunction pollTabNewsSoon() ${fn("pollTabNewsSoon")}\n`
     + "return { run: pollTabNews, save: saveTabs, soon: pollTabNewsSoon, news: () => tabNews };")(...names.map((n) => env[n]), "k", () => "", { setItem() {} });
-  return { f, calls, saved, seenStore, clock, spaceBox, tick };
+  return { f, calls, saved, seenStore, clock, spaceBox, tick, replies };
 }
 const items3 = [{ id: "a" }, { id: "b" }];
 test("pollTabNews: активна вкладка і вкладки інших просторів не опитуються", async () => {
   const h = pollHarness({ tabs: [{ id: "T0", space: "s1" }, { id: "T1", space: "s1" }, { id: "T2", space: "s2" }, { id: "T3" }],
-    replies: { T1: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
+    replies: { T1: { supported: true, team: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
   await h.f.run();
   assert.deepEqual(h.calls, ["/api/comment-news?task=T1"]);
   assert.deepEqual(h.f.news(), { T1: 1 });
 });
 test("pollTabNews: рахує нові інших вкладок, пише маркер лише з supported:true; збій/unsupported — ні числа, ні маркера", async () => {
   const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }, { id: "T2", space: "s1" }, { id: "T3", space: "s1" }, { id: "T4", space: "s1" }],
-    replies: { T1: { supported: true, items: items3 }, T2: { supported: false, items: [] }, T3: new Error("down"), T4: { supported: true, items: "x" } },
+    replies: { T1: { supported: true, team: true, items: items3 }, T2: { supported: false, items: [] }, T3: new Error("down"), T4: { supported: true, team: true, items: "x" } },
     seenStore: { "s1:T1": new Set(["a"]) } });
   await h.f.run();
   assert.deepEqual(h.f.news(), { T1: 1 });
   assert.deepEqual(h.saved, [], "маркер уже був у T1; решта не мусить його отримати");
   const h2 = pollHarness({ tabs: [{ id: "T1", space: "s1" }, { id: "T2", space: "s1" }],
-    replies: { T1: { supported: true, items: items3 }, T2: { supported: false, items: [] } } });
+    replies: { T1: { supported: true, team: true, items: items3 }, T2: { supported: false, items: [] } } });
   await h2.f.run();
   assert.deepEqual(h2.saved, ["s1:T1"], "перша відповідь supported:true — основа без числа; unsupported — без запису");
   assert.deepEqual(h2.f.news(), {});
@@ -219,33 +219,59 @@ test("pollTabNews: рахує нові інших вкладок, пише ма�
 const withReplies = [{ id: "t1" }, { id: "r1", parent: "p" }, { id: "r2", parent: "p" }];
 test("pollTabNews 0.34: «бачене» — обʼєднання головного маркера й маркера відповідей (`dc-seen-r:`), як у виду", async () => {
   const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
-    replies: { T1: { supported: true, items: withReplies } },
+    replies: { T1: { supported: true, team: true, items: withReplies } },
     seenStore: { "s1:T1": new Set(["t1"]), "dc-seen-r:s1:T1": new Set(["r1", "r2"]) } });
   await h.f.run();
   assert.deepEqual(h.f.news(), {}, "відповіді, побачені у виді й записані в `dc-seen-r:`, на вкладці не «нові»");
   const h2 = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
-    replies: { T1: { supported: true, items: withReplies } },
+    replies: { T1: { supported: true, team: true, items: withReplies } },
     seenStore: { "s1:T1": new Set(["t1"]), "dc-seen-r:s1:T1": new Set(["r1"]) } });
   await h2.f.run();
   assert.deepEqual(h2.f.news(), { T1: 1 }, "r2 ще не бачено ніким — одна нова відповідь");
 });
 test("pollTabNews 0.34: є лише маркер відповідей (вид без команди) — основа без відповідей, нова відповідь не губиться", async () => {
   const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
-    replies: { T1: { supported: true, items: withReplies } },
+    replies: { T1: { supported: true, team: true, items: withReplies } },
     seenStore: { "dc-seen-r:s1:T1": new Set(["r1"]) } });
   await h.f.run();
   assert.deepEqual(h.f.news(), { T1: 1 }, "r2 прийшла після останнього погляду — лишається новою, а не поглинається основою");
   assert.deepEqual([...h.seenStore["s1:T1"]], ["t1"], "головний маркер — основа лише командних (без `parent`)");
 });
+test("pollTabNews 0.34: відповідь без `team` (проєкт без команди, зламаний модуль) ніколи не пише ГОЛОВНИЙ маркер `dc-seen:`", async () => {
+  const local = [{ id: "r1", parent: "p" }, { id: "r2", parent: "p" }];
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, team: false, items: local } } });
+  await h.f.run();
+  assert.deepEqual(h.saved, ["dc-seen-r:s1:T1"], "основа — у маркері відповідей, не в головному");
+  assert.equal(h.seenStore["s1:T1"], undefined, "`dc-seen:` не створено");
+  assert.deepEqual([...h.seenStore["dc-seen-r:s1:T1"]], ["r1", "r2"]);
+  assert.deepEqual(h.f.news(), {}, "перший погляд — усе існуюче бачене");
+  /* наступний опит: нова відповідь рахується, маркери не міняються */
+  h.replies.T1 = { supported: true, team: false, items: [...local, { id: "r3", parent: "p" }] };
+  h.clock.t += 31000;
+  await h.f.run();
+  assert.deepEqual(h.f.news(), { T1: 1 });
+  assert.equal(h.seenStore["s1:T1"], undefined, "головний маркер і далі не заданий");
+  assert.deepEqual(h.saved, ["dc-seen-r:s1:T1"], "жодного нового запису");
+});
+test("pollTabNews 0.34: team:false не змінює вже наявний головний маркер, а лічить за обʼєднанням", async () => {
+  const main = new Set(["t1"]);
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
+    replies: { T1: { supported: true, team: false, items: [{ id: "t1" }, { id: "r1", parent: "p" }] } },
+    seenStore: { "s1:T1": main } });
+  await h.f.run();
+  assert.deepEqual(h.saved, [], "ні головний, ні маркер відповідей не пишуться, коли головний уже є");
+  assert.deepEqual([...h.seenStore["s1:T1"]], ["t1"]);
+  assert.deepEqual(h.f.news(), { T1: 1 });
+});
 test("pollTabNews: supported:true з error (команда впала) — ні числа, ні маркера (інакше після одужання усе «нове»)", async () => {
-  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, items: [], error: "x" } } });
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, team: true, items: [], error: "x" } } });
   await h.f.run();
   assert.deepEqual(h.f.news(), {});
   assert.deepEqual(h.saved, []);
 });
 test("опит: незмінний склад вкладок — один опит; зміна складу — опит і в межах 30 с", async () => {
   const tabs = [{ id: "T1", space: "s1" }];
-  const h = pollHarness({ tabs, replies: { T1: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
+  const h = pollHarness({ tabs, replies: { T1: { supported: true, team: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
   h.f.save(); h.f.save(); h.f.save();
   await h.tick(1600);
   assert.equal(h.calls.length, 1, "три saveTabs без зміни складу — один запит на вкладку");
@@ -256,7 +282,7 @@ test("опит: незмінний склад вкладок — один опи
 });
 test("опит: 5 примусових за секунду — один раунд після вікна, по запиту на іншу вкладку", async () => {
   const h = pollHarness({ tabs: [{ id: "T0", space: "s1" }, { id: "T1", space: "s1" }, { id: "T2", space: "s1" }],
-    replies: { T1: { supported: true, items: items3 }, T2: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]), "s1:T2": new Set(["a"]) } });
+    replies: { T1: { supported: true, team: true, items: items3 }, T2: { supported: true, team: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]), "s1:T2": new Set(["a"]) } });
   for (let i = 0; i < 5; i++) { h.f.soon(); await h.tick(200); }
   assert.equal(h.calls.length, 0, "у межах вікна (хвостовий debounce) запитів нема");
   await h.tick(1600);
@@ -266,7 +292,7 @@ test("опит: 5 примусових за секунду — один раун
 });
 test("опит: примусовий під час зайнятого раунду — один додатковий після нього, а не купа", async () => {
   const h = pollHarness({ tabs: [{ id: "T0", space: "s1" }, { id: "T1", space: "s1" }],
-    replies: { T1: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
+    replies: { T1: { supported: true, team: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
   const first = h.f.run(true);           // раунд ще йде (await api)
   h.f.soon(); h.f.soon(); h.f.soon();
   await first;
@@ -274,7 +300,7 @@ test("опит: примусовий під час зайнятого раунд
   assert.equal(h.calls.length, 2, "перший раунд + один повтор від злитих примусових");
 });
 test("опит: без force — не частіше разу на 30 с", async () => {
-  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, team: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) } });
   await h.f.run();
   h.clock.t += 29000; await h.f.run();
   assert.equal(h.calls.length, 1, "focus/таймер у межах 30 с — без запитів");
@@ -284,13 +310,13 @@ test("опит: без force — не частіше разу на 30 с", async
   assert.equal(h.calls.length, 3, "force ігнорує поріг");
 });
 test("опит: простір перемкнули посеред опиту — старі числа не малюються", async () => {
-  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) },
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, team: true, items: items3 } }, seenStore: { "s1:T1": new Set(["a"]) },
     onApi: (box) => { box.id = "s2"; } });
   await h.f.run();
   assert.deepEqual(h.f.news(), {}, "sp зняли на старті, на кінці простір інший — присвоєння немає");
 });
 test("pollTabNews: приховане вікно — жодного запиту", async () => {
-  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], visible: false, replies: { T1: { supported: true, items: items3 } } });
+  const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], visible: false, replies: { T1: { supported: true, team: true, items: items3 } } });
   await h.f.run();
   assert.deepEqual(h.calls, []);
 });

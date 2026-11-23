@@ -287,6 +287,19 @@ def where_lookup(pins, task_id=None):
         return None, 'незрозуміла відповідь pin-where'
 
 
+#: Префікс продовження багаторядкового тексту піна: символ, якого нема в рамках виводу (`↳`, `•`), тож рядок тексту не вдасть
+#: із себе гілку відповідей чи інший службовий рядок.
+TEXT_CONT = '\n            │ '
+
+
+def pin_text(text):
+    """Текст піна для виводу: перший рядок — як є, решта — з префіксом `TEXT_CONT`; кожен рядок без керівних символів (`agent_line`).
+    Текст пише будь-хто (колега, відвідувач превʼю): рядок `↳ відповіді (1):` усередині нього інакше був би невідрізним від
+    справжньої гілки, а агент читає цей вивід як довіреніший за коментар."""
+    s = text if isinstance(text, str) else ''
+    return TEXT_CONT.join(agent_line(ln, 10000) for ln in s.strip().split('\n'))
+
+
 def _reply_ts(ts):
     """`DD.MM.YYYY HH:MM` → `DD.MM HH:MM`; нерозбірний час — як є (очищений, ≤ 20)."""
     d = _parse_ts(ts)
@@ -296,7 +309,11 @@ def _reply_ts(ts):
 def reply_line(r):
     """Один рядок відповіді: `<автор>, <ДД.ММ ГГ:ХХ>: <текст>` (≤ 300; відповідь агента — `AI`). Локальний файл пише
     браузер, а відповіді командного каналу — інші люди: усе проходить `agent_line` (без переносів і керівних символів)."""
-    who = 'AI' if r.get('agent') is True else (agent_line(r.get('author'), 100) or '?')
+    who = agent_line(r.get('author'), 100) or '?'
+    if r.get('agent') is True:
+        who = 'AI'
+    elif who.strip().casefold() == 'ai':
+        who = 'AI (людина)'                     # людина з імʼям «AI» не має виглядати відповіддю агента
     return agent_line(f'{who}, {_reply_ts(r.get("ts"))}: {agent_line(r.get("text"), 4000)}', 300)
 
 
@@ -306,9 +323,9 @@ def show_pins(pins, label, tag, where=None):
     if openp:
         print(f'  {label} — {len(openp)} відкритих:')
         for p in openp:
-            print(f'      • {_num(p, tag)} [{_it(p)}] {(p.get("text") or "").strip()}  '
-                  f'[{(p.get("id") or "")[:8]} · {p.get("author") or ""}]')
-            ctx = ctx_line((p.get('meta') or {}).get('ctx'))
+            print(f'      • {_num(p, tag)} [{_it(p)}] {pin_text(p.get("text"))}  '
+                  f'[{agent_line(p.get("id") or "", 200)[:8]} · {agent_line(p.get("author") or "", 200)}]')
+            ctx = agent_line(ctx_line((p.get('meta') or {}).get('ctx')), 500)
             if ctx:
                 print(f'          ↳ де: {ctx}')
             replies = [r for r in p.get('replies') or [] if isinstance(r, dict)] if isinstance(p.get('replies'), list) else []
@@ -334,17 +351,18 @@ def show_pins(pins, label, tag, where=None):
                 print(f'          ↳ ширина: {_band(vp["w"])} · {vp["w"]}×{vp.get("h")}')
             fp = p.get('fp') or {}
             if fp:
-                anchor = (fp.get('text') or '').strip().replace('\n', ' ')[:50]
-                path = ' > '.join((fp.get('path') or [])[-3:])
-                print(f'          ↳ якір: <{fp.get("tag") or "?"}>'
+                # локальний файл пише браузер, а не `agent_pin`: рядки якоря чистимо тут, інакше `fp.text` із переносом підробив би рамку
+                anchor = agent_line((fp.get('text') or '').strip(), 50)
+                path = agent_line(' > '.join(str(x) for x in (fp.get('path') or [])[-3:]), 300)
+                print(f'          ↳ якір: <{agent_line(fp.get("tag") or "?", 50)}>'
                       + (f' «{anchor}»' if anchor else '')
                       + (f'  · {path}' if path else ''))
             html = _snapshot_html(p)
             sel = root_selector(html)
             if sel:
-                print(f'          ↳ селектор: {sel}')
+                print(f'          ↳ селектор: {agent_line(sel, 300)}')
             if html:
-                print(f'          ↳ html: {html_head(html)}')
+                print(f'          ↳ html: {agent_line(html_head(html), 300)}')
     if resolved:
         print(f'  {label}: (+ {resolved} вирішених в історії)')
     return len(openp)
@@ -883,7 +901,8 @@ def build_parser():
         epilog='Приклад: python3 bin/inbox.py reply 3f2a9c1b --text "це про кнопку в шапці?"',
         formatter_class=argparse.RawDescriptionHelpFormatter)
     yp.add_argument('prefix', metavar='ID', help=f'префікс id піна, не коротший за {MIN_PREFIX} символів')
-    yp.add_argument('--text', required=True, help=f'текст відповіді (непорожній, до {REPLY_MAX} символів)')
+    yp.add_argument('--text', required=True, help=f'текст відповіді (непорожній, до {REPLY_MAX} символів); '
+                                                  'текст, що починається з «-», — як --text="-..."')
     yp.add_argument('--dry-run', action='store_true', help='надрукувати, що було б записано, нічого не міняючи')
     ap.set_defaults(reply_parser=yp)
     return ap, rp

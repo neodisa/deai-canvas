@@ -3460,7 +3460,8 @@ def _agent_meta(meta):
     if 'url' in meta:
         meta['url'] = agent_line(meta['url'], 500)
     if 'shotMiss' in meta:                                          # код причини, чому нема знімка (`inbox` друкує його словом)
-        miss = agent_line(meta['shotMiss'], 40) if isinstance(meta['shotMiss'], str) else ''
+        miss = agent_line(meta['shotMiss'], 41) if isinstance(meta['shotMiss'], str) else ''
+        miss = miss if len(miss) <= 40 else ''                      # довший за код — не код: відкидаємо, а не обрізаємо
         if miss:
             meta['shotMiss'] = miss
         else:
@@ -7362,17 +7363,19 @@ class Handler(SimpleHTTPRequestHandler):
         local = local_agent_news(self._local_file(task))
         pc = ProjectComments(spaces.active_space())
         if pc.kind != 'module':
-            self._send_json({'supported': local is not None, 'items': local or []})
+            self._send_json({'supported': local is not None, 'team': False, 'items': (local or [])[:MAX_NEWS]})
             return
         try:
             items = pc.recent(task, tid)
         except (OSError, deai_modules.ModuleError) as e:
-            self._send_json({'supported': True, 'items': [], 'error': agent_line(str(e), 300)})
+            self._send_json({'supported': True, 'team': False, 'items': [], 'error': agent_line(str(e), 300)})
             return
         if items is None and local is None:
-            self._send_json({'supported': False, 'items': []})
+            self._send_json({'supported': False, 'team': False, 'items': []})
             return
-        self._send_json({'supported': True, 'items': (items or []) + (local or [])})
+        # `team` — командний канал справді опитано (`recent` модуля відповів без помилки): лише тоді вкладка має право писати
+        # ГОЛОВНИЙ маркер «бачив» (інакше після повернення команди усі її коментарі стали б «новими»).
+        self._send_json({'supported': True, 'team': items is not None, 'items': ((items or []) + (local or []))[:MAX_NEWS]})
 
     # ---------- Локальні коментарі (фідбек Claude, НЕ в Supabase, у файлі) ----------
     def _local_file(self, task):

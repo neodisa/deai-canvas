@@ -7107,12 +7107,15 @@ async function pollTabNews(force = false) {
       /* Два маркера, як у `cmtSeenSet` (0.34): головний `dc-seen:` і відповідей `dc-seen-r:`; «бачене» — їх обʼєднання, інакше
          відповідь агента в проєкті без команди (її бачив відкритий вид, а головного маркера немає) висіла б «новою» вічно. */
       const key = seenKey(sp, x.id), rkey = `dc-seen-r:${sp || '-'}:${x.id}`;
-      let seen = loadSeen(key);
-      const rseen = loadSeen(rkey);
-      /* Основа лише коли нема жодного маркера; є лише маркер відповідей (вид без команди) — основа командних БЕЗ відповідей, щоб
-         відповідь, що прийшла після останнього погляду, лишилась новою. */
-      if (!seen) { seen = baseline(rseen ? r.items.filter((c) => !c.parent) : r.items); saveSeen(key, seen); }
-      const n = countNew(r.items, rseen ? new Set([...seen, ...rseen]) : seen, myName());
+      let seen = loadSeen(key), rseen = loadSeen(rkey);
+      /* Як `cmtSeenSet`: ГОЛОВНИЙ маркер — «команда жива», його пишемо лише з відповіді, де `recent` модуля справді опитано без
+         помилки (`team`); інакше (проєкт без команди, зламаний модуль) основа — маркер відповідей, а головний лишається
+         незаданим: коли команда зʼявиться чи оживе, її коментарі не мусять усі стати «новими». */
+      if (!seen && r.team) {
+        /* є лише маркер відповідей — основа командних БЕЗ відповідей, щоб відповідь після останнього погляду лишилась новою */
+        seen = baseline(rseen ? r.items.filter((c) => !c.parent) : r.items); saveSeen(key, seen);
+      } else if (!seen && !rseen) { rseen = baseline(r.items); saveSeen(rkey, rseen); }
+      const n = countNew(r.items, new Set([...(seen || []), ...(rseen || [])]), myName());
       if (n && x.id !== currentTaskId) next[x.id] = n;
     }
     /* Простір перемкнули, поки ішов опит: чужі числа не малюємо (новий опит уже в черзі від paintTabs). */
