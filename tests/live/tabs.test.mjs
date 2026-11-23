@@ -265,7 +265,8 @@ test("12: смуга задачі віддає назві й ітерації в
     const txt = el.querySelector(".txt");
     const zone = document.querySelector("#bar .zone-1").getBoundingClientRect();
     return { box: el.getBoundingClientRect().width, full: txt.scrollWidth, shown: txt.clientWidth,
-      free: zone.right - el.getBoundingClientRect().right };
+      /* Фаза И: за назвою йде «/» і ітерація — вільне місце міряємо від правого краю ОСТАННЬОЇ крошки, а не самої назви. */
+      free: zone.right - document.querySelector("#bar .crumbs").lastElementChild.getBoundingClientRect().right };
   });
   assert.ok(w.box > 200, `назва задачі в смузі завузька: ${Math.round(w.box)}px`);
   /* Назва довша за зону — обрізатись їй можна, але лише тоді, коли місце в зоні 1 скінчилось. */

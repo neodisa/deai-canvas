@@ -3071,59 +3071,36 @@ test("AF. питання канваса не спираються на стан,
       `сторінки немає там, де її питали: it2 = ${JSON.stringify(names("it2"))}`);
   });
 
-  await t.test("AF2. скасоване питання не створює ітерацію — ні Esc, ні перебиттям", async () => {
+  await t.test("AF2. «Нова ітерація» створює одразу й відкриває поле назви; Esc лишає ітерацію; підкладка ловить кліки", async () => {
     const page = await canvas();
     const before = iterations();
 
-    /* 1. Esc. Доти тут стояло `?? ''`, тобто скасування ставало «створи
-          ітерацію з порожньою приміткою». */
+    /* 1. Питання про примітку (діалог `ask()`) зникло: ітерація зʼявляється ОДРАЗУ, а її рядок відкритий на полі назви
+          (`#it-ren-in`). Esc скасовує лише правку назви — створена ітерація лишається (її можна видалити з кошика). */
     await page.locator('[data-dd="iter"]').click();
     await press(page, page.locator('.dd [data-act="newit"]'));
-    await page.locator(".cv-ask input").waitFor({ timeout: 3000 });
+    await page.locator("#it-ren-in").waitFor({ timeout: 3000 });
+    assert.equal(await page.locator(".cv-ask").count(), 0, "«Нова ітерація» знову питає діалогом");
+    assert.equal(iterations().length, before.length + 1, "ітерація не створена одразу");
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(700);
-    assert.deepEqual(iterations(), before, "Esc створив ітерацію");
+    await page.waitForTimeout(500);
+    assert.equal(iterations().length, before.length + 1, "Esc у полі назви прибрав ітерацію");
 
-    /* 2. Перебиття другим питанням. Оверлей на канвас один, тож другий виклик
-          гасить перший і той віддає `null` — а з `?? ''` це означало «створюй»:
-          ітерація зʼявлялась від звичайного кліку по СУСІДНІЙ кнопці, без
-          підтвердження й без сліду. Клік через `evaluate`, бо мишею підкладка
-          його вже не пускає; шлях у коді від цього нікуди не дівається.
-          Старий `#pp-add` → `[data-act="newpage"]` → (панель шарів без «＋ стор.»)
-          тепер «Перейменувати ітерацію». */
-    await page.locator('[data-dd="iter"]').click();
-    await press(page, page.locator('.dd [data-act="newit"]'));
-    await page.locator(".cv-ask input").waitFor({ timeout: 3000 });
-    await page.evaluate(() => {
-      // друге питання — «Перейменувати ітерацію» (синхронне, як колишня «＋ стор.»)
-      document.querySelector('[data-dd="iter"]').dispatchEvent(
-        new MouseEvent("click", { bubbles: true, cancelable: true }));
-      document.querySelector('.dd [data-act="renit"]').dispatchEvent(
-        new MouseEvent("click", { bubbles: true, cancelable: true }));
-    });
-    await page.locator(".cv-ask input").waitFor({ timeout: 3000 });
-    await page.keyboard.press("Escape");
-    await page.waitForTimeout(700);
-    assert.deepEqual(iterations(), before, "перебите питання створило ітерацію мовчки");
-
-    /* 3. І сама підкладка: поки питання відкрите, сусідня кнопка мишею
-          недосяжна. Без цього рядка «перебиття» лишалось би теоретичним, а
-          підкладка — неперевіреною. */
-    await page.locator('[data-dd="iter"]').click();
-    await press(page, page.locator('.dd [data-act="newit"]'));
+    /* 2. Підкладка: поки питання (`ask()`) відкрите, сусідня кнопка мишею недосяжна. Тригер — «Перейменувати…» сторінки
+          (як у AF1). Без цього рядка підкладка лишалась би неперевіреною. */
+    await page.locator('.panel [data-page="holovna"]').click({ button: "right" });
+    await page.click('#cv-ctx [data-a="rename"]');
     await page.locator(".cv-ask input").waitFor({ timeout: 3000 });
     const blocked = await page.locator('.panel [data-act="newfolder"]').click({ timeout: 1500 })
       .then(() => false, () => true);
     assert.equal(blocked, true,
       "підкладка не ловить кліки — канвас лишається живим під відкритим питанням");
     await page.keyboard.press("Escape");
-    /* Позитивний контроль до «blocked»: після закриття питання та сама кнопка
-       досяжна й клік доходить (зʼявляється поле назви нової теки). Без цього
-       `blocked` був би зелений і на кнопці, якої немає в DOM. */
+    /* Позитивний контроль до «blocked»: після закриття питання та сама кнопка досяжна й клік доходить (зʼявляється поле
+       назви нової теки). Без цього `blocked` був би зелений і на кнопці, якої немає в DOM. */
     await page.locator(".cv-ask-scrim").waitFor({ state: "detached", timeout: 3000 });
     await page.locator('.panel [data-act="newfolder"]').click({ timeout: 3000 });
     await page.locator(".cv-ask input").waitFor({ timeout: 3000 });
-    await page.keyboard.press("Escape");
   });
 });
 

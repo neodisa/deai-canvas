@@ -326,7 +326,8 @@ test("D: дії модулів — ⌘K, меню картки задачі, д�
 
   // дропдаун ітерації
   await page.click('[data-dd="iter"]');
-  await page.locator('.dd-item[data-act="modact"]').click();
+  await page.locator('#bar .it-more').first().click();
+  await page.locator('.dd--itmenu [data-act="itmodact"]').click();
   await waitToast(page, /pong iteration/);
 
   // меню картки на екрані «Задачі»
@@ -348,10 +349,11 @@ test("E: список модулів дочитався, поки дропдау
   const s = await boot(t, { beforeGoto: (pg) => pg.route("**/api/module-ext*", async (r) => { await gate; await r.continue(); }) });
   const { page } = s;
   await page.click('[data-dd="iter"]');
-  await page.waitForSelector(".dd-item");
-  assert.equal(await page.locator('.dd-item[data-act="modact"]').count(), 0, "дія зʼявилась до відповіді /api/module-ext");
+  await page.locator('#bar .it-more').first().click();
+  await page.waitForSelector(".dd--itmenu .dd-item");
+  assert.equal(await page.locator('.dd--itmenu [data-act="itmodact"]').count(), 0, "дія зʼявилась до відповіді /api/module-ext");
   release();
   await page.waitForSelector(BTN, { timeout: 15000 });
-  await page.waitForSelector('.dd-item[data-act="modact"]', { timeout: 5000 });
+  await page.waitForSelector('.dd--itmenu [data-act="itmodact"]', { timeout: 5000 });
   assert.deepEqual(s.errors, []);
 });

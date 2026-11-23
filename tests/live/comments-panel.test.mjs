@@ -484,7 +484,7 @@ const pressAt = async (page, x, y) => { await page.mouse.move(x, y); await page.
 
 test("15: «Огляд» — з відкритою панеллю ті самі картки, але полотна (без приміток «на іншій сторінці»); ручка коментатора полотна схована", async () => {
   const { dir } = t45Task();
-  const server = await startServer(dir, { portBase: OVR_PORT_BASE, title: "Огляд" });
+  const server = await startServer(dir, { portBase: OVR_PORT_BASE, title: "Тест панелі" });
   aCleanup.push(() => server.child.kill());
   const comments = await seedPins(browser, server.url);
   const shot = await shootAll(server.url);

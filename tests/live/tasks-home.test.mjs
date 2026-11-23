@@ -552,7 +552,7 @@ test("мова: перемикання з ⌘K на екрані «Задачі�
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => /Mine/.test(document.querySelector("#tasks-home .th-tab--on")?.textContent || ""));
   assert.match(await page.textContent("#tasks-home h1"), /Tasks/);
-  assert.match(await page.getAttribute("#th-q", "placeholder"), /Key, title/);
+  assert.match(await page.getAttribute("#th-q", "placeholder"), /Title, number, status/);
 });
 
 test("гонка: поточну переключили карткою «Задач», екран ще вантажиться — клік по картці старої задачі ПЕРЕКЛЮЧАЄ", async (t) => {

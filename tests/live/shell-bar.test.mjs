@@ -191,7 +191,9 @@ test("кожен контрол смуги щось робить на клік",
   /* 0.25.0: крошки-перемикача задач у смузі нема — лише назва задачі (текст), а керування
      острівцем (інспектор, «Відгук») живе в `#hud`, не в `#bar`. */
   assert.ok(await page.locator("#bar .crumb--title").count() > 0, "немає назви задачі в смузі");
-  assert.equal(controls.some((c) => c.dd === "task"), false, "перемикач задач повернувся в смугу");
+  /* Фаза И: назва задачі — дропдаун (`data-dd="task"`: перейменувати, теги), але НЕ перемикач задач: його роль — вкладки. */
+  assert.equal(controls.filter((c) => c.dd === "task").length, 1, "дропдаун задачі: рівно один");
+  assert.equal(controls.some((c) => c.dd === "tasks" || c.act === "switchtask"), false, "перемикач задач повернувся в смугу");
   assert.ok(controls.some((c) => c.root === "#hud" && c.act === "feedback"), "у острівці немає «Відгук»");
   assert.ok(controls.some((c) => c.root === "#hud" && c.act === "inspector"), "у острівці немає інспектора");
 
@@ -431,21 +433,27 @@ test("«Видалити ітерацію»: питання в дропдаун�
   await page.locator("#bar button.crumb--iter").first().waitFor();
   assert.match(await page.locator("#bar button.crumb--iter").innerText(), /Іт\.2/, "відкрита не остання ітерація");
 
+  /* Фаза И: «Видалити» — у меню «⋯» рядка (`itdel`), питання стає НА МІСЦІ рядка (`.it-cfm`), без модальної картки. */
   const ask = async () => {
     await page.click('#bar [data-dd="iter"]');
-    await page.click('#bar [data-act="delitask"]');
-    await page.waitForSelector("#bar .dd--confirm .cfm", { timeout: 5000 });
+    await page.click('#bar .it-more[data-val="it2"]');
+    await page.click('#bar .dd--itmenu [data-act="itdel"]');
+    await page.waitForSelector("#bar .it-cfm .cfm", { timeout: 5000 });
     assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "питання вийшло модальним");
     assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cfm-no")), true, "фокус не на «Ні»");
-    assert.match(await page.textContent("#bar .cfm-t"), /Видалити Іт\.2\?/);
+    assert.match(await page.textContent("#bar .cfm-t"), /Видалити Іт\.2 · друга\?/);
     assert.equal(await page.locator("#bar .cfm p").count(), 1, "у питанні є щось, крім самого питання");
   };
-  // (a) Esc
+  const noQuestion = () => page.waitForSelector("#bar .it-cfm", { state: "detached" });
+  // (a) Esc закриває лише питання: перелік лишається
   await ask();
   await page.keyboard.press("Escape");
-  await page.waitForSelector("#bar .dd", { state: "detached" });
+  await noQuestion();
+  await page.waitForSelector("#bar .dd--iters");
   assert.equal(alive(), true, "Esc видалив ітерацію");
-  // (b) клік повз смугу
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#bar .dd", { state: "detached" });
+  // (b) клік повз смугу закриває дропдаун цілком
   await ask();
   await page.locator(".panel").first().click({ position: { x: 3, y: 3 } });
   await page.waitForSelector("#bar .dd", { state: "detached" });
@@ -455,34 +463,35 @@ test("«Видалити ітерацію»: питання в дропдаун�
   await page.waitForSelector('#bar [data-act="iter"]');
   assert.equal(await page.locator("#bar .cfm").count(), 0, "питання пережило закриття дропдауна");
   await page.keyboard.press("Escape");
-  // (c) «Ні»
+  await page.waitForSelector("#bar .dd", { state: "detached" });
+  // (c) «Ні» знімає питання, перелік лишається
   await ask();
   await page.click("#bar .cfm-no");
-  await page.waitForSelector("#bar .dd", { state: "detached" });
+  await noQuestion();
   assert.equal(alive(), true, "«Ні» видалило ітерацію");
-  // ⌘K → картка (модальна, темна), Esc — нічого не видалено
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#bar .dd", { state: "detached" });
+  // ⌘K «Видалити ітерацію» — те саме питання в переліку (модальної картки нема), Esc — нічого не видалено
   await page.keyboard.press("Control+k");
   await page.locator("#palq").waitFor({ state: "visible" });
   await page.fill("#palq", "Видалити ітерацію");
   await page.waitForFunction(() => document.querySelectorAll(".pal-it").length >= 1, null, { timeout: 5000 });
   await page.keyboard.press("Enter");
-  await page.waitForSelector(".cv-ask-scrim .cv-ask", { timeout: 5000 });
-  assert.equal(await page.locator("#bar .cfm").count(), 0);
-  const card = await page.evaluate(() => getComputedStyle(document.querySelector(".cv-ask")).backgroundColor);
-  assert.notEqual(card, "rgb(255, 255, 255)", "картка біла");
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.a), "cancel", "фокус не на «Скасувати»");
-  // Порядок кнопок (0.28.1, власник): «Скасувати» ліворуч, «Видалити» — праворуч, як «Ні» / «Видалити» в дропдауні.
-  assert.deepEqual(await page.$$eval(".cv-ask-row button", (bs) => bs.map((b) => b.dataset.a)), ["cancel", "ok"]);
+  await page.waitForSelector("#bar .it-cfm .cfm", { timeout: 5000 });
+  assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "⌘K відкрив модальну картку");
   await page.keyboard.press("Escape");
-  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
-  assert.equal(alive(), true, "Esc у картці видалив ітерацію");
-  // (d) «Видалити» в дропдауні — видалено без другого вікна
+  await noQuestion();
+  assert.equal(alive(), true, "Esc у питанні видалив ітерацію");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#bar .dd", { state: "detached" });
+  // (d) «Видалити» в переліку — видалено без другого вікна; тост пропонує «Повернути»
   await ask();
   await page.click("#bar .cfm-yes");
   const end = Date.now() + 8000;
   while (Date.now() < end && ids().includes("it2")) await new Promise((r) => setTimeout(r, 100));
   assert.equal(ids().includes("it2"), false, "«Видалити» не дійшло до iterations.json");
   assert.equal(existsSync(it2), false, "папка ітерації лишилась на диску");
+  await page.waitForSelector('#cv-toast.show [data-act="undo"]');
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "після видалення висить друге питання");
   assert.equal(dialogs, 0, "з'явилось нативне вікно браузера");
 });

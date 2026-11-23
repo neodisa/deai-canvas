@@ -96,7 +96,7 @@ test("2: ⌘K «Знайомство з канвасом» — Esc і підкл
   await page.waitForSelector(".fr-card", { state: "detached" });
   await palette(page, "Знайомство");
   await page.click('.fr-card [data-fr="demo"]');
-  await page.waitForFunction(() => document.querySelector("#tabs")?.textContent.includes("tally-demo"), null, { timeout: 20000 });
+  await page.waitForFunction(() => !!document.querySelector('#tabs [data-act="tab"][data-val="tally-demo"]'), null, { timeout: 20000 });
   const dir = path.join(server.spaces[0].path, "tally-demo");
   const pins = JSON.parse(readFileSync(path.join(dir, ".dc-local-comments.json"), "utf8"));
   assert.deepEqual(pins.map((p) => p.status).sort(), ["open", "resolved"]);
@@ -127,7 +127,7 @@ test("3: майстер, крок 4 — «Демо-задача (Tally)»: на�
   assert.equal(await page.locator("#tf-title").isDisabled(), true);
   assert.equal(await page.locator("#wz-demo-why").isVisible(), true);
   await next();
-  await page.waitForFunction(() => document.querySelector("#tabs")?.textContent.includes("tally-demo"), null, { timeout: 20000 });
+  await page.waitForFunction(() => !!document.querySelector('#tabs [data-act="tab"][data-val="tally-demo"]'), null, { timeout: 20000 });
   assert.deepEqual(errors, []);
 });
 
