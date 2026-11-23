@@ -3,6 +3,49 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.35.1] — 23.11.2026
+
+Pin screenshots: readable, and on every page. The commenter used to keep a 360-px JPEG rendered at half the screen's
+pixel density, and it silently lost the screenshot on pages styled with modern CSS colours or when the target was an icon:
+on 60 real mockup pages 15 % of pins had none. Now a pin keeps a sharp thumbnail in its card and a full-size screenshot that
+opens on click, and 99.7 % of pins on the same pages have one.
+
+### Змінено
+- A pin's screenshot comes in two sizes. The card keeps an inline thumbnail (`meta.shot`, up to 720×720 px, JPEG 0.7 —
+  about 15 KB instead of 6 KB). The full screenshot (the screen's pixel density up to ×2, up to 2400 px, JPEG 0.85 — about
+  75 KB on average) is stored separately: a team pin's in the Storage bucket as before (`meta.shotUrl`, also on the Teams
+  card), a local pin's in `<task>/.dc-local-shots/<id>.jpg` (new `POST`/`GET /api/local-shots`; the folder goes to the
+  task's `.gitignore` and is never published). A click on a screenshot opens the full one, or the thumbnail if the full
+  one doesn't load.
+- Rendering is capped at 6 megapixels per screenshot, so a very large target renders no heavier than before: the heavy
+  page of 0.30.1 shows the same longest task after «Надіслати» (115 ms against 113 ms).
+- Store contract: `uploadShot` gets the full-size image; the answer `{ skipped: true }` means «nothing to upload for this
+  pin» (no retry, no `shotMiss`). `dual-store` sends a local pin's screenshot to the local store, never to the team bucket.
+
+### Виправлено
+- Screenshots no longer go missing on pages whose CSS uses `color-mix()`, `oklch()`, `oklab()`, `lab()`, `lch()` or
+  `color()`. html2canvas 1.4.1 can't parse them; the commenter now rewrites them to `rgba()` in its own copy of the page
+  (never on the live page) and stops CSS transitions there. A click on an SVG icon screenshots its HTML parent (a button, a
+  link) instead of failing. On 60 real mockup pages: 85 % → 99.7 % of pins with a screenshot; the rest are targets over the
+  1500-node limit (`too-big`).
+- A new pin is first saved only with its screenshot, so its Teams card has the image even when another pin, a reply or an
+  edit is saved meanwhile.
+- The agent (`inbox.py`, `/api/comments`) no longer reports «без знімка» for a pin that has a screenshot; 0.35.0 saved
+  `shotMiss: 'upload'` on local pins next to the shot.
+- Publishing a preview removes old Vercel deployments again: each removal is approved with `--confirm-name <address>`
+  instead of `--yes`, which Vercel CLI 66 ignores when it runs under an AI agent. A deployment the CLI keeps because an
+  alias still points to it is reported on its own line («Лишено старих публікацій…»), not as a failure.
+
+### Owner actions after update
+- Nothing required. Re-publish active previews to get the new commenter in them. A product that embeds its own copy of the
+  commenter takes the new `app/vendor/comment-layer.min.js` (the API is backward compatible); full-size screenshots need a
+  store with `uploadShot`.
+
+### Known limits
+- A very tall target (a whole long page) is still a narrow strip in the lightbox.
+- Deleting a local pin leaves its `.dc-local-shots/<id>.jpg`.
+- Inline thumbnails are about 2.5× bigger, so a full read of the team channel grows accordingly.
+
 ## [0.35.0] — 23.11.2026
 
 Replies in comments. A pin now has a thread: in Deai and in the published preview people answer a comment instead of leaving
