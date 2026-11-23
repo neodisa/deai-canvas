@@ -42,6 +42,7 @@ import task_trash  # кошик задач простору (етап Д, 0.30.0
 import feedback  # відгук (0.23.0): кільце помилок, збирач діагностики, черга відправки
 import agents_md  # AGENTS.md простору (етап Е, 0.31.0): блок з шаблону + «Ваше»
 import agent_guide  # живий гайд агента й автооновлення блоків AGENTS.md (23.11.2026)
+import claude_hook  # Stop-хук Claude Code простору: правки AI в історії без скіла власника (23.11.2026)
 import updater  # оновлення інструмента (0.23.0): перевірка тегів у remote, `update.json`, `GET /api/update`
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
 import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
@@ -9464,15 +9465,24 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'space': sid, 'tools': tools})
 
     def _agents_md_post(self, payload):
-        """`POST /api/agents-md {space[, claude: true]}`: створити/оновити блок; з `claude: true` — лише підключити CLAUDE.md
-        (`agents_md.claude_connect`: дописати `@AGENTS.md` на початок чи створити файл), AGENTS.md не чіпається."""
-        self._agents_md(payload.get('space'), 'claude' if payload.get('claude') is True else True)
+        """`POST /api/agents-md {space[, claude: true | hook: false]}`: створити/оновити блок; з `claude: true` — «Підключити»:
+        CLAUDE.md (`agents_md.claude_connect`: дописати `@AGENTS.md` на початок чи створити файл) і Stop-хук (`claude_hook.connect`,
+        лише коли його стан `missing`/`stale`), AGENTS.md не чіпається; з `hook: false` — «Відключити»: лише хук (`claude_hook.disconnect`).
+        `hook: true` команди не є: це звичайне створення/оновлення."""
+        if payload.get('hook') is False:
+            write = 'unhook'
+        else:
+            write = 'claude' if payload.get('claude') is True else True
+        self._agents_md(payload.get('space'), write)
 
     def _agents_md(self, want, write):
         """`GET|POST /api/agents-md[?space=]` → `{ok, space, …agents_md.status, paths}`. POST створює/оновлює блок (`ValueError('newer')` →
         409 `newer`, файл цілий). `claude` — стан CLAUDE.md теки простору (`agents_md.claude_status`); `write='claude'` —
         лише підключити його. Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
-        у відповіді, у файл вони не потрапляють. Версія — та сама, що `current` у `GET /api/update`."""
+        у відповіді, у файл вони не потрапляють. Версія — та сама, що `current` у `GET /api/update`.
+        `hook` — стан Stop-хука Claude Code (`claude_hook.status`: `ok`/`missing`/`stale`/`unreadable`/`elsewhere`, абсолютний шлях —
+        лише тут). `hookError` (`changed`/`unreadable`) зʼявляється, коли CLAUDE.md підключено, а хук поставити не вдалося (200; клієнт
+        показує тост збою). `hook: false` — `changed` → 409, нечитний файл → 503, як і для AGENTS.md. Старт канваса хука НЕ чіпає."""
         sp = self._module_space(want)
         if sp is None:
             return
@@ -9481,10 +9491,16 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_error(409, 'no-folder', 'no-folder')
             return
         version = updater.current_version(UPDATER_ROOT)
+        port = self.server.server_port          # порт цього канваса: у команду хука
+        hook_error = None
         try:
-            if write == 'claude':
+            if write == 'unhook':
+                claude_hook.disconnect(folder, port)         # лише хук: CLAUDE.md і AGENTS.md не чіпаємо
+                st = agents_md.status(folder, version=version)
+            elif write == 'claude':
                 agents_md.claude_connect(folder)
                 st = agents_md.status(folder, version=version)
+                hook_error = self._connect_hook(folder, port)
             elif write:
                 existed = os.path.lexists(os.path.join(folder, agents_md.NAME))
                 st = agents_md.write(folder, version=version)
@@ -9503,9 +9519,25 @@ class Handler(SimpleHTTPRequestHandler):
             return
         deai = UPDATER_ROOT
         self._send_json({'ok': True, 'space': sp['id'], **st, 'claude': agents_md.claude_status(folder),
+                         'hook': claude_hook.status(folder, port), **({'hookError': hook_error} if hook_error else {}),
                          'paths': {'deai': deai, 'inbox': os.path.join(deai, 'bin', 'inbox.py'),
                                    'authoring': os.path.join(deai, 'docs', 'modules', 'authoring.md'),
                                    'agents': os.path.join(deai, 'docs', 'agents')}})
+
+    @staticmethod
+    def _connect_hook(folder, port):
+        """Друга половина «Підключити»: поставити Stop-хук, коли його стан `missing`/`stale` (для `ok`, `elsewhere` і `unreadable` —
+        ні: людина не просила, чи хук тут не діє, чи файл не наш). Повертає `None` або код збою (`changed`/`unreadable`): CLAUDE.md
+        на цей момент уже підключено, тож збій хука — не збій відповіді."""
+        if claude_hook.status(folder, port)['state'] not in ('missing', 'stale'):
+            return None
+        try:
+            claude_hook.connect(folder, port)
+        except ValueError as e:
+            return str(e)
+        except OSError:
+            return 'unreadable'
+        return None
 
     def _agent_guide_get(self):
         """`GET /api/agent-guide[?path=|space=][&have=][&topic=][&format=json]` (`agent_guide`, 23.11.2026): чи актуальна мітка
