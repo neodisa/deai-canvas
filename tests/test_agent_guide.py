@@ -50,6 +50,17 @@ def _rb(path):
         return f.read()
 
 
+def _label_template(tc):
+    """Тимчасовий шаблон з міткою `guide` (справжній шаблон отримує її пізніше): підставляється в `agents_md.TEMPLATE`."""
+    d = tempfile.mkdtemp(prefix='agent-guide-tpl-')
+    tc.addCleanup(shutil.rmtree, d, True)
+    tpl = os.path.join(d, 'agents.md')
+    _w(tpl, '<!-- deai:begin v{version} · x -->\n# T (guide {guide})\n{index}\n<!-- deai:end -->\n')
+    p = mock.patch.object(agents_md, 'TEMPLATE', tpl)
+    p.start()
+    tc.addCleanup(p.stop)
+
+
 class Topics(unittest.TestCase):
     """Теми, індекс і мітка на підставлених теках (`DOCS`, `MODULES`, `TEMPLATE`)."""
 
@@ -218,6 +229,7 @@ class Live(unittest.TestCase):
         return base
 
     def test_live_validates_have_and_drops_the_block_when_current(self):
+        _label_template(self)
         v = '1.2.0'
         g = agents_md.guide_of(agents_md.render_block(version=v))
         kw = dict(version=v, space=None, task=None, modules=[], own=[], docs='/d')
@@ -291,8 +303,10 @@ class Route(base.Fixture):
         p = mock.patch.object(agents_md, 'DOCS', self.docs)
         p.start()
         self.addCleanup(p.stop)
+        _label_template(self)
         self.version = updater.current_version(serve.UPDATER_ROOT)
         self.guide = agents_md.guide_of(agents_md.render_block(version=self.version))
+        self.assertRegex(self.guide, r'^[0-9a-f]{8}$')
 
     def j(self, query=''):
         sep = '&' if '?' in query else '?'
