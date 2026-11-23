@@ -8273,7 +8273,8 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             pass                       # слот-залишок без `files` нешкідливий, знищиться через 7 днів
         git_autocommit(task['dir'], f'restore iteration {entry["id"]}')
-        self._send_json({'ok': True, 'id': entry['id'], 'renamed': renamed, 'iteration': entry})
+        self._send_json({'ok': True, 'id': entry['id'], 'renamed': renamed,
+                         'iteration': {**entry, 'label_text': iteration_label(entry)}})
 
     def _iteration_rename(self, payload):
         """Перейменувати ітерацію: `label` — короткий підпис на пілюлі,

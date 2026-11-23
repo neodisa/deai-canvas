@@ -1446,8 +1446,10 @@ const iterNoteOf = (it) => (it?.label_text || '').replace(new RegExp(`^Іт\\.${
  * стає обраною, а її рядок одразу відкритий для перейменування — окремого питання про примітку нема. Тіло спільне для
  * кнопки внизу переліку, пункту «Дублювати» меню рядка й ⌘K.
  */
+let creatingIt = false;   // подвійний клік не створює двох ітерацій
 async function createIteration(from) {
-  if (!from) return;
+  if (!from || creatingIt) return;
+  creatingIt = true;
   const note = iterNoteOf((curTask?.iterations || []).find((x) => x.id === from));
   try {
     const r = await post('/api/iteration', { from, note });
@@ -1457,6 +1459,7 @@ async function createIteration(from) {
     await refreshGitlab(); await render();
     focusItRen();
   } catch (e) { tellError(t('errTDupIter'), e.message); }
+  finally { creatingIt = false; }
 }
 
 /** Відкрити поле назви на рядку ітерації `id` (дропдаун — відкритий) і поставити в нього фокус. */
@@ -1520,22 +1523,26 @@ async function saveItRen(inp, { refocus = false } = {}) {
 async function deleteIteration(id) {
   const it = (curTask?.iterations || []).find((x) => x.id === id);
   const label = it?.label_text || id;
+  const taskId = currentTaskId;      // «Повернути» мусить піти в ТУ задачу, де видалили, навіть якщо за 8 с перемкнули задачу
   iterUi = IT_NONE;
   try {
     const r = await post('/api/iteration-delete', { id });
     if (picked === id) picked = null;
     closeHistory(id);
     await render();
-    toast(t('iterDeleted', label), { ms: 8000, action: { label: t('iterRestore'), run: () => restoreIteration(r.trash, label) } });
+    toast(t('iterDeleted', label), { ms: 8000, action: { label: t('iterRestore'), run: () => restoreIteration(r.trash, label, taskId) } });
   } catch (e) { paintBar(); tellError(t('errTDeleteIter'), e.message); }
 }
 
 /** «Повернути» з тосту: теку й запис назад із кошика; номер зайнятий — сервер дає наступний вільний, тост про це каже. */
-async function restoreIteration(slot, label) {
+async function restoreIteration(slot, label, taskId) {
   try {
-    const r = await post('/api/iteration-restore', { trash: slot });
-    picked = r.id;
-    await render();
+    const r = await api('/api/iteration-restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(taskId ? { 'X-Canvas-Task': taskId } : {}) },
+      body: JSON.stringify({ trash: slot }),
+    });
+    if (!taskId || taskId === currentTaskId) { picked = r.id; await render(); }
     if (r.renamed) toast(t('iterRestoredAs', r.iteration?.label_text || t('iterTag', itNum(r.id))));
   } catch (e) { toast(t('iterRestoreFailed', label)); }
 }
@@ -2631,7 +2638,7 @@ function onCommentsEvent(src, m) {
     if (!cmtOpen) setCommentsOpen(true); else paintComments();
   } else if (m.ev === 'mode') {
     if (!m.on && cmtOpen) { cmtOpen = false; cmtSel = null; cmtEditing = null; cmtDraft = null; cmtDelAsk = null; cmtReplyReset(); paintComments(); }
-    else if (m.on && !cmtOpen) { cmtOpen = true; paintComments(); }
+    else if (m.on && !cmtOpen) { closeHistory(); cmtOpen = true; paintComments(); }   // права панель одна — історія поступається
   }
 }
 /* Посилки коментатора з рамки (режим хоста, `host=1`). Правило джерела:
@@ -3170,7 +3177,7 @@ const BAR_ACTIONS = {
   dupit: () => createIteration(picked),
   renit: () => { if (picked) { openDd = 'iter'; startItRen(picked); } },
   delit: () => {
-    if (!picked) return;
+    if (!picked || (curTask?.iterations || []).length <= 1) return;
     openDd = 'iter';
     iterUi = { ...IT_NONE, del: picked };
     paintBar();
@@ -3982,7 +3989,7 @@ bar.addEventListener('keydown', (ev) => {
 function refuseMissingTask(id, tasks = curTaskList && curTaskList.tasks) {
   const x = (tasks || []).find((y) => y.id === id);
   if (!x || !x.missing) return false;
-  toast(t('folderMissingOpen', taskKey(x)));
+  toast(t('folderMissingOpen', cleanTitle(x)));
   return true;
 }
 
@@ -9759,6 +9766,7 @@ function paletteState() {
   const st = barState();
   return {
     mode: st.mode, view: st.view, hasIteration: st.hasIteration,
+    iterCount: (curTask?.iterations || []).length,
     homeOpen: st.homeOpen,
     homePage: st.homePage,
     pagesError: st.pagesError, flowRaw: st.flowRaw, flowError: st.flowError,

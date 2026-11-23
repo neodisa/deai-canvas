@@ -309,7 +309,7 @@ export function paletteActions(state) {
     out.push({ id: "renit", group: "gIter", labelKey: "renameIteration", icon: "pencil", act: "renit" });
     out.push({ id: "dupit", group: "gIter", labelKey: "dupIteration", icon: "copy", act: "dupit" });
     /* Історія — права панель живого «Макета»: в «Огляді» (знімки) її нема. */
-    if (s.mode !== "canvas") out.push({ id: "ithist", group: "gIter", labelKey: "iterHistoryPal", icon: "refresh", act: "histcur" });
+    if (s.mode !== "overview") out.push({ id: "ithist", group: "gIter", labelKey: "iterHistoryPal", icon: "refresh", act: "histcur" });
   }
 
   /* ── gPage: навпаки, ПРИЧИНА ВИДИМА — той самий вибір, що робить сама
@@ -462,7 +462,9 @@ export function paletteActions(state) {
 
   /* ── gDanger ──────────────────────────────────────────────────────────── */
   if (hasIteration) {
-    out.push({ id: "delit", group: "gDanger", labelKey: "delIteration", icon: "trash", act: "delit", danger: true });
+    out.push({ id: "delit", group: "gDanger", labelKey: "delIteration", icon: "trash", act: "delit", danger: true,
+      /* Єдину ітерацію не видаляють (сервер: `last-iteration`). Без `iterCount` (старі виклики) — як було. */
+      ...(Number.isFinite(s.iterCount) && s.iterCount <= 1 ? { disabled: true, whyKey: "iterDelOnly" } : {}) });
   }
   out.push({
     id: "delpage", group: "gDanger", labelKey: "delPage", icon: "trash", act: "delpage", danger: true,

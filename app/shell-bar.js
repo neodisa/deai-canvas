@@ -50,11 +50,11 @@ const lblCls = (labelTier) => {
    `current` — `aria-current="true"` на «де я зараз» (поточний простір): колір
    `dd-item--on` стан не оголошує, а читач мусить його почути. Без `current`
    розмітка пункту побайтно та сама, що була. */
-const ddItem = ({ act, val = "", icon = "", lead = "", title, sub = "", why = "",
+const ddItem = ({ act, val = "", icon = "", lead = "", title, sub = "", why = "", tip = "",
   on = false, danger = false, marks = "", cls: extra = "", current = false } = {}) => {
   const cls = `dd-item${on ? " dd-item--on" : ""}${danger ? " dd-item--danger" : ""}`
     + `${extra ? ` ${extra}` : ""}`;
-  return `<button class="${cls}" data-act="${esc(act)}" data-val="${esc(val)}"${current ? ' aria-current="true"' : ""}${why ? " disabled" : ""}>
+  return `<button class="${cls}" data-act="${esc(act)}" data-val="${esc(val)}"${current ? ' aria-current="true"' : ""}${why || tip ? " disabled" : ""}${tip ? ` title="${esc(tip)}"` : ""}>
     ${lead || (icon ? ico(icon) : '<span class="ico" style="width:16px"></span>')}
     <span class="dd-body"><span class="dd-t">${esc(title)}</span>
     ${why ? `<span class="dd-why">${esc(why)}</span>` : ""}
@@ -196,19 +196,19 @@ function iterRow(x, ui) {
 }
 
 /* Меню «⋯» рядка: усе діє на ЦЮ ітерацію (не на поточну). Позицію (праворуч від переліку, на висоті рядка) ставить `paintBar`. */
-function iterMenu(x, count, modActs) {
+function iterMenu(x, count, modActs, overview = false) {
   const id = esc(x.id);
   return `<div class="dd dd--itmenu" role="menu" data-for="${id}">
     ${ddItem({ act: "itren", val: x.id, icon: "pencil", title: t("iterRename"), marks: "<kbd>F2</kbd>" })}
     ${ddItem({ act: "itdup", val: x.id, icon: "copy", title: t("dupIteration") })}
-    ${ddItem({ act: "ithist", val: x.id, icon: "refresh", title: t("iterHistory") })}
+    ${overview ? "" : ddItem({ act: "ithist", val: x.id, icon: "refresh", title: t("iterHistory") })}
     ${modActs.length ? `<div class="dd-sep"></div>${modActs.map((a) => ddItem({ act: "itmodact", val: `${x.id}::${a.key}`, icon: "puzzle", title: a.label })).join("")}` : ""}
     <div class="dd-sep"></div>
-    ${ddItem({ act: "itdel", val: x.id, icon: "trash", title: t("iterDelete"), danger: true, why: count <= 1 ? t("iterDelOnly") : "" })}
+    ${ddItem({ act: "itdel", val: x.id, icon: "trash", title: t("iterDelete"), danger: true, tip: count <= 1 ? t("iterDelOnly") : "" })}
   </div>`;
 }
 
-function crumbIter(model, openDd, ui = null, modActs = []) {
+function crumbIter(model, openDd, ui = null, modActs = [], overview = false) {
   const it = model.zone1.find((x) => x.id === "iter");
   if (!it) return "";
   const open = openDd === "iter";
@@ -221,8 +221,8 @@ function crumbIter(model, openDd, ui = null, modActs = []) {
   const menuFor = ui?.menu ? items.find((x) => x.id === ui.menu) : null;
   const dd = open ? `<div class="dd dd--iters">
     ${items.map((x) => iterRow(x, ui)).join("")}${items.length ? '<div class="dd-sep"></div>' : ""}
-    ${ddItem({ act: "newit", icon: "plus", title: t("newIteration"), sub: t("newIterationSub") })}
-  </div>${menuFor ? iterMenu(menuFor, items.length, modActs) : ""}` : "";
+    ${ddItem({ act: "newit", icon: "plus", title: t("newIteration") })}
+  </div>${menuFor ? iterMenu(menuFor, items.length, modActs, overview) : ""}` : "";
   /* Імені автора в крошці нема (власник: лише ітерація та її назва); чужа ітерація — видимий клас `crumb--foreign`
      і title-підказка: про межу треба дізнатись ДО того, як почав у ній працювати. Автор — у підказці кружка чужого рядка переліку. */
   const foreign = it.mine ? "" : " crumb--foreign";
@@ -473,7 +473,7 @@ export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
   const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
   /* Третій аргумент `crumbIter` — `state.iterUi` `{menu, ren, del}`: меню рядка, поле назви, питання видалення (фаза И). */
-  const iter = home ? "" : crumbIter(model, openDd, state?.iterUi ?? null, Array.isArray(state?.modActs) ? state.modActs : []);
+  const iter = home ? "" : crumbIter(model, openDd, state?.iterUi ?? null, Array.isArray(state?.modActs) ? state.modActs : [], state?.mode === "overview");
   const zone1 = home
     ? `${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
     : `<div class="crumbs">${crumbTask(model, openDd, state)}${iter ? `<span class="crumb-sep" aria-hidden="true">/</span>${iter}` : ""}</div>`;

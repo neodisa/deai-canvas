@@ -245,8 +245,10 @@ export function cardHTML(x, ui, cur) {
     : `<div class="th-badges">${status}${comments}${gone}${actionHTML(x, team)}</div>`;
   /* Фаза И (Р1): ідентифікатора на картці немає. Ключ видно лише коли пошук збігся з ним, а не з назвою. Рядок стоїть
      завжди (мін. висота в CSS): назви карток на одній лінії. */
-  const ql = q.trim().toLowerCase();
-  const keyHit = !!ql && !cleanTitle(x).toLowerCase().includes(ql) && taskKey(x).toLowerCase().includes(ql);
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const titleL = cleanTitle(x).toLowerCase();
+  const keyL = taskKey(x).toLowerCase();
+  const keyHit = words.some((w) => keyL.includes(w) && !titleL.includes(w));
   const krow = (keyHit ? `<span class="th-key">${mark(taskKey(x), q)}</span>` : "")
     + (isCur ? `<span class="th-curb">${keyHit ? "· " : ""}${esc(t("thCurrent"))}</span>` : "");
   const cls = `th-card${isCur ? " th-card--cur" : ""}${missing ? " th-card--miss" : ""}${asking ? " th-card--ask" : ""}`;

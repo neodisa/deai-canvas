@@ -951,3 +951,21 @@ test("initials: перші літери двох перших слів; поро
   assert.equal(initials(""), "?");
   assert.equal(initials(undefined), "?");
 });
+
+test("фаза И: меню рядка в «Огляді» не має «Історії змін» (панель живе лише в «Макеті»); у «Макеті» є", () => {
+  const menu = { openDd: "iter", iterUi: { menu: "it2", ren: null, del: null } };
+  assert.match(itHtml({ ...menu, mode: "layout" }), /data-act="ithist" data-val="it2"/);
+  const h = itHtml({ ...menu, mode: "overview" });
+  assert.doesNotMatch(h, /data-act="ithist"/);
+  assert.match(h, /data-act="itren" data-val="it2"/);
+});
+
+test("Р10: «Видалити» єдиної ітерації вимкнене з причиною в title, без видимого підпису; «Нова ітерація» без підпису", () => {
+  setLang("uk");
+  const st = { openDd: "iter", iterUi: { menu: "it1", ren: null, del: null } };
+  const one = barHTML(barModel(S({ iterList: [{ id: "it1", label: "Іт.1", note: "", mine: true }], iterId: "it1", ...st })), S(st));
+  assert.match(one, /data-act="itdel" data-val="it1"[^>]*disabled title="єдина ітерація"/);
+  assert.doesNotMatch(one, /dd-why/);
+  assert.doesNotMatch(one, /копія обраної/);
+  assert.doesNotMatch(itHtml({ openDd: "iter" }), /dd-sub/);
+});

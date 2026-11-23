@@ -50,8 +50,8 @@ const filesLine = (files, more) => {
 
 function entryHTML(e) {
   const ai = e.actor?.kind === "ai";
-  const name = ai ? "AI" : (e.actor?.name || "");
-  return `<div class="hist-e"><span class="hist-av${ai ? " hist-av--ai" : ""}">${esc(ai ? "AI" : initials(name))}</span>`
+  const name = ai ? "" : (e.actor?.name || "");   // аватар «AI» уже каже, хто це — другий рядок «AI» зайвий
+  return `<div class="hist-e"><span class="hist-av${ai ? " hist-av--ai" : ""}">${esc(ai ? "AI" : initials(e.actor?.name || ""))}</span>`
     + `<div class="hist-b"><div class="hist-t">${esc(what(e))}</div>${name ? `<div class="hist-m">${esc(name)}</div>` : ""}`
     + `${filesLine(e.files, e.more)}</div><span class="hist-time">${esc(hhmm(e.at))}</span></div>`;
 }

@@ -167,7 +167,10 @@ test("видалення: питання в рядку → тост «Повер
   await page.waitForSelector('#cv-toast.show [data-act="undo"]');
   assert.deepEqual(await ids(), ["it1", "it3"], "сервер не прибрав ітерацію");
   await shot(page, "06-toast.png");
+  const restoreReq = page.waitForRequest((r) => r.url().endsWith("/api/iteration-restore"));
   await page.click('#cv-toast [data-act="undo"]');
+  const hdr = (await restoreReq).headers()["x-canvas-task"];
+  assert.ok(hdr, "«Повернути» не називає задачу заголовком X-Canvas-Task: після перемикання задачі пішло б не туди");
   await page.waitForFunction(async () => (await (await fetch("/api/task")).json()).iterations.length === 3);
   assert.deepEqual(await ids(), ["it1", "it2", "it3"], "ітерація повернулась не на своє місце");
   // перелік показує найновішу ітерацію зверху; без ручного перевідкриття дропдауна — перемальовка сама мусить дати Іт.2
@@ -182,6 +185,20 @@ test("видалення: «Видалити» вимкнене, коли лиш
   await openRowMenu(page, "it1");
   const del = page.locator('#bar .dd--itmenu [data-act="itdel"]');
   assert.equal(await del.isDisabled(), true, "єдину ітерацію можна видалити");
+});
+
+test("«Огляд»: меню рядка без «Історії змін» (панелі там нема); ⌘K без історії; у «Макеті» пункт є", async (t) => {
+  const { page } = await boot(t, { count: 2 });
+  await openList(page);
+  await openRowMenu(page, "it2");
+  assert.equal(await page.locator('#bar .dd--itmenu [data-act="ithist"]').count(), 1, "у «Макеті» пункту нема");
+  await page.keyboard.press("Escape");
+  await page.click('[data-act="mode"][data-val="overview"]');
+  await page.waitForSelector('[data-act="mode"][data-val="layout"]');
+  await openList(page);
+  await openRowMenu(page, "it2");
+  assert.equal(await page.locator('#bar .dd--itmenu [data-act="ithist"]').count(), 0, "в «Огляді» пункт «Історія змін» мертвий");
+  assert.equal(await page.locator('#bar .dd--itmenu [data-act="itren"]').count(), 1);
 });
 
 test("історія: меню рядка → панель із записами; закриття; винятковість із коментарями; ⌘K відкриває для поточної", async (t) => {

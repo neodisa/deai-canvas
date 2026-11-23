@@ -1171,5 +1171,12 @@ test("«Історія ітерації»: є лише з ітерацією й 
   const find = (o) => paletteActions(S(o)).find((a) => a.id === "ithist");
   assert.deepEqual({ id: find({}).id, act: find({}).act, group: find({}).group }, { id: "ithist", act: "histcur", group: "gIter" });
   assert.equal(find({ hasIteration: false }), undefined);
-  assert.equal(find({ mode: "canvas" }), undefined);
+  assert.equal(find({ mode: "overview" }), undefined, "у «Огляді» (реальне значення режиму — `overview`) історії нема");
+});
+
+test("⌘K «Видалити ітерацію»: єдина ітерація — вимкнено з причиною; кілька — доступне", () => {
+  const del = (o) => paletteActions(S(o)).find((a) => a.id === "delit");
+  assert.deepEqual([del({ iterCount: 1 }).disabled, del({ iterCount: 1 }).whyKey], [true, "iterDelOnly"]);
+  assert.equal(del({ iterCount: 2 }).disabled, undefined);
+  assert.equal(del({ iterCount: 2 }).whyKey, undefined);
 });

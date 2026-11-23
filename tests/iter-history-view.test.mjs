@@ -64,3 +64,25 @@ test("усі види записів мають текст; en і uk; порож
   assert.match(h, /Today/);
   setLang("uk");
 });
+
+test("запис AI: у другому рядку немає зайвого «AI» (аватар уже каже); запис людини зберігає імʼя", () => {
+  setLang("uk");
+  const ai = histHTML({ label: "Іт.5", entries: [E({ kind: "ai", actor: { kind: "ai", name: "AI" } })] }, { now: NOW });
+  assert.doesNotMatch(ai, /class="hist-m"/);
+  assert.match(ai, /<span class="hist-av hist-av--ai">AI<\/span>/);
+  const me = histHTML({ label: "Іт.5", entries: [E({})] }, { now: NOW });
+  assert.match(me, /<div class="hist-m">Олена Д\.<\/div>/);
+});
+
+test("dayKey: мітка зі зсувом пояса рахується за локальним днем машини (очікування з геттерів Date)", () => {
+  setLang("uk");
+  const at = "2026-11-23T00:30:00+05:00";
+  const d = new Date(at);
+  const pad = (n) => String(n).padStart(2, "0");
+  const local = `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+  const farNow = new Date(d.getFullYear() + 1, 5, 15, 12);       // далеко: ні «Сьогодні», ні «Вчора»
+  assert.equal(dayKey(at, farNow), local);
+  assert.equal(dayKey(at, new Date(d.getTime() + 3600e3)), "Сьогодні");
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 12);
+  assert.equal(dayKey(at, next), "Вчора");
+});

@@ -53,7 +53,8 @@ test("фаза И: єдиний шлях видалення ітерації —
   assert.match(del, /\/api\/iteration-delete/);
   assert.match(del, /toast\(t\('iterDeleted', label\), \{ ms: 8000, action: \{ label: t\('iterRestore'\)/);
   const cmdK = app.slice(app.indexOf("  delit: () => {"), app.indexOf("  ithist:"));
-  assert.doesNotMatch(cmdK, /api\/iteration-delete|askYesNo/);
+  assert.doesNotMatch(cmdK, /api\/iteration-delete|askYesNo|deleteIteration\(/, "⌘K `delit` не видаляє сам: лише відкриває питання");
+  assert.match(cmdK, /\.length <= 1\) return;/, "єдину ітерацію ⌘K не пропонує видаляти");
   assert.match(cmdK, /iterUi = \{ \.\.\.IT_NONE, del: picked \}/);
 });
 
@@ -74,3 +75,43 @@ test("фаза И: перемальовка смуги не губить наб�
   assert.match(paint, /setSelectionRange\(renKeep\.a, renKeep\.b\)/);
 });
 
+
+/* Фаза И, фінальний раунд: проводка в app.js, що перевіряється лише по джерелу. */
+const fn = (name, next) => app.slice(app.indexOf(name), app.indexOf(next, app.indexOf(name) + 1));
+
+test("createIteration: охоронець від подвійного кліку знімається в finally", () => {
+  const f = fn("async function createIteration(", "/** Відкрити поле назви");
+  assert.match(app, /^let creatingIt = false;/m);
+  assert.match(f, /if \(!from \|\| creatingIt\) return;\n\s+creatingIt = true;/);
+  assert.match(f, /finally \{ creatingIt = false; \}/);
+});
+
+test("«Повернути» йде в задачу, де видалили: id задачі береться при видаленні й їде заголовком X-Canvas-Task", () => {
+  const del = fn("async function deleteIteration(", "async function restoreIteration(");
+  assert.match(del, /const taskId = currentTaskId;/);
+  assert.match(del, /restoreIteration\(r\.trash, label, taskId\)/);
+  const res = fn("async function restoreIteration(", "/**\n * Забути ВСЕ");
+  assert.match(res, /'X-Canvas-Task': taskId/);
+  assert.match(res, /\/api\/iteration-restore/);
+  assert.match(res, /taskId === currentTaskId\) \{ picked = r\.id; await render\(\); \}/, "чужу задачу не перемальовуємо");
+});
+
+test("права панель одна: історія закривається при відкритті коментарів, модуля, інспектора (кнопка й клавіша `I`) і події `mode` коментатора", () => {
+  assert.match(app.slice(app.indexOf("function setCommentsOpen("), app.indexOf("function setCommentsOpen(") + 400), /if \(on\) closeHistory\(\);/);
+  assert.match(app.slice(app.indexOf("function openModTool("), app.indexOf("function openModTool(") + 700), /\n  closeHistory\(\);/);
+  assert.match(app, /  inspector: \(\) => \{[\s\S]{0,400}if \(!api\.on\) closeHistory\(\);/);
+  assert.match(app, /if \(api && api\.on && histOpen\) closeHistory\(\);/);
+  assert.match(app, /else if \(m\.on && !cmtOpen\) \{ closeHistory\(\); cmtOpen = true;/);
+});
+
+test("openHistory відкидає застарілу відповідь і в успіху, і в помилці", () => {
+  const f = fn("async function openHistory(", "/** Закрити історію");
+  assert.equal((f.match(/if \(histOpen\?\.seq !== seq\) return;/g) || []).length, 2);
+  const [ok, bad] = f.split("} catch (e) {");
+  assert.match(ok, /histOpen\?\.seq !== seq\) return;[\s\S]*histHTML\(\{ label, entries: r\.entries/);
+  assert.match(bad, /histOpen\?\.seq !== seq\) return;[\s\S]*degraded: true/);
+});
+
+test("Р1: тост «теки немає» називає задачу назвою, а не ключем", () => {
+  assert.match(app, /toast\(t\('folderMissingOpen', cleanTitle\(x\)\)\)/);
+});

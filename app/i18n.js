@@ -175,7 +175,6 @@ const UK = {
   iterHistoryPal: 'Історія ітерації',
   /* Підпис автора ітерації. Імʼя — ДАНІ (його написала людина у своєму
      git-конфізі), і воно лишається як є; переклад стосується лише обрамлення. */
-  iterBy: (who) => `· ${who}`,
   iterForeign: 'ітерація колеги — дивитись можна, працювати у своїй',
   /* Рід НЕ вгадуємо: «у неї це Іт.3» про колегу-чоловіка читається неправильно,
      а статі в git-конфізі немає й бути не може. */
@@ -210,8 +209,6 @@ const UK = {
   // Контекст-меню ітерації й сторінки (`pillMenu`/`pageMenu`) — самі меню
   // лишаються, План B їх не чіпає
   menuRename: 'Перейменувати…',
-  menuDuplicateIteration: 'Дублювати (нова копія)',
-  menuDeleteIteration: 'Видалити ітерацію',
   menuDeleteYes: 'Видалити',
   menuTogglePublish: 'Сховати/показати в превью',
   // Порядок сторінок (fb-09092026-d4c51b): «на одну» серед сусідів того самого
@@ -362,7 +359,6 @@ const UK = {
   vpAuto: 'авто',
   vpCustom: 'своя ширина, px',
   newIteration: 'Нова ітерація',
-  newIterationSub: 'копія обраної',
   iterRename: 'Перейменувати',
   iterDelete: 'Видалити',
   iterHistory: 'Історія змін',
@@ -1714,7 +1710,6 @@ const EN = {
   histSync: 'Synced with GitLab',
   histMore: (n) => `${n} more`,
   iterHistoryPal: 'Iteration history',
-  iterBy: (who) => `· ${who}`,
   iterForeign: 'a colleague’s iteration — you can view it, work in your own',
   iterOriginTitle: (who, n) => `${who} · It.${n} on their side`,
   glForeignMsg: (who) => `This is a colleague’s iteration (${who}) — it can’t be `
@@ -1741,8 +1736,6 @@ const EN = {
   vcsErrTarget: 'The repository address, branch or folder of this task (or the defaults in Settings) is not valid.',
 
   menuRename: 'Rename…',
-  menuDuplicateIteration: 'Duplicate (new copy)',
-  menuDeleteIteration: 'Delete iteration',
   menuDeleteYes: 'Delete',
   menuTogglePublish: 'Hide/show in preview',
   menuMoveUp: 'Move up',
@@ -1864,7 +1857,6 @@ const EN = {
   vpAuto: 'auto',
   vpCustom: 'custom width, px',
   newIteration: 'New iteration',
-  newIterationSub: 'a copy of the selected one',
   iterRename: 'Rename',
   iterDelete: 'Delete',
   iterHistory: 'Change history',

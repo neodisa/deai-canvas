@@ -760,3 +760,12 @@ test("Д: картка кошика пише «видалено …» від ф�
   const T = { id: "old", title: "Стара", jira: null, tags: [], at: "2026-10-09T09:00:00Z", thumb: null };
   assert.match(trashCardHTML(T, ui0()), /<div class="th-meta">видалено 3 год тому<\/div>/);
 });
+
+test("пошук із кількох слів: ключ видно, коли ХОЧА Б одне слово збіглося з ключем і його нема в назві", () => {
+  const key = (q) => /class="th-key"/.test(cardHTML(A, UI({ q }), "other"));
+  assert.equal(key("очікування 7019"), true, "слово зі ключа + слово з назви");
+  assert.equal(key("7019 очікування"), true);
+  assert.equal(key("очікування оновлення"), false, "обидва слова — з назви");
+  assert.equal(key(""), false);
+  assert.match(cardHTML(A, UI({ q: "очікування 7019" }), "other"), /<span class="th-key">LIGA-<mark>7019<\/mark><\/span>/);
+});

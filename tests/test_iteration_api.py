@@ -80,6 +80,7 @@ class IterationApi(_Base):
         self.assertEqual((st, body['ok'], body['id'], body['renamed']), (200, True, 'it2', False))
         self.assertEqual(self.ids(), ['it1', 'it2', 'it3'])
         self.assertIn('restore iteration it2', _git(self.x_dir, 'log', '-1', '--format=%s'))
+        self.assertTrue(body['iteration']['label_text'].startswith('Іт.2'), body['iteration'])   # тост «Повернено як…»
 
     def test_new_iteration_does_not_reuse_trashed_number(self):
         self.post('/api/iteration-delete', {'id': 'it2'})
