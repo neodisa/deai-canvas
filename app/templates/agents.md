@@ -39,6 +39,17 @@ Create a task:
       header: X-Canvas-Task: <task-id>
 
   A folder created by hand is not registered and does not show in the canvas.
+- Deleting an iteration moves it to the task's trash for 7 days (`.trash/`, outside git); the answer carries the slot to
+  restore it. The only iteration of a task cannot be deleted.
+
+      POST http://127.0.0.1:8765/api/iteration-delete  {"id": "itN"}          → {"ok": true, "trash": "<slot>"}
+      POST http://127.0.0.1:8765/api/iteration-restore {"trash": "<slot>"}    → {"ok": true, "id": "itN", "renamed": false}
+      header: X-Canvas-Task: <task-id>
+
+- The change history of an iteration comes from the task folder's git:
+  `GET http://127.0.0.1:8765/api/iteration-history?id=itN` (header `X-Canvas-Task`). After each of your replies the canvas
+  commits your edits to an iteration as `itN: зміни AI` with the trailer `Deai-Actor: ai`, so the designer sees what you
+  changed; you don't need to commit them yourself.
 
 ## Comments
 
