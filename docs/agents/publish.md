@@ -3,7 +3,7 @@ Publish marked iterations as a preview link; preview password; import someone's 
 
 Publishing is done by the space's module with the role `publish` (see the topic `modules`). Every call acts on one task:
 send the header `X-Canvas-Task: <task-id>` (or the `/t/<task-id>` prefix); without it, on the current task. Publishing deploys the marked
-iterations; the link is visible to anyone who has it.
+iterations; the preview link can be shared with others.
 
 ## Mark iterations
 

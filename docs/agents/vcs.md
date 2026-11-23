@@ -46,5 +46,5 @@ A refusal of the provider or the module is `200` with `{"ok": false, "error", "c
 `vcs-auth`, `vcs-bad-target`, `vcs-busy`, `vcs-error`. `vcs-busy` means a send or a pull is already running: try again.
 The repository address in messages is masked.
 
-With the module's `autosync` setting on, the Stop hook sends after each agent reply (topic `hooks`); otherwise sending happens on
-`POST /api/vcs-push`.
+With the module's `autosync` setting on and a Stop hook set up (topic `hooks`), sending happens after each agent reply;
+otherwise it happens on `POST /api/vcs-push`.
