@@ -64,7 +64,7 @@ AGENTS.md («після правок ітерації клич `/api/autosync`»
 
 - `command(port)` → рядок команди; `HOOK_MARK = '# deai-autosync'`; `FILE = '.claude/settings.local.json'`.
 - `status(space_dir, port)` → `{state, path}`; ніколи не кидає.
-- `connect(space_dir, port)` → `status` після запису; `disconnect(space_dir)` → `status` після.
+- `connect(space_dir, port)` → `status` після запису; `disconnect(space_dir, port)` → `status` після (`port` — щоб відрізнити `ok` від `stale`).
 
 Правила:
 - Злиття, не перезапис: читаємо JSON, додаємо в `hooks.Stop` одну нашу групу; інші ключі й чужі хуки не чіпаємо. Наші групи
@@ -93,8 +93,10 @@ AGENTS.md («після правок ітерації клич `/api/autosync`»
 - `GET /api/agents-md?space=` → новий ключ `hook: {state, path}` (абсолютний шлях — лише у відповіді).
 - `POST /api/agents-md {space, claude: true}` → `agents_md.claude_connect` + `claude_hook.connect`, коли стан хука `missing` чи
   `stale` (для `elsewhere`/`unreadable` хук пропускаємо, CLAUDE.md однаково підключаємо). Збій хука після успішного CLAUDE.md —
-  відповідь зі станами обох (клієнт показує тост збою); `changed` → 409, `unreadable` → 503, як зараз.
-- `POST /api/agents-md {space, hook: false}` → `claude_hook.disconnect`.
+  200 зі станами обох і `hookError: 'changed'|'unreadable'` (клієнт показує тост збою). Збій самого CLAUDE.md — як зараз:
+  `changed` → 409, `unreadable` → 503, хук тоді не пробуємо.
+- `POST /api/agents-md {space, hook: false}` → `claude_hook.disconnect`; `changed` → 409, `unreadable` → 503. Відповіді 409/503
+  ключа `hook` не мають: клієнт показує тост і рядок не міняє.
 - Автооновлення при старті канваса хука НЕ чіпає (не ставить, не лагодить порт, не знімає): це налаштування людини.
 
 Рядок «Claude Code» (`setup-model.js` `claudeRow(claude, hook)`, `first-run.js` `agentRowsHTML`) — як у прототипі, без пояснювальних
