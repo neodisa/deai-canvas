@@ -5985,6 +5985,9 @@ MODULE_CALL_BODY_MAX = 64 * 1024
 #: `POST /api/local-shots` (0.35.1): тіло JSON ≤ 12 МіБ (413 ДО читання), декодований JPEG ≤ 8 МіБ.
 LOCAL_SHOT_BODY_MAX = 12 * 1024 * 1024
 LOCAL_SHOT_MAX = 8 * 1024 * 1024
+#: `POST /api/autosync`: тіло ≤ 2 МіБ (413 ДО читання). Stop-хук Claude Code шле туди весь JSON сесії (разом з текстом останньої
+#: відповіді), а з нього потрібен лише `cwd`; хук на 413 мовчить, наступна відповідь закомітить.
+AUTOSYNC_BODY_MAX = 2 * 1024 * 1024
 #: Імʼя знімка — id піна коментатора (UUID чи `c-<цифри>-<base36>`): без крапок і скісних, не з дефіса.
 LOCAL_SHOT_ID_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,99}')
 LOCAL_SHOT_DIR = '.dc-local-shots'
@@ -7943,6 +7946,9 @@ class Handler(SimpleHTTPRequestHandler):
             if length > LOCAL_SHOT_BODY_MAX and self.path in ('/api/local-shots',):   # кортеж, не `==`: охоронець `bad-body` збирає маршрути за `== '…'` разом з обробником
                 self._refuse_unread(413, 'body-too-large', 'screenshot body is too large')    # так само: ДО читання
                 return
+            if length > AUTOSYNC_BODY_MAX and self.path in ('/api/autosync',):   # кортеж, не `==`: той самий довід, що й у `local-shots`
+                self._refuse_unread(413, 'body-too-large', 'autosync body is too large')       # так само: ДО читання
+                return
             raw_body = self.rfile.read(length) if length else b''
             self._body_read = True      # далі центральна відмова тіло вже не вичитує
             payload = json.loads(raw_body) if length else {}
@@ -8779,19 +8785,48 @@ class Handler(SimpleHTTPRequestHandler):
             stderr сервера, і хук КРИЧИТЬ: це збій ЛОКАЛЬНИЙ (нечитабельні `iterations.json`, права на теку), а не мережа, і
             незапушений макет лежав би тихо, якби його сховали під `offline`.
         Єдиний виняток — центральні стани простору (`NoTask`, `SpaceUnavailable`, `SpacesError`, `AmbiguousTask`): вони йдуть далі
-        в `_guarded` і дають ті самі 404/409/503, що й будь-який маршрут."""
-        tid, task, vcs, err = self._vcs_ctx()
+        в `_guarded` і дають ті самі 404/409/503, що й будь-який маршрут.
+
+        Режим «за шляхом» (23.11.2026; Stop-хук, який ставить «Підключити», шле весь JSON сесії): задачі в запиті нема, у тілі абсолютний
+        `cwd` → простір — найдовший префікс серед зареєстрованих (`agent_guide.find_space`), `ai_commit` для КОЖНОЇ його задачі з
+        `.git` (`_ai_commit_space`), далі крок відправки — для ПОТОЧНОЇ задачі цього простору, лише коли в модулі ввімкнено autosync.
+        Відповідь додатково несе `ai_tasks`. `cwd` поза просторами — `reason: "no-space"`; простір без поточної задачі — `reason:
+        "no-task"` (хук мовчить на обох). З тіла береться лише `cwd`."""
+        # Режим «за шляхом» (Stop-хук від «Підключити»): задачу запит НЕ назвав (`_task_override is None`: ні заголовка, ні `/t/<id>/`),
+        # у тілі абсолютний `cwd`. Тіло розібрано вище; звідси береться ЛИШЕ `cwd` — решту (текст відповіді, `session_id`) не читаємо й
+        # нікуди не пишемо. Простір запиту стає знайденим, тож далі все — рівно як у режимі задачі (`_vcs_ctx` читає ЙОГО файл задач).
+        cwd = payload.get('cwd')
+        by_path = self._task_override is None and isinstance(cwd, str) and bool(cwd)
+        extra, ai_tasks = {}, None
+        if by_path:
+            sp = agent_guide.find_space(spaces.read_registry()['spaces'], path=cwd)
+            if sp is None:
+                self._send_json({'ok': True, 'changed': False, 'reason': 'no-space', 'ai': None})
+                return
+            spaces.set_request_space(sp['id'])
+            ai_tasks = self._ai_commit_space(sp)
+            extra = {'ai_tasks': ai_tasks}
         try:
-            ai = ai_commit(task) if task is not None else None
-        except Exception:  # noqa: BLE001 — локальний збій коміту AI не валить хук: історія просто без цього запису
-            sys.stderr.write(_mask_repo(traceback.format_exc()))
-            ai = None
+            tid, task, vcs, err = self._vcs_ctx()
+        except spaces.NoTask:
+            if not by_path:
+                raise
+            self._send_json({'ok': True, 'changed': False, 'reason': 'no-task', 'ai': None, **extra})
+            return
+        if by_path:
+            ai = ai_tasks.get(tid)              # уже закомічено вище, для ВСІХ задач; тут лише результат поточної (сумісність)
+        else:
+            try:
+                ai = ai_commit(task) if task is not None else None
+            except Exception:  # noqa: BLE001 — локальний збій коміту AI не валить хук: історія просто без цього запису
+                sys.stderr.write(_mask_repo(traceback.format_exc()))
+                ai = None
         if err is not None or vcs is None or vcs[3] is None:
-            out = {'ok': True, 'changed': False, 'reason': 'no-gitlab', 'ai': ai}
+            out = {'ok': True, 'changed': False, 'reason': 'no-gitlab', 'ai': ai, **extra}
             self._send_json({**out, 'code': err.code} if err is not None else out)
             return
         if not (vcs[1].get('settings') or {}).get('autosync'):
-            self._send_json({'ok': True, 'changed': False, 'reason': 'autosync-off', 'ai': ai})
+            self._send_json({'ok': True, 'changed': False, 'reason': 'autosync-off', 'ai': ai, **extra})
             return
         try:
             r = autosync(tid, task, vcs[3], vcs=vcs[:3])
@@ -8804,11 +8839,29 @@ class Handler(SimpleHTTPRequestHandler):
             if not offline:
                 # Причину бачить той, хто дивиться в лог сервера: у відповіді хука лише короткий `error`.
                 sys.stderr.write(_mask_repo(traceback.format_exc()))
-            self._send_json({**_vcs_failure(e), 'synced': False, 'changed': False, 'reason': 'offline' if offline else 'error', 'ai': ai})
+            self._send_json({**_vcs_failure(e), 'synced': False, 'changed': False, 'reason': 'offline' if offline else 'error', 'ai': ai, **extra})
             return
         if r.get('changed'):
             self._overview_sync()
-        self._send_json({**r, 'ai': ai})
+        self._send_json({**r, 'ai': ai, **extra})
+
+    def _ai_commit_space(self, sp):
+        """Режим «за шляхом» `/api/autosync`: `ai_commit` для КОЖНОЇ задачі простору `sp` (її тека є на цій машині); задача без `.git`
+        — `None` (`ai_commit` сам). Збій однієї — рядок у stderr (лише імʼя задачі й трасування; тіла запиту тут нема), решта йде.
+        Повертає `{id задачі: {it, sha, its}}` лише для задач, де щось закомічено."""
+        out = {}
+        for tid, row in spaces._space_tasks(sp).items():
+            d = row.get('dir') if isinstance(row, dict) else None
+            if not isinstance(d, str) or not os.path.isdir(d):
+                continue
+            try:
+                ai = ai_commit(row)
+            except Exception:  # noqa: BLE001 — збій однієї задачі не валить хук і не зупиняє інші
+                sys.stderr.write(f'autosync: ai-commit {tid!r} failed\n' + _mask_repo(traceback.format_exc()))
+                continue
+            if ai:
+                out[tid] = ai
+        return out
 
     def _gitlab_pull(self, payload):
         """`POST /api/vcs-pull` (і `/api/gitlab-pull`): ті самі відмови, що в `_gitlab_sync`."""

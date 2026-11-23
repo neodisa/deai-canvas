@@ -1413,6 +1413,7 @@ class AddressMask(Core):
         sent = []
         task = {**self.task, 'gitlab': dict(self.gl)}
         h = SimpleNamespace(path='/api/gitlab-status?it=it1', _current_task=lambda: ('t1', task), _send_json=sent.append,
+                            _task_override=None,        # `_autosync` дивиться, чи запит назвав задачу (режим «за шляхом»)
                             send_error=lambda *a: sent.append(a), _overview_sync=lambda: None, **attrs)
         h._vcs_ctx = lambda: serve.Handler._vcs_ctx(h)         # справжній метод: постачальник і ціль — як на сервері
         return h, sent
