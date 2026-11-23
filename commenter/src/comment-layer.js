@@ -810,7 +810,12 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         }
         // Click a card's screenshot → open it full-screen (lightbox), not navigate.
         const img = e.target.closest('img.shot');
-        if (img) { e.stopPropagation(); this._openLightbox(img.getAttribute('src')); return; }
+        if (img) {
+          e.stopPropagation();
+          const cardEl = img.closest('.c'), cm = cardEl && cardEl.id ? this.comments.find((x) => x.id === cardEl.id.slice(1)) : null;
+          this._openLightbox((cm && cm.meta && (cm.meta.shotUrl || cm.meta.shot)) || img.getAttribute('src'));   // повний знімок, якщо є
+          return;
+        }
         // Don't navigate while typing in an editor; ignore clicks inside edit forms.
         if (this._editingId || e.target.closest('.editform')) return;
         const card = e.target.closest('.c');
@@ -1399,7 +1404,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         if (r && r.shot) {
           if (c) {
             c.meta = c.meta || {}; c.meta.shot = r.shot;
-            const up = await this._uploadShot(id, r.shot, c);   // `c` — для комбінованого сховища (поправка 5 плану Б2)
+            const up = await this._uploadShot(id, r.full || r.shot, c);   // повний знімок (мініатюра — лише inline); `c` — для комбінованого сховища (поправка 5 плану Б2)
             if (up.failed) miss = 'upload'; else if (up.url) c.meta.shotUrl = up.url;
           }
         } else miss = (r && r.miss) || 'render';
@@ -1410,12 +1415,14 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     },
 
     // Заливка знімка: одна повторна спроба через 500 мс — лише після ШВИДКОЇ відмови (null/виняток), не після таймауту. `failed` — сховище є, а URL так і нема (null/таймаут/виняток).
+    // Відповідь сховища `{ skipped: true }` — «для цього піна тут нічого заливати»: одразу без повтору й без `upload`.
     async _uploadShot(id, shot, c) {
       if (!this.store || typeof this.store.uploadShot !== 'function') return { url: null, failed: false };
       for (let i = 0; i < 2; i++) {
         if (i) await new Promise((res) => setTimeout(res, 500));
         try {
           const url = await raceTimeout(this.store.uploadShot(id, shot, c), 8000);
+          if (url && typeof url === 'object' && url.skipped === true) return { url: null, failed: false };
           if (url === SHOT_TIMEOUT) break;   // після таймауту не повторюємо: найгірший час першого persist і гонка з зависшою спробою
           if (url) return { url, failed: false };
         } catch (e) { /* швидка відмова — повтор */ }
@@ -1443,11 +1450,11 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         } catch (e) { return { miss: 'no-lib' }; }
         if (typeof h2c !== 'function') return { miss: 'no-lib' };
         if (!target.isConnected) return { miss: 'detached' };   // поки вантажилась бібліотека, ціль могли прибрати
-        const base = { backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false };
+        const r = target.getBoundingClientRect();
+        const base = { backgroundColor: '#ffffff', scale: shotScale(r.width, r.height, window.devicePixelRatio), useCORS: true, logging: false };
         if (picked.classList) picked.classList.remove('cl-hl');
         target.classList.remove('cl-hl');            // don't bake the hover outline into the shot
         // Без сусідів розкладка цілі в клоні може попливти (flex:1, grid, space-between) — фіксуємо її бокс.
-        const r = target.getBoundingClientRect();
         const onclone = (doc, el) => {
           if (!el || !el.style) return;
           const set = (n, v) => el.style.setProperty(n, v, 'important');
@@ -1462,12 +1469,10 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         } catch (e) { return { miss: 'render' }; }
         if (canvas === SHOT_TIMEOUT) return { miss: 'timeout' };
         if (!canvas) return { miss: 'render' };
-        const maxW = 360, k = Math.min(1, maxW / (canvas.width || maxW)) || 1;
-        const out = document.createElement('canvas');
-        out.width = Math.max(1, Math.round(canvas.width * k));
-        out.height = Math.max(1, Math.round(canvas.height * k));
-        out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
-        return { shot: out.toDataURL('image/jpeg', 0.6) };      // small; stored inline in the comment meta
+        const thumb = fitCanvas(canvas, SHOT_THUMB_MAX).toDataURL('image/jpeg', 0.7);   // мініатюра: inline у `meta.shot`
+        let full = null;
+        try { full = await canvasToJpegDataUrl(fitCanvas(canvas, SHOT_FULL_MAX), 0.85); } catch (e) { full = null; }   // повний: у сховище → `meta.shotUrl`
+        return { shot: thumb, full: full || thumb };
       } catch (e) { return { miss: 'render' }; }
     },
 
@@ -1651,7 +1656,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const route = location.pathname + location.hash;
       const hosted = !!this._hostOpts;   // у хості `meta.url` — адреса Deai: переходити нікуди, сторінку визначає тег версії
       if (hosted && this._otherPage(c)) {
-        const src = c.meta && (c.meta.shot || c.meta.shotUrl);
+        const src = c.meta && (c.meta.shotUrl || c.meta.shot);
         if (src) this._openLightbox(src);
         return;
       }
@@ -1662,7 +1667,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
          раніше тут був мовчазний `return` — дизайнер клікав і не розумів, що
          сталось (fb-06102026-c38f46). Тепер — знімок елемента, якщо є. */
       if (!el || el.getClientRects().length === 0) {
-        const src = c.meta && (c.meta.shot || c.meta.shotUrl);
+        const src = c.meta && (c.meta.shotUrl || c.meta.shot);
         if (src) this._openLightbox(src);
         return;
       }
@@ -2205,7 +2210,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     },
     openShot(id) {
       const c = this.comments.find((x) => x.id === id);
-      const src = c && c.meta && (c.meta.shot || c.meta.shotUrl);
+      const src = c && c.meta && (c.meta.shotUrl || c.meta.shot);
       if (src) this._openLightbox(src);
     },
     togglePins() { if (!this._inited) return false; this._togglePins(); this._render(); return !!this._pinsHidden; },
@@ -2373,6 +2378,45 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   const SHOT_MAX_SVG = 300;
   const SHOT_CDN = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
   const SHOT_TIMEOUT = {};   // відрізняє таймаут від порожнього результату
+  // Розміри знімка: рендер min(DPR, 2) у межах стелі пікселів полотна; мініатюра (inline) і повний (у сховище) — вписані в квадрат.
+  const SHOT_MAX_PX = 6000000;
+  const SHOT_THUMB_MAX = 720;
+  const SHOT_FULL_MAX = 2400;
+  function shotScale(w, h, dpr) {
+    let s = Math.min(Number(dpr) || 1, 2);
+    if (!(s > 0)) s = 1;
+    const area = (w > 0 && h > 0) ? w * h : 0;
+    if (area && area * s * s > SHOT_MAX_PX) s = Math.max(0.1, Math.sqrt(SHOT_MAX_PX / area));
+    return s;
+  }
+  // Вписати в max×max зі збереженням пропорцій, без збільшення.
+  function fitCanvas(canvas, max) {
+    const w = canvas.width || max, h = canvas.height || max;
+    const k = Math.min(1, max / w, max / h) || 1;
+    const out = document.createElement('canvas');
+    out.width = Math.max(1, Math.round(w * k));
+    out.height = Math.max(1, Math.round(h * k));
+    out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+    return out;
+  }
+  // JPEG-дані через `toBlob` (кодування поза головним потоком); нема `toBlob` або null — `toDataURL`.
+  function canvasToJpegDataUrl(canvas, q) {
+    const sync = () => canvas.toDataURL('image/jpeg', q);
+    if (typeof canvas.toBlob !== 'function') return Promise.resolve(sync());
+    return new Promise((resolve) => {
+      let done = false;
+      const fin = (v) => { if (!done) { done = true; resolve(v); } };
+      try {
+        canvas.toBlob((blob) => {
+          if (!blob) return fin(sync());
+          const fr = new FileReader();
+          fr.onload = () => fin(typeof fr.result === 'string' ? fr.result : sync());
+          fr.onerror = () => fin(sync());
+          fr.readAsDataURL(blob);
+        }, 'image/jpeg', q);
+      } catch (e) { fin(sync()); }
+    });
+  }
   function raceTimeout(p, ms) {
     let t;
     return Promise.race([Promise.resolve(p), new Promise((res) => { t = setTimeout(() => res(SHOT_TIMEOUT), ms); })])

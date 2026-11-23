@@ -19,8 +19,8 @@ let browser;
 test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
-async function boot(html, { route } = {}) {
-  const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
+async function boot(html, { route, dpr = 1 } = {}) {
+  const page = await browser.newPage({ viewport: { width: 1000, height: 700 }, deviceScaleFactor: dpr });
   if (route) await route(page);
   await page.setContent(html, { waitUntil: "load" });
   await page.addScriptTag({ content: H2C });
@@ -33,7 +33,9 @@ async function boot(html, { route } = {}) {
   await page.evaluate(() => {
     const mem = [];
     window.__mem = mem;
-    const store = { load: () => mem.slice(), save: (l) => { mem.length = 0; mem.push(...l); } };
+    window.__uploads = [];
+    const store = { load: () => mem.slice(), save: (l) => { mem.length = 0; mem.push(...l); },
+      uploadShot: (id, shot) => { window.__uploads.push(shot); return Promise.resolve({ skipped: true }); } };
     window.CommentLayer.init({ projectId: "t", storage: store, version: "1", user: { name: "Тест" },
       host: { onReady() {}, onChange() {}, onSelect() {}, onMode() {} } });
     window.CommentLayer.setCommentMode(true);
@@ -125,5 +127,21 @@ test("(d') контроль: кольори нормалізовані, але �
   const meta = await addComment(page, "#b", "г2");
   assert.equal(meta.shot, undefined, "без вимкнення переходів знімок мав зірватись (інакше тест не доводить нічого)");
   assert.equal(meta.shotMiss, "render");
+  await page.close();
+});
+
+test("(e) DPR 2: мініатюра ≤ 720 px, повний знімок у заливці — вдвічі густіший (≈ 600 px для цілі 300 px)", async () => {
+  const page = await boot(`<!doctype html><html><body style="margin:40px;background:#fff">
+<div id="card" style="width:300px;height:120px;background:#2a7;color:#fff"><p>Картка</p></div></body></html>`, { dpr: 2 });
+  const meta = await addComment(page, "#card", "д");
+  assertShot(meta);
+  const size = (u) => page.evaluate(async (x) => { const i = new Image(); i.src = x; await i.decode(); return [i.naturalWidth, i.naturalHeight]; }, u);
+  const [tw] = await size(meta.shot);
+  assert.ok(tw <= 720, `мініатюра ${tw} px`);
+  const ups = await page.evaluate(() => window.__uploads);
+  assert.equal(ups.length, 1);
+  assert.ok(ups[0].startsWith("data:image/jpeg"));
+  const [fw, fh] = await size(ups[0]);
+  assert.ok(Math.abs(fw - 600) <= 2 && Math.abs(fh - 240) <= 2, `повний ${fw}×${fh}, очікували ≈ 600×240`);
   await page.close();
 });

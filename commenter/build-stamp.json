@@ -1,8 +1,8 @@
 {
-  "src": "80292c4c796a4c8ed0dd76c02d44719a6127f30335b14f38251e75c53f7bf151",
+  "src": "60605c93d85a6e03f0184219bc5140af76f7da95be3cd4fe015908cdbd786cea",
   "esbuild": "0.25.12",
   "out": {
-    "comment-layer.min.js": "ab1014cc9bd477840539c1ffe7fd3fe35378ae5c595b05b1fb58b72fc32705db",
+    "comment-layer.min.js": "842ce47fd9067d5085a41c1bec6a235034cd1499459a9c831f427ba1b486d312",
     "anchor.min.js": "1478f9c69d124b3d918c3d85778d1b6a38fd284b2ac7a54b985f58b9a15d9c3c"
   }
 }
