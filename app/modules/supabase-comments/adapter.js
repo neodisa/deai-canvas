@@ -527,9 +527,10 @@
     function planReplies(comments, fl) {
       var up = [], del = [], block = false;
       if (!supportsReplies) {
-        /* Відповіді недоступні. Тимчасовий збій (repliesDown — повідомлення): save з незбереженою відповіддю мусить ВІДХИЛИТИСЬ,
-           інакше коментатор зніме _pending, і відповідь зникне мовчки. Таблиці нема назавжди ('no-replies-schema'): відкидаємо з
-           одним попередженням (інтерфейс не пропонує відповідей у такому проєкті). */
+        /* Відповіді недоступні. Тимчасовий збій (repliesDown — повідомлення) АБО підтримка ще невідома (repliesDown === null: до
+           першого вдалого читання, після невдалого fetch коментарів — відновлена з локального бекапу відповідь саме така): save з
+           незбереженою відповіддю мусить ВІДХИЛИТИСЬ, інакше коментатор зніме _pending, і відповідь зникне мовчки. Таблиці нема
+           назавжди ('no-replies-schema'): відкидаємо з одним попередженням (інтерфейс не пропонує відповідей у такому проєкті). */
         var lost = false;
         comments.forEach(function (c) {
           (Array.isArray(c.replies) ? c.replies : []).forEach(function (r) {
@@ -538,7 +539,7 @@
             if (writtenReplies[r.id] !== stable(replyToRow(r, c.id, channel))) lost = true;
           });
         });
-        if (lost && typeof repliesDown === 'string') {
+        if (lost) {
           if (repliesDown === 'no-replies-schema') { if (!noSchemaWarned) { noSchemaWarned = true; warn('replies dropped', 'table comment_replies is missing in this project'); } }
           else block = true;
         }
@@ -573,7 +574,7 @@
       comments = comments.filter(keep);          // видалене колегою не воскрешаємо, навіть якщо коментатор тримає його як _pending
       var rows = comments.map(function (c) { return commentToRow(c, channel); });
       /* Запис РІЗНИЦЕЮ (Deai 0.27.0): лише рядки, яких база ще не має в такому вигляді. Застарілий список одного вікна вже не
-         перетирає чужого закриття чи доручення в РЕШТІ рядків; два записи в ОДИН рядок — виграє останній. Відповіді (0.34) — та
+         перетирає чужого закриття чи доручення в РЕШТІ рядків; два записи в ОДИН рядок — виграє останній. Відповіді (0.35) — та
          сама різниця, окремо: нова відповідь до незмінного коментаря не чіпає `comments`. */
       var changed = rows.filter(function (r) { return written[r.id] !== stable(r); });
       var plan = planReplies(comments, fl);
@@ -663,7 +664,7 @@
     var store = {
       ready: ready,
       get loadError() { return loadError; },
-      /* Відповіді (0.34): `supportsReplies` — таблиця comment_replies є й читається; `repliesDown` — null чи причина
+      /* Відповіді (0.35): `supportsReplies` — таблиця comment_replies є й читається; `repliesDown` — null чи причина
          ('no-replies-schema' | текст помилки). Подвійне сховище бере їх звідси. */
       get supportsReplies() { return supportsReplies; },
       get repliesDown() { return repliesDown; },

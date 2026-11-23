@@ -1930,6 +1930,21 @@ test("витіснене save-ом читання, запущене подією
   assert.equal(w.pending().filter((t) => t.ms === 120).length, 0, "без циклу");
 });
 
+test("підтримка відповідей ще невідома (читання коментарів не вдалось, repliesDown=null): save з новою відповіддю ВІДХИЛЯЄТЬСЯ, відповідь не пишеться; save без відповідей проходить (0.35)", async () => {
+  const w = world({ rows: [row("a")], replies: [], failSelect: true });
+  const s = w.create();
+  await s.ready;
+  assert.equal(s.supportsReplies, false);
+  assert.equal(s.repliesDown, null, "невідомо, а не «таблиці нема»");
+  const withReply = [pin("a", { replies: [rep("r1")] })];
+  await assert.rejects(s.save(withReply), /replies unavailable/);
+  assert.equal(repUps(w).length, 0, "відповідь не записано");
+  await assert.rejects(s.save(withReply), /replies unavailable/, "повтор теж відхиляється: коментатор тримає _pending");
+  await s.save([pin("a", { text: "без відповідей" })]);
+  assert.equal(repUps(w).length, 0);
+  assert.ok(comUps(w).length >= 1, "коментар без відповідей записано");
+});
+
 test("відповіді недоступні тимчасово: save з новою відповіддю ВІДХИЛЯЄТЬСЯ (коментарі записано), після відновлення відповідь іде в базу", async () => {
   const w = world({ rows: [row("a")], replies: [] });
   const s = w.create();
