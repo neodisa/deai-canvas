@@ -45,9 +45,9 @@ def bin_tokens(text):
     return sorted({t.rstrip('.') for t in BIN_RE.findall(text)})
 
 
-def tripwire(code, routes, allow=()):
+def tripwire(code, routes):
     """Рядки коду, що починаються з `/api/`, але не є відомим маршрутом (склеєний чи f-рядковий маршрут): `[літерал]`.
-    `allow` — відомі не-маршрути (голий префікс). Докстрінги пропускаються; рядок-продовження — лише `/`, `?` після маршруту."""
+    Константи в `HANDLED_PREFIXES = (…)` (голі префікси) пропускаються. Докстрінги пропускаються; рядок-продовження — лише `/`, `?` після маршруту."""
     bad = []
     tree = ast.parse(code)
     for node in ast.walk(tree):
@@ -55,8 +55,12 @@ def tripwire(code, routes, allow=()):
             first = node.body[0]
             if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
                 first.value.value = ''
+    skip = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith('/api/') and node.value not in allow:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'HANDLED_PREFIXES' for t in node.targets):
+            skip |= {id(c) for c in ast.walk(node.value) if isinstance(c, ast.Constant)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and id(node) not in skip and isinstance(node.value, str) and node.value.startswith('/api/'):
             m = ROUTE_RE.match(node.value)
             rest = node.value[m.end():] if m else node.value
             if not m or m.group(0) not in routes or (rest and rest[0] not in '/?'):
@@ -123,7 +127,9 @@ class Helpers(unittest.TestCase):
         routes = ['/api/known']
         self.assertEqual(tripwire("x = '/api/known'\ny = '/api/known/f?q=1'", routes), [])
         self.assertEqual(tripwire("x = '/api/' + name", routes), ['/api/'])
-        self.assertEqual(tripwire("x = '/api/'", routes, allow=('/api/',)), [])
+        both = "HANDLED_PREFIXES = ('/app', '/api/')\nx = '/api/' + name"
+        self.assertEqual(tripwire(both, routes), ['/api/'])
+        self.assertEqual(tripwire("HANDLED_PREFIXES = ('/api/',)", routes), [])
         self.assertEqual(tripwire("x = f'/api/new-{k}'", routes), ['/api/new-'])
         self.assertEqual(tripwire("x = '/api/other'", routes), ['/api/other'])
         self.assertEqual(tripwire('def f():\n    """see /api/other"""\n', routes), [])
@@ -163,7 +169,7 @@ class Coverage(unittest.TestCase):
         self.assertEqual(internal_problems(self.internal, lambda t: mentioned(t, self.all)), [])
 
     def test_routes_are_extracted_completely(self):
-        self.assertEqual(tripwire(self.serve, self.routes, allow=('/api/',)), [],  # '/api/' — HANDLED_PREFIXES
+        self.assertEqual(tripwire(self.serve, self.routes), [],
                          'app/serve.py builds or names an /api route the guard cannot see: spell it as a plain literal')
         for r in ('/api/module-client', '/api/module-ui', '/api/module-ui-kit'):
             self.assertIn(r, self.routes)
