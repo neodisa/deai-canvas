@@ -417,11 +417,23 @@ function homeCrumbs(model) {
   return `<div class="crumbs"><span class="crumb crumb--flat crumb--page">${ico(icon)}<span class="txt">${esc(t(key))}</span></span></div>`;
 }
 
-/* Назва задачі — приглушено й нерухомо: «де я» тепер каже вкладка, а перемикати задачі — теж вона. */
-function crumbTitle(model) {
+/* Фаза И (Р2): задача — ПЕРША крошка й кнопка. Дропдаун — ті самі пункти, що «⋯» картки, крім «Видалити» (видалення —
+   лише з екрана «Задачі»). Клас `crumb--title` лишено: на ньому правило ширини `#bar .crumb.crumb--title`. */
+function crumbTask(model, openDd, state) {
   const c = model.zone1.find((x) => x.id === "title");
   if (!c) return "";
-  return `<span class="crumb crumb--flat crumb--title" title="${esc(c.label)}"><span class="txt">${esc(c.label)}</span></span>`;
+  const open = openDd === "task";
+  const acts = Array.isArray(state?.taskActs) ? state.taskActs : [];
+  const prev = typeof state?.taskPreview === "string" && /^https?:\/\//i.test(state.taskPreview) ? state.taskPreview : "";
+  const dd = open ? `<div class="dd dd--task">
+    ${ddItem({ act: "tren", icon: "pencil", title: t("taskRename"), marks: "<kbd>F2</kbd>" })}
+    ${ddItem({ act: "ttags", icon: "sliders", title: t("taskTagsMenu") })}
+    ${prev ? ddItem({ act: "tprev", val: prev, icon: "ext", title: t("taskPreviewOpen") }) : ""}
+    ${acts.length ? `<div class="dd-sep"></div>\n    ${acts.map((a) => ddItem({ act: "tmodact", val: a.key, icon: "puzzle", title: a.label })).join("")}` : ""}
+  </div>` : "";
+  return `<div class="ddhost crumb-h crumb--task">`
+    + `<button class="ctl crumb crumb--title" data-dd="task" aria-haspopup="true" aria-expanded="${open}" title="${esc(c.label)}">`
+    + `${ico("task")}<span class="txt">${esc(c.label)}</span>${ico("chevdown", 14, "ico caret")}</button>${dd}</div>`;
 }
 
 /**
@@ -441,9 +453,11 @@ function crumbTitle(model) {
 export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
   const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
+  /* Третій аргумент `crumbIter` — поки лише питання «Видалити ітерацію?» (`iterDelAsk`); обʼєкт `state.iterUi` для Task 7 ще не читається. */
+  const iter = home ? "" : crumbIter(model, openDd, !!state?.iterDelAsk, Array.isArray(state?.modActs) ? state.modActs : []);
   const zone1 = home
     ? `${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
-    : `<div class="crumbs">${crumbIter(model, openDd, !!state?.iterDelAsk, Array.isArray(state?.modActs) ? state.modActs : [])}${crumbTitle(model)}</div>`;
+    : `<div class="crumbs">${crumbTask(model, openDd, state)}${iter ? `<span class="crumb-sep" aria-hidden="true">/</span>${iter}` : ""}</div>`;
   /* Зони 2 і 3 екрана «Задачі» порожні в МОДЕЛІ — не малюємо їхніх контролів,
      але самі вузли лишаються (грид смуги на них тримається). */
   const zone2 = home ? "" : zone2HTML(model, state, openDd);

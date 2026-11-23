@@ -31,18 +31,44 @@ test("смуга не малює ні логотипа, ні палітри, н�
     { homeOpen: true, homePage: "wiz" }, { mode: "overview" }, { update: { current: "0.1.0", latest: "0.2.0", available: true, state: "ok" } },
     { openDd: "task", taskList }, { space: { id: "a", name: "A", color: "space-1" } }]) {
     const h = html(o);
+    /* Фаза И: `data-dd="task"` — тепер крошка задачі (дропдаун її дій), а не перемикач задач; перемикача (`dd--tasks`, `task-q`) як не було. */
     assert.doesNotMatch(h, /data-act="(palette|home|update|feedback|inspector|back|task)"/, JSON.stringify(o));
-    assert.doesNotMatch(h, /data-dd="task"|logo-btn|pal-open|upd-pill|fb-btn|task-q|dd--tasks/, JSON.stringify(o));
+    assert.doesNotMatch(h, /logo-btn|pal-open|upd-pill|fb-btn|task-q|dd--tasks/, JSON.stringify(o));
   }
 });
 
-/* Смуга задачі: крошка ітерації, а за нею — назва задачі приглушено й нерухомо (це не перемикач: «де я» каже вкладка). */
-test("смуга задачі: крошка ітерації, потім назва задачі — плоска, приглушена, з повною назвою в title", () => {
+/* Фаза И (Р2): «задача / ітерація» — задача першою, кнопкою з дропдауном дій; роздільник лише коли є ітерація. */
+test("фаза И (Р2): спершу задача, потім «/», потім ітерація; задача — кнопка з дропдауном", () => {
+  setLang("uk");
   const h = html({ taskTitle: 'Картка "клієнта"' });
-  assert.match(h, /<span class="crumb crumb--flat crumb--title" title="Картка &quot;клієнта&quot;"><span class="txt">Картка &quot;клієнта&quot;<\/span><\/span>/);
-  assert.ok(h.indexOf('data-dd="iter"') < h.indexOf("crumb--title"), "назва — після крошки ітерації");
-  assert.ok(h.indexOf("crumb--title") < h.indexOf('class="zone zone-2"'), "назва лишається в зоні 1");
-  assert.doesNotMatch(/<span class="crumb crumb--flat crumb--title"[\s\S]*?<\/span><\/span>/.exec(h)[0], /<button|data-/, "назва — не контрол");
+  const iTask = h.indexOf('data-dd="task"'), iSep = h.indexOf('class="crumb-sep"'), iIter = h.indexOf('data-dd="iter"');
+  assert.ok(iTask > 0 && iTask < iSep && iSep < iIter, "задача / ітерація");
+  assert.match(h, /<button class="ctl crumb crumb--title" data-dd="task" aria-haspopup="true" aria-expanded="false" title="Картка &quot;клієнта&quot;">/);
+  assert.ok(h.indexOf("crumb--title") < h.indexOf('class="zone zone-2"'), "задача лишається в зоні 1");
+});
+
+test("фаза И (Р2): дропдаун задачі — Перейменувати, Мітки, превʼю, дії модулів; без «Видалити»", () => {
+  setLang("uk");
+  const st = { ...S({ taskTitle: "Лендінг" }), openDd: "task", taskPreview: "https://example.com/p",
+    taskActs: [{ key: "notes/ping", label: "Пінг" }] };
+  const h = barHTML(barModel(st), st);
+  for (const a of ['data-act="tren"', 'data-act="ttags"', 'data-act="tprev"', 'data-act="tmodact" data-val="notes/ping"']) assert.match(h, new RegExp(a));
+  assert.doesNotMatch(h, /data-act="tdel"|data-act="delitask"[^>]*>[\s\S]*?dd--task|Видалити задачу/);
+  const dd = /<div class="dd dd--task">[\s\S]*?<\/div>\s*<\/div>/.exec(h)[0];
+  assert.doesNotMatch(dd, /danger|delete|Видалити/);
+});
+
+test("фаза И (Р2): превʼю не http(s) (локальний шлях) і порожні дії модулів — пунктів нема", () => {
+  const st = { ...S({}), openDd: "task", taskPreview: "/published/p/t/", taskActs: [] };
+  const h = barHTML(barModel(st), st);
+  assert.doesNotMatch(h, /data-act="tprev"|data-act="tmodact"/);
+  assert.match(h, /data-act="tren"/);
+});
+
+test("фаза И (Р2): без ітерації — лише задача, без роздільника", () => {
+  const h = html({ hasIteration: false, taskTitle: "Т" });
+  assert.match(h, /data-dd="task"/);
+  assert.doesNotMatch(h, /crumb-sep/);
 });
 
 test("назва задачі екранується", () => {

@@ -338,11 +338,11 @@ test("порожній перелік не ламає крошку", () => {
 });
 
 /* Рядок вкладок (0.25.0) забрав логотип, палітру, перемикач задач, пігулку оновлення й «Відгук»; острівець — інспектор. */
-test("смуга задачі: зона 1 — ітерація й назва; нічого з рядка вкладок чи острівця", () => {
+test("смуга задачі: зона 1 — назва й ітерація; нічого з рядка вкладок чи острівця", () => {
   const m = barModel({ ...base, hasIteration: true, iterLabel: "Іт.3", taskTitle: "Картка" });
-  assert.deepEqual(m.zone1.map((x) => x.id), ["iter", "title"]);
-  assert.equal(m.zone1[1].label, "Картка");
-  assert.equal(m.zone1[1].tier, 0, "назву ховати нікуди");
+  assert.deepEqual(m.zone1.map((x) => x.id), ["title", "iter"]);
+  assert.equal(m.zone1[0].label, "Картка");
+  assert.equal(m.zone1[0].tier, 0, "назву ховати нікуди");
   const ids = [...m.zone1, ...m.zone2, ...m.zone3].map((x) => x.id);
   for (const gone of ["home", "palette", "space", "task", "update", "feedback", "inspector", "back"]) {
     assert.ok(!ids.includes(gone), `«${gone}» переїхав зі смуги`);
@@ -474,15 +474,15 @@ test("«В Figma» в «Огляді» — лише іконка, у «Маке�
 const NO_ROLES = { publish: null, tokens: null, comments: null, vcs: null, notify: null, dashboard: null, tracker: null };
 const SP = (o = {}) => ({ id: "p", name: "P", color: "space-2", capabilities: NO_ROLES, ...o });
 
-test("простір: смуга задачі фішки не має (простір каже вкладка), зона 1 — ітерація й назва", () => {
+test("простір: смуга задачі фішки не має (простір каже вкладка), зона 1 — назва й ітерація", () => {
   const m = barModel({ ...base, space: SP() });
-  assert.deepEqual(m.zone1.map((x) => x.id), ["iter", "title"]);
+  assert.deepEqual(m.zone1.map((x) => x.id), ["title", "iter"]);
 });
 
 test("простір: без `space` — смуга та сама, зона 3 повна", () => {
   for (const space of [undefined, null]) {
     const m = barModel({ ...base, space });
-    assert.deepEqual(m.zone1.map((x) => x.id), ["iter", "title"]);
+    assert.deepEqual(m.zone1.map((x) => x.id), ["title", "iter"]);
     assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "gl", "publish"]);
   }
 });

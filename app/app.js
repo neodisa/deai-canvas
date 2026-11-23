@@ -215,7 +215,7 @@ let progressTimer = null;
 let shootProgress = null;
 
 /* ===== Смуга (Task 3 Плану B): стан, якого нема більш ніде ===== */
-/** Який дропдаун смуги розкритий: `'iter'|'gl'|'pub'|'more'|'space'|null`. */
+/** Який дропдаун смуги розкритий: `'task'|'iter'|'gl'|'pub'|'more'|'space'|null`. */
 let openDd = null;
 let iterDelAsk = false;   // дропдаун ітерації показує питання «Видалити Іт.N?» (етап В)
 /* Відкритий екран «Задачі» (вхід — логотип у смузі). Прапорець ділять смуга
@@ -1114,6 +1114,10 @@ function barState() {
     openDd, iterDelAsk,
     /* Дії модулів у дропдауні ітерації (ціль — відкрита задача й ітерація `picked`). */
     modActs: actionItems(modExtNow(), 'iteration'),
+    /* Дропдаун крошки задачі (фаза И, Р2): дії модулів над задачею й адреса превʼю (та сама ціль, що в «Опублікувати»). Лише
+       ПРОСТА адреса: пароль превʼю в розмітку не йде, «Відкрити превʼю» бере повне посилання в `openpreview` у момент кліку. */
+    taskActs: actionItems(modExtNow(), 'task'),
+    taskPreview: pubTarget?.url || '',
     homeOpen,
     /* Сторінка оверлею (`tasks`/`conn`/`wiz`) — для крихти смуги й пункту ⌘K; поза оверлеєм — `null`. */
     homePage: homeOpen ? homePage : null,
@@ -1892,11 +1896,12 @@ function closeNewTaskCard() {
  * порожнім і невидимо для людини.
  */
 async function editTaskTags(id) {
-  const row = (homeData?.mine || []).find((y) => y.id === id);
+  /* Фаза И (Р2): «Мітки…» є й у дропдауні крошки задачі, поза екраном «Задачі» — тоді рядок із переліку поточного простору. */
+  const row = (homeData?.mine || []).find((y) => y.id === id) || (curTaskList?.tasks || []).find((y) => y.id === id);
   if (!row) return;
   await askForm(() => tagsFormHTML({ value: (row.tags || []).join(', ') }), {
     /* Кнопки «Мітки» на картці вже нема: «Мітки…» відкривається з меню, тож фокус вертається на «⋯» картки. */
-    focusBack: () => homeNode()?.querySelector(`.th-more[data-id="${CSS.escape(id)}"]`),
+    focusBack: () => (homeOpen ? homeNode()?.querySelector(`.th-more[data-id="${CSS.escape(id)}"]`) : bar.querySelector('[data-dd="task"]')),
     onSubmit: async (vals, ctl) => {
       let saved;
       try { saved = await postForm('/api/task-tags', { id, tags: parseTags(vals.tags) }); }
@@ -1906,6 +1911,9 @@ async function editTaskTags(id) {
         return undefined;
       }
       /* Екран міг змінитись, поки запит летів (інший простір, перечитані дані): правимо ті дані, що є зараз, і лише рядок цієї задачі. */
+      if (Array.isArray(saved?.tags) && curTaskList?.tasks) {
+        curTaskList = { ...curTaskList, tasks: curTaskList.tasks.map((y) => (y.id === id ? { ...y, tags: saved.tags } : y)) };
+      }
       if (homeReady() && Array.isArray(saved?.tags)) {
         homeData = { ...homeData, mine: homeData.mine.map((y) => (y.id === id ? { ...y, tags: saved.tags } : y)) };
         if (pruneFilters(homeUi, homeData)) saveHomeUi();
@@ -2470,6 +2478,11 @@ async function switchTask(val) {
 const BAR_ACTIONS = {
   /* ⌘K «Перейменувати задачу» (Task 10): поповер під вкладкою поточної задачі. */
   rentask: () => renameTaskFromTab(currentTaskId),
+  /* Дропдаун крошки задачі (фаза И, Р2): ті самі дії, що «⋯» картки, крім «Видалити». */
+  tren: () => renameTaskFromTab(currentTaskId),
+  ttags: () => editTaskTags(currentTaskId),
+  tprev: () => BAR_ACTIONS.openpreview(),
+  tmodact: (key) => runModuleAction(key, 'task', currentTaskId, null),
   /* Логотип → екран «Задачі» (`enterHome` нижче: смуга, клас на `body`, запит
      `/api/tasks-overview`). Логотип з «Підключення» теж веде на «Задачі» — тому сторінка названа явно: без
      неї `enterHome` лишив би відкриту. Відкрита панель «Підключення» з незбереженими змінами спершу питає

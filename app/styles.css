@@ -891,9 +891,10 @@ body.with-panel.panel-collapsed.with-mod .cv-canvas{width:calc(100% - var(--pane
 .crumb--flat{display:inline-flex;align-items:center;gap:6px;
   height:var(--h-ctl);padding:0 9px;border:1px solid transparent;
   color:var(--mid);white-space:nowrap}
-/* Назва задачі в смузі — приглушена: «де я» каже вкладка. `.txt` усередині тримає колір крошки (`.crumb .txt` нижче дав би `--hi`). */
-.crumb--title{color:var(--dim)}
-.crumb--title .txt{color:inherit}
+/* Фаза И (Р2): задача — кнопка першою в смузі; назва яскрава (`--hi`), як у прототипі. */
+.crumb--title{color:var(--hi)}
+.crumb--title .txt{color:var(--hi)}
+#bar .crumbs>.crumb-sep{padding:0 2px}
 /* Етап А (0.25.0): у зоні 1 смуги задачі лишились тільки ітерація й назва, тож вільне місце (~450px на 1280) — їхнє, а не ліміт 110px
    крошок дерева шарів (`.crumb{max-width:110px}` нижче у файлі різав обидві; знайдено перевіркою проти живого канвасу, живий тест
    `tabs` 12). Два класи — щоб перемагати незалежно від порядку, як `.crumb.crumb--page`. Стискається першою назва (еліпсис, повна —
