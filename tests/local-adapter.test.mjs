@@ -486,3 +486,63 @@ test("runtime-поля коментатора на обʼєктах із load() 
   assert.equal(body.includes("_pending"), false);
   assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["R", "N"]);
 });
+
+/* ---- uploadShot (0.35.1): повний знімок локального піна → файл поруч із задачею ---- */
+async function shotStore(opts) {
+  globalThis.window = globalThis.window || {};
+  await import(pathToFileURL(VENDOR).href);
+  const s = globalThis.window.CommentLayerLocal(opts);
+  await s.ready;
+  return s;
+}
+function fakeShotFetch(reply) {
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    if (opts && opts.method === "POST" && String(url).includes("/api/local-shots")) {
+      calls.push({ url: String(url), opts });
+      return reply(calls.length);
+    }
+    return { ok: true, json: async () => ({ comments: [] }) };
+  };
+  return calls;
+}
+const ok = (url) => async () => ({ ok: true, json: async () => ({ ok: true, url }) });
+
+test("uploadShot: POST {id, dataUrl} на shotsEndpoint, абсолютна адреса у відповіді", async () => {
+  const calls = fakeShotFetch(ok("/api/local-shots/p1.jpg"));
+  const s = await shotStore({ endpoint: "http://127.0.0.1:9/api/local-comments", shotsEndpoint: "http://127.0.0.1:9/api/local-shots" });
+  const url = await s.uploadShot("p1", "data:image/jpeg;base64,/9j/AA==", { _aud: "local" });
+  assert.equal(url, "http://127.0.0.1:9/api/local-shots/p1.jpg");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:9/api/local-shots");
+  assert.deepEqual(JSON.parse(calls[0].opts.body), { id: "p1", dataUrl: "data:image/jpeg;base64,/9j/AA==" });
+  assert.equal(calls[0].opts.headers["Content-Type"], "application/json");
+});
+
+test("uploadShot: shotsEndpoint виводиться з endpoint (хвіст /api/local-comments і query замінюються)", async () => {
+  for (const [ep, want] of [
+    ["http://127.0.0.1:9/api/local-comments", "http://127.0.0.1:9/api/local-shots"],
+    ["http://127.0.0.1:9/api/local-comments?k=1", "http://127.0.0.1:9/api/local-shots"],
+    ["http://127.0.0.1:9/t/beta/api/local-comments", "http://127.0.0.1:9/t/beta/api/local-shots"],
+  ]) {
+    const calls = fakeShotFetch(ok("/api/local-shots/p1.jpg"));
+    const s = await shotStore({ endpoint: ep });
+    await s.uploadShot("p1", "data:image/jpeg;base64,AA==");
+    assert.equal(calls[0].url, want);
+  }
+});
+
+test("uploadShot: збій мережі, ok:false, відповідь без url, сміття — null, без винятку", async () => {
+  const replies = [
+    async () => { throw new Error("offline"); },
+    async () => ({ ok: false, status: 413, json: async () => ({ ok: false }) }),
+    async () => ({ ok: true, json: async () => ({ ok: true }) }),
+    async () => ({ ok: true, json: async () => { throw new Error("not json"); } }),
+    async () => ({ ok: true, json: async () => ({ ok: true, url: 42 }) }),
+  ];
+  for (const r of replies) {
+    fakeShotFetch(r);
+    const s = await shotStore({ endpoint: "http://127.0.0.1:9/api/local-comments" });
+    assert.equal(await s.uploadShot("p1", "data:image/jpeg;base64,AA=="), null);
+  }
+});

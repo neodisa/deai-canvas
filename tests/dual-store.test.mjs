@@ -76,14 +76,26 @@ test("remove — туди, де пін живе; невідомий id — в о
   assert.deepEqual(plain([L.log.at(-1), T.log.at(-1)]), [["remove", ["x9"]], ["remove", ["x9"]]]);
 });
 
-test("скріншот у командне сховище — лише для командного піна (поправка 5)", async () => {
-  const L = fake(), T = fake([], { shots: true });
+test("скріншот: командний пін — у командне сховище, локальний (чи без _aud) — у локальне, ніколи в командний кошик (поправка 5)", async () => {
+  const L = fake([], { shots: true }), T = fake([], { shots: true });
   const d = load()({ local: L.store, team: T.store });
   await d.ready;
-  assert.equal(await d.uploadShot("a", "data:image/jpeg;base64,AA", { _aud: "local" }), null);
-  assert.equal(await d.uploadShot("a", "data:image/jpeg;base64,AA"), null);
+  assert.equal(await d.uploadShot("a", "data:image/jpeg;base64,AA", { _aud: "local" }), "https://x/a");
+  assert.equal(await d.uploadShot("a2", "data:image/jpeg;base64,AA"), "https://x/a2");
   assert.equal(await d.uploadShot("b", "data:image/jpeg;base64,AA", { _aud: "project" }), "https://x/b");
   assert.deepEqual(plain(T.log.filter((e) => e[0] === "shot")), [["shot", "b"]]);
+  assert.deepEqual(plain(L.log.filter((e) => e[0] === "shot")), [["shot", "a"], ["shot", "a2"]]);
+});
+
+test("скріншот: нема того, хто заллє, — { skipped: true } (командний пін без команди чи без uploadShot; локальний без локального завантажувача)", async () => {
+  const D = (local, team) => load()({ local, team });
+  const noUp = fake();
+  const a = D(noUp.store, fake([], { shots: true }).store); await a.ready;
+  assert.deepEqual(plain(await a.uploadShot("a", "d", { _aud: "local" })), { skipped: true });   // локальний адаптер без uploadShot
+  const b = D(fake([], { shots: true }).store, noUp.store); await b.ready;
+  assert.deepEqual(plain(await b.uploadShot("a", "d", { _aud: "project" })), { skipped: true });   // команда без uploadShot
+  const c = load()({ local: fake([], { shots: true }).store, team: null, teamDown: "x" }); await c.ready;
+  assert.deepEqual(plain(await c.uploadShot("a", "d", { _aud: "project" })), { skipped: true });   // команди нема
 });
 
 test("командного нема: локальне працює, teamDown — причина, командний запис відмовляє", async () => {

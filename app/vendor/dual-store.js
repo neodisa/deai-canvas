@@ -152,9 +152,17 @@
       team = null; shadow = null;            // пізня готовність команди нічого не закриє вдруге
       if (t && typeof t.close === 'function') { try { t.close(); } catch (e) {} }
     };
+    /* Куди слати ПОВНИЙ знімок піна (0.35.1). Командний пін — у командний кошик; будь-який інший (локальний, без `_aud`) — у локальне
+       сховище, а НІКОЛИ в командний кошик. Немає, кому залити, — `{ skipped: true }`: «для цього піна тут нічого заливати»
+       (коментатор не повторює спробу й не пише `shotMiss: 'upload'`). */
     store.uploadShot = function (id, dataUrl, c) {
-      if (!team || typeof team.uploadShot !== 'function' || !c || c._aud !== 'project') return Promise.resolve(null);
-      return Promise.resolve(team.uploadShot(id, dataUrl));
+      var skipped = { skipped: true };
+      if (c && c._aud === 'project') {
+        if (!team || typeof team.uploadShot !== 'function') return Promise.resolve(skipped);
+        return Promise.resolve(team.uploadShot(id, dataUrl));
+      }
+      if (typeof local.uploadShot !== 'function') return Promise.resolve(skipped);
+      return Promise.resolve(local.uploadShot(id, dataUrl, c));
     };
     return store;
   }
