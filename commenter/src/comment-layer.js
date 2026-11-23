@@ -16,6 +16,7 @@
 import { buildContextBundle, iterationOf } from './context-bundle.js';
 import { audiencesHTML, notifyAudience } from './audiences.js';
 import { shotScope } from './shot-scope.js';
+import { liftSvgTarget, normalizeClone, canvasColorConverter } from './shot-colors.js';
 import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
 
 (function (global) {
@@ -1427,6 +1428,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     // Повертає `{ shot }` або `{ miss: код }` (too-big | no-lib | timeout | render | detached).
     async _captureShot(target) {
       try {
+        const picked = target;
+        target = liftSvgTarget(target);   // іконка-SVG → її HTML-предок (html2canvas не знаходить клон SVG-цілі); лише для знімка
         if (!target || target.nodeType !== 1 || !target.isConnected) return { miss: 'detached' };
         const trim = svgTrim(target);
         if (target.getElementsByTagName('*').length - trim.dropped > SHOT_MAX_NODES) return { miss: 'too-big' };
@@ -1441,6 +1444,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         if (typeof h2c !== 'function') return { miss: 'no-lib' };
         if (!target.isConnected) return { miss: 'detached' };   // поки вантажилась бібліотека, ціль могли прибрати
         const base = { backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false };
+        if (picked.classList) picked.classList.remove('cl-hl');
         target.classList.remove('cl-hl');            // don't bake the hover outline into the shot
         // Без сусідів розкладка цілі в клоні може попливти (flex:1, grid, space-between) — фіксуємо її бокс.
         const r = target.getBoundingClientRect();
@@ -1449,6 +1453,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
           const set = (n, v) => el.style.setProperty(n, v, 'important');
           set('width', r.width + 'px'); set('height', r.height + 'px'); set('box-sizing', 'border-box');
           set('flex', '0 0 auto'); set('max-width', 'none'); set('min-width', '0'); set('max-height', 'none');
+          // Переходи в клоні вимкнути, сучасні кольори (color-mix/oklab/oklch…) переписати в rgba — html2canvas їх не розбирає.
+          try { normalizeClone(doc, el, canvasColorConverter(document)); } catch (e) { /* збій нормалізації не губить знімок, що вдався б і так */ }
         };
         let canvas;
         try {

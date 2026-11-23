@@ -95,7 +95,7 @@ test("(c) клік по <svg> в кнопці — html2canvas отримує к�
 
 const BTN_PAGE = `<!doctype html><html><head><link rel="stylesheet" href="https://example.test/t.css"></head>
 <body style="margin:40px"><button id="b">Кнопка</button></body></html>`;
-const BTN_CSS = "#b{padding:12px 20px;border:0;color:#fff;background-color:color-mix(in srgb, #3366cc 90%, #ffffff);transition:background-color 3s linear}";
+const BTN_CSS = "#b{padding:12px 20px;border:0;color:#fff;background-color:color-mix(in srgb, #3366cc 90%, #ffffff);transition:background-color 3s linear!important}";
 const routeCss = (delay) => async (page) => {
   await page.route("https://example.test/t.css", async (route) => {
     if (delay) await new Promise((r) => setTimeout(r, delay));
@@ -109,15 +109,16 @@ test("(d) перехід із зовнішньої таблиці в клоні:
   await page.close();
 });
 
-test("(d') контроль: кольори нормалізовані, але стиль «transition:none» вирізано — знімок НЕ виходить", async () => {
+test("(d') контроль: кольори нормалізовані, але вимкнення переходів вирізано — знімок НЕ виходить", async () => {
   const page = await boot(BTN_PAGE, { route: routeCss(150) });
   await page.evaluate(() => {
     window.__wrap = (el, opts, real) => {
       const oc = opts.onclone;
       return real(el, { ...opts, onclone: (doc, e) => {
-        const W = doc.defaultView, orig = W.Node.prototype.appendChild;
+        const W = doc.defaultView, orig = W.Node.prototype.appendChild, set = CSSStyleDeclaration.prototype.setProperty;   // елементи клону усиновлені з живого документа — їхній style з живого світу
         W.Node.prototype.appendChild = function (n) { return n.tagName === "STYLE" && /transition:\s*none/.test(n.textContent) ? n : orig.call(this, n); };
-        try { oc(doc, e); } finally { W.Node.prototype.appendChild = orig; }
+        CSSStyleDeclaration.prototype.setProperty = function (p, ...r) { return /^transition/.test(p) ? undefined : set.call(this, p, ...r); };
+        try { oc(doc, e); } finally { W.Node.prototype.appendChild = orig; CSSStyleDeclaration.prototype.setProperty = set; }
       } });
     };
   });
