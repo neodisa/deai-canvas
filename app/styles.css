@@ -173,7 +173,7 @@ body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);
 /* Чистий перегляд макета (fb-01102026-7f7b6d): лише макет, без оболонки й пінів.
    !important — бо розкладку сцени ставлять правила `body.with-panel…` вищої
    специфічності; чистий режим мусить перекрити їх усі разом. */
-html.cv-clean #tabs,html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean #cmt-panel,html.cv-clean #mod-panel,html.cv-clean .cv-notice,
+html.cv-clean #tabs,html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean #cmt-panel,html.cv-clean #mod-panel,html.cv-clean #hist-panel,html.cv-clean .cv-notice,
 html.cv-clean .errbar,html.cv-clean .cv-zoom,html.cv-clean .cv-canvas-hint,html.cv-clean .cv-hud,
 html.cv-clean [data-comment-layer],html.cv-clean .cn-drawer{display:none!important}
 html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!important;width:100%!important}
@@ -786,6 +786,26 @@ body.with-panel.with-mod .cv-stage,
 body.with-panel.with-mod .cv-canvas{width:calc(100% - var(--panel-w) - var(--insp-w))}
 body.with-panel.panel-collapsed.with-mod .cv-stage,
 body.with-panel.panel-collapsed.with-mod .cv-canvas{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
+/* ── Фаза И: панель «Історія змін» — четверта права панель (ширина `--insp-w`, як у решти) ── */
+body.with-hist .cv-stage,body.with-hist .cv-canvas{width:calc(100% - var(--insp-w))}
+body.with-panel.with-hist .cv-stage,
+body.with-panel.with-hist .cv-canvas{width:calc(100% - var(--panel-w) - var(--insp-w))}
+body.with-panel.panel-collapsed.with-hist .cv-stage,
+body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
+.hist-day{padding:14px 4px 6px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim)}
+.hist-day:first-child,.hist-deg+.hist-day,.hist-e--pending+.hist-day{padding-top:2px}
+.hist-e{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:start;padding:8px 6px;border-radius:var(--r-sm)}
+.hist-e:hover{background:var(--s3)}
+.hist-e--pending .hist-t{color:var(--open)}
+.hist-av{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:600;
+  background:var(--s4);color:var(--hi)}
+.hist-av--ai{background:var(--local-pin);color:#fff}
+.hist-b{min-width:0}
+.hist-t{font-size:13px;line-height:1.35;color:var(--hi);overflow-wrap:anywhere}
+.hist-m{margin-top:2px;font-size:12px;color:var(--dim)}
+.hist-files{margin-top:4px;font:11.5px/1.45 var(--mono);color:var(--dim);overflow-wrap:anywhere}
+.hist-time{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;padding-top:1px}
+.hist-deg{margin:0 0 8px;font-size:12px;color:var(--dim)}
 /* `.pages-panel`/`.pp-*` нижче — розмітка старої панелі (План B Task 4 її
    замінив на `.panel`/`.panel--rail`/`.row*`/`.shots*`, кінець файла).
    Лишені НЕ вживаними свідомо, тим самим рядком думки, що вже стоїть для

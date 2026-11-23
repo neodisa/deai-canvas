@@ -32,6 +32,7 @@ import { barModel } from './bar-model.js';
 import { ISLAND_SHELL, applyBadge, badgeFor, islandParts } from './claude-status.js';
 import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.js';
 import { barHTML } from './shell-bar.js';
+import { histHTML } from './iter-history-view.js';
 import { cleanTitle, readHomeUi, relTime, retitle, taskKey } from './tasks-model.js';
 import { SEC_KEY, readSec } from './settings-model.js';
 import { spaceReadOnly } from './space-view.js';
@@ -142,6 +143,7 @@ const cmtEl = document.getElementById('cmt-panel');
    icon, spaceId, url, host}`), `modFrame` — його iframe. `modSel` — останній вибір інспектора ({key сторінки, значення}).
    Оголошено ТУТ, нагорі: `paintIsland`/`paintBar` читають їх із першого ж рендера (TDZ). */
 const modEl = document.getElementById('mod-panel');
+const histEl = document.getElementById('hist-panel');
 let modExt = { spaceId: null, tools: [], actions: [] };
 let modExtKey = '';
 let modExtSeq = 0;
@@ -1323,6 +1325,7 @@ function paintBar() {
   paintIsland();
   paintInsp();
   modSync();
+  histSync();
   if (openDd === 'space') {
     /* Щойно відкрили — фокус на ПОТОЧНИЙ рядок (там людина й так хоче почати); інакше —
        на той самий рядок, де стояв. Клавіатура далі йде по `.dd--spaces .dd-item`. */
@@ -1510,7 +1513,7 @@ async function deleteIteration(id) {
   try {
     const r = await post('/api/iteration-delete', { id });
     if (picked === id) picked = null;
-    if (typeof closeHistory === 'function') closeHistory(id);
+    closeHistory(id);
     await render();
     toast(t('iterDeleted', label), { ms: 8000, action: { label: t('iterRestore'), run: () => restoreIteration(r.trash, label) } });
   } catch (e) { paintBar(); tellError(t('errTDeleteIter'), e.message); }
@@ -1570,6 +1573,7 @@ async function resetPerTaskState() {
   /* Те саме для плашки «Опубліковано на Vercel» (2b-1): вона про щойно опубліковану задачу, а не про наступну. */
   dropNotice('publish-remote');
   autoShootStopped.clear(); autoShootOff.clear(); autoShootSig.clear();
+  closeHistory();   // історія — про ітерацію ПОПЕРЕДНЬОЇ задачі: `it1` є в кожній
   tuneState = emptyTune();
   /* Ревізія — теж пер-задачна: з ревізією задачі A перший запис у задачі B
      дістав би 409 і «пакет змінено поза вкладкою» на рівному місці. */
@@ -2182,6 +2186,7 @@ function newsToast(came) {
 function setCommentsOpen(on) {
   on = !!on;
   if (on) closeModTool();   // права панель одна: коментарі витісняють інструмент модуля
+  if (on) closeHistory();   // …і історію ітерації
   /* Інспектор і коментарі — взаємно виключні: обидва ділять праву панель і обидва ловлять клік по макету. */
   if (on) { const api = inspectorApi(); if (api?.on) { api.set(false); paintBar(); } }
   cmtOpen = on;
@@ -2330,6 +2335,7 @@ function openModTool(key) {
   const url = typeof x?.panel === 'string' && x.panel.startsWith('/api/module-ui/') ? x.panel : null;
   if (!x || !url) return;
   closeModTool();
+  closeHistory();
   if (cmtOpen) setCommentsOpen(false);                       // права панель одна
   const api = inspectorApi();
   if (api?.on) api.set(false);
@@ -2371,6 +2377,54 @@ function closeModTool() {
 }
 
 /** Узгодження з оболонкою: панель не живе поза «Макетом» і поза своїм простором; зміна задачі/ітерації/сторінки й теми — подія. */
+/* ===== Історія ітерації (фаза И, Р7): четверта права панель =====
+   `histOpen` — `{id, seq}` відкритої або null. Права панель одна — історія поступається іншим (`histSync`). */
+let histOpen = null;
+let histSeq = 0;
+
+async function openHistory(id) {
+  if (!id || homeOpen || cleanView || mode === 'canvas') return;
+  if (cmtOpen) setCommentsOpen(false);
+  closeModTool();
+  const insp = inspectorApi();
+  if (insp?.on) insp.set(false);
+  const seq = ++histSeq;
+  histOpen = { id, seq };
+  const label = (curTask?.iterations || []).find((x) => x.id === id)?.label_text || id;
+  histEl.innerHTML = histHTML({ label, entries: [], pending: null });
+  histEl.hidden = false;
+  document.body.classList.add('with-hist');
+  paintBar();
+  try {
+    const r = await api(`/api/iteration-history?id=${encodeURIComponent(id)}`);
+    if (histOpen?.seq !== seq) return;                    // за час запиту відкрили іншу чи закрили
+    histEl.innerHTML = histHTML({ label, entries: r.entries || [], pending: r.pending || null, degraded: !!r.degraded });
+  } catch (e) {
+    if (histOpen?.seq !== seq) return;
+    histEl.innerHTML = histHTML({ label, entries: [], pending: null, degraded: true });
+  }
+}
+
+/** Закрити історію; з `id` — лише якщо відкрита саме вона (видалення ітерації не чіпає історію іншої). */
+function closeHistory(id) {
+  if (!histOpen || (id && histOpen.id !== id)) return;
+  histOpen = null;
+  histEl.hidden = true;
+  histEl.innerHTML = '';
+  document.body.classList.remove('with-hist');
+}
+
+/** Права панель одна: історія закривається, коли відкрилась інша панель, «Задачі», «Огляд» чи ітерація зникла. */
+function histSync() {
+  if (!histOpen) return;
+  const gone = !(curTask?.iterations || []).some((x) => x.id === histOpen.id);
+  if (homeOpen || mode === 'canvas' || cmtOpen || modOpen || inspectorApi()?.on || gone) closeHistory();
+}
+
+histEl.addEventListener('click', (ev) => {
+  if (ev.target.closest('[data-act="histclose"]')) { closeHistory(); paintBar(); }
+});
+
 function modSync() {
   if (!modOpen) return;
   if (homeOpen || mode === 'canvas' || modOpen.spaceId !== (spaceNow()?.id ?? null)) { closeModTool(); return; }
@@ -2547,6 +2601,7 @@ function toggleClean(on = !cleanView) {
   if (on) { const api = inspectorApi(); if (api?.on) api.set(false); }
   if (on && cmtOpen) setCommentsOpen(false);   // панель коментарів — теж інтерфейс, як і інспектор
   if (on) closeModTool();                      // і панель інструмента модуля
+  if (on) closeHistory();                      // і історія ітерації
   applyClean(document, frame, on, { label: t('cleanExit'), title: t('cleanExitTitle'),
     onExit: () => toggleClean(false), onChord: () => toggleClean() });
 }
@@ -2763,6 +2818,7 @@ const BAR_ACTIONS = {
     const api = inspectorApi();
     if (!api) return;                    // макет ще вантажиться
     if (!api.on && cmtOpen) setCommentsOpen(false);   // коментарі й інспектор — взаємно виключні
+    if (!api.on) closeHistory();                      // і історія ітерації
     api.set(!api.on);
     // Легка перемальовка замість `syncInspectorBtn`: та сама причина, що й
     // нижче в `frame`-обробнику завантаження — контрол іноді живе ще й
@@ -2969,7 +3025,9 @@ const BAR_ACTIONS = {
 
   /* Меню рядка ітерації (фаза И, Р4): історія та дії модулів над ЦІЄЮ ітерацією (`id::ключ`). Видалення, перейменування,
      «Дублювати» й «Нова» — у делегації кліку смуги (лишають дропдаун відкритим). */
-  ithist: (id) => { if (typeof openHistory === 'function') openHistory(id); },
+  ithist: (id) => openHistory(id),
+  /* ⌘K «Історія ітерації» — для поточної (`picked`, інакше найновішої). */
+  histcur: () => openHistory(picked || (curTask?.iterations || []).at(-1)?.id),
   itmodact: (v) => {
     const i = String(v).indexOf('::');
     if (i > 0) runModuleAction(v.slice(i + 2), 'iteration', currentTaskId, v.slice(0, i));
@@ -4360,6 +4418,7 @@ function enterHome({ spaces = true, page } = {}) {
   homeQueued = null;                     // клік, зроблений ДО повернення на екран (другий клік пари), — не вибір на ньому
   if (cmtOpen) setCommentsOpen(false);   // екран «Задачі» не про макет: панель і режим коментування закриваємо
   closeModTool();                        // так само й панель інструмента модуля
+  closeHistory();                        // і історія ітерації
   /* Явна сторінка — це навігація людини: вхід на «Підключення», що ще чекає перелік просторів, відступає (`enterConnections`). */
   if (page !== undefined) connEntrySeq += 1;
   /* Пішли із задачі на екран «Задачі»: відкладений повтор статусу синку не мусить опитувати й малювати смугу під оверлеєм
@@ -7875,6 +7934,7 @@ function paintInsp() {
   /* Єдине місце, де видно «інспектор увімкнено» з обох шляхів (кнопка/⌘K і клавіша `I` у рамці → `onChange` → `paintBar`):
      права панель одна, тож увімкнений інспектор закриває інструмент модуля. */
   if (api && api.on && modOpen) closeModTool();
+  if (api && api.on && histOpen) closeHistory();   // інспектор увімкнено клавішею `I` у рамці — історія поступається
   /* Скраб, якому не прийшов pointerup (Esc вимкнув інспектор, вікно втратило фокус), не сміє заморозити панель до
      перезавантаження: коли інспектор вимкнено чи панелі вже немає — жест кинуто, а те, що встигли накрутити, мусить
      лягти в пакет одним записом. */

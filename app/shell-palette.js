@@ -308,6 +308,8 @@ export function paletteActions(state) {
     out.push({ id: "newit", group: "gIter", labelKey: "newIteration", icon: "plus", act: "newit" });
     out.push({ id: "renit", group: "gIter", labelKey: "renameIteration", icon: "pencil", act: "renit" });
     out.push({ id: "dupit", group: "gIter", labelKey: "dupIteration", icon: "copy", act: "dupit" });
+    /* Історія — права панель живого «Макета»: в «Огляді» (знімки) її нема. */
+    if (s.mode !== "canvas") out.push({ id: "ithist", group: "gIter", labelKey: "iterHistoryPal", icon: "refresh", act: "histcur" });
   }
 
   /* ── gPage: навпаки, ПРИЧИНА ВИДИМА — той самий вибір, що робить сама
