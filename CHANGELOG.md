@@ -32,7 +32,10 @@ iteration has a change history built from the task folder's git — including wh
   carries `ai` (`{it, sha, its}` or `null`). A task folder without git gets no AI commit.
 - Task dropdown in the bar: Rename (F2), Tags, the preview link when there is one, the modules' task actions. No Delete —
   tasks are deleted from «Задачі».
-- AGENTS.md: the trash, the history route and the AI commits are described for agents.
+- AGENTS.md: the trash and the history route are described for agents, and any agent is asked to call
+  `POST /api/autosync` when it has finished editing an iteration. Deai does not install a hook itself: Claude with the
+  dev-pipeline Stop hook already calls it after every reply; without the call an agent's edits land in the designer's next
+  canvas commit.
 
 ### Змінено
 - The task's title replaces its id: tabs (the Jira key moves to the tooltip), cards on «Задачі» (the key shows only when

@@ -47,9 +47,15 @@ Create a task:
       header: X-Canvas-Task: <task-id>
 
 - The change history of an iteration comes from the task folder's git:
-  `GET http://127.0.0.1:8765/api/iteration-history?id=itN` (header `X-Canvas-Task`). After each of your replies the canvas
-  commits your edits to an iteration as `itN: зміни AI` with the trailer `Deai-Actor: ai`, so the designer sees what you
-  changed; you don't need to commit them yourself.
+  `GET http://127.0.0.1:8765/api/iteration-history?id=itN` (header `X-Canvas-Task`). When you have finished changing the
+  files of an iteration, tell the canvas, so the designer sees your edits as yours:
+
+      POST http://127.0.0.1:8765/api/autosync {}
+      header: X-Canvas-Task: <task-id>
+
+  The canvas commits each changed iteration of this computer's user as `itN: зміни AI` with the trailer
+  `Deai-Actor: ai` (and sends it on, if the space's git module is set to do so). Do not commit the task folder yourself.
+  Without this call your edits land in the next commit the designer's own action makes, under the designer's name.
 
 ## Comments
 
