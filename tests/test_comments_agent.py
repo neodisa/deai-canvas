@@ -115,6 +115,10 @@ class Net:
     def __init__(self):
         self.calls, self.rows, self.bodies, self.error = [], [], [], None
 
+    def comment_calls(self):
+        """Виклики таблиці `comments`: `list` (0.35) додатково читає `comment_replies` — тут той другий запит не рахується."""
+        return [c for c in self.calls if '/rest/v1/comment_replies' not in c[1]]
+
     def __call__(self, req, timeout=None, context=None):
         self.calls.append((req.get_method(), req.full_url))
         if req.data:
@@ -138,6 +142,16 @@ ANSWER_SERVER = tm.CHECK_ONLY + (
     'def resolve(ctx, channel, id, reason):\n'
     '    with open(os.path.join(ctx["space"]["path"], "resolved.log"), "a", encoding="utf-8") as f:\n'
     '        f.write(json.dumps([channel, id, reason]) + "\\n")\n')
+
+#: Модуль-фікстура з необовʼязковою `reply` (пише `replied.log` у теці простору) і `recent` (відповідь — `news.json`).
+REPLY_SERVER = ANSWER_SERVER + (
+    'def recent(ctx, channel):\n'
+    '    with open(os.path.join(ctx["space"]["path"], "news.json"), encoding="utf-8") as f:\n'
+    '        return json.loads(f.read())\n'
+    'def reply(ctx, channel, id, text, author):\n'
+    '    with open(os.path.join(ctx["space"]["path"], "replied.log"), "a", encoding="utf-8") as f:\n'
+    '        f.write(json.dumps([channel, id, text, author], ensure_ascii=False) + "\\n")\n'
+    '    return {"id": "r-1"}\n')
 
 CONTROL = re.compile('[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]')
 
@@ -342,7 +356,7 @@ class InboxModuleTest(AgentEnv):
         self.use(self.liga)
         self.net.rows = [rest('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7)]
         _, legacy_out, _ = self.inbox(['--all'])
-        self.assertEqual(len(self.net.calls), 1, 'контроль: ЛІГА питає свій Supabase')
+        self.assertEqual(len(self.net.comment_calls()), 1, 'контроль: ЛІГА питає свій Supabase')
         self.assertTrue(self.pin_lines(module_out))
         self.assertEqual(self.pin_lines(module_out), self.pin_lines(legacy_out))
 
@@ -524,14 +538,14 @@ class InboxOtherProvidersTest(AgentEnv):
         self.assertIn('-- ПРОЄКТ (колеги + історія, Supabase) --', out)
         self.assertIn('• P#7 [2/me--welcome] Кнопку вирівняти  [c0ffee01 · Олена]', out)
         # запит модуля: канал у `project_id`, `select=*` (свідома відмінність від 0.9.0: перелік колонок)
-        self.assertEqual(self.net.calls, [('GET', f'{sbconf.SB_URL}/rest/v1/comments?project_id=eq.dc%2Flx'
-                                                  '&order=id&select=*&limit=5001')])
+        self.assertEqual(self.net.comment_calls(), [('GET', f'{sbconf.SB_URL}/rest/v1/comments?project_id=eq.dc%2Flx'
+                                                            '&order=id&select=*&limit=5001')])
         self.assertEqual(self.svc.log, [])
         rc, out, _ = self.inbox(['resolve', 'c0ffee01', '--reason', 'готово'])
         self.assertEqual(rc, 0, out)
         self.assertIn('✓ c0ffee01 закрито (проєкт, Іт.1): «готово»', out)
-        self.assertEqual([m for m, _ in self.net.calls], ['GET', 'GET', 'PATCH'])
-        self.assertEqual(self.net.calls[-1][1], f'{sbconf.SB_URL}/rest/v1/comments?id=eq.c0ffee01-aaaa'
+        self.assertEqual([m for m, _ in self.net.comment_calls()], ['GET', 'GET', 'PATCH'])
+        self.assertEqual(self.net.comment_calls()[-1][1], f'{sbconf.SB_URL}/rest/v1/comments?id=eq.c0ffee01-aaaa'
                                                 '&project_id=eq.dc%2Flx&select=id')
         self.assertEqual(self.svc.log, [])
 
@@ -595,7 +609,7 @@ class InboxOtherProvidersTest(AgentEnv):
         rc, out, _ = self.inbox(['--all'])
         self.assertEqual(rc, 0, out)
         self.assertIn('(колеги + історія, Supabase)', out)
-        self.assertEqual(len(self.net.calls), 1)
+        self.assertEqual(len(self.net.comment_calls()), 1)
 
     def test_a_module_that_does_not_answer_in_time_is_a_message(self):
         self.mkcm('slow', settings=[], server=tm.CHECK_ONLY + (
@@ -729,6 +743,57 @@ class AgentPinUnitTest(unittest.TestCase):
                           row['html_snapshot'], row['born_v'], row['resolve_reason']),
                          ('', 'open', '', '', {}, None, None, None, None))
 
+    def test_replies_pass_through_clean_and_without_a_key_when_there_are_none(self):
+        row = serve.agent_pin(cl('c0ffee01-aaaa', 'Текст', replies=[
+            {'id': 'r1', 'author': 'Ол\x1b[31mена\nX', 'text': 'рядок 1\nрядок 2\x07', 'ts': '19.10.2026 11:00', 'editedTs': '19.10.2026 11:05\x00'},
+            {'id': 'r2', 'author': 'AI', 'text': 'питання?', 'ts': '19.10.2026 11:10', 'agent': True}]))
+        self.assertEqual(row['replies'], [
+            {'id': 'r1', 'author': 'Ол[31mена X', 'text': 'рядок 1\nрядок 2', 'ts': '19.10.2026 11:00', 'editedTs': '19.10.2026 11:05'},
+            {'id': 'r2', 'author': 'AI', 'text': 'питання?', 'ts': '19.10.2026 11:10', 'agent': True}])
+        for none in (None, [], 'x', {'id': 'r1'}, 5):
+            self.assertNotIn('replies', serve.agent_pin(cl('c0ffee01-aaaa', 'Текст', replies=none)), repr(none))
+        self.assertNotIn('replies', serve.agent_pin(cl('c0ffee01-aaaa', 'Текст')))
+
+    def test_a_reply_with_an_unsafe_id_or_a_junk_shape_is_dropped_and_agent_must_be_literally_true(self):
+        bad = ['a b', 'x&y=1', '../x', 'a\nb', '', None, 5, 'a' * 201]
+        raw = [{'id': b, 'text': 'зле'} for b in bad] + ['junk', 7, None, {'id': 'ok1', 'text': 'добре', 'agent': 'yes'}]
+        row = serve.agent_pin(cl('c0ffee01-aaaa', 'Текст', replies=raw))
+        self.assertEqual([r['id'] for r in row['replies']], ['ok1'])
+        self.assertNotIn('agent', row['replies'][0], '`agent` — лише справжній `True`, не будь-яке «правдиве»')
+
+    def test_at_most_200_replies_pass_the_first_ones(self):
+        raw = [{'id': f'r{i}', 'text': 't'} for i in range(250)]
+        row = serve.agent_pin(cl('c0ffee01-aaaa', 'Текст', replies=raw))
+        self.assertEqual((len(row['replies']), row['replies'][0]['id'], row['replies'][-1]['id']), (200, 'r0', 'r199'))
+        self.assertEqual(serve.MAX_AGENT_REPLIES, 200)
+        bad_then_good = [{'id': 'a b'}] * 300 + [{'id': 'ok', 'text': 't'}]
+        self.assertEqual(len(serve.agent_pin(cl('c0ffee01-aaaa', 't', replies=bad_then_good))['replies']), 1)
+
+    def test_a_reply_text_is_cut_to_4000(self):
+        row = serve.agent_pin(cl('c0ffee01-aaaa', 't', replies=[{'id': 'r1', 'text': 'я' * 9000}]))
+        self.assertEqual(len(row['replies'][0]['text']), 4000)
+
+    def test_shot_miss_passes_in_meta_as_one_clean_word_and_junk_is_dropped(self):
+        for given, want in (('too-big', 'too-big'), ('no-lib', 'no-lib'), ('ti\x1bme\nout', 'time out'), ('x' * 40, 'x' * 40)):
+            with self.subTest(given=given):
+                row = serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': given}))
+                self.assertEqual(row['meta']['shotMiss'], want)
+        for junk in (None, 5, ['render'], {'a': 1}, '', '\x1b', 'x' * 41, 'x' * 100):          # довший за 40 — не код: відкинуто, а не обрізано
+            with self.subTest(junk=junk):
+                self.assertNotIn('shotMiss', serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': junk}))['meta'])
+
+    def test_shot_miss_is_dropped_when_the_pin_has_a_shot(self):
+        """0.35.0 записував `shotMiss: 'upload'` локальним пінам поруч зі знімком; `shot` агентові не віддаємо, тож рішення — тут."""
+        for meta in ({'shot': 'data:image/png;base64,AAAA'}, {'shotUrl': 'https://example.com/s.png'}):
+            with self.subTest(meta=list(meta)):
+                row = serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': 'upload', **meta}))
+                self.assertNotIn('shotMiss', row['meta'])
+                self.assertNotIn('shot', row['meta'])
+        for empty in ({'shot': ''}, {'shot': ' ', 'shotUrl': None}, {'shotUrl': 5}):
+            with self.subTest(empty=empty):
+                row = serve.agent_pin(cl('c0ffee01-aaaa', 't', meta={'version': '1', 'shotMiss': 'upload', **empty}))
+                self.assertEqual(row['meta']['shotMiss'], 'upload')
+
     def test_the_list_is_validated_as_a_whole(self):
         pins = serve.agent_pins([cl('a1', 'один'), cl('a2', 'два')])
         self.assertIsInstance(pins, serve.ModulePins)
@@ -845,9 +910,9 @@ class DecisionTest(AgentEnv):
         pc = self.pc(self.liga)
         self.net.rows = [rest('c0ffee01-aaaa', 'x')]
         self.assertEqual([p['id'] for p in pc.pins({'comment_project': 'dc/custom'}, 'lx')], ['c0ffee01-aaaa'])
-        self.assertIn('project_id=eq.dc%2Fcustom&', self.net.calls[-1][1])
+        self.assertIn('project_id=eq.dc%2Fcustom&', self.net.comment_calls()[-1][1])      # запит до `comments`, не до відповідей
         pc.resolve({'comment_project': 'dc/custom'}, 'lx', 'c0ffee01-aaaa', 'r')
-        self.assertEqual([m for m, _ in self.net.calls], ['GET', 'PATCH'])
+        self.assertEqual([m for m, _ in self.net.comment_calls()], ['GET', 'PATCH'])
         self.assertEqual(self.svc.log, [], 'ЛІГА не ходить у модуль простору')
 
     def test_the_league_passes_the_iteration_and_a_space_module_gets_none(self):
@@ -1187,6 +1252,14 @@ class AgentNewsUnitTest(unittest.TestCase):
         [c] = serve.agent_news([self.good(ts='19.10\n10:00\x1b[31m', author='О\x07лена\nX', version=3)])
         self.assertEqual((c['ts'], c['author'], c['version'], c['status']), ('19.10 10:00[31m', 'Олена X', '3', 'open'))
 
+    def test_a_reply_item_keeps_a_safe_parent_and_loses_an_unsafe_one(self):
+        raw = [self.good(id='r1', parent='c0ffee01-aaaa'), self.good(id='r2', parent='a b'), self.good(id='r3', parent='x&y=1'),
+               self.good(id='r4', parent=7), self.good(id='r5', parent=None), self.good(id='r6')]
+        got = {c['id']: c for c in serve.agent_news(raw)}
+        self.assertEqual(got['r1']['parent'], 'c0ffee01-aaaa')
+        for rid in ('r2', 'r3', 'r4', 'r5', 'r6'):
+            self.assertNotIn('parent', got[rid], rid)
+
     def test_the_answer_is_capped(self):
         raw = [self.good(id=f'c{i:07d}-aaaa') for i in range(serve.MAX_NEWS + 50)]
         self.assertEqual(len(serve.agent_news(raw)), serve.MAX_NEWS)
@@ -1195,6 +1268,55 @@ class AgentNewsUnitTest(unittest.TestCase):
         for raw in ({'a': 1}, 'x', None, 5):
             with self.assertRaises(dm.ModuleError, msg=repr(raw)):
                 serve.agent_news(raw)
+
+
+class ProjectCommentsReplyTest(AgentEnv):
+    """`ProjectComments.reply` (0.35): необовʼязкова `reply` модуля; без неї — `None`, а не помилка."""
+
+    def replier(self, sp):
+        self.mkcm('replier', server=REPLY_SERVER, settings=[])
+        dm.write_module_state(sp, 'replier', enabled=True, settings={})
+        tcr._write(os.path.join(sp['path'], 'answer.json'), '[]')
+
+    def log(self, sp):
+        f = os.path.join(sp['path'], 'replied.log')
+        if not os.path.exists(f):
+            return []
+        with open(f, encoding='utf-8') as fh:
+            return [json.loads(ln) for ln in fh.read().splitlines()]
+
+    def test_a_module_without_reply_answers_none_and_calls_nothing(self):
+        self.enable_memo_in(self.plain)
+        self.assertIsNone(self.pc(self.plain).prov.fn('reply'))
+        self.assertIsNone(self.pc(self.plain).reply({}, 'px', 'c0ffee01-aaaa', 'текст'))
+        self.assertEqual([e for e in self.svc.log if e[0] == 'POST'], [])
+
+    def test_the_module_gets_channel_id_text_and_ai_as_the_author(self):
+        self.replier(self.plain)
+        got = self.pc(self.plain).reply({}, 'px', 'c0ffee01-aaaa', 'це про кнопку?')
+        self.assertEqual(got, {'id': 'r-1'})
+        self.assertEqual(self.log(self.plain), [[self.chan(self.plain, 'px'), 'c0ffee01-aaaa', 'це про кнопку?', 'AI']])
+
+    def test_the_internal_channel_is_used_on_request(self):
+        self.replier(self.plain)
+        self.pc(self.plain).reply({}, 'px', 'c0ffee01-aaaa', 'x', internal=True)
+        self.assertEqual(self.log(self.plain)[0][0], self.chan(self.plain, 'px', internal=True))
+
+    def test_an_unsafe_id_never_reaches_the_module(self):
+        self.replier(self.plain)
+        pc = self.pc(self.plain)
+        for pid in PinIdWhitelistTest.BAD + [None, 5]:
+            with self.subTest(bad=pid), self.assertRaises(dm.ModuleError):
+                pc.reply({}, 'px', pid, 'x')
+        self.assertEqual(self.log(self.plain), [])
+
+    def test_a_space_without_a_provider_is_role_off_and_a_broken_module_is_its_error(self):
+        with self.assertRaises(spaces.RoleOff):
+            self.pc(self.new_space('Bare')).reply({}, 'px', 'c0ffee01-aaaa', 'x')
+        self.break_module(self.liga)
+        self.use(self.liga)
+        with self.assertRaises(dm.ModuleError):
+            self.pc(self.liga).reply({}, 'lx', 'c0ffee01-aaaa', 'x')
 
 
 class ServerEnv(AgentEnv):
@@ -1264,7 +1386,7 @@ class CommentsRouteTest(ServerEnv):
         self.net.rows = rows
         st, body, _ = self.get('project')
         self.assertEqual((st, body), (200, {'project': 'dc/lx', 'comments': rows, 'all': True}))
-        self.assertEqual(len(self.net.calls), 1)
+        self.assertEqual(len(self.net.comment_calls()), 1)
         self.assertEqual(self.svc.log, [])
         st, body, _ = self.get('internal')
         self.assertEqual(body['project'], 'dc/lx/internal')
@@ -1401,7 +1523,7 @@ class StateTest(AgentEnv):
         self.use(self.liga)
         self.net.rows = [assigned(rest('c0ffee01-aaaa', 'a')), assigned(rest('c0ffee02-bbbb', 'b', status='resolved'))]
         self.assertIn('+ 1 проєктних', self.line())
-        self.assertEqual(len(self.net.calls), 1)
+        self.assertEqual(len(self.net.comment_calls()), 1)
 
 
 class CommentNewsRouteTest(ServerEnv):
@@ -1416,13 +1538,13 @@ class CommentNewsRouteTest(ServerEnv):
         self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'Новий'), cl('c0ffee02-bbbb', 'Старе', status='resolved')])
         st, raw = self.news()
         self.assertEqual(st, 200, raw)
-        self.assertEqual(json.loads(raw), {'supported': True, 'items': [
+        self.assertEqual(json.loads(raw), {'supported': True, 'team': True, 'items': [
             {'id': 'c0ffee01-aaaa', 'ts': '19.10.2026 10:00', 'author': 'Олена', 'status': 'open', 'version': '2/me--welcome'}]})
         self.assertNotIn('AAAA', raw)
 
     def test_a_space_without_a_provider_is_unsupported_not_an_error(self):
         st, raw = self.news()
-        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'items': []}))
+        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'team': False, 'items': []}))
 
     def test_an_unknown_task_is_404_and_a_bad_name_is_400(self):
         self.enable_memo_in(self.plain)
@@ -1433,7 +1555,100 @@ class CommentNewsRouteTest(ServerEnv):
     def test_a_module_without_recent_is_unsupported(self):
         self.answer(self.plain, [])
         st, raw = self.news()
-        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'items': []}), 'модуль `answer` не має `recent`')
+        self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'team': False, 'items': []}), 'модуль `answer` не має `recent`')
+
+    # --- 0.35: відповіді агента на відкриті локальні піни ---
+    def lpin(self, pid, status='open', replies=None, version='3/p', **kw):
+        p = self.local_pin(pid, 'локальний', status=status)
+        p['meta'] = {'version': version}
+        if replies is not None:
+            p['replies'] = replies
+        p.update(kw)
+        return p
+
+    def test_local_agent_replies_on_open_pins_are_news_even_without_a_module(self):
+        self.set_local(self.plain, 'px', [
+            self.lpin('11111111-aaaa', replies=[
+                {'id': 'r-ai', 'author': 'AI', 'text': 'питання?', 'ts': '19.10.2026 11:00', 'agent': True},
+                {'id': 'r-human', 'author': 'Ольга', 'text': 'відповідь людини', 'ts': '19.10.2026 11:05'}]),
+            self.lpin('22222222-bbbb', status='resolved', replies=[{'id': 'r-closed', 'author': 'AI', 'text': 'x', 'ts': 't', 'agent': True}]),
+            self.lpin('33333333-cccc')])
+        st, raw = self.news()
+        self.assertEqual(st, 200, raw)
+        self.assertEqual(json.loads(raw), {'supported': True, 'team': False, 'items': [
+            {'id': 'r-ai', 'ts': '19.10.2026 11:00', 'author': 'AI', 'status': 'open', 'version': '3/p', 'parent': '11111111-aaaa'}]})
+
+    def test_the_local_replies_are_appended_to_the_module_items(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'Новий')])
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': 'r-ai', 'author': 'AI', 'text': 'q', 'ts': '19.10.2026 11:00', 'agent': True}])])
+        st, raw = self.news()
+        items = json.loads(raw)['items']
+        self.assertEqual((st, [c['id'] for c in items], items[1].get('parent')), (200, ['c0ffee01-aaaa', 'r-ai'], '11111111-aaaa'))
+        self.assertNotIn('parent', items[0])
+
+    def test_a_local_file_alone_makes_the_answer_supported_but_a_module_without_recent_and_no_file_does_not(self):
+        self.answer(self.plain, [])
+        self.assertEqual(json.loads(self.news()[1]), {'supported': False, 'team': False, 'items': []})
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa')])
+        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'team': False, 'items': []})
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': 'r-ai', 'author': 'AI', 'text': 'q', 'ts': '19.10.2026 11:00', 'agent': True}])])
+        self.assertEqual([c['id'] for c in json.loads(self.news()[1])['items']], ['r-ai'], 'модуль без `recent` + локальний файл — локальні новини')
+
+    def test_hostile_local_ids_and_text_do_not_pass(self):
+        self.set_local(self.plain, 'px', [
+            self.lpin('a b', replies=[{'id': 'r1', 'agent': True}]),
+            self.lpin('11111111-aaaa', version='3\x1b[31m/p', replies=[
+                {'id': 'x&y=1', 'agent': True}, {'id': 'r-ok', 'author': 'A\nI\x07', 'ts': '19.10\n2026', 'agent': True}, 'junk', None])])
+        items = json.loads(self.news()[1])['items']
+        self.assertEqual(items, [{'id': 'r-ok', 'ts': '19.10 2026', 'author': 'A I', 'status': 'open', 'version': '3[31m/p', 'parent': '11111111-aaaa'}])
+
+    def test_an_unreadable_local_file_is_no_source(self):
+        tcr._write(os.path.join(self.plain['path'], 'px', '.dc-local-comments.json'), '{broken')
+        self.assertEqual(json.loads(self.news()[1]), {'supported': False, 'team': False, 'items': []})
+        tcr._write(os.path.join(self.plain['path'], 'px', '.dc-local-comments.json'), '{"not": "a list"}')
+        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'team': False, 'items': []})
+
+    def test_team_is_true_only_when_the_module_recent_was_consulted_without_error(self):
+        """`team` каже вкладці, чи є «команда жива» (право писати ГОЛОВНИЙ маркер «бачив»)."""
+        self.answer(self.plain, [])
+        self.assertIs(json.loads(self.news()[1])['team'], False, 'модуль без `recent`')
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa')])
+        self.assertIs(json.loads(self.news()[1])['team'], False, 'модуль без `recent` + локальний файл')
+        self.mkcm('replier', server=REPLY_SERVER, settings=[])
+        dm.write_module_state(self.plain, 'answer', enabled=False)
+        dm.write_module_state(self.plain, 'replier', enabled=True, settings={})
+        tcr._write(os.path.join(self.plain['path'], 'news.json'), '[]')
+        self.assertEqual(json.loads(self.news()[1]), {'supported': True, 'team': True, 'items': []}, '`recent` відповів порожнім списком — команда жива')
+        tcr._write(os.path.join(self.plain['path'], 'news.json'), '{"not": "a list"}')
+        got = json.loads(self.news()[1])
+        self.assertEqual((got['supported'], got['team'], got['items']), (True, False, []))
+        self.assertIn('error', got, '`recent` кинув помилку — команда не опитана')
+
+    def test_team_is_false_without_a_module_and_with_a_broken_one(self):
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': 'r-ai', 'author': 'AI', 'ts': 't', 'agent': True}])])
+        got = json.loads(self.news()[1])
+        self.assertEqual((got['supported'], got['team']), (True, False), 'нема модуля')
+        self.break_module(self.plain)
+        got = json.loads(self.news()[1])
+        self.assertEqual((got['supported'], got['team'], [c['id'] for c in got['items']]), (True, False, ['r-ai']), 'зламаний модуль')
+
+    def test_the_merged_list_is_capped_at_max_news(self):
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [cl(f'c0ffee{i:03d}-aaaa', 'x') for i in range(serve.MAX_NEWS)])
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': f'r{i}', 'author': 'AI', 'ts': 't', 'agent': True} for i in range(50)])])
+        items = json.loads(self.news()[1])['items']
+        self.assertEqual(len(items), serve.MAX_NEWS)
+        self.assertTrue(all(c['id'].startswith('c0ffee') for c in items), 'модульні — першими, надлишок локальних відсікається')
+
+    def test_the_local_news_are_capped(self):
+        self.set_local(self.plain, 'px', [self.lpin('11111111-aaaa', replies=[
+            {'id': f'r{i}', 'author': 'AI', 'ts': 't', 'agent': True} for i in range(serve.MAX_NEWS * 4)])])
+        self.assertEqual(len(json.loads(self.news()[1])['items']), serve.MAX_NEWS)
 
 
 if __name__ == '__main__':

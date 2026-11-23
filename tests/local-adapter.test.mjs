@@ -354,3 +354,195 @@ test("впалий запис не зупиняє чергу: наступний
 
   assert.ok(server.rows.some((c) => c.id === "next"), "після впалого запису черга стала");
 });
+
+/* ---------- Відповіді піна (0.35) ---------- */
+const reply = (id, ts, extra = {}) => ({ id, author: "Lead", text: `відповідь ${id}`, ts, ...extra });
+const copyOf = (s) => s.load().map((c) => JSON.parse(JSON.stringify(c)));
+
+test("replies переживають save/load: файл → вкладка → файл", async () => {
+  const r = reply("r1", "20.11.2026 10:00", { editedTs: "20.11.2026 10:05", agent: true });
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  await s.save([{ ...copyOf(s)[0], replies: [r] }]);
+  assert.deepEqual(server.rows[0].replies, [r]);
+  await s.refresh();
+  assert.deepEqual(copyOf(s)[0].replies, [r]);
+});
+
+test("clean: зайві поля відповіді відкинуто, agent:true лишається, agent:false — ні, спадок без id дослівно, не-обʼєкти геть", async () => {
+  const legacy = { who: "claude", body: "старий формат", n: [1, { z: 2 }] };
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  await s.save([copyOf(s)[0], { ...pin("n"), replies: [
+    { ...reply("r1", "20.11.2026 10:00", { agent: true }), _pending: true, junk: 1 },
+    reply("r2", "20.11.2026 10:01", { agent: false }),
+    legacy, "рядок", 7, null,
+  ] }]);
+  assert.deepEqual(server.rows[1].replies, [
+    reply("r1", "20.11.2026 10:00", { agent: true }),
+    reply("r2", "20.11.2026 10:01"),
+    legacy,
+  ]);
+  assert.equal("agent" in server.rows[1].replies[1], false);
+  await s.save([...copyOf(s), { ...pin("m"), replies: "не масив" }, { ...pin("e"), replies: [] }]);
+  assert.equal("replies" in server.rows[2], false, "не-масив має прибрати ключ");
+  assert.equal("replies" in server.rows[3], false, "порожній масив — теж");
+});
+
+test("одночасно: агент дописав A на диск, вкладка додала B — обидві, за ts", async () => {
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  server.rows = [pin("a", { replies: [reply("A", "20.11.2026 10:00", { agent: true })] })];
+  await s.save([{ ...seen[0], replies: [reply("B", "20.11.2026 11:00")] }]);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["A", "B"]);
+  server.rows = [pin("a", { replies: [reply("A", "20.11.2026 12:00", { agent: true })] })];
+  await s.refresh();
+  const seen2 = copyOf(s);
+  server.rows[0].replies.push(reply("C", "20.11.2026 09:00", { agent: true }));
+  await s.save([{ ...seen2[0], replies: [...seen2[0].replies, reply("D", "20.11.2026 10:30")] }]);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["C", "D", "A"], "порядок за ts");
+});
+
+test("вкладка прибрала відповідь, яку знала, а на диску вона ще є — її нема", async () => {
+  const server = fakeServer([pin("a", { replies: [reply("r1", "20.11.2026 10:00"), reply("r2", "20.11.2026 10:01")] })]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  await s.save([{ ...seen[0], replies: [seen[0].replies[1]] }]);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["r2"]);
+  await s.save([{ ...copyOf(s)[0], replies: undefined }]);
+  assert.equal("replies" in server.rows[0], false, "порожній результат — без ключа");
+});
+
+test("відповідь на диску, якої вкладка не знала, лишається, коли вкладка міняє лише текст піна", async () => {
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  server.rows = [pin("a", { replies: [reply("A", "20.11.2026 10:00", { agent: true })] })];
+  await s.save([{ ...seen[0], text: "нова правка" }]);
+  assert.equal(server.rows[0].text, "нова правка");
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["A"]);
+});
+
+test("вкладка правила текст відповіді R, диск не мінявся — правка виграє", async () => {
+  const server = fakeServer([pin("a", { replies: [reply("R", "20.11.2026 10:00")] })]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  const edited = { ...seen[0].replies[0], text: "виправлено", editedTs: "20.11.2026 10:30" };
+  await s.save([{ ...seen[0], replies: [edited] }]);
+  assert.equal(server.rows[0].replies[0].text, "виправлено");
+  assert.equal(server.rows[0].replies[0].editedTs, "20.11.2026 10:30");
+});
+
+test("спадковий запис без id на диску переживає відповідь вкладки, лишаючись попереду", async () => {
+  const legacy = { who: "claude", body: "від попередника" };
+  const server = fakeServer([pin("a", { replies: [legacy] })]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  await s.save([{ ...seen[0], replies: [...seen[0].replies, reply("B", "20.11.2026 10:00")] }]);
+  assert.deepEqual(server.rows[0].replies, [legacy, reply("B", "20.11.2026 10:00")]);
+});
+
+test("зміна лише replies викликає запис; незмінений пін лишає сирі replies сервера", async () => {
+  const server = fakeServer([pin("a"), pin("b")]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  const w0 = server.writes;
+  await s.save([{ ...seen[0], replies: [reply("B", "20.11.2026 10:00")] }, seen[1]]);
+  assert.equal(server.writes, w0 + 1);
+  assert.equal(server.rows[0].replies.length, 1);
+  // Незмінений пін b: на диску сирі replies у «чужій» формі — не чіпаємо.
+  const raw = [{ ts: 5, anything: true }, { id: "x", text: "t", extraField: 1 }];
+  server.rows[1] = { ...server.rows[1], replies: raw };
+  await s.refresh();
+  const seen2 = copyOf(s);
+  await s.save([{ ...seen2[0], text: "інша" }, seen2[1]]);
+  assert.deepEqual(server.rows[1].replies, raw);
+});
+
+test("відповідь, видалена на диску, не воскресає, коли вкладка додає іншу (ревʼю T5)", async () => {
+  const server = fakeServer([pin("a", { replies: [reply("X", "20.11.2026 10:00"), reply("Y", "20.11.2026 10:01")] })]);
+  const s = await store(server);
+  const seen = copyOf(s);
+  server.rows = [pin("a", { replies: [reply("Y", "20.11.2026 10:01")] })];   // X видалили на диску
+  await s.save([{ ...seen[0], replies: [...seen[0].replies, reply("Z", "20.11.2026 10:02")] }]);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["Y", "Z"]);
+});
+
+test("runtime-поля коментатора на обʼєктах із load() не доходять до POST (_goneReplies, reply._pending)", async () => {
+  const server = fakeServer([pin("a", { replies: [reply("R", "20.11.2026 10:00")] })]);
+  const s = await store(server);
+  const live = s.load()[0];                       // коментатор мутує саме ці обʼєкти
+  live._goneReplies = { r9: 1 };
+  live._pending = true;
+  live.replies[0]._pending = true;
+  live.replies.push({ ...reply("N", "20.11.2026 10:05"), _pending: true });
+  let body = null;
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => { if (opts && opts.method === "POST") body = opts.body; return orig(url, opts); };
+  await s.save(s.load());
+  assert.ok(body, "POST не було");
+  assert.equal(body.includes("_goneReplies"), false);
+  assert.equal(body.includes("_pending"), false);
+  assert.deepEqual(server.rows[0].replies.map((r) => r.id), ["R", "N"]);
+});
+
+/* ---- uploadShot (0.35.1): повний знімок локального піна → файл поруч із задачею ---- */
+async function shotStore(opts) {
+  globalThis.window = globalThis.window || {};
+  await import(pathToFileURL(VENDOR).href);
+  const s = globalThis.window.CommentLayerLocal(opts);
+  await s.ready;
+  return s;
+}
+function fakeShotFetch(reply) {
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    if (opts && opts.method === "POST" && String(url).includes("/api/local-shots")) {
+      calls.push({ url: String(url), opts });
+      return reply(calls.length);
+    }
+    return { ok: true, json: async () => ({ comments: [] }) };
+  };
+  return calls;
+}
+const ok = (url) => async () => ({ ok: true, json: async () => ({ ok: true, url }) });
+
+test("uploadShot: POST {id, dataUrl} на shotsEndpoint, абсолютна адреса у відповіді", async () => {
+  const calls = fakeShotFetch(ok("/api/local-shots/p1.jpg"));
+  const s = await shotStore({ endpoint: "http://127.0.0.1:9/api/local-comments", shotsEndpoint: "http://127.0.0.1:9/api/local-shots" });
+  const url = await s.uploadShot("p1", "data:image/jpeg;base64,/9j/AA==", { _aud: "local" });
+  assert.equal(url, "http://127.0.0.1:9/api/local-shots/p1.jpg");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:9/api/local-shots");
+  assert.deepEqual(JSON.parse(calls[0].opts.body), { id: "p1", dataUrl: "data:image/jpeg;base64,/9j/AA==" });
+  assert.equal(calls[0].opts.headers["Content-Type"], "application/json");
+});
+
+test("uploadShot: shotsEndpoint виводиться з endpoint (хвіст /api/local-comments і query замінюються)", async () => {
+  for (const [ep, want] of [
+    ["http://127.0.0.1:9/api/local-comments", "http://127.0.0.1:9/api/local-shots"],
+    ["http://127.0.0.1:9/api/local-comments?k=1", "http://127.0.0.1:9/api/local-shots"],
+    ["http://127.0.0.1:9/t/beta/api/local-comments", "http://127.0.0.1:9/t/beta/api/local-shots"],
+  ]) {
+    const calls = fakeShotFetch(ok("/api/local-shots/p1.jpg"));
+    const s = await shotStore({ endpoint: ep });
+    await s.uploadShot("p1", "data:image/jpeg;base64,AA==");
+    assert.equal(calls[0].url, want);
+  }
+});
+
+test("uploadShot: збій мережі, ok:false, відповідь без url, сміття — null, без винятку", async () => {
+  const replies = [
+    async () => { throw new Error("offline"); },
+    async () => ({ ok: false, status: 413, json: async () => ({ ok: false }) }),
+    async () => ({ ok: true, json: async () => ({ ok: true }) }),
+    async () => ({ ok: true, json: async () => { throw new Error("not json"); } }),
+    async () => ({ ok: true, json: async () => ({ ok: true, url: 42 }) }),
+  ];
+  for (const r of replies) {
+    fakeShotFetch(r);
+    const s = await shotStore({ endpoint: "http://127.0.0.1:9/api/local-comments" });
+    assert.equal(await s.uploadShot("p1", "data:image/jpeg;base64,AA=="), null);
+  }
+});

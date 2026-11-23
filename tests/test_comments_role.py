@@ -385,6 +385,32 @@ class ProviderTest(CommentsEnv):
 
 # --------------------------------------------------------------------------------------- comments_client
 
+class OptionalReplyTest(CommentsEnv):
+    """0.35: `reply` — НЕобовʼязкова функція ролі `comments` (як `recent`): модуль без неї валідний, з нею — ядро її бере."""
+
+    def test_a_module_without_reply_is_valid_and_has_no_reply_fn(self):
+        self.mkcm('plain')
+        m = dm.catalog()['plain']
+        self.assertEqual((m.status, m.error), ('ok', None))
+        self.assertIsNone(m.fn('reply'))
+        self.assertNotIn('reply', dm.ROLE_FUNCTIONS['comments'], '`reply` не обовʼязкова')
+
+    def test_a_module_with_reply_gets_it_in_fns_and_a_junk_reply_is_just_absent(self):
+        self.mkcm('withreply', server=tm.COMMENTS_FNS + 'def reply(ctx, channel, id, text, author):\n    return {"id": "r1"}\n')
+        self.mkcm('junk', server=tm.COMMENTS_FNS + 'reply = 5\n')
+        cat = dm.catalog()
+        self.assertEqual((cat['withreply'].status, cat['junk'].status), ('ok', 'ok'))
+        self.assertTrue(callable(cat['withreply'].fn('reply')))
+        self.assertIsNone(cat['junk'].fn('reply'), 'не-функція `reply` — не помилка маніфесту, а відсутня функція')
+
+    def test_the_core_passes_ctx_channel_and_the_arguments_to_reply(self):
+        self.mkcm('withreply', server=tm.COMMENTS_FNS + 'def reply(ctx, channel, id, text, author):\n    return {"got": [channel, id, text, author]}\n')
+        m = dm.catalog()['withreply']
+        sp = self.new_space()
+        got = dm.call(m, 'reply', {'space': sp}, 'chan', 'c1', 'привіт', 'AI')
+        self.assertEqual(got, {'got': ['chan', 'c1', 'привіт', 'AI']})
+
+
 class CommentsClientTest(CommentsEnv):
     TOKEN, PUB = 'tok-SECRET-1', 'pub-OPEN-2'
 
@@ -1927,6 +1953,26 @@ class DualPagesTest(PagesEnv):
         self.assertIn('window.__dcIslandInset = ', js)
         # «Огляд»: коментатор полотна живе у вікні оболонки і бере ту саму межу від свого `host`.
         self.assertIn('bottomInset: () => islandInsetOver(canvasEl.getBoundingClientRect())', js)
+
+    def test_host_args_ask_the_shell_for_theme_and_labels(self):
+        """Пара «Python ↔ JS» (0.35): форма коментатора бере токени й підписи в оболонки через `window.parent.__dcCmtTheme` /
+        `__dcCmtLabels`; оболонки (`app.js`, `ext-shell.js`) їх виставляють. Обидва хости — і Deai, і превʼю — мають обидві функції,
+        причому виняток чи відсутність провайдера дають `null` (коментатор тоді лишає свій вигляд)."""
+        base = os.path.dirname(serve.__file__)
+        for host in (serve.HOST_ARG, serve.PREVIEW_HOST_ARG):
+            for need in ('theme: function', 'labels: function', '__dcCmtTheme', '__dcCmtLabels'):
+                self.assertIn(need, host)
+            self.assertEqual(host.count("typeof f === 'function' ? f() : null; } catch (e) { return null; }"), 2)
+        for name in ('app.js', 'ext-shell.js'):
+            with open(os.path.join(base, name), encoding='utf-8') as fh:
+                js = fh.read()
+            self.assertIn('window.__dcCmtTheme = ', js, name)
+            self.assertIn('window.__dcCmtLabels = ', js, name)
+        # превʼю: острівця/адресатів нема, а охоронець походження й `userName` на місці
+        self.assertIn("window.parent === window || window.parent.__dcPreviewShell !== 2", serve.PREVIEW_HOST_ARG)
+        self.assertIn('userName: function', serve.PREVIEW_HOST_ARG)
+        # спільний модуль їде в публікацію разом з `ext-shell.js`
+        self.assertIn('cmt-form.js', serve.SHELL_MODULES)
 
     def test_dual_audience_labels_match_dictionary(self):
         """Підписи чипів у `DUAL_AUDIENCES_JS` — парні до `audChip*` у `app/i18n.js` (сервер не бачить JS-словника)."""

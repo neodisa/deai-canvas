@@ -363,7 +363,7 @@ class ModuleErrorTest(unittest.TestCase):
         for gone in ('IMPLICIT_ROLES', 'IMPLICIT_ON_ERROR_ROLES', 'STRICT_IMPLICIT_ROLES'):
             self.assertFalse(hasattr(dm, gone), gone)
         self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS, {'vcs': ('validate', 'mirror_dir'), 'dashboard': ('open_comments',),
-                                                      'comments': ('recent',)})
+                                                      'comments': ('recent', 'reply')})
 
 
 # ------------------------------------------------------------------------------------------ маніфест

@@ -12,7 +12,7 @@
  * Attaches window.DeaiDualStore. Без DOM: тест — `tests/dual-store.test.mjs`.
  */
 (function () {
-  var FIELDS = ['id', 'author', 'text', 'status', 'fp', 'htmlSnapshot', 'meta', 'bornV', 'resolvedV', 'resolveReason', 'ts'];
+  var FIELDS = ['id', 'author', 'text', 'status', 'fp', 'htmlSnapshot', 'meta', 'bornV', 'resolvedV', 'resolveReason', 'ts', 'replies'];
   function strip(c) { var o = {}; for (var k in c) if (k !== '_aud') o[k] = c[k]; return o; }
   function tag(list, aud) {
     return (list || []).map(function (c) { var o = {}; for (var k in c) o[k] = c[k]; o._aud = aud; return o; });
@@ -79,6 +79,16 @@
       return Promise.race([settled, guard]);
     }
     store.ready = Promise.all([Promise.resolve(local.ready), teamReady()]).then(function () {});
+    /* Причина, чому відповіді командного каналу недоступні (0.35): лише коли команда жива, а її модуль сам сказав. */
+    Object.defineProperty(store, 'repliesDown', { enumerable: true, get: function () {
+      if (!team || store.teamDown) return null;
+      return typeof team.repliesDown === 'string' && team.repliesDown ? team.repliesDown : null;
+    } });
+    store.supportsReplies = function (aud) {
+      if (aud === 'local') return true;
+      if (aud === 'project') return !!team && team.supportsReplies === true;
+      return false;
+    };
     store.load = function () { return union(); };
     store.save = function (list) {
       var mine = { local: [], project: [] };
@@ -142,9 +152,17 @@
       team = null; shadow = null;            // пізня готовність команди нічого не закриє вдруге
       if (t && typeof t.close === 'function') { try { t.close(); } catch (e) {} }
     };
+    /* Куди слати ПОВНИЙ знімок піна (0.35.1). Командний пін — у командний кошик; будь-який інший (локальний, без `_aud`) — у локальне
+       сховище, а НІКОЛИ в командний кошик. Немає, кому залити, — `{ skipped: true }`: «для цього піна тут нічого заливати»
+       (коментатор не повторює спробу й не пише `shotMiss: 'upload'`). */
     store.uploadShot = function (id, dataUrl, c) {
-      if (!team || typeof team.uploadShot !== 'function' || !c || c._aud !== 'project') return Promise.resolve(null);
-      return Promise.resolve(team.uploadShot(id, dataUrl));
+      var skipped = { skipped: true };
+      if (c && c._aud === 'project') {
+        if (!team || typeof team.uploadShot !== 'function') return Promise.resolve(skipped);
+        return Promise.resolve(team.uploadShot(id, dataUrl));
+      }
+      if (typeof local.uploadShot !== 'function') return Promise.resolve(skipped);
+      return Promise.resolve(local.uploadShot(id, dataUrl, c));
     };
     return store;
   }

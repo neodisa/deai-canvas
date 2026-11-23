@@ -131,7 +131,7 @@ ROLE_FUNCTIONS = {'publish': ('publish',), 'tokens': ('tokens',), 'comments': ('
                   'tracker': ('statuses',), 'notify': ('mute_state', 'mute_set')}
 #: Необовʼязкові функції ролі: беруться з server.py, якщо є й callable; свій модуль без них валідний.
 ROLE_OPTIONAL_FUNCTIONS = {'vcs': ('validate', 'mirror_dir'), 'dashboard': ('open_comments',),
-                           'comments': ('recent',)}
+                           'comments': ('recent', 'reply')}
 #: Куди публікує модуль ролі `publish` (необовʼязкове поле маніфесту `publish_target`): `folder` — у локальну теку
 #: (`static-publish`), `url` — на віддалений хост, де результат — адреса (`vercel-publish`). Типово `folder`.
 PUBLISH_TARGETS = ('folder', 'url')
@@ -229,7 +229,7 @@ class Module:
     `publish_target` — `'folder'` (типово) чи `'url'` (див. `PUBLISH_TARGETS`): що повертає й куди пише модуль
     ролі `publish`. `client` — кортеж імен файлів браузерного адаптера (лише роль `comments`, див. `_check_client`),
     у порядку вантаження. `fn(імʼя)` — функція `server.py` (`'check'`, `'publish'`, `'client_config'`…) або `None`: необовʼязкові
-    функції ролі (`ROLE_OPTIONAL_FUNCTIONS`: `validate`, `mirror_dir` у `vcs`, `recent` у `comments`) модуль міг не мати, і тоді `fn()` дає `None`,
+    функції ролі (`ROLE_OPTIONAL_FUNCTIONS`: `validate`, `mirror_dir` у `vcs`, `recent` і `reply` у `comments`) модуль міг не мати, і тоді `fn()` дає `None`,
     а модуль лишається справним.
 
     Свій модуль простору (`origin='space'`) без робочого знімка — `status='untrusted'` чи `'error'` (`refused`) з

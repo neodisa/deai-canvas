@@ -717,6 +717,20 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(got['comments'], [{'id': 'c1', 'text': 't', 'replies': [1]},
                                            {'id': 'c2', 'text': 'u'}])
 
+    def test_local_comments_drop_reply_runtime_fields(self):
+        """0.35: `_goneReplies` піна і `_pending` у відповідях — runtime коментатора, на диск не лягають.
+
+        Решта полів відповіді (і записи не-обʼєкти, і спадок без id) — дані, їх не чіпаємо.
+        """
+        pins = [{'id': 'c1', 'text': 't', '_goneReplies': {'r9': 1},
+                 'replies': [{'id': 'r1', 'text': 'a', '_pending': True, 'agent': True},
+                             {'who': 'claude', '_pending': 1}, 'рядок']}]
+        post(self.base + '/api/local-comments', {'comments': pins})
+        got = json.load(urllib.request.urlopen(self.base + '/api/local-comments'))
+        self.assertEqual(got['comments'], [{'id': 'c1', 'text': 't',
+                                            'replies': [{'id': 'r1', 'text': 'a', 'agent': True},
+                                                        {'who': 'claude'}, 'рядок']}])
+
     def test_local_comments_drop_audience_marker(self):
         """`_aud` — службова позначка адресата комбінованого сховища (0.27.0), а не дані піна.
 
@@ -5404,6 +5418,9 @@ class PreviewHostArg(unittest.TestCase):
         for need in ('host: (function', "'dc-comments'", 'onReady', 'onChange', 'onSelect', 'onMode',
                      "ev: 'add'", 'userName: function', "localStorage.getItem('comment-layer:user')"):
             self.assertIn(need, js)
+        # 0.35: відповідь теж «своя» — `onReply` шле id ВІДПОВІДІ (`o.reply`), не коментаря; лише превʼю, у Deai цього нема.
+        self.assertIn("onReply: function (o) { send({ ev: 'reply', id: o && o.reply }); }", js)
+        self.assertNotIn('onReply', serve.HOST_ARG)
         # 0.32.1: острівця внизу превʼю нема — відступу під нього теж (інструменти в смузі згори).
         self.assertNotIn('bottomInset', js)
         self.assertNotIn('__dcIslandInset', js)
@@ -5449,6 +5466,8 @@ class PreviewHostArg(unittest.TestCase):
                                                  {'channel': 'c'}, version='1', host='preview')
         self.assertEqual(html.count('dc-comments'), 1)
         self.assertIn('userName: function', html)
+        self.assertIn("onReply: function (o)", html, 'зібрана сторінка превʼю має onReply у host')
+        self.assertLess(html.index('onAdd: function'), html.index('onReply: function'))
         self.assertNotIn('defaultUser', html)
         plain = serve.inject_module_comment_layer('<html><body></body></html>', '../comment-layer', [],
                                                   {'channel': 'c'}, version='1')

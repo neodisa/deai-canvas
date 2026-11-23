@@ -368,8 +368,8 @@ test("E: setMeta додає/знімає ключ meta і повертає false
 
 test("F: uploadShot отримує пін третім аргументом (_aud доходить до сховища)", async () => {
   const page = await bootAud();
-  // Захоплення скріншота в голій сторінці недоступне — підміняємо _captureShot, решта шляху (форма → _finishComment) справжня.
-  await page.evaluate(() => { window.CommentLayer._captureShot = async () => "data:image/png;base64,iVBORw0KGgo="; });
+  // Захоплення скріншота в голій сторінці недоступне — підміняємо _captureShot (контракт 0.35: `{ shot }`), решта шляху (форма → _finishComment) справжня.
+  await page.evaluate(() => { window.CommentLayer._captureShot = async () => ({ shot: "data:image/png;base64,iVBORw0KGgo=" }); });
   await openForm(page);
   await page.evaluate(`(() => { const ta = ${SH}.querySelector('.compose textarea'); ta.value = 'y'; ${SH}.querySelector('.compose .save').click(); })()`);
   await page.waitForFunction(() => window.__shots.length > 0);

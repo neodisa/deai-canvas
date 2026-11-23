@@ -141,9 +141,9 @@ test("«Доручити» / «Забрати» — лише на відкрит
   assert.ok(html.indexOf('data-act="cmtassign" data-val="a"') < html.indexOf('data-act="cmtedit" data-val="a"'), "перед «Редагувати»");
 });
 
-test("розділ «Нові від команди»: з числом, над «Відкритими», без дубля там", () => {
+test("розділ «Нове»: з числом, над «Відкритими», без дубля там", () => {
   const html = dual([D({ id: "n1", n: 5, aud: "project" }), D({ id: "o1", n: 1 })], { fresh: new Set(["n1"]) });
-  assert.match(html, /<h3 class="cmt-h cmt-h--new">Нові від команди <span>1<\/span><\/h3>/);
+  assert.match(html, /<h3 class="cmt-h cmt-h--new">Нове <span>1<\/span><\/h3>/);
   assert.ok(html.indexOf("cmt-sec--new") < html.indexOf('aria-label="Відкриті"'));
   assert.equal((html.match(/data-cid="n1"/g) || []).length, 1);
   assert.equal(commentsPanelHTML(base({ dual: true, filter: "all", snapshot: { iteration: "3", comments: [D({ id: "o1", n: 1 })] } })).includes("cmt-sec--new"), false);

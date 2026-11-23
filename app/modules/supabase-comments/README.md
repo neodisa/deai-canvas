@@ -22,6 +22,26 @@ The module changes nothing in the project's schema: you run `schema.sql` yoursel
      `secret` key: it bypasses every rule, and this key goes into every page and preview. The module refuses it
      (`sb_secret_…`, or a JWT whose payload says `"role": "service_role"`) with `bad-settings`.
 
+### Comment replies (`comment_replies`) — existing projects
+
+Replies to comments live in a second table, `public.comment_replies`. A **new** project gets it from `schema.sql` (the last block).
+A project that **already has** the comments schema needs one more step: run [`replies.sql`](replies.sql) **once per project**, in that project's SQL editor
+(**SQL Editor → New query → Run**; it is idempotent; it holds exactly the replies block of `schema.sql`, without touching `public.comments`).
+
+* **Shared or organisation databases** whose `comments` policies differ from the open ones in `schema.sql` (e.g. a database shared with other products): run
+  **only** `replies.sql`, never the whole `schema.sql` — it would replace the policies of `public.comments`.
+* **Check first** that the project has no unrelated table named `public.comment_replies`: `create table if not exists` would adopt it
+  (row-level security on, policies replaced, the public key granted full access).
+* The table has the same guards as `comments`: an immutable `project_id`, and a delete cannot cross channels or exceed **100 rows**
+  per DELETE statement (the adapter deletes replies in batches of at most 100 rows, and the replies of ten comments per request, so it stays under the guard; a hand-written bulk `DELETE` of more than 100 rows is refused).
+* There is no foreign key and no `on delete cascade` on purpose: older clients delete only the `comments` row, and a foreign key
+  would make that delete fail. Orphan replies are harmless — a reply is shown only together with its comment.
+* Without the table replies are unavailable and **comments are unaffected**: the canvas shows a banner («Відповіді команди недоступні …
+  `replies.sql`»), the preview says nothing and has no reply field, `list` returns the comments without replies, `recent` only comment items.
+  `check` still answers `ok` and says whether replies are available (below).
+* **Replies are untrusted data.** They live under the same open policies as comments, so anyone with the public key (a visitor of a published preview too) can write a reply with `agent: true` and any author: the «AI» mark is **not authenticated**.
+* **Known limits.** Replies are ordered by their displayed time (minute precision, each writer's own clock — the same as comments). Deleting a comment deletes its replies **first**: if the comment delete then fails, the comment stays without its replies (an orphan reply is harmless and invisible).
+
 ## 2. Enable the module in a space
 
 Through the canvas module settings, or with the API of the running canvas (`<port>` is the one of your canvas):
@@ -38,7 +58,7 @@ The answer carries the verdict of `check`:
 
 | `error` | meaning |
 |---|---|
-| *(ok)* | the table `comments` answers |
+| *(ok)* | the table `comments` answers; `replies: true` when `comment_replies` answers too, `replies: false` (with the reason in `detail`: run `replies.sql`, or what the replies probe returned) when it does not — the verdict stays `ok`. The core passes on only `ok`, `error` and `detail`, so the replies state reaches the UI through the `detail` text; the `replies` flag is for the module's own use and tests |
 | `bad-key` | Supabase did not accept the key (HTTP 401/403) — re-copy the public key; right after `schema.sql` this also means the table grants are missing (run it again) |
 | `no-schema` | the table does not exist — run `schema.sql` (step 1) |
 | `network` | the project is not reachable or did not answer within 4 s (paused project, wrong ref, no internet) |
@@ -55,7 +75,9 @@ socket operation — shorter than the core's own 5 s and 10 s, so a slow project
 * the **Team** tab and project comments in the canvas, on the overview and in published previews (`static-publish`,
   `vercel-publish`) — one channel per task: `deai/<space-id>/<task-id>` (`…/internal` for the internal one);
 * live updates between reviewers (realtime `postgres_changes` → re-read of the channel, once per burst of events);
-* `inbox` and `inbox resolve` for the agent: `list` / `resolve` through the REST API of the same project. When the core passes
+* `inbox` and `inbox resolve` for the agent: `list` / `resolve` through the REST API of the same project; `list` also attaches the
+  replies to their comments (`replies`), `recent` adds one item per reply to an open comment (with `parent`), and `reply(ctx, channel, id, text, author)`
+  posts a reply of the agent (`agent: true`) to an **open** comment (text up to 4000 characters, author up to 100). When the core passes
   the iteration number, `resolve` also writes it to `resolved_v` (only a real integer ≥ 1; otherwise the column is left alone);
 * pin screenshots in Storage, when you set the optional `shots_bucket` (next section).
 
@@ -139,7 +161,8 @@ page's own origin and need nothing extra.
 | file | purpose |
 |---|---|
 | `module.json` | manifest: role `comments`, the two client files, settings `url`, `key` (public secret) and the optional `shots_bucket` |
-| `server.py` | `client_config`, `list`, `resolve`, `check` — stdlib REST client for the agent and the core (TLS through the `certifi` store when present) |
+| `server.py` | `client_config`, `list`, `resolve`, `recent`, `reply`, `check` — stdlib REST client for the agent and the core (TLS through the `certifi` store when present) |
 | `adapter.js` | `window.DeaiComments.create(cfg)` over supabase-js (port of `CommentLayerSupabase`; `uploadShot` when `shotsBucket` is set) |
 | `supabase.min.js`, `LICENSE-supabase-js` | the vendored SDK and its license |
-| `schema.sql` | the table, RLS, guard triggers, realtime — run once by you |
+| `schema.sql` | the tables `comments` and `comment_replies`, RLS, guard triggers, realtime — run once by you |
+| `replies.sql` | only the `comment_replies` block — for a project that already has the comments schema (and for shared databases) |

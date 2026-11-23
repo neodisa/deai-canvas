@@ -28,18 +28,30 @@ function refIds(el) {
   return ids;
 }
 
-export function shotScope(target) {
+export function shotScope(target, blankRoots) {
   const doc = target.ownerDocument;
+  // «Порожні» корені SVG (обрізка понад бюджет): їхні нащадки в знімок не йдуть, сам корінь клонується й тримає бокс.
+  const blankDesc = new Set();
+  if (blankRoots) for (const b of blankRoots) for (const d of b.getElementsByTagName('*')) blankDesc.add(d);
   const anchors = [target];
   const seen = new Set([target]);
-  const all = [target, ...target.getElementsByTagName('*')];
-  for (const el of all) {
+  const queue = [];
+  const scan = (el) => {
     for (const id of refIds(el)) {
       const ref = doc.getElementById(id);
-      if (ref && !seen.has(ref)) { seen.add(ref); anchors.push(ref); }
+      if (!ref || seen.has(ref)) continue;
+      seen.add(ref); anchors.push(ref);
+      if (blankDesc.has(ref)) {   // на вузол усередині порожнього кореня вказує живий — лишаємо його, нащадків і предків до кореня
+        const keep = [ref, ...ref.getElementsByTagName('*')];
+        for (let p = ref.parentElement; p && blankDesc.has(p); p = p.parentElement) keep.push(p);
+        for (const k of keep) { blankDesc.delete(k); queue.push(k); }   // їхні власні посилання теж треба зібрати (транзитивно)
+      }
     }
-  }
+  };
+  for (const el of [target, ...target.getElementsByTagName('*')]) if (!blankDesc.has(el)) scan(el);   // посилання з відсічених вузлів нікому не потрібні
+  while (queue.length) scan(queue.pop());
   return function ignoreElements(node) {
+    if (blankDesc.size && blankDesc.has(node)) return true;
     if (node.closest && node.closest('head')) return false;
     const tag = node.tagName;
     if (tag === 'STYLE' || tag === 'LINK') return false;

@@ -74,3 +74,14 @@ test("без `isOwn` усі картки чужі (нічого не вгаду�
   const html = commentsPanelHTML(base([C({ id: "mine", n: 1 })], { isOwn: undefined }));
   assert.deepEqual(acts(card(html, "mine")), ["cmtshow"]);
 });
+
+test("відповіді: `repliesNote: false` ховає примітку «Відповіді недоступні» (превʼю — тихо); без прапора примітка лишається", () => {
+  const withReplies = (o) => base([C({ id: "mine", n: 1 })], { threads: new Set(["mine"]), repliesOff: () => "off", ...o });
+  assert.match(commentsPanelHTML(withReplies({})), /class="cmt-rnote"/, "Deai: примітка лишилась без прапора");
+  const quiet = commentsPanelHTML(withReplies({ repliesNote: false }));
+  assert.equal(quiet.includes("cmt-rnote"), false, "прапор не прибрав примітку");
+  for (const bad of ["cmt-rta", 'data-act="cmtreply"']) assert.equal(quiet.includes(bad), false, bad);
+  // прапор не вимикає поле, коли відповіді ввімкнені
+  const on = commentsPanelHTML(base([C({ id: "mine", n: 1 })], { threads: new Set(["mine"]), repliesOff: () => null, repliesNote: false }));
+  assert.match(on, /data-act="cmtreply" data-val="mine"/);
+});

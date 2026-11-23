@@ -5,6 +5,8 @@
 Ядро: итерации (замороженные копии), публикация на Vercel со свитчером,
 comment-layer с каналами: internal (локально, для Claude) / external (Vercel).
 """
+import base64
+import binascii
 import collections
 import contextlib
 import errno
@@ -156,9 +158,14 @@ def _ssl_context():
 #: пушити ні те, ні те. Колезі вони шум, а записка тюнера писалась не для
 #: чужих очей. Обидва лежать у КОРЕНІ теки задачі, тобто рівно там, куди
 #: дивиться `git add -A`.
+#:
+#: `.dc-local-shots/` (0.35.1) — повні знімки локальних пінів (`POST /api/local-shots`):
+#: ті самі «робоче листування з Клодом», що й `.dc-local-comments.json` (знімок — тієї ж розмови), а не частина макета.
+#: Рішення власника 18.09.2026 поширюється й на них. Git-sync копіює теку задачі разом із її `.gitignore`, тож
+#: дзеркало їх теж не бере; статична публікація крапкові теки не возить (`_is_tool_junk`).
 TASK_IGNORE = ('publish/', '*.bak', '*.tmp', '.DS_Store', 'comments-for-ai*',
                '.vercel/', '.dc-tuner.json', '.dc-local-comments.json',
-               '.pages.lock', '.trash/')
+               '.pages.lock', '.dc-local-shots/', '.trash/')
 
 
 def ensure_task_gitignore(task_dir):
@@ -3169,13 +3176,15 @@ HOST_ARG = """,
             onMode: function (on) { send({ ev: 'mode', on: !!on }); },
             defaultAudience: function () { try { return localStorage.getItem('dc-cmt-aud'); } catch (e) { return null; } },
             onAudiencePick: function (id) { try { localStorage.setItem('dc-cmt-aud', id); } catch (e) {} },
-            bottomInset: function () { try { var f = window.parent && window.parent.__dcIslandInset; return typeof f === 'function' ? f() : 0; } catch (e) { return 0; } }
+            bottomInset: function () { try { var f = window.parent && window.parent.__dcIslandInset; return typeof f === 'function' ? f() : 0; } catch (e) { return 0; } },
+            theme: function () { try { var f = window.parent && window.parent.__dcCmtTheme; return typeof f === 'function' ? f() : null; } catch (e) { return null; } },
+            labels: function () { try { var f = window.parent && window.parent.__dcCmtLabels; return typeof f === 'function' ? f() : null; } catch (e) { return null; } }
           };
         })()"""
 
 
 # Режим хоста для ОПУБЛІКОВАНОГО превʼю (0.32.0): оболонка превʼю (`ext-shell.js`) малює панель сама, тож сторінка шле їй ті самі
-# посилки, що в Deai, плюс `onAdd` (id створеного коментаря — оболонка запише «свій») і `userName` (імʼя з localStorage —
+# посилки, що в Deai, плюс `onAdd`/`onReply` (id створеного коментаря/відповіді — оболонка запише «свій») і `userName` (імʼя з localStorage —
 # спільного для оболонки й рамки, бо превʼю статичне, одного походження; його ставить діалог оболонки перед першим коментарем).
 # ⛔ `userName` присутній ЗАВЖДИ: він і є ознакою «prompt() не кличеться» (`getUser` у коментаторі). ⛔ Жодного `defaultUser`:
 # особа машини дизайнера в публічне превʼю не їде. Адресатів (`defaultAudience`) і `bottomInset` острівця тут нема: у превʼю
@@ -3200,12 +3209,15 @@ PREVIEW_HOST_ARG = """,
             onSelect: function (id) { send({ ev: 'select', id: id }); },
             onMode: function (on) { send({ ev: 'mode', on: !!on }); },
             onAdd: function (id) { send({ ev: 'add', id: id }); },
+            onReply: function (o) { send({ ev: 'reply', id: o && o.reply }); },
             userName: function () {
               var v = '';
               try { v = localStorage.getItem('comment-layer:user') || ''; } catch (e) { v = ''; }
               if (v && v !== 'Anonymous') return v;
               try { return String(window.parent.__dcPreviewUser || ''); } catch (e) { return ''; }
-            }
+            },
+            theme: function () { try { var f = window.parent && window.parent.__dcCmtTheme; return typeof f === 'function' ? f() : null; } catch (e) { return null; } },
+            labels: function () { try { var f = window.parent && window.parent.__dcCmtLabels; return typeof f === 'function' ? f() : null; } catch (e) { return null; } }
           };
         })()"""
 
@@ -3613,6 +3625,7 @@ def _agent_meta(meta):
     """`meta` піна для агента. Усе, що `inbox` друкує чи розбирає, — у строгій формі (одним рядком, малі цілі, обмежені
     списки); решта — безпечна копія JSON (`_agent_json`). `shot` не беремо: ні `inbox`, ні агентові він не потрібен, а
     обрізаний base64 гірший за відсутній."""
+    shot = isinstance(meta, dict) and any(isinstance(meta.get(k), str) and meta.get(k).strip() for k in ('shot', 'shotUrl'))
     meta = (_agent_json(meta, [300]) if isinstance(meta, dict) else None) or {}
     meta.pop('shot', None)
     if 'version' in meta:                                           # друкується тегом `[itN]` і розбирається `pin_target`
@@ -3624,6 +3637,13 @@ def _agent_meta(meta):
             del meta['version']
     if 'url' in meta:
         meta['url'] = agent_line(meta['url'], 500)
+    if 'shotMiss' in meta:                                          # код причини, чому нема знімка (`inbox` друкує його словом)
+        miss = agent_line(meta['shotMiss'], 41) if isinstance(meta['shotMiss'], str) else ''
+        miss = miss if len(miss) <= 40 else ''                      # довший за код — не код: відкидаємо, а не обрізаємо
+        if miss and not shot:                                       # знімок є — причина хибна (0.35.0 писав 'upload' локальним пінам)
+            meta['shotMiss'] = miss
+        else:
+            del meta['shotMiss']
     if 'seq' in meta:                                               # `P#<seq>`
         seq = _agent_version(meta['seq'])
         if seq is None:
@@ -3670,6 +3690,36 @@ def _agent_fp(fp):
     return fp
 
 
+#: Скільки відповідей під пінем бере агент (решту відкидаємо) і скільки знаків тексту відповіді (як межа `reply` модуля).
+MAX_AGENT_REPLIES = 200
+AGENT_REPLY_TEXT = 4000
+
+
+def _agent_replies(raw):
+    """Відповіді піна (форма CommentLayer: `id, author, text, ts[, editedTs][, agent]`) → безпечний список ≤ `MAX_AGENT_REPLIES`.
+    `id` — за білим списком `_AGENT_ID` (інакше відповідь відкинута), текст — з очищенням як у тексту піна, однорядкові поля —
+    через `agent_line`. Не список → `[]`; зіпсований елемент пропускається (не рахуючись у межу)."""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for r in raw[:MAX_AGENT_REPLIES * 4]:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get('id')
+        if not isinstance(rid, str) or not _AGENT_ID.fullmatch(rid):
+            continue
+        item = {'id': rid, 'author': agent_line(r.get('author'), 200), 'text': _agent_text(r.get('text'), AGENT_REPLY_TEXT),
+                'ts': agent_line(r.get('ts'), 40)}
+        if agent_line(r.get('editedTs'), 40):
+            item['editedTs'] = agent_line(r.get('editedTs'), 40)
+        if r.get('agent') is True:
+            item['agent'] = True
+        out.append(item)
+        if len(out) >= MAX_AGENT_REPLIES:
+            break
+    return out
+
+
 def agent_pin(c):
     """Коментар модуля (форма CommentLayer: `id, author, text, status, fp, htmlSnapshot, meta, bornV, resolvedV,
     resolveReason, ts`) → рядок у формі REST ЛІГА (`id, text, status, author, ts, meta, born_v, fp, html_snapshot,
@@ -3687,7 +3737,8 @@ def agent_pin(c):
     snap = c.get('htmlSnapshot')
     snap = ({'text': _agent_text(snap.get('text'), 2000), 'outerHTML': _agent_text(snap.get('outerHTML'), 20000)}
             if isinstance(snap, dict) else None)
-    return {'id': pid,
+    replies = _agent_replies(c.get('replies'))
+    pin = {'id': pid,
             'text': _agent_text(c.get('text'), 10000),
             'status': 'resolved' if c.get('status') == 'resolved' else 'open',
             'author': agent_line(c.get('author'), 200),
@@ -3698,6 +3749,9 @@ def agent_pin(c):
             'html_snapshot': snap if snap and (snap['text'] or snap['outerHTML']) else None,
             'resolved_v': _agent_version(c.get('resolvedV')),
             'resolve_reason': agent_line(c.get('resolveReason'), 1000) or None}
+    if replies:                                                     # лише коли є: пін без відповідей — як до 0.35
+        pin['replies'] = replies
+    return pin
 
 
 def agent_pins(raw):
@@ -3734,7 +3788,7 @@ MAX_NEWS = 200
 
 
 def agent_news(raw):
-    """Відповідь `recent` модуля → `[{id, ts, author, status: 'open', version}]` лише відкритих, ≤ `MAX_NEWS`. Не список —
+    """Відповідь `recent` модуля → `[{id, ts, author, status: 'open', version[, parent]}]` лише відкритих, ≤ `MAX_NEWS`. Не список —
     `ModuleError`. Поля — як у `agent_pin`: `id` за `_AGENT_ID` (інакше пропуск), однорядкові тексти без керівних символів."""
     if not isinstance(raw, list):
         raise deai_modules.ModuleError('module-error', message='the comments module must answer recent() with a list')
@@ -3748,10 +3802,48 @@ def agent_news(raw):
         seen.add(pid)
         v = c.get('version')
         ver = str(v) if isinstance(v, int) and not isinstance(v, bool) else agent_line(v, 200)
-        out.append({'id': pid, 'ts': agent_line(c.get('ts'), 40), 'author': agent_line(c.get('author'), 200),
-                    'status': 'open', 'version': ver or None})
+        item = {'id': pid, 'ts': agent_line(c.get('ts'), 40), 'author': agent_line(c.get('author'), 200),
+                'status': 'open', 'version': ver or None}
+        parent = c.get('parent')
+        if isinstance(parent, str) and _AGENT_ID.fullmatch(parent):  # відповідь: `parent` — id коментаря (0.35)
+            item['parent'] = parent
+        out.append(item)
         if len(out) >= MAX_NEWS:
             break
+    return out
+
+
+def local_agent_news(path):
+    """Відповіді агента (`agent: true`) на ВІДКРИТІ піни локального файла задачі — у формі елементів `agent_news` (з `parent`);
+    `None`, коли файла нема чи він нечитабельний (джерела нема), `[]` — файл є, а відповідей нема. Лише читання; усе, що
+    йде в маршрут, чиститься як у `agent_pin` (`id` за `_AGENT_ID`, однорядкові поля без керівних символів), ≤ `MAX_NEWS`."""
+    try:
+        if not os.path.isfile(path):
+            return None
+        with open(path, encoding='utf-8') as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    out = []
+    for c in data if isinstance(data, list) else ():
+        if not isinstance(c, dict) or c.get('status') == 'resolved' or not isinstance(c.get('replies'), list):
+            continue
+        pid = c.get('id')
+        if not isinstance(pid, str) or not _AGENT_ID.fullmatch(pid):
+            continue
+        meta = c.get('meta') if isinstance(c.get('meta'), dict) else {}
+        v = meta.get('version')
+        ver = str(v) if isinstance(v, int) and not isinstance(v, bool) else agent_line(v, 200)
+        for r in c['replies'][:MAX_AGENT_REPLIES * 4]:
+            if not isinstance(r, dict) or r.get('agent') is not True:
+                continue
+            rid = r.get('id')
+            if not isinstance(rid, str) or not _AGENT_ID.fullmatch(rid):
+                continue
+            out.append({'id': rid, 'ts': agent_line(r.get('ts'), 40), 'author': agent_line(r.get('author'), 200),
+                        'status': 'open', 'version': ver or None, 'parent': pid})
+            if len(out) >= MAX_NEWS:
+                return out
     return out
 
 
@@ -3868,6 +3960,17 @@ class ProjectComments:
         if self.prov.fn('recent') is None:
             return None
         return agent_news(self._module('recent', task, tid, False))
+
+    def reply(self, task, tid, pin_id, text, internal=False):
+        """Відповісти на коментар від імені агента (`reply(ctx, channel, id, text, author)` необовʼязкової функції модуля; автор
+        — `AI`). Модуль без `reply` → `None` («не підтримує»), а не помилка: викликач скаже це людині. Решту (коментар існує й
+        відкритий, межі тексту й автора) перевіряє сам модуль. `id` — лише за білим списком `_AGENT_ID`, як у `resolve`."""
+        self._check()
+        if self.prov.fn('reply') is None:
+            return None
+        if not isinstance(pin_id, str) or not _AGENT_ID.fullmatch(pin_id):
+            raise deai_modules.ModuleError('module-error', message='comments: the pin id is not a safe identifier')
+        return self._module('reply', task, tid, internal, pin_id, text, 'AI')
 
     def resolve(self, task, tid, pin_id, reason, iteration=None, internal=False):
         """Закрити пін модулем (`resolve(ctx, channel, id, reason[, iteration])`); номер ітерації — лише коли
@@ -4056,7 +4159,7 @@ SHELL_MODULES = ('i18n.js', 'icons.js', 'shell-panel.js', 'viewport.js',
                  'camera.js', 'canvas-geom.js', 'layout.js', 'rows-model.js',
                  'styles.css', 'ask.js', 'esc.js', 'ext-shell.js', 'ext-bar.js',
                  'tree-model.js', 'clean-view.js', 'island.js',
-                 'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js',
+                 'ext-comments.js', 'comments-view.js', 'comments-model.js', 'inline-confirm.js', 'cmt-form.js',
                  'ext-inspect.js', 'shell-inspect.js', 'insp-panel.js', 'insp-model.js', 'ext-follow.js',
                  'setup-model.js')
 
@@ -5878,6 +5981,12 @@ def module_check_verdict(space, mid):
 
 #: Тіло `POST /api/module-tool|module-action` — не більше (байтів): панель шле короткі аргументи.
 MODULE_CALL_BODY_MAX = 64 * 1024
+#: `POST /api/local-shots` (0.35.1): тіло JSON ≤ 12 МіБ (413 ДО читання), декодований JPEG ≤ 8 МіБ.
+LOCAL_SHOT_BODY_MAX = 12 * 1024 * 1024
+LOCAL_SHOT_MAX = 8 * 1024 * 1024
+#: Імʼя знімка — id піна коментатора (UUID чи `c-<цифри>-<base36>`): без крапок і скісних, не з дефіса.
+LOCAL_SHOT_ID_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,99}')
+LOCAL_SHOT_DIR = '.dc-local-shots'
 
 
 def module_action_target(frm, tid, iid):
@@ -6737,6 +6846,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.startswith('/api/local-comments'):
             self._local_comments_get()
             return
+        if self.path.startswith('/api/local-shots/'):
+            self._local_shots_get()
+            return
         if self.path.startswith('/api/tuner'):
             self._tuner_get()
             return
@@ -7531,16 +7643,23 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(task, dict):
             self._send_json({'ok': False, 'error': 'unknown task'}, status=404)
             return
+        # 0.35: відповіді агента на ВІДКРИТІ локальні піни (їх дописує `inbox.py reply` у локальний файл) — теж новини вкладки.
+        local = local_agent_news(self._local_file(task))
         pc = ProjectComments(spaces.active_space())
         if pc.kind != 'module':
-            self._send_json({'supported': False, 'items': []})
+            self._send_json({'supported': local is not None, 'team': False, 'items': (local or [])[:MAX_NEWS]})
             return
         try:
             items = pc.recent(task, tid)
         except (OSError, deai_modules.ModuleError) as e:
-            self._send_json({'supported': True, 'items': [], 'error': agent_line(str(e), 300)})
+            self._send_json({'supported': True, 'team': False, 'items': [], 'error': agent_line(str(e), 300)})
             return
-        self._send_json({'supported': items is not None, 'items': items or []})
+        if items is None and local is None:
+            self._send_json({'supported': False, 'team': False, 'items': []})
+            return
+        # `team` — командний канал справді опитано (`recent` модуля відповів без помилки): лише тоді вкладка має право писати
+        # ГОЛОВНИЙ маркер «бачив» (інакше після повернення команди усі її коментарі стали б «новими»).
+        self._send_json({'supported': True, 'team': items is not None, 'items': ((items or []) + (local or []))[:MAX_NEWS]})
 
     # ---------- Локальні коментарі (фідбек Claude, НЕ в Supabase, у файлі) ----------
     def _local_file(self, task):
@@ -7565,10 +7684,100 @@ class Handler(SimpleHTTPRequestHandler):
         # дані піна. Адаптер їх і так не шле; тут — рубіж для будь-якого писаря
         # і самоочищення старих файлів, де `_el` осів у кожному піні (fb 05.11.2026).
         # `_aud` — службова позначка адресата комбінованого сховища (0.27.0).
-        comments = [{k: v for k, v in c.items() if k not in ('_el', '_pending', '_aud')}
-                    if isinstance(c, dict) else c for c in comments]
+        # 0.35: `_goneReplies` (надгробки відповідей) і `_pending` у самих відповідях — теж runtime.
+        def _scrub(c):
+            if not isinstance(c, dict):
+                return c
+            o = {k: v for k, v in c.items()
+                 if k not in ('_el', '_pending', '_aud', '_goneReplies')}
+            if isinstance(o.get('replies'), list):
+                o['replies'] = [{k: v for k, v in r.items() if k != '_pending'}
+                                if isinstance(r, dict) else r for r in o['replies']]
+            return o
+        comments = [_scrub(c) for c in comments]
         atomic_write_json(self._local_file(task), comments, indent=1)
         self._send_json({'ok': True, 'count': len(comments)})
+
+    # ---------- Повні знімки локальних пінів (0.35.1): `.dc-local-shots/<id>.jpg` у теці задачі ----------
+    @staticmethod
+    def _local_shots_dir(task):
+        """Тека знімків задачі, або `None`, коли вона (чи її батько) — симлінк, що веде геть із теки задачі."""
+        d = os.path.join(task['dir'], LOCAL_SHOT_DIR)
+        if os.path.islink(d):
+            return None
+        return d if os.path.realpath(os.path.dirname(d)) == os.path.realpath(task['dir']) else None
+
+    def _local_shots_post(self, payload):
+        """`POST /api/local-shots {id, dataUrl}` → `{ok, url}`. Лише `data:image/jpeg;base64,…` зі СТРОГИМ base64, ≤ 8 МіБ
+        після декодування й із сигнатурою JPEG (FF D8 FF); `id` — як у коментатора. Запис атомарний (tmp → replace) у теку
+        задачі запиту (так само, як `/api/local-comments`)."""
+        def refuse(status, msg):
+            self._send_json({'ok': False, 'error': msg}, status=status)
+        sid, url = payload.get('id'), payload.get('dataUrl')
+        if not isinstance(sid, str) or not LOCAL_SHOT_ID_RE.fullmatch(sid):
+            return refuse(400, 'bad id')
+        head = 'data:image/jpeg;base64,'
+        if not isinstance(url, str) or not url.startswith(head):
+            return refuse(400, 'dataUrl must be data:image/jpeg;base64')
+        b64 = url[len(head):]
+        if len(b64) > (LOCAL_SHOT_MAX // 3 + 2) * 4:         # раніше за декодування: сміттєвого розміру не роздуваємо
+            return refuse(413, 'screenshot is too large')
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except (ValueError, binascii.Error):
+            return refuse(400, 'bad base64')
+        if len(raw) > LOCAL_SHOT_MAX:
+            return refuse(413, 'screenshot is too large')
+        if raw[:3] != b'\xff\xd8\xff':
+            return refuse(400, 'not a JPEG')
+        tid, task = self._current_task()
+        d = self._local_shots_dir(task)
+        if d is None:
+            return refuse(400, 'screenshot folder is not usable')
+        os.makedirs(d, exist_ok=True)
+        if os.path.realpath(d) != os.path.join(os.path.realpath(task['dir']), LOCAL_SHOT_DIR):
+            return refuse(400, 'screenshot folder is not usable')
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=sid + '.', suffix=TMP_SUFFIX)
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(raw)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, os.path.join(d, sid + '.jpg'))
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            return refuse(500, 'cannot write screenshot')
+        self._send_json({'ok': True, 'url': f'/api/local-shots/{sid}.jpg'})
+
+    def _local_shots_get(self):
+        """`GET /api/local-shots/<id>.jpg` — байти знімка поточної задачі запиту. Справжній шлях файла мусить лишитись у
+        `.dc-local-shots` (симлінк назовні — 404)."""
+        name = unquote(self.path.split('?', 1)[0][len('/api/local-shots/'):])
+        m = re.fullmatch(r'(.+)\.jpg', name, re.S)
+        if not m or not LOCAL_SHOT_ID_RE.fullmatch(m.group(1)):
+            self.send_error(400, 'bad screenshot name')
+            return
+        tid, task = self._current_task()
+        d = self._local_shots_dir(task)
+        f = os.path.join(d, name) if d else None
+        body = None
+        if f and os.path.isfile(f):
+            if os.path.realpath(f) == os.path.join(os.path.realpath(d), name):
+                try:
+                    with open(f, 'rb') as fh:
+                        body = fh.read()
+                except OSError:
+                    body = None
+        if body is None:
+            self.send_error(404, 'no screenshot')
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', 'image/jpeg')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+        self.wfile.write(body)
 
     # ---------- Пакет ТЮНЕРА (рекомендації Клоду, НЕ правки макета) ----------
     def _tuner_file(self, task):
@@ -7718,6 +7927,9 @@ class Handler(SimpleHTTPRequestHandler):
             if length > MODULE_CALL_BODY_MAX and self.path in ('/api/module-tool', '/api/module-action'):
                 self._refuse_unread(413, 'body-too-large', 'module call body is too large')   # так само: ДО читання
                 return
+            if length > LOCAL_SHOT_BODY_MAX and self.path in ('/api/local-shots',):   # кортеж, не `==`: охоронець `bad-body` збирає маршрути за `== '…'` разом з обробником
+                self._refuse_unread(413, 'body-too-large', 'screenshot body is too large')    # так само: ДО читання
+                return
             raw_body = self.rfile.read(length) if length else b''
             self._body_read = True      # далі центральна відмова тіло вже не вичитує
             payload = json.loads(raw_body) if length else {}
@@ -7778,6 +7990,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._teams_mute(payload)
         elif self.path == '/api/local-comments':
             self._local_comments_post(payload)
+        elif self.path == '/api/local-shots':
+            self._local_shots_post(payload)
         elif self.path == '/api/tuner':
             self._tuner_post(payload)
         elif self.path == '/api/shoot':

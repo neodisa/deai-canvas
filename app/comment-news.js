@@ -9,6 +9,8 @@ import { pinTarget } from "./overview-pins.js";
 export const SEEN_MAX = 1000;
 /** Ключ маркера в localStorage: простір (або `-`) і задача — id задач у різних просторах можуть збігатися. */
 export const seenKey = (spaceId, taskId) => `dc-seen:${spaceId || "-"}:${taskId}`;
+/** Ключ маркера «бачив» для ВІДПОВІДЕЙ (окремий від `seenKey`: старий клієнт пише лише головний): `dc-seen-r:<простір>:<задача>`. */
+export const replySeenKey = (spaceId, taskId) => `dc-seen-r:${spaceId || "-"}:${taskId}`;
 /** Рядок зі сховища → `Set` id; маркера нема або він битий — `null` (перший погляд, див. `baseline`). */
 export function readSeen(raw) {
   if (typeof raw !== "string" || !raw) return null;
@@ -30,6 +32,24 @@ export function markSeen(seen, ids) {
 }
 /** Командні коментарі знімка коментатора. */
 export const teamOf = (comments) => (Array.isArray(comments) ? comments.filter((c) => c && c._aud === "project") : []);
+/** Що рахується новиною (0.35): командні коментарі (як `teamOf`; відкритість перевіряє `isNew`) ПЛЮС відповіді на коментарі
+ *  будь-якого каналу — відповідь агента на локальний пін теж новина. Відповідь — елемент тієї ж форми, що й коментар
+ *  (`id`, `ts`, `author`, `status`, `version`), тож `isNew`/`baseline`/`arrived`/`countNew` працюють без змін; `parent` — id коментаря.
+ *  Відповіді ЗАКРИТИХ коментарів теж у списку, зі статусом батька: `isNew`/`countNew` рахують лише відкриті (новиною вони не стають),
+ *  зате `baseline` їх покриває — і коли закритий коментар відкриють знову, його давні відповіді не зʼявляться «новими».
+ *  Відповідь без рядкового `id` пропускається (нема що запамʼятати в маркері «бачив»). */
+export function newsItems(comments) {
+  const all = Array.isArray(comments) ? comments : [];
+  const replies = [];
+  for (const c of all) {
+    if (!c || !Array.isArray(c.replies)) continue;
+    for (const r of c.replies) {
+      if (!r || typeof r.id !== "string") continue;
+      replies.push({ id: r.id, ts: r.ts, author: r.author, status: c.status, version: c.meta && c.meta.version, parent: c.id });
+    }
+  }
+  return teamOf(all).concat(replies);
+}
 /** Чи «новий»: відкритий, не мій (`me` — імʼя автора цього вікна; порожнє — «мого» нема), id не бачили. */
 export const isNew = (c, seen, me) => !!c && typeof c.id === "string" && c.status === "open"
   && !(me && c.author === me) && !!seen && !seen.has(c.id);

@@ -76,14 +76,26 @@ test("remove — туди, де пін живе; невідомий id — в о
   assert.deepEqual(plain([L.log.at(-1), T.log.at(-1)]), [["remove", ["x9"]], ["remove", ["x9"]]]);
 });
 
-test("скріншот у командне сховище — лише для командного піна (поправка 5)", async () => {
-  const L = fake(), T = fake([], { shots: true });
+test("скріншот: командний пін — у командне сховище, локальний (чи без _aud) — у локальне, ніколи в командний кошик (поправка 5)", async () => {
+  const L = fake([], { shots: true }), T = fake([], { shots: true });
   const d = load()({ local: L.store, team: T.store });
   await d.ready;
-  assert.equal(await d.uploadShot("a", "data:image/jpeg;base64,AA", { _aud: "local" }), null);
-  assert.equal(await d.uploadShot("a", "data:image/jpeg;base64,AA"), null);
+  assert.equal(await d.uploadShot("a", "data:image/jpeg;base64,AA", { _aud: "local" }), "https://x/a");
+  assert.equal(await d.uploadShot("a2", "data:image/jpeg;base64,AA"), "https://x/a2");
   assert.equal(await d.uploadShot("b", "data:image/jpeg;base64,AA", { _aud: "project" }), "https://x/b");
   assert.deepEqual(plain(T.log.filter((e) => e[0] === "shot")), [["shot", "b"]]);
+  assert.deepEqual(plain(L.log.filter((e) => e[0] === "shot")), [["shot", "a"], ["shot", "a2"]]);
+});
+
+test("скріншот: нема того, хто заллє, — { skipped: true } (командний пін без команди чи без uploadShot; локальний без локального завантажувача)", async () => {
+  const D = (local, team) => load()({ local, team });
+  const noUp = fake();
+  const a = D(noUp.store, fake([], { shots: true }).store); await a.ready;
+  assert.deepEqual(plain(await a.uploadShot("a", "d", { _aud: "local" })), { skipped: true });   // локальний адаптер без uploadShot
+  const b = D(fake([], { shots: true }).store, noUp.store); await b.ready;
+  assert.deepEqual(plain(await b.uploadShot("a", "d", { _aud: "project" })), { skipped: true });   // команда без uploadShot
+  const c = load()({ local: fake([], { shots: true }).store, team: null, teamDown: "x" }); await c.ready;
+  assert.deepEqual(plain(await c.uploadShot("a", "d", { _aud: "project" })), { skipped: true });   // команди нема
 });
 
 test("командного нема: локальне працює, teamDown — причина, командний запис відмовляє", async () => {
@@ -256,4 +268,60 @@ test("close(), потім пізня відмова готовності ком�
   rej(new Error("пізно"));
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(closes(T), 1);
+});
+
+/* ---------- Відповіді (0.35) ---------- */
+test("зміна лише replies пишеться в потрібне під-сховище за _aud, інше не чіпає", async () => {
+  const L = fake([P("l1")]), T = fake([P("t1")]);
+  const d = load()({ local: L.store, team: T.store });
+  await d.ready;
+  const r = { id: "r1", author: "a", text: "відп", ts: "20.11.2026 10:00" };
+  let list = d.load().map((c) => (c.id === "t1" ? { ...c, replies: [r] } : { ...c }));
+  await d.save(list);
+  assert.equal(L.log.filter((e) => e[0] === "save").length, 0, "локальне не мало писатись");
+  assert.deepEqual(plain(T.log.at(-1)[1][0].replies), [r]);
+  list = d.load().map((c) => (c.id === "l1" ? { ...c, replies: [r] } : { ...c }));
+  const tn = T.log.length;
+  await d.save(list);
+  assert.deepEqual(plain(L.log.at(-1)[1][0].replies), [r]);
+  assert.equal(T.log.length, tn, "командне не мало писатись");
+});
+
+test("repliesDown: null без команди; null при teamDown; пропускає team.repliesDown", async () => {
+  const L = fake();
+  const none = load()({ local: L.store });
+  assert.equal(none.repliesDown, null);
+  const down = load()({ local: L.store, teamDown: "VPN" });
+  assert.equal(down.teamDown, "VPN");
+  assert.equal(down.repliesDown, null);
+  const T = fake();
+  T.store.repliesDown = "модуль без відповідей";
+  const d = load()({ local: L.store, team: T.store });
+  assert.equal(d.repliesDown, "модуль без відповідей");
+  assert.equal(Object.keys(d).includes("repliesDown"), true, "enumerable");
+  T.store.repliesDown = "";
+  assert.equal(d.repliesDown, null);
+  T.store.repliesDown = 5;
+  assert.equal(d.repliesDown, null);
+  T.store.repliesDown = "x";
+  await d.ready;
+  d.close();                                    // команда знята — причини нема
+  assert.equal(d.repliesDown, null);
+});
+
+test("supportsReplies: local так; project лише з team.supportsReplies === true; інше — ні", async () => {
+  const L = fake();
+  const T = fake();
+  const d = load()({ local: L.store, team: T.store });
+  assert.equal(d.supportsReplies("local"), true);
+  assert.equal(d.supportsReplies("project"), false, "прапора нема");
+  T.store.supportsReplies = "yes";
+  assert.equal(d.supportsReplies("project"), false, "не строго true");
+  T.store.supportsReplies = true;
+  assert.equal(d.supportsReplies("project"), true);
+  assert.equal(d.supportsReplies("other"), false);
+  assert.equal(d.supportsReplies(undefined), false);
+  const noTeam = load()({ local: L.store });
+  assert.equal(noTeam.supportsReplies("project"), false);
+  assert.equal(noTeam.supportsReplies("local"), true);
 });

@@ -59,7 +59,7 @@ test("create: ready чекає на перше читання каналу з п
   await s.ready;
   assert.deepEqual(w.server.calls.map((c) => [c.method, c.url]), [["GET", "http://127.0.0.1:4000/c/deai%2Fliga%2Ft-1"]]);
   assert.deepEqual(ids(s.load()), ["a", "b"]);
-  assert.deepEqual(Object.keys(s).sort(), ["close", "load", "ready", "remove", "save", "subscribe"]);
+  assert.deepEqual(Object.keys(s).sort(), ["close", "load", "ready", "remove", "save", "subscribe", "supportsReplies"]);
 });
 
 test("create: збій першого читання не валить ready — кеш порожній", async () => {
@@ -180,4 +180,18 @@ test("підписник, що кидає виняток, не валить ре
   s.subscribe((rows) => seen.push(rows.length));
   await s.save([pin("a")]);
   assert.deepEqual(seen, [1]);
+});
+
+test("supportsReplies === true, а replies їдуть із коментарем і вертаються з сервера (0.35)", async () => {
+  const r = { id: "r1", author: "B", text: "відповідь", ts: "20.11.2026 10:00", editedTs: "20.11.2026 10:05", agent: true };
+  const w = world();
+  const s = w.sandbox.DeaiComments.create(cfg());
+  await s.ready;
+  assert.equal(s.supportsReplies, true);
+  await s.save([{ ...pin("a"), replies: [r] }]);
+  assert.deepEqual(JSON.parse(w.server.calls.at(-1).body).comments[0].replies, [r]);
+  const w2 = world({ rows: [{ ...pin("a"), replies: [r] }] });
+  const s2 = w2.sandbox.DeaiComments.create(cfg());
+  await s2.ready;
+  assert.deepEqual(plain(s2.load()[0].replies), [r]);
 });

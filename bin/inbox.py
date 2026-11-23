@@ -4,6 +4,7 @@
 Для Claude:
   `python3 bin/inbox.py` — усе до відпрацювання скопом;
   `python3 bin/inbox.py resolve <id> --reason "що зроблено"` — закрити пін(и);
+  `python3 bin/inbox.py reply <id> --text "питання чи примітка"` — відповісти в гілці під пінем (0.35);
   `python3 bin/inbox.py -h` — довідка;
   `python3 bin/inbox.py --task <id> …` — про названу задачу, а не поточну.
 ДВА джерела:
@@ -30,6 +31,7 @@ import shlex
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.parse import quote
@@ -50,6 +52,19 @@ MIN_PREFIX = 6
 #: Скільки початку outerHTML показувати в якорі (fb-22092026-4460ae).
 HTML_HEAD = 80
 TS_FORMAT = '%d.%m.%Y %H:%M'
+#: Межа тексту відповіді (та сама, що в `reply` модуля `supabase-comments`) і скільки останніх відповідей друкує `show_pins`.
+REPLY_MAX = 4000
+REPLIES_SHOWN = 20
+#: Коди `meta.shotMiss` (спека «Коментарі: відповіді») → причина, чому нема знімка. Тексти — як `cmtShotMiss_*` у `app/i18n.js`
+#: (без «Без знімка:»). Невідомий код друкується як є (очищений): новий код від новішого коментатора не губимо.
+SHOT_MISS = {
+    'too-big': 'елемент завеликий для знімка',
+    'no-lib': 'бібліотека знімків не завантажилась',
+    'timeout': 'знімок не встиг',
+    'render': 'знімок не вдався',
+    'detached': 'елемент зник зі сторінки до збереження',
+    'upload': 'знімок не завантажився в сховище',
+}
 #: Класи, які comment-layer САМ вішає на елементи сторінки: підсвітка під
 #: курсором, мультивибір, спалах. outerHTML знімається з живого елемента, тож
 #: підсвітка може в нього потрапити — і селектор `.madd-cav.cl-hl` шукав би в
@@ -59,7 +74,8 @@ CL_OWN_CLASSES = frozenset({'cl-hl', 'cl-msel', 'cl-el-flash'})
 
 def _it(p):
     m = p.get('meta') or {}
-    return m.get('version') or '—'
+    v = m.get('version')
+    return agent_line(v if isinstance(v, str) else str(v) if v else '', 40) or '—'
 
 
 def _local_path(task):
@@ -69,7 +85,10 @@ def _local_path(task):
 def read_local(task):
     f = _local_path(task)
     try:
-        return json.loads(open(f, encoding='utf-8').read()) if os.path.isfile(f) else []
+        if not os.path.isfile(f):
+            return []
+        with open(f, encoding='utf-8') as fh:
+            return json.load(fh)
     except (OSError, ValueError):
         return []
 
@@ -209,7 +228,7 @@ def _num(p, tag):
     (fb-30092026-e53eaa), тож голий «№91» неоднозначний. Локальні піни в
     канвасі номера не показують, але `meta.seq` мають — Claude посилається на нього."""
     seq = (p.get('meta') or {}).get('seq')
-    return f'{tag}#{seq if seq else "?"}'
+    return f'{tag}#{agent_line(seq if isinstance(seq, str) else str(seq) if seq else "", 20) or "?"}'
 
 
 def ctx_line(ctx):
@@ -269,17 +288,84 @@ def where_lookup(pins, task_id=None):
         return None, 'незрозуміла відповідь pin-where'
 
 
+#: Префікс продовження багаторядкового тексту піна: символ, якого нема в рамках виводу (`↳`, `•`), тож рядок тексту не вдасть
+#: із себе гілку відповідей чи інший службовий рядок.
+TEXT_CONT = '\n            │ '
+
+
+def pin_text(text):
+    """Текст піна для виводу: перший рядок — як є, решта — з префіксом `TEXT_CONT`; кожен рядок без керівних символів (`agent_line`).
+    Текст пише будь-хто (колега, відвідувач превʼю): рядок `↳ відповіді (1):` усередині нього інакше був би невідрізним від
+    справжньої гілки, а агент читає цей вивід як довіреніший за коментар."""
+    s = text if isinstance(text, str) else ''
+    return TEXT_CONT.join(agent_line(ln, 10000) for ln in s.strip().split('\n'))
+
+
+def _reply_ts(ts):
+    """`DD.MM.YYYY HH:MM` → `DD.MM HH:MM`; нерозбірний час — як є (очищений, ≤ 20)."""
+    d = _parse_ts(ts)
+    return d.strftime('%d.%m %H:%M') if d else agent_line(ts, 20)
+
+
+#: Префікс продовження багаторядкової ВІДПОВІДІ: глибший за рядок відповіді (14 пробілів) і за продовження тексту піна (12), з тим
+#: самим `│`. Рядок усередині тексту відповіді (`Іван, 01.01 10:00: …`, `↳ відповіді (9):`) так ніколи не стоїть на відступі
+#: справжнього рядка відповіді чи заголовка гілки.
+REPLY_CONT = '\n                │ '
+#: Скільки символів тексту відповіді бачить агент (стільки ж приймає сховище); довше — з `…` в кінці.
+REPLY_TEXT_MAX = 4000
+REPLY_LINES_MAX = 60       # 4000 переносів інакше дали б 4000 рядків виводу на одну відповідь
+
+
+def reply_line(r):
+    """Відповідь для виводу: `<автор>, <ДД.ММ ГГ:ХХ>[ (ред.)]: <текст>` (відповідь агента — `AI`). Текст — ПОВНИЙ (≤ 4000, довший
+    обрізається з `…`; понад `REPLY_LINES_MAX` рядків — теж `…`): людина відповідає на питання агента, і зрізати її відповідь
+    мовчки не можна. Перший рядок іде в тому ж рядку,
+    решта — з `REPLY_CONT`. Локальний файл пише браузер, а відповіді командного каналу — інші люди: кожен рядок проходить
+    `agent_line` (без переносів і керівних символів)."""
+    who = agent_line(r.get('author'), 100) or '?'
+    if r.get('agent') is True:
+        who = 'AI'
+    elif who.strip().casefold() == 'ai':
+        who = 'AI (людина)'                     # людина з імʼям «AI» не має виглядати відповіддю агента
+    t = r.get('text')
+    t = t.strip() if isinstance(t, str) else ''
+    if len(t) > REPLY_TEXT_MAX:
+        t = t[:REPLY_TEXT_MAX - 1] + '…'
+    edited = ' (ред.)' if agent_line(r.get('editedTs'), 40).strip() else ''
+    lines = t.split('\n')
+    if len(lines) > REPLY_LINES_MAX:
+        lines = lines[:REPLY_LINES_MAX - 1] + ['…']
+    body = REPLY_CONT.join(agent_line(ln, REPLY_TEXT_MAX) for ln in lines)
+    return f'{who}, {_reply_ts(r.get("ts"))}{edited}: {body}'
+
+
+def has_shot(meta):
+    """Чи має пін знімок: непорожній `shot` (data URL) чи `shotUrl` (кошик команди)."""
+    return any(isinstance(meta.get(k), str) and meta.get(k).strip() for k in ('shot', 'shotUrl'))
+
+
 def show_pins(pins, label, tag, where=None):
     openp = [p for p in pins if p.get('status') != 'resolved']
     resolved = len(pins) - len(openp)
     if openp:
         print(f'  {label} — {len(openp)} відкритих:')
         for p in openp:
-            print(f'      • {_num(p, tag)} [{_it(p)}] {(p.get("text") or "").strip()}  '
-                  f'[{(p.get("id") or "")[:8]} · {p.get("author") or ""}]')
-            ctx = ctx_line((p.get('meta') or {}).get('ctx'))
+            print(f'      • {_num(p, tag)} [{_it(p)}] {pin_text(p.get("text"))}  '
+                  f'[{agent_line(p.get("id") or "", 200)[:8]} · {agent_line(p.get("author") or "", 200)}]')
+            ctx = agent_line(ctx_line((p.get('meta') or {}).get('ctx')), 500)
             if ctx:
                 print(f'          ↳ де: {ctx}')
+            replies = [r for r in p.get('replies') or [] if isinstance(r, dict)] if isinstance(p.get('replies'), list) else []
+            if replies:
+                print(f'          ↳ відповіді ({len(replies)}):')
+                for r in replies[-REPLIES_SHOWN:]:
+                    print(f'              {reply_line(r)}')
+            pm = p.get('meta') if isinstance(p.get('meta'), dict) else {}
+            miss = pm.get('shotMiss')
+            # Знімок є — причина його відсутності хибна: у 0.35.0 комбіноване сховище на локальних пінах відповідало «нема
+            # чого заливати» так само, як на відмову, і коментатор записував 'upload' поруч зі знімком.
+            if isinstance(miss, str) and miss and not has_shot(pm):
+                print(f'          ↳ без знімка: {SHOT_MISS.get(miss) or agent_line(miss, 60)}')
             w = (where or {}).get(p.get('id'))
             if w is not None:
                 if not w.get('found'):
@@ -295,17 +381,18 @@ def show_pins(pins, label, tag, where=None):
                 print(f'          ↳ ширина: {_band(vp["w"])} · {vp["w"]}×{vp.get("h")}')
             fp = p.get('fp') or {}
             if fp:
-                anchor = (fp.get('text') or '').strip().replace('\n', ' ')[:50]
-                path = ' > '.join((fp.get('path') or [])[-3:])
-                print(f'          ↳ якір: <{fp.get("tag") or "?"}>'
+                # локальний файл пише браузер, а не `agent_pin`: рядки якоря чистимо тут, інакше `fp.text` із переносом підробив би рамку
+                anchor = agent_line((fp.get('text') or '').strip(), 50)
+                path = agent_line(' > '.join(str(x) for x in (fp.get('path') or [])[-3:]), 300)
+                print(f'          ↳ якір: <{agent_line(fp.get("tag") or "?", 50)}>'
                       + (f' «{anchor}»' if anchor else '')
                       + (f'  · {path}' if path else ''))
             html = _snapshot_html(p)
             sel = root_selector(html)
             if sel:
-                print(f'          ↳ селектор: {sel}')
+                print(f'          ↳ селектор: {agent_line(sel, 300)}')
             if html:
-                print(f'          ↳ html: {html_head(html)}')
+                print(f'          ↳ html: {agent_line(html_head(html), 300)}')
     if resolved:
         print(f'  {label}: (+ {resolved} вирішених в історії)')
     return len(openp)
@@ -423,6 +510,7 @@ def cmd_list(where=False, task_id=None, show_all=False):
         # Підказку копіюють дослівно: без `--task` вона закрила б пін ПОТОЧНОЇ задачі.
         flag = f' --task {shlex.quote(tid)}' if task_id is not None else ''
         print(f'Закрити: python3 bin/inbox.py{flag} resolve <id> --reason "що зроблено"')
+        print(f'Відповісти в гілці: python3 bin/inbox.py{flag} reply <id> --text "питання чи примітка"')
     return 0
 
 
@@ -467,7 +555,7 @@ def _is_open(p):
 
 
 def _cand(p):
-    return f'{(p.get("id") or "")[:8]} «{(p.get("text") or "").strip()[:40]}»'
+    return f'{agent_line(p.get("id") or "", 8)} «{agent_line((p.get("text") or "").strip(), 40)}»'
 
 
 def find_target(prefix, local, project_loader):
@@ -677,17 +765,124 @@ def cmd_resolve(a, rp=None):
     return 1 if failed else 0
 
 
+# ---------- reply ----------
+
+def write_local_reply(path, pin_id, text, now):
+    """Дописати відповідь агента під ВІДКРИТИЙ локальний пін: `{id: uuid4, author: 'AI', text, ts, agent: true}`.
+
+    Файл перечитується ТУТ, безпосередньо перед записом (як у `write_local_resolved`): пошук цілі був раніше, а вкладка канваса
+    могла за цей час дописати пін чи відповідь. Запис — `atomic_write_json` (`indent=1`, як у `serve._local_comments_post`).
+    Вкладка зливає тристоронньо (`mergeReplies` у `local-adapter.js`), тож додана тут відповідь не губиться.
+
+    `now` — `datetime`. → ('ok', id відповіді) · ('closed', None) — закрили між пошуком і записом · ('missing', None) — піна вже нема."""
+    with open(path, encoding='utf-8') as f:
+        data = json.load(f)
+    for p in data if isinstance(data, list) else ():
+        if not (isinstance(p, dict) and p.get('id') == pin_id):
+            continue
+        if not _is_open(p):
+            return 'closed', None
+        rid = str(uuid.uuid4())
+        if not isinstance(p.get('replies'), list):
+            p['replies'] = []
+        p['replies'].append({'id': rid, 'author': 'AI', 'text': text, 'ts': now.strftime(TS_FORMAT), 'agent': True})
+        atomic_write_json(path, data, indent=1)
+        return 'ok', rid
+    return 'missing', None
+
+
+def cmd_reply(a):
+    """`reply ID --text "…"`: відповісти в гілці під пінем від імені `AI`.
+
+    Лише ВІДКРИТИЙ пін. Командний — лише ДОРУЧЕНИЙ Claude (`for_agent`): відповідь у чужому піні колег бачать усі, тож агент не
+    встряє туди, куди його не кликали. Модуль без `reply` — відмова, а не тиха втрата. Текст (непорожній, ≤ `REPLY_MAX`) уже
+    перевірено в `_main`. Код виходу — 0 лише коли відповідь додано (чи `--dry-run` її прийняв би)."""
+    got = resolve_task(a.task)
+    if got is None:
+        return 2
+    tid, task = got
+    text = a.text.strip()
+    path = _local_path(task)
+    local = read_local(task)
+    local = [p for p in local if isinstance(p, dict)] if isinstance(local, list) else []
+    cache = {}
+
+    def project_loader():
+        if 'pins' not in cache:
+            try:
+                cache['pc'] = project_comments()
+                cache['pins'] = cache['pc'].pins(task, tid)
+            except Exception as e:  # noqa: BLE001
+                cache['pins'] = e
+        if isinstance(cache['pins'], Exception):
+            raise cache['pins']
+        return cache['pins']
+
+    prefix = a.prefix.strip().lower()
+    kind, found = find_target(prefix, local, project_loader)
+    if kind is None:
+        print(f'✗ {a.prefix}: {found}')
+        return 1
+    if kind == 'closed':
+        for p in found:
+            print(f'✗ {(p.get("id") or "")[:8]}: пін закрито — відповідати можна лише на відкритий')
+        return 1
+    short = found['id'][:8]
+    if kind == 'local':
+        if a.dry_run:
+            print(f'[dry-run] {path}: {short} ← відповідь AI {json.dumps(text, ensure_ascii=False)}')
+            print('[dry-run] нічого не записано')
+            return 0
+        try:
+            state, _rid = write_local_reply(path, found['id'], text, datetime.now())
+        except (OSError, ValueError) as e:
+            print(f'✗ локальний файл не переписано ({_say(e)})')
+            return 1
+        if state == 'closed':
+            print(f'✗ {short}: пін закрито, поки йшов пошук — відповідати можна лише на відкритий')
+            return 1
+        if state != 'ok':
+            print(f'✗ {short}: піна вже нема в локальному файлі')
+            return 1
+        print(f'✓ {short} відповідь додано (локальний)')
+        return 0
+    if not for_agent(found, 'project'):
+        print(f'✗ {short}: пін не доручено AI — відповідати можна лише в дорученому')
+        return 1
+    pc = cache['pc']
+    if a.dry_run:
+        if pc.prov is None or pc.prov.fn('reply') is None:
+            print(f'✗ {short}: модуль коментарів не підтримує відповідей')
+            return 1
+        print(f'[dry-run] {pc.label}: reply {pc.channel(task, tid)} {found["id"]} {json.dumps(text, ensure_ascii=False)}')
+        print('[dry-run] нічого не записано')
+        return 0
+    try:
+        done = pc.reply(task, tid, found['id'], text)
+    except Exception as e:  # noqa: BLE001
+        print(f'✗ {short}: {pc.label} не прийняв ({_say(e)})')
+        return 1
+    if done is None:
+        print(f'✗ {short}: модуль коментарів не підтримує відповідей')
+        return 1
+    print(f'✓ {short} відповідь додано (проєкт)')
+    return 0
+
+
 # ---------- аргументи ----------
 
 EPILOG = """\
 Закрити пін (id — перші символи з виводу, «[3f2a9c1b · автор]»):
   python3 bin/inbox.py resolve 3f2a9c1b --reason "кнопку перенесено в шапку"
   python3 bin/inbox.py resolve 3f2a9c 7d41e0 --reason "..." --it 4 --dry-run
+Відповісти в гілці під пінем (питання чи примітка; лише на відкритий, командний — лише доручений Claude):
+  python3 bin/inbox.py reply 3f2a9c1b --text "це про кнопку в шапці чи в підвалі?"
+  python3 bin/inbox.py reply 3f2a9c1b --text "..." --dry-run
 Паралельні сесії: `current` один на машину, тож називай свою задачу — `--task` стоїть
 ПЕРЕД підкомандою (після неї — помилка):
   python3 bin/inbox.py --task bf360
   python3 bin/inbox.py --task bf360 resolve 3f2a9c1b --reason "..."
-Подробиці: python3 bin/inbox.py resolve -h
+Подробиці: python3 bin/inbox.py resolve -h · python3 bin/inbox.py reply -h
 """
 
 
@@ -707,7 +902,7 @@ def build_parser():
                          'елементів на сторінці (браузер; потрібен запущений канвас)')
     ap.add_argument('--all', action='store_true',
                     help='усі командні коментарі, а не лише доручені Claude (як до 0.27.0)')
-    sub = ap.add_subparsers(dest='cmd', metavar='{resolve}')
+    sub = ap.add_subparsers(dest='cmd', metavar='{resolve,reply}')
     rp = sub.add_parser(
         'resolve', help='закрити пін(и) з причиною',
         description='Закрити відкриті піни поточної (або названої --task) '
@@ -728,6 +923,18 @@ def build_parser():
                          'коментарів не потрібен і ігнорується (контракт модуля його не має)')
     rp.add_argument('--dry-run', action='store_true',
                     help='надрукувати, що було б записано, нічого не міняючи')
+    yp = sub.add_parser(
+        'reply', help='відповісти в гілці під пінем',
+        description='Дописати відповідь від імені AI під ВІДКРИТИМ пінем поточної (або названої --task) задачі: питання, якщо '
+                    'зміст коментаря неоднозначний, чи примітка. Локальний пін — у локальний файл; командний — лише доручений '
+                    'Claude, і відповідь бачать колеги.',
+        epilog='Приклад: python3 bin/inbox.py reply 3f2a9c1b --text "це про кнопку в шапці?"',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    yp.add_argument('prefix', metavar='ID', help=f'префікс id піна, не коротший за {MIN_PREFIX} символів')
+    yp.add_argument('--text', required=True, help=f'текст відповіді (непорожній, до {REPLY_MAX} символів); '
+                                                  'текст, що починається з «-», — як --text="-..."')
+    yp.add_argument('--dry-run', action='store_true', help='надрукувати, що було б записано, нічого не міняючи')
+    ap.set_defaults(reply_parser=yp)
     return ap, rp
 
 
@@ -751,6 +958,13 @@ def _main(argv):
         # Короткий префікс відхиляє `cmd_resolve` — після того, як він знайшов простір задачі: лише в просторі з модулем
         # коментарів повний id коротший за `MIN_PREFIX` законний.
         return cmd_resolve(a, rp)
+    if a.cmd == 'reply':
+        yp = a.reply_parser
+        if not a.text.strip():
+            yp.error('--text порожній: напиши відповідь')
+        if len(a.text.strip()) > REPLY_MAX:
+            yp.error(f'--text задовгий: {len(a.text.strip())} знаків, межа {REPLY_MAX}')
+        return cmd_reply(a)
     return cmd_list(where=a.where, task_id=a.task, show_all=a.all)
 
 

@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SEEN_MAX, arrived, baseline, isNew, markSeen, newsByPage, readSeen, seenKey, teamOf, writeSeen } from "../app/comment-news.js";
+import { SEEN_MAX, arrived, baseline, isNew, markSeen, newsByPage, countNew, newsItems, readSeen, replySeenKey, seenKey, teamOf, writeSeen } from "../app/comment-news.js";
 
 test("seenKey: простір і задача; без простору — «-»", () => {
   assert.equal(seenKey("liga", "t1"), "dc-seen:liga:t1");
   assert.equal(seenKey(null, "t1"), "dc-seen:-:t1");
+});
+
+test("replySeenKey: окремий ключ відповідей, байт у байт `dc-seen-r:<простір>:<задача>`; без простору — «-»", () => {
+  assert.equal(replySeenKey("liga", "t1"), "dc-seen-r:liga:t1");
+  assert.equal(replySeenKey(null, "t1"), "dc-seen-r:-:t1");
+  assert.equal(replySeenKey("", "t1"), "dc-seen-r:-:t1");
+  assert.notEqual(replySeenKey("liga", "t1"), seenKey("liga", "t1"));
 });
 
 test("readSeen: сміття, чужа версія — null; не-рядки в ids відкидаються", () => {
@@ -82,4 +89,46 @@ test("countNew: рахує лише нові (відкриті, не мої, н�
   assert.equal(countNew(items, new Set(["d"]), "me"), 1);
   assert.equal(countNew(items, null, "me"), 0);
   assert.equal(countNew(null, new Set(), "me"), 0);
+});
+
+test("newsItems: командні коментарі + відповіді на ВІДКРИТІ коментарі будь-якого каналу", () => {
+  const R = (id, o = {}) => ({ id, ts: "20.11.2026 10:00", author: "AI", text: "т", ...o });
+  const all = [
+    { id: "p1", _aud: "project", status: "open", author: "x", meta: { version: "3/a" }, replies: [R("rp")] },
+    { id: "l1", status: "open", author: "Я", meta: { version: "3/b" }, replies: [R("rl", { author: "Я" }), { text: "без id" }, null] },
+    { id: "l2", status: "resolved", author: "Я", replies: [R("rc")] },
+    { id: "l3", status: "open", author: "Я" },
+  ];
+  const items = newsItems(all);
+  assert.deepEqual(items.map((i) => i.id), ["p1", "rp", "rl", "rc"], "відповіді закритого — теж у списку (для бази «бачив»), без відповідей — нічого; без id пропущено");
+  assert.equal(items.find((i) => i.id === "rc").status, "resolved", "відповідь закритого несе статус батька");
+  assert.equal(isNew(items.find((i) => i.id === "rc"), new Set(), "Хтось"), false, "відповідь закритого не нова");
+  assert.equal(countNew(items, new Set(), "Хтось"), 3, "закрита не рахується (p1, rp, rl)");
+  assert.deepEqual(items.find((i) => i.id === "rl"), { id: "rl", ts: "20.11.2026 10:00", author: "Я", status: "open", version: "3/b", parent: "l1" });
+  assert.equal(items.find((i) => i.id === "rp").parent, "p1");
+  assert.equal(items.find((i) => i.id === "rp").version, "3/a");
+  assert.equal(newsItems(null).length, 0);
+  assert.equal(newsItems([{ id: "x", status: "open", replies: [R("y")] }])[0].version, undefined, "нема meta — version undefined, без падіння");
+});
+
+test("newsItems + isNew/countNew: власна відповідь не нова; чужа — нова, доки не бачена", () => {
+  const all = [{ id: "l1", status: "open", author: "Я", replies: [
+    { id: "mine", author: "Я", ts: "t" }, { id: "ai", author: "AI", ts: "t" }] }];
+  const items = newsItems(all);
+  assert.equal(isNew(items.find((i) => i.id === "mine"), new Set(), "Я"), false);
+  assert.equal(isNew(items.find((i) => i.id === "ai"), new Set(), "Я"), true);
+  assert.equal(countNew(items, new Set(), "Я"), 1);
+  assert.equal(countNew(items, new Set(["ai"]), "Я"), 0);
+  assert.deepEqual([...baseline(items)], ["mine", "ai"]);
+  assert.deepEqual(arrived(new Set(["mine"]), items).map((i) => i.id), ["ai"]);
+});
+
+test("newsItems: закритий коментар відкрили знову — його давні відповіді не стають «новими» (їх покрила база «бачив»)", () => {
+  const R = (id) => ({ id, ts: "t", author: "AI" });
+  const closed = [{ id: "c1", status: "resolved", author: "Я", replies: [R("old1"), R("old2")] }];
+  const seen = baseline(newsItems(closed));                      // перший знімок: коментар закритий
+  assert.deepEqual([...seen].sort(), ["old1", "old2"]);
+  const reopened = [{ id: "c1", status: "open", author: "Я", replies: [R("old1"), R("old2"), R("fresh")] }];
+  const news = newsItems(reopened);
+  assert.deepEqual(news.filter((c) => isNew(c, seen, "Я")).map((c) => c.id), ["fresh"], "давні відповіді стали новими після відкриття");
 });

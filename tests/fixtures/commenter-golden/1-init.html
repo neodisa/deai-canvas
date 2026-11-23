@@ -1,0 +1,350 @@
+<style>
+    :host{all:initial}
+    *{box-sizing:border-box;font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+    .root{position:fixed;inset:0;pointer-events:none;z-index:2147483000;
+      --s1:#15181D;--s2:#1B1F26;--s3:#232830;--line:#2A2F38;--line2:#39414C;
+      --hi:#F4F6F9;--mid:#A2A9B2;--lo:#6E7681;--white:#fff;--onwhite:#14171C;
+      --open:#FBBC55;--openbg:rgba(251,188,85,.13);--ok:#6AD09D;--okbg:rgba(106,208,157,.13);
+      --bad:#F37373;--badbg:rgba(243,115,115,.13);--r:12px;--rsm:8px;color:var(--hi)}
+    .root svg{display:block}
+    .pin{position:fixed;transform:translate(-50%,-50%);min-width:26px;height:26px;padding:0 6px;border-radius:9px;
+      background:var(--onwhite);color:var(--white);font-weight:800;font-size:11.5px;font-variant-numeric:tabular-nums;
+      display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.5),0 0 0 2px rgba(244,246,249,.92);
+      pointer-events:auto;cursor:pointer;transition:transform .14s ease}
+    .pin:hover{transform:translate(-50%,-50%) scale(1.12)}
+    /* Режим «полотно» (T-45): позицію несе обгортка .cp (transform на кожен кадр
+       камери, без transition), ховер лишається за самим .pin. */
+    .cp{position:fixed;left:0;top:0;pointer-events:none}
+    .root.canvas .cp .pin{position:static;pointer-events:auto}
+    .root.canvas .pin.off{min-width:0;height:20px;padding:0 8px;border-radius:10px;font-size:11px;font-weight:700;
+      background:var(--s1);color:var(--hi);box-shadow:0 0 0 1px var(--line2);transform:translate(0,-130%);white-space:nowrap}
+    .root.canvas .pin.off:hover{transform:translate(0,-130%) scale(1.06)}
+    .root.canvas .pin.cluster{min-width:30px;height:26px;padding:0 9px;border-radius:13px;
+      background:var(--open);color:var(--onwhite);box-shadow:0 4px 14px rgba(0,0,0,.35),0 0 0 2px rgba(20,23,28,.85)}
+    .clhov{position:fixed;left:0;top:0;display:none;pointer-events:none;border:2px solid #FBBC55;border-radius:3px;
+      box-shadow:0 0 0 3px rgba(251,188,85,.22);box-sizing:border-box}
+    .root.canvas .mode[data-mode="text"],.root.canvas .mode[data-mode="multi"],.root.canvas .mode[data-mode="area"],
+    .root.canvas .mfreeze{display:none}
+    .root.canvas .panel{top:var(--cl-top,0px);height:calc(100% - var(--cl-top,0px))}
+    .root.canvas .panel,.root.canvas .compose{cursor:auto;user-select:text;-webkit-user-select:text}
+    .root.local .pin{min-width:18px;height:18px;padding:0;background:#7C6CF0;box-shadow:0 4px 14px rgba(0,0,0,.5),0 0 0 2px rgba(124,108,240,.55)}
+    .root.local .seq{display:none}
+    .modes{position:fixed;left:50%;bottom:4px;transform:translateX(-50%);opacity:0;pointer-events:none;
+      display:flex;gap:3px;align-items:center;background:var(--s1);border:1px solid var(--line2);border-radius:12px;padding:4px;
+      z-index:2147483250;box-shadow:0 24px 60px rgba(0,0,0,.6);transition:opacity .2s ease,bottom .2s ease}
+    .modes.shift{left:calc(50% - 186px)}
+    .modes.show{opacity:1;bottom:20px;pointer-events:auto}
+    .modes .mode{font:600 12px/1 inherit;border-radius:8px;padding:8px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+      border:0;background:transparent;color:var(--mid);transition:background .12s,color .12s}
+    .modes .mode svg{width:15px;height:15px}
+    .modes .mode:hover{background:var(--s3);color:var(--hi)}
+    .modes .mode.active{background:var(--white);color:var(--onwhite)}
+    /* Freeze is a toggle, not one of the modes — separate it and give it its own
+       on-state so it never reads as "the selected mode". */
+    .modes .mfreeze{margin-left:3px;border-left:1px solid var(--line2);border-radius:0 8px 8px 0;padding-left:13px}
+    .modes .mfreeze.on{color:var(--open)}
+    .modes .mfreeze.on:hover{background:var(--openbg);color:var(--open)}
+    .mcompose{position:fixed;right:20px;bottom:80px;width:300px;display:none;flex-direction:column;
+      background:var(--s1);border:1px solid var(--line2);border-radius:var(--r);padding:12px;pointer-events:auto;
+      z-index:2147483250;box-shadow:0 24px 60px rgba(0,0,0,.6);transition:right .2s ease}
+    .mcompose.show{display:flex}
+    .mcompose.shift{right:378px}
+    .mchead{font-size:12px;color:var(--mid);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+    .mchead svg{width:14px;height:14px}
+    .mchead b{color:var(--hi);font-variant-numeric:tabular-nums}
+    .mcta{width:100%;height:70px;resize:none;background:var(--s2);color:var(--hi);border:1px solid var(--line);border-radius:var(--rsm);padding:9px 10px;font:14px/1.5 inherit;outline:none}
+    .mcta::placeholder{color:var(--lo)}
+    .mcta:focus{border-color:var(--line2)}
+    .mcompose .row{display:flex;gap:8px;margin-top:10px;justify-content:flex-end}
+    .mcompose .row button{font:600 13px/1 inherit;border-radius:var(--rsm);padding:9px 13px;cursor:pointer;border:1px solid var(--line2);background:transparent;color:var(--mid);display:inline-flex;align-items:center;gap:7px}
+    .mcompose .row button:hover{background:var(--s3);color:var(--hi)}
+    .mcompose .row button svg{width:14px;height:14px}
+    .mcompose .row .primary{background:var(--white);border-color:var(--white);color:var(--onwhite)}
+    .mcompose .row .primary:hover{background:#e7eaef}
+    .clarea{position:fixed;border:2px dashed var(--open);background:var(--openbg);z-index:2147483000;pointer-events:none;border-radius:6px}
+    .mtag{font-size:10.5px;font-weight:600;color:var(--mid);background:var(--s3);border:1px solid var(--line);border-radius:999px;padding:2px 8px;display:inline-flex;align-items:center;gap:4px}
+    .mtag svg{width:12px;height:12px}
+    .handle{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:2147483200;pointer-events:auto;cursor:pointer;
+      display:flex;flex-direction:column;align-items:center;gap:9px;border:0;border-radius:16px 0 0 16px;
+      background:var(--white);color:var(--onwhite);padding:16px 11px;
+      box-shadow:-8px 0 28px rgba(0,0,0,.45);transition:right .2s ease,transform .2s ease,background .12s,padding .12s}
+    .handle:hover{transform:translateY(-50%) translateX(-4px);padding-left:15px}
+    .handle:active{transform:translateY(-50%) translateX(-1px)}
+    .handle.shift{right:372px}
+    .handle svg{width:18px;height:18px}
+    .handle .hlabel{writing-mode:vertical-rl;transform:rotate(180deg);font:600 12px/1 inherit;letter-spacing:.03em}
+    .handle.active{background:var(--open)}
+    .handle.active:hover{background:#f6c877}
+    .cbadge{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;
+      border-radius:999px;background:var(--onwhite);color:var(--white);font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+    .handle.active .cbadge{background:rgba(20,23,28,.22);color:var(--onwhite)}
+    .pins.hide{display:none}
+    .panel{position:fixed;top:0;right:0;width:372px;height:100%;background:var(--s1);border-left:1px solid var(--line);
+      pointer-events:auto;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .2s ease;z-index:2147483150}
+    .panel.show{transform:none}
+    .head{padding:16px 14px 14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+    .head .ttl{font-size:15px;font-weight:600;letter-spacing:-.01em}
+    .count{font-size:12px;font-weight:600;color:var(--mid);background:var(--s3);border-radius:999px;padding:2px 9px;font-variant-numeric:tabular-nums}
+    .head .eye{margin-left:auto}
+    .iconbtn{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;cursor:pointer;background:transparent;border:1px solid transparent;color:var(--mid);transition:background .12s,color .12s;padding:0}
+    .iconbtn:hover{background:var(--s3);color:var(--hi)}
+    .iconbtn svg{width:17px;height:17px}
+    .toolbar{display:flex;gap:8px;align-items:center;padding:12px 14px 4px}
+    .searchwrap{flex:1;display:flex;align-items:center;gap:8px;background:var(--s2);border:1px solid var(--line);border-radius:var(--rsm);padding:0 10px;transition:border-color .12s}
+    .searchwrap:focus-within{border-color:var(--line2)}
+    .searchwrap .si{color:var(--lo);display:flex}
+    .searchwrap .si svg{width:16px;height:16px}
+    .search{flex:1;background:none;border:0;outline:none;color:var(--hi);font:14px inherit;padding:9px 0}
+    .search::placeholder{color:var(--lo)}
+    .searchx{background:none;border:0;color:var(--mid);cursor:pointer;padding:0 2px;display:flex}
+    .searchx[hidden]{display:none}
+    .searchx svg{width:15px;height:15px}
+    .searchx:hover{color:var(--hi)}
+    .sort{cursor:pointer;font:600 12px/1 inherit;white-space:nowrap;border:1px solid var(--line2);background:transparent;color:var(--mid);border-radius:var(--rsm);padding:9px 11px}
+    .sort:hover{background:var(--s3);color:var(--hi)}
+    .tabs{display:flex;gap:2px;background:var(--s2);border:1px solid var(--line);border-radius:10px;padding:3px;margin:12px 14px 6px}
+    /* The OPTIONAL audience row sits right above the Open/Closed one and
+       borrows its whole look; only the gap to the row below is its own. */
+    /* Аудиторія — НЕ фільтр. До 02.09.2026 вона стояла рядком «.tabs» над
+       «Open/Closed» і виглядала дослівно як він: дві однакові пари пілюль,
+       і сказати, котра з них аудиторія, було неможливо (скріншот власника).
+       Тепер вона в шапці, поруч із заголовком, і відрізняється трьома
+       речами одразу: іншим місцем, іншим кольором активного стану
+       («--open», власний акцент віджета, проти білого у фільтра) і
+       АСИМЕТРІЄЮ — назву показує лише активна. Остання й робить стан
+       «максимально очевидним»: у смузі завжди читається ім'я поточної
+       аудиторії, а друга є голою іконкою, по якій клікають. */
+    .head .auds{display:flex;gap:2px;background:var(--s3);border:1px solid var(--line);
+      border-radius:999px;padding:2px;flex:none}
+    /* 28px — не стиль, а підлога: правило проєкту «жодна ціль не менша за
+       28px по короткій стороні». Власник просив «маленький такий перемикач»,
+       і 28 лишає його малим (значкові кнопки шапки — 34, вкладки фільтра —
+       32), але вже влучним. Разом із «padding:2px» і рамкою обгортки це дає
+       рівно 34px — тобто рядок аудиторій стає однієї висоти зі значковими
+       кнопками поруч, і шапка не розʼїжджається. */
+    .head .aud{display:inline-flex;align-items:center;gap:5px;height:28px;min-width:28px;
+      justify-content:center;padding:0 8px;
+      border:0;border-radius:999px;background:transparent;color:var(--mid);cursor:pointer;
+      font:600 11px/1 inherit;transition:background .12s,color .12s}
+    .head .aud:hover{color:var(--hi)}
+    .head .aud .ic{width:14px;height:14px;display:block;flex:none}
+    .head .aud .aud-t{display:none}
+    .head .aud.active{background:var(--open);color:var(--onwhite)}
+    .head .aud.active .aud-t{display:inline}
+    .tab{flex:1;cursor:pointer;font:600 12px/1 inherit;padding:8px 6px;border-radius:7px;border:0;background:transparent;color:var(--mid);transition:color .12s}
+    .tab:hover{color:var(--hi)}
+    .tab.active{background:var(--white);color:var(--onwhite);box-shadow:0 1px 2px rgba(0,0,0,.4)}
+    .tab.active:hover{color:var(--onwhite)}
+    .list{overflow:auto;padding:10px 14px 20px;flex:1}
+    .sect{color:var(--lo);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin:8px 4px 4px}
+    .empty{color:var(--mid);font-size:12.5px;line-height:1.5;padding:10px 4px}
+    .cl-prev{margin-top:10px;border-top:1px solid var(--line)}
+    .cl-prev>summary{cursor:pointer;list-style:none;padding:9px 4px;font-size:11.5px;font-weight:600;color:var(--mid);display:flex;align-items:center;gap:6px}
+    .cl-prev>summary::-webkit-details-marker{display:none}
+    .cl-prev>summary svg{width:13px;height:13px}
+    .cl-prev-item{padding:8px;margin:4px 0;background:var(--s3);border:1px solid var(--line);border-radius:9px}
+    .cl-prev-meta{font-size:10.5px;color:var(--mid);margin-bottom:4px}
+    .cl-prev-text{font-size:12.5px;line-height:1.45;margin-bottom:8px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+    .cl-carry{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:5px 10px}
+    .cl-carry svg{width:13px;height:13px}
+    .c{position:relative;border:1px solid var(--line);border-radius:var(--r);padding:12px 13px;margin-bottom:10px;background:var(--s2);
+      cursor:pointer;transition:border-color .12s,background .12s,box-shadow .12s}
+    .c:hover{border-color:var(--line2);background:#1e232b;box-shadow:0 0 0 1px rgba(255,255,255,.03)}
+    .jump{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;color:var(--lo);cursor:pointer;transition:background .12s,color .12s}
+    .jump:hover{background:var(--s3);color:var(--hi)}
+    .jump svg{width:15px;height:15px}
+    [data-tip]{position:relative}
+    [data-tip]::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 7px);left:50%;transform:translateX(-50%) translateY(3px);
+      background:#0B0D10;color:var(--hi);border:1px solid var(--line2);border-radius:7px;padding:5px 9px;font:600 11px/1.1 inherit;white-space:nowrap;
+      opacity:0;pointer-events:none;transition:opacity .12s ease,transform .12s ease;z-index:2147483300;box-shadow:0 8px 22px rgba(0,0,0,.5)}
+    [data-tip]:hover::after{opacity:1;transform:translateX(-50%) translateY(0)}
+    .jump[data-tip]::after,.head [data-tip]::after{bottom:auto;top:calc(100% + 6px);left:auto;right:0;transform:translateY(-3px)}
+    .jump[data-tip]:hover::after,.head [data-tip]:hover::after{transform:translateY(0)}
+    .c .shot{display:block;margin-top:10px;max-width:100%;border:1px solid var(--line);border-radius:9px;cursor:zoom-in}
+    .c .otherpage{display:inline-flex;align-items:center;gap:5px;margin-top:8px;font-size:11.5px;color:var(--open)}
+    .c .otherpage svg{width:13px;height:13px}
+    .c .offscreen{display:flex;align-items:flex-start;gap:6px;margin-top:8px;font-size:11.5px;line-height:1.4;color:var(--lo)}
+    .c .offscreen svg{width:13px;height:13px;flex:none;margin-top:2px}
+    .c .top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+    .seq{min-width:22px;height:20px;padding:0 6px;border-radius:6px;background:var(--white);color:var(--onwhite);font:800 10.5px/1 inherit;display:grid;place-items:center;flex:none;font-variant-numeric:tabular-nums}
+    .c .who{font-weight:600;font-size:13px;color:var(--hi)}
+    .badge{margin-left:auto;font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:5px}
+    .badge .d{width:6px;height:6px;border-radius:50%}
+    .badge.open{background:var(--openbg);color:var(--open)}
+    .badge.open .d{background:var(--open)}
+    .badge.resolved{background:var(--okbg);color:var(--ok)}
+    .badge.resolved .d{background:var(--ok)}
+    .c .body{font-size:13.5px;line-height:1.5;color:#dbe0e7}
+    .c .meta{color:var(--lo);font-size:11.5px;margin-top:9px;font-variant-numeric:tabular-nums}
+    .c .when{color:var(--lo);font-size:11.5px;margin-top:4px;display:flex;align-items:center;gap:5px}
+    .c .vptag{color:var(--lo)}
+    .c .when svg{width:12px;height:12px}
+    .c .acts{display:flex;gap:6px;margin-top:11px}
+    .c .acts button{width:30px;height:30px;border-radius:7px;cursor:pointer;border:1px solid transparent;background:transparent;color:var(--mid);display:grid;place-items:center;padding:0;transition:background .12s,border-color .12s,color .12s}
+    .c .acts button svg{width:15px;height:15px}
+    .c .acts button:hover{background:var(--s3);color:var(--hi)}
+    .c .acts .ghost{border-color:var(--line2)}
+    .c .acts .primary{background:var(--white);border-color:var(--white);color:var(--onwhite)}
+    .c .acts .primary:hover{background:#e7eaef}
+    .c .acts .danger:hover{background:var(--badbg);color:var(--bad);border-color:transparent}
+    .csel{font-size:12.5px;line-height:1.45;color:var(--mid);border-left:2px solid var(--open);background:rgba(251,188,85,.08);border-radius:0 6px 6px 0;padding:6px 10px;font-style:italic}
+    .c .csel{margin-top:8px}
+    .compose .csel{margin-bottom:10px}
+    .clmark{background:rgba(251,188,85,.32);color:var(--hi);border-radius:2px;padding:0 1px}
+    .editform textarea.editta{width:100%;height:72px;resize:vertical;background:var(--s2);color:var(--hi);border:1px solid var(--line);border-radius:var(--rsm);padding:9px 10px;font:14px/1.5 inherit;margin-bottom:8px;outline:none}
+    .editform textarea.editta:focus{border-color:var(--line2)}
+    .c.hist{opacity:.72}
+    .c.hist:hover{opacity:1}
+    @keyframes cl-flash{0%{box-shadow:0 0 0 2px var(--white),0 0 20px rgba(255,255,255,.35);border-color:var(--white)}100%{box-shadow:none}}
+    .c.flash{animation:cl-flash 1.3s ease}
+    .compose{position:fixed;width:290px;background:var(--s1);border:1px solid var(--line2);border-radius:var(--r);padding:12px;
+      box-shadow:0 24px 60px rgba(0,0,0,.6);pointer-events:auto;z-index:2147483100}
+    .compose textarea{width:100%;height:70px;resize:none;background:var(--s2);color:var(--hi);border:1px solid var(--line);border-radius:var(--rsm);padding:9px 10px;font:14px/1.5 inherit;outline:none}
+    .compose textarea::placeholder{color:var(--lo)}
+    .compose textarea:focus{border-color:var(--line2)}
+    .compose .row{display:flex;gap:8px;margin-top:10px;justify-content:flex-end}
+    .compose .caud{display:flex;gap:6px;margin-top:8px}
+    .compose .caud-b{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:0 10px;border-radius:var(--rsm);border:1px solid var(--line);background:var(--s2);color:var(--lo);font:12px/1 inherit;cursor:pointer}
+    .compose .caud-b[aria-pressed="true"]{border-color:var(--line2);color:var(--hi)}
+    .compose .caud-note{min-height:0;margin-top:4px;font-size:11px;color:var(--lo)}
+    .compose .caud-note:empty{display:none}
+    .mcompose .caud{display:flex;gap:6px;margin-top:8px}
+    .mcompose .caud-b{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:0 10px;border-radius:var(--rsm);border:1px solid var(--line);background:var(--s2);color:var(--lo);font:12px/1 inherit;cursor:pointer}
+    .mcompose .caud-b[aria-pressed="true"]{border-color:var(--line2);color:var(--hi)}
+    .mcompose .caud-note{min-height:0;margin-top:4px;font-size:11px;color:var(--lo)}
+    .mcompose .caud-note:empty{display:none}
+    .compose button{font:600 13px/1 inherit;border-radius:var(--rsm);padding:9px 13px;cursor:pointer;border:1px solid var(--line2);background:transparent;color:var(--mid);display:inline-flex;align-items:center;gap:7px}
+    .compose button:hover{background:var(--s3);color:var(--hi)}
+    .compose button svg{width:14px;height:14px}
+    .compose button.primary{background:var(--white);border-color:var(--white);color:var(--onwhite)}
+    .compose button.primary:hover{background:#e7eaef}
+    .cllb{position:fixed;inset:0;background:rgba(6,7,9,.86);z-index:2147483400;display:flex;align-items:center;justify-content:center;padding:32px;pointer-events:auto;cursor:zoom-out}
+    .cllb img{max-width:92vw;max-height:92vh;border-radius:10px;border:1px solid var(--line2);box-shadow:0 30px 90px rgba(0,0,0,.7)}
+    .pfoot{display:flex;align-items:center;gap:7px;padding:9px 14px;border-top:1px solid var(--line);font-size:11.5px;color:var(--lo);flex:none}
+    .pfoot kbd{font:700 10px/1 inherit;background:var(--s2);border:1px solid var(--line2);border-bottom-width:2px;border-radius:5px;padding:3px 6px;color:var(--mid)}
+    .pinpop{position:fixed;max-width:260px;background:var(--s1);border:1px solid var(--line2);border-radius:10px;padding:10px 12px;box-shadow:0 16px 44px rgba(0,0,0,.6);z-index:2147483260;pointer-events:none;opacity:0;transform:translateY(3px);transition:opacity .12s ease,transform .12s ease}
+    .pinpop.show{opacity:1;transform:translateY(0)}
+    .pinpop .pptop{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+    .pinpop .who{font-weight:600;font-size:13px;color:var(--hi)}
+    .pinpop .ppbody{font-size:13px;line-height:1.45;color:#dbe0e7;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+
+    /* Controls that only exist on touch / narrow screens are hidden by default. */
+    .modes .mstop{display:none}
+    .sheetpeek{display:none}
+    .sheetgrab{display:none}
+    .sheetscrim{display:none}
+
+    /* ---- Mobile / narrow screens (≤640px) ----------------------------------
+       One round comment FAB starts/stops commenting; the mode bar gains a
+       second "Show comments" row that pulls the review panel up as a bottom
+       sheet. Nothing else sits on the page. Desktop layout is untouched. */
+    @media (max-width:640px){
+      /* Review panel → bottom sheet (slides up from the bottom). */
+      .panel{top:auto;bottom:0;left:0;right:0;width:100%;height:86vh;border-left:0;
+        border-top:1px solid var(--line);border-radius:18px 18px 0 0;transform:translateY(100%);
+        box-shadow:0 -18px 50px rgba(0,0,0,.55)}
+      /* base .panel.show{transform:none} lands it fully open at the bottom */
+      .pfoot{display:none}                              /* “C to comment” hint — no key on touch */
+
+      .sheetgrab{display:block;flex:none;width:38px;height:4px;border-radius:999px;
+        background:var(--line2);margin:9px auto 3px;cursor:pointer}
+
+      /* Dim, tap-to-close scrim behind the open sheet (sits above the mode bar). */
+      .sheetscrim{position:fixed;inset:0;background:rgba(6,7,9,.5);z-index:2147483255;
+        opacity:0;pointer-events:none;transition:opacity .2s ease}
+      .panelopen .sheetscrim{display:block;opacity:1;pointer-events:auto}
+      .panel{z-index:2147483260}                        /* sheet above the scrim & mode bar */
+
+      /* One round icon-only FAB: tap to start/stop commenting. */
+      .handle{top:auto;bottom:calc(18px + env(safe-area-inset-bottom));right:16px;transform:none;
+        width:56px;height:56px;padding:0;gap:0;justify-content:center;border-radius:999px;
+        box-shadow:0 10px 28px rgba(0,0,0,.5)}
+      .handle:hover{transform:none;padding:0}
+      .handle:active{transform:scale(.94)}
+      .handle.shift{right:16px}                         /* ignore desktop side-shift */
+      .handle svg{width:23px;height:23px}
+      .handle .hlabel{display:none}                     /* icon-only on mobile */
+      .handle .cbadge{position:absolute;top:-4px;right:-4px}
+
+      .arming .handle{display:none}                     /* while commenting, the mode bar takes over */
+      .panelopen .handle{opacity:0;pointer-events:none}
+
+      .modes{left:12px;right:12px;transform:none;bottom:calc(12px + env(safe-area-inset-bottom));
+        flex-wrap:wrap}                                  /* modes on row 1, "Show comments" on row 2 */
+      .modes.show{bottom:calc(12px + env(safe-area-inset-bottom))}
+      .modes.shift{left:12px}
+      .modes .mode{flex:1;justify-content:center;padding:12px 6px;font-size:12.5px}
+      .modes .mode[data-mode="area"]{display:none}      /* drag-select doesn't map to touch */
+      .modes .mstop{display:inline-flex;flex:0 0 auto}
+
+      /* Second row of the mode bar: Freeze toggle + "Show comments" (pulls up the
+         review sheet). Modes and Done stay on row 1. */
+      .sheetpeek{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+        flex:1 1 55%;margin-top:4px;padding:11px 6px;cursor:pointer;
+        border:0;border-top:1px solid var(--line);background:transparent;color:var(--mid);
+        font:600 12.5px/1 inherit;border-radius:0 0 9px 0;transition:background .12s,color .12s}
+      .sheetpeek:hover{background:var(--s3);color:var(--hi)}
+      .sheetpeek svg{width:15px;height:15px}
+      .modes .mfreeze{flex:1 1 35%;margin:4px 0 0;padding:11px 6px;
+        border:0;border-top:1px solid var(--line);border-radius:0 0 0 9px}
+
+      /* Composers dock above the (now two-row) mode bar, so their action
+         buttons never hide behind it. */
+      .mcompose{left:12px;right:12px;width:auto;bottom:calc(126px + env(safe-area-inset-bottom))}
+      .mcompose.shift{right:12px}
+      .mcta{font-size:16px}                             /* ≥16px avoids iOS auto-zoom */
+
+      .compose{left:12px !important;right:12px !important;width:auto !important;
+        top:auto !important;bottom:calc(126px + env(safe-area-inset-bottom)) !important}
+      .compose textarea{font-size:16px}
+
+      .search{font-size:16px}
+      .pin{min-width:30px;height:30px}                  /* larger tap target */
+    }
+    .root.hosted .handle,.root.hosted .panel,.root.hosted .sheetscrim,.root.hosted .sheetpeek,.root.hosted .modes{display:none !important}
+  </style><div class="root">
+        <div class="pins"></div>
+        <div class="pinpop"></div>
+        <div class="modes">
+          <button class="mode active" data-mode="element" title="Comment on one element"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="4.5" width="15" height="15" rx="3.5"></rect></svg>Element</button>
+          <button class="mode" data-mode="text" title="Select text and comment on it"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M12 6v12M9 19h6"></path></svg>Text</button>
+          <button class="mode" data-mode="multi" title="Pick several elements for one comment"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Multi</button>
+          <button class="mode" data-mode="area" title="Drag a region to comment on"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"></path></svg>Area</button>
+          <button class="mode mstop" title="Stop commenting"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>Done</button>
+          <button class="mode mfreeze on" title="Freeze the page — keep dropdowns, modals and tooltips open while you comment" aria-pressed="true"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M4.5 6.5l15 11M19.5 6.5l-15 11"></path><path d="M12 6.5l2.5-2M12 6.5L9.5 4.5M12 17.5l2.5 2M12 17.5l-2.5 2"></path></svg>Freeze</button>
+          <button class="sheetpeek" title="Open comments" aria-label="Open comments"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-11.5 7.2L4 20l1.2-4.3A8 8 0 1121 12z"></path></svg><span class="speektxt">Show comments · 1</span></button>
+        </div>
+        <div class="mcompose">
+          <div class="mchead"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Comment on <b class="mccount">0</b> element(s)</div>
+          <textarea class="mcta" placeholder="Leave a change request…"></textarea>
+          <div class="mcaud"></div>
+          <div class="row"><button class="mccancel">Clear</button><button class="primary mcsave"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"></path></svg>Comment</button></div>
+        </div>
+        <button class="handle" title="Comment — open the panel">
+          <span class="hicon"><svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-11.5 7.2L4 20l1.2-4.3A8 8 0 1121 12z"></path></svg></span>
+          <span class="hlabel lbl">Comment</span>
+          <span class="cbadge">1</span>
+        </button>
+        <div class="sheetscrim"></div>
+        <div class="panel">
+          <div class="sheetgrab" aria-hidden="true"></div>
+          <div class="head">
+            <span class="ttl">Comments</span><span class="count">3</span>
+            
+            <button class="eye iconbtn" data-tip="Hide pins" aria-label="Hide pins"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"></path><path d="M10.6 6.15A10.8 10.8 0 0112 6c6.4 0 10 6 10 6a17.6 17.6 0 01-3.4 3.95M6.5 6.55A17.4 17.4 0 002 12s3.6 6.5 10 6.5a10.7 10.7 0 004.2-.85"></path></svg></button>
+            <button class="x iconbtn" data-tip="Close panel" aria-label="Close panel"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+          </div>
+          <div class="toolbar">
+            <div class="searchwrap"><span class="si"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg></span><input class="search" type="text" placeholder="Search — text, author, #5, date…"><button class="searchx" hidden="" title="Clear"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
+            <button class="sort" title="Sort by date">↓ Newest</button>
+          </div>
+          <div class="tabs"><button class="tab tabOpen active" data-tab="open">Open (2)</button><button class="tab tabClosed" data-tab="resolved">Closed (1)</button></div>
+          <div class="list"><div class="c " id="cg-else">
+        <div class="top"><span class="seq">3</span><span class="who">Анна</span><span class="badge open"><span class="d"></span>open</span><span class="jump" data-tip="Open page" aria-label="Open page"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"></path></svg></span></div>
+        <div class="body">Коментар з іншої сторінки</div><div class="when"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7.5V12l3 2"></path></svg>13.11.2026 12:00</div><div class="otherpage"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"></path></svg>on another page — open</div>
+        <div class="acts"><button data-cl-act="edit" data-cl-id="g-else" data-tip="Edit" aria-label="Edit"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4z"></path><path d="M14 5l4 4"></path></svg></button><button class="ghost" data-cl-act="resolve" data-cl-id="g-else" data-tip="Resolve" aria-label="Resolve comment"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"></path></svg></button><button class="danger" data-cl-act="delete" data-cl-id="g-else" data-tip="Delete" aria-label="Delete"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"></path></svg></button></div></div><div class="c " id="cg-open">
+        <div class="top"><span class="seq">1</span><span class="who">Анна</span><span class="badge open"><span class="d"></span>open</span><span class="jump" data-tip="Show snapshot" aria-label="Show snapshot"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"></path></svg></span></div>
+        <div class="body">Відкритий коментар</div><div class="when"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7.5V12l3 2"></path></svg>13.11.2026 10:00</div><div class="offscreen"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"></path></svg><span>Елемента зараз немає на екрані — інший крок чи стан сторінки</span></div>
+        <div class="acts"><button data-cl-act="edit" data-cl-id="g-open" data-tip="Edit" aria-label="Edit"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4z"></path><path d="M14 5l4 4"></path></svg></button><button class="ghost" data-cl-act="resolve" data-cl-id="g-open" data-tip="Resolve" aria-label="Resolve comment"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"></path></svg></button><button class="danger" data-cl-act="delete" data-cl-id="g-open" data-tip="Delete" aria-label="Delete"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"></path></svg></button></div></div></div>
+          <div class="pfoot"><kbd>C</kbd> to comment</div>
+        </div></div>

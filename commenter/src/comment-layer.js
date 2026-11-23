@@ -16,6 +16,7 @@
 import { buildContextBundle, iterationOf } from './context-bundle.js';
 import { audiencesHTML, notifyAudience } from './audiences.js';
 import { shotScope } from './shot-scope.js';
+import { liftSvgTarget, normalizeClone, canvasColorConverter } from './shot-colors.js';
 import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
 
 (function (global) {
@@ -149,6 +150,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (active.length === 2) break;
     }
     return heading || active.length ? { heading, active } : null;
+  }
+
+  /** Сторінка з тегу версії піна/застосунку: усе після ПЕРШОГО `/` (`"1/holovna"` → `"holovna"`, `"3"` → `""`). */
+  function pageOf(v) {
+    if (typeof v !== 'string') return '';
+    const i = v.indexOf('/');
+    return i < 0 ? '' : v.slice(i + 1);
   }
 
   /** Рядок для картки з `meta.ctx`: «Крок 2» · розділ «Ваш партнер». */
@@ -505,6 +513,36 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     .root.hosted .handle,.root.hosted .panel,.root.hosted .sheetscrim,.root.hosted .sheetpeek,.root.hosted .modes{display:none !important}
   `;
 
+  /* Вигляд форм від хоста (`host.theme`): окремий лист, що додається в тіньовий корінь ЛИШЕ коли тема прийнята (`_applyTheme`).
+     `STYLE` не чіпаємо: без теми розмітка й правила — ті самі, що й були. Токени (`--s2`, `--sel`…) ставить на `.root` сама
+     `_applyTheme`; запасні значення в `var()` — на випадок, коли хост дав не всі. Той самий вигляд — і для `.compose`, і
+     для форми «Кілька» (`.mcompose`). */
+  const THEME_STYLE = `
+    .root.themed .compose,.root.themed .mcompose{--r:8px;--rsm:6px;width:300px;background:var(--s2);border:1px solid var(--line2);border-radius:var(--r);padding:10px;
+      box-shadow:0 16px 44px rgba(0,0,0,.5);font-family:system-ui,sans-serif}
+    .root.themed .compose *,.root.themed .mcompose *{font-family:system-ui,sans-serif}
+    .root.themed .compose .csel{margin:0 0 8px;padding:0;border:0;background:none;border-radius:0;font-style:normal;font-size:11.5px;color:var(--dim,var(--lo));
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .root.themed .compose .csel code{font:11px ui-monospace,monospace;color:var(--mid);background:var(--s3);border:1px solid var(--line);border-radius:4px;padding:0 4px;margin-right:4px}
+    .root.themed .compose .csel svg{display:inline-block;vertical-align:-2px}
+    .root.themed .mchead{font-size:11.5px;color:var(--dim,var(--lo));margin-bottom:8px}
+    .root.themed .compose textarea,.root.themed .mcta{height:72px;background:var(--s1);color:var(--hi);border:1px solid var(--line);border-radius:var(--rsm);padding:7px 8px;font-size:13px;line-height:1.45}
+    .root.themed .compose textarea:focus,.root.themed .mcta:focus{border-color:var(--sel,var(--white))}
+    .root.themed .compose .caud,.root.themed .mcompose .caud{gap:0;margin-top:8px;border:1px solid var(--line);border-radius:var(--rsm);overflow:hidden}
+    .root.themed .compose .caud-b,.root.themed .mcompose .caud-b{flex:1;justify-content:center;min-height:28px;border:0;border-radius:0;background:none;color:var(--dim,var(--lo));font-size:12px}
+    .root.themed .compose .caud-b+.caud-b,.root.themed .mcompose .caud-b+.caud-b{border-left:1px solid var(--line)}
+    .root.themed .compose .caud-b[aria-pressed="true"],.root.themed .mcompose .caud-b[aria-pressed="true"]{background:var(--sel-tint-2,rgba(255,255,255,.12));color:var(--hi)}
+    .root.themed .compose .caud-note,.root.themed .mcompose .caud-note{color:var(--dim,var(--lo))}
+    .root.themed .compose .row,.root.themed .mcompose .row{gap:6px;margin-top:10px}
+    .root.themed .compose .row button,.root.themed .mcompose .row button{height:28px;padding:0 12px;border-radius:var(--rsm);font:500 12px/1 system-ui,sans-serif;border:1px solid var(--line2);background:var(--s3);color:var(--hi)}
+    .root.themed .compose .row button:hover,.root.themed .mcompose .row button:hover{background:var(--s4,var(--s3))}
+    .root.themed .compose .row button.primary,.root.themed .mcompose .row button.primary{background:var(--sel,var(--white));border-color:var(--sel,var(--white));color:var(--on-sel,var(--onwhite));font-weight:600}
+    .root.themed .compose .row button.primary:hover,.root.themed .mcompose .row button.primary:hover{background:var(--sel-hover,var(--sel,var(--white)))}
+  `;
+  /* Дозволені токени теми й підписи форми (`host.theme`, `host.labels`). */
+  const THEME_KEYS = ['s1', 's2', 's3', 's4', 'line', 'line2', 'hi', 'mid', 'lo', 'dim', 'sel', 'sel-hover', 'sel-tint-2', 'on-sel', 'open', 'bad', 'local-pin'];
+  const LABEL_KEYS = ['placeholder', 'cancel', 'submit', 'target', 'quote', 'area', 'multiTitle', 'clear'];
+
   /* ===========================================================================
    * 5. Controller
    * ========================================================================= */
@@ -590,7 +628,19 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         // Сховище може показати пін ОПТИМІСТИЧНО, до підтвердження запису
         // (локальний адаптер сповіщає одразу в save). Позначку не губимо: інакше
         // впалий запис лишає пін поза бекапом — тільки в памʼяті вікна (fb 05.11.2026).
-        else ext._pending = true;
+        else {
+          ext._pending = true;
+          // Відповіді «у польоті» (ще не підтверджені) не губимо: зовнішня копія може бути
+          // без них. Локальна версія перекриває зовнішню з тим самим id, нова — додається.
+          const mine = Array.isArray(local.replies) ? local.replies.filter((r) => r && r._pending) : [];
+          if (mine.length) ext.replies = mergeReplies(ext.replies, mine);
+          // Видалена «у польоті» відповідь не воскресає зі застарілої зовнішньої копії.
+          const gone = Array.isArray(local._goneReplies) ? local._goneReplies : [];
+          if (gone.length) {
+            ext._goneReplies = gone;
+            if (Array.isArray(ext.replies)) ext.replies = ext.replies.filter((r) => !(r && gone.indexOf(r.id) >= 0));
+          }
+        }
       }
       this.comments = [...byId.values()];
       this._seqHigh = this.comments.reduce((m, c) => Math.max(m, (c.meta && c.meta.seq) || 0), this._seqHigh || 0);
@@ -709,6 +759,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._mcompose = root.querySelector('.mcompose');
       this._mcta = root.querySelector('.mcta');
       this._mccount = root.querySelector('.mccount');
+      this._applyTheme();
       root.querySelectorAll('.mode:not(.mstop):not(.mfreeze)').forEach((b) => {
         b.onclick = () => this._pickMode(b.getAttribute('data-mode'));
       });
@@ -759,7 +810,12 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         }
         // Click a card's screenshot → open it full-screen (lightbox), not navigate.
         const img = e.target.closest('img.shot');
-        if (img) { e.stopPropagation(); this._openLightbox(img.getAttribute('src')); return; }
+        if (img) {
+          e.stopPropagation();
+          const cardEl = img.closest('.c'), cm = cardEl && cardEl.id ? this.comments.find((x) => x.id === cardEl.id.slice(1)) : null;
+          this._openLightbox((cm && cm.meta && (cm.meta.shotUrl || cm.meta.shot)) || img.getAttribute('src'), (cm && cm.meta && cm.meta.shot) || img.getAttribute('src'));   // повний знімок, якщо є; не відкрився — мініатюра
+          return;
+        }
         // Don't navigate while typing in an editor; ignore clicks inside edit forms.
         if (this._editingId || e.target.closest('.editform')) return;
         const card = e.target.closest('.c');
@@ -1031,6 +1087,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       // Повторне ввімкнення в режимі «Кілька»: форма мусить повернутись (її ховає disarm), бо острівець показує Multi натиснутим.
       if (on && this._mode === 'multi' && this._mcompose) {
         this._mcompose.classList.add('show');
+        this._prepMulti();
         this._refreshMultiAuds();
         if (this._hostOpts) this._placeHostMulti();
       }
@@ -1060,13 +1117,16 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     // ---- annotation modes ----
     _toggleMulti(el) {
       const i = this._multiSel.indexOf(el);
+      const first = this._multiSel[0];
       if (i >= 0) { this._multiSel.splice(i, 1); el.classList.remove('cl-msel'); }
       else { this._multiSel.push(el); el.classList.add('cl-msel'); }
+      // Контекст multi-піна — від ПЕРШОГО вибраного елемента, у мить його вибору (і перезйомка, коли перший змінився).
+      if (this._multiSel[0] !== first) { try { this._multiAt = this._multiSel[0] ? this._captureAt(this._multiSel[0]) : null; } catch (e) { this._multiAt = null; } }
       if (this._mccount) this._mccount.textContent = this._multiSel.length;
     },
     _clearMulti() {
       (this._multiSel || []).forEach((el) => el.classList.remove('cl-msel'));
-      this._multiSel = [];
+      this._multiSel = []; this._multiAt = null;
       if (this._mccount) this._mccount.textContent = '0';
       if (this._mcta) this._mcta.value = '';
     },
@@ -1075,7 +1135,9 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const text = this._mcta ? this._mcta.value.trim() : '';
       if (!this._multiSel.length || !text) { if (this._mcta) this._mcta.focus(); return; }
       const els = this._multiSel.slice();
-      const fps = els.map((el) => fingerprint(el, this.target));
+      let at = this._multiAt;   // ДО _clearMulti
+      if (!at) { try { at = this._captureAt(els[0]); } catch (e) { at = null; } }
+      const fps = els.map((el) => this._withoutOwnClasses(el, () => fingerprint(el, this.target)));
       const rect = unionRect(els);   // kept in meta so the selection region is on record
       // Screenshot the closest common ancestor: it shows every picked element in
       // context, and the element render path is the only reliable one.
@@ -1084,7 +1146,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const aud = this._pickedAud(this._mcompose);
       if (aud) this._emit('onAudiencePick', aud);
       this._clearMulti();
-      this._addComment(els[0], text, '', { mode: 'multi', fps, count: els.length, rect, shotEl: anc || els[0] }, aud);
+      this._addComment(els[0], text, '', { mode: 'multi', fps, count: els.length, rect, shotEl: anc || els[0], at }, aud);
     },
     /** Чипи адресата у формі «Кілька» (як у `_openCompose`): перемальовуємо при кожному показі — типовий вибір міг змінитись. */
     _refreshMultiAuds() {
@@ -1147,9 +1209,10 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const r = t.rect;
       const box = document.createElement('div');
       box.className = 'compose';
-      const tx = (t.fp && t.fp.text || '').slice(0, 50);
-      box.innerHTML = `<div class="csel">on &lt;${esc(t.fp && t.fp.tag || '?')}&gt;${tx ? ' · “' + esc(tx) + '”' : ''}</div><textarea placeholder="Leave a change request…"></textarea>
-        ${this._audChipsHTML()}<div class="row"><button class="cancel">Cancel</button><button class="primary save">Comment</button></div>`;
+      this._applyTheme(); this._themeForm(box); const L = this._labels();
+      const tgt = this._targetHTML(L, t.fp && t.fp.tag || '?', t.fp && t.fp.text || '');
+      box.innerHTML = `<div class="csel">${L.target ? tgt : 'on ' + tgt}</div><textarea placeholder="${esc(L.placeholder || 'Leave a change request…')}"></textarea>
+        ${this._audChipsHTML()}<div class="row"><button class="cancel">${esc(L.cancel || 'Cancel')}</button><button class="primary save">${esc(L.submit || 'Comment')}</button></div>`;
       this._sh.appendChild(box); this._wireAudChips(box);
       /* Права межа — за СПРАВЖНІМИ ширинами композера й панелі. Числа 260/340
          DOM-режиму менші за 290/372, і біля панелі кнопка «Comment» ховалась під
@@ -1181,7 +1244,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this.comments.push({
         id, author: user.name, text, status: 'open', fp: t.fp,
         htmlSnapshot: ctx.htmlSnapshot, meta: ctx.meta,
-        bornV: this._version(), ts: nowStamp(), _pending: true,
+        bornV: this._version(), ts: nowStamp(), _pending: true, _awaitShot: true,
         ...(aud ? { _aud: aud } : {}),
       });
       this._emit('onAdd', id);
@@ -1196,21 +1259,29 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         const en = await this._withTimeout(t._enrich, 8000);
         if (c() && en) { if (en.fp) c().fp = en.fp; if (en.htmlSnapshot) c().htmlSnapshot = en.htmlSnapshot; }
       } catch (e) { /* fail-soft */ }
+      let miss = null;
       try {
-        const shot = typeof this.anchors.shot === 'function' ? await this._withTimeout(this.anchors.shot(t), 8000) : null;
-        if (c() && shot) {
-          c().meta.shot = shot;
-          if (this.store && typeof this.store.uploadShot === 'function') {
+        if (typeof this.anchors.shot === 'function') {
+          const shot = await raceTimeout(this.anchors.shot(t), 8000);
+          if (shot === SHOT_TIMEOUT) miss = 'timeout';
+          else if (!shot) miss = 'render';
+          else if (c()) {
+            c().meta.shot = shot;
             // Третій аргумент — пін: комбіноване сховище за `_aud` вирішує, чи слати знімок у командний кошик (поправка 5 плану Б2).
-            const url = await this._withTimeout(this.store.uploadShot(id, shot, c()), 8000);
-            if (url) c().meta.shotUrl = url;
+            const up = await this._uploadShot(id, shot, c());
+            if (up.failed) miss = 'upload'; else if (up.url) c().meta.shotUrl = up.url;
           }
         }
-      } catch (e) { /* fail-soft */ }
+      } catch (e) { miss = miss || 'render'; }
+      finally { if (c()) delete c()._awaitShot; }   // усі await вище обмежені за часом: пін не лишається в затримці назавжди
+      if (miss && c()) { c().meta = c().meta || {}; c().meta.shotMiss = miss; }   // ДО першого persist
       this._persist(); this._render(); this._placePins();
     },
 
     _openCompose(el, sel, extra) {
+      let at = null;
+      try { at = this._captureAt(el); } catch (e) { at = null; }   // збій захоплення — старий шлях (контекст у мить збереження), форма відкривається
+      // контекст — у мить вибору цілі, не в мить збереження (SPA може змінити маршрут)
       const existing = this._sh.querySelector('.compose'); if (existing) existing.remove();
       const r = el.getBoundingClientRect();
       const box = document.createElement('div');
@@ -1219,13 +1290,14 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       box.style.left = Math.max(8, Math.min(r.left, rightBound)) + 'px';
       const m = extra && extra.mode;
       // What is being commented on — shown in every mode (like the text quote), so the target is always clear.
-      const desc = (e) => { const t = e.tagName.toLowerCase(); const tx = (e.textContent || '').replace(/\s+/g, ' ').trim(); return '&lt;' + t + '&gt;' + (tx ? ' · “' + esc(tx.slice(0, 50)) + '”' : ''); };
+      this._applyTheme(); this._themeForm(box); const L = this._labels();
+      const desc = (e) => this._targetHTML(L, e.tagName.toLowerCase(), (e.textContent || '').replace(/\s+/g, ' ').trim());
       const note = m === 'multi' ? `${icon('multi', 13)} ${extra.count} elements`
-        : m === 'area' ? `${icon('area', 13)} area · ${desc(el)}`
-        : sel ? `on: “${esc(sel.slice(0, 120))}”`
-        : `on ${desc(el)}`;
-      box.innerHTML = `<div class="csel">${note}</div><textarea placeholder="Leave a change request…"></textarea>
-        ${this._audChipsHTML()}<div class="row"><button class="cancel">Cancel</button><button class="primary save">Comment</button></div>`;
+        : m === 'area' ? `${icon('area', 13)} ` + (L.area ? fillLabel(L.area, { target: desc(el) }) : `area · ${desc(el)}`)
+        : sel ? (L.quote ? fillLabel(L.quote, { text: esc(sel.slice(0, 120)) }) : `on: “${esc(sel.slice(0, 120))}”`)
+        : (L.target ? desc(el) : `on ${desc(el)}`);
+      box.innerHTML = `<div class="csel">${note}</div><textarea placeholder="${esc(L.placeholder || 'Leave a change request…')}"></textarea>
+        ${this._audChipsHTML()}<div class="row"><button class="cancel">${esc(L.cancel || 'Cancel')}</button><button class="primary save">${esc(L.submit || 'Comment')}</button></div>`;
       this._sh.appendChild(box); this._wireAudChips(box);
       /* Хост: праву межу рахуємо за СПРАВЖНЬОЮ шириною композера (260 — менше за неї) і за місцем, яке тримає хост. */
       if (this._hostOpts) box.style.left = Math.max(8, Math.min(r.left, window.innerWidth - this._hostInset() - (box.offsetWidth || 290) - 12)) + 'px';
@@ -1237,19 +1309,52 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       box.querySelector('.save').onclick = () => {
         const text = ta.value.trim(); if (!text) return;
         const aud = this._pickedAud(box); if (aud) this._emit('onAudiencePick', aud);
-        this._addComment(el, text, sel, extra, aud); box.remove();
+        this._addComment(el, text, sel, Object.assign({}, extra, { at }), aud); box.remove();
       };
+    },
+
+    /** Виконує `fn` без службових класів коментатора (`cl-hl`, `cl-msel`) на `el` і його нащадках; класи повертає в `finally`. */
+    _withoutOwnClasses(el, fn) {
+      const held = [];
+      const own = ['cl-hl', 'cl-msel'];
+      try {
+        const nodes = [el].concat(Array.from(el.querySelectorAll('.cl-hl,.cl-msel')));
+        for (const n of nodes) {
+          const had = own.filter((k) => n.classList.contains(k));
+          if (had.length) { held.push([n, had]); n.classList.remove(...had); }
+        }
+        return fn();
+      } finally {
+        for (const [n, had] of held) n.classList.add(...had);
+      }
+    },
+
+    /** Знімок контексту цілі в мить її вибору. `where` — з заголовком, `whereNoHead` — без (TD-36: заголовок лише для приватних). */
+    _captureAt(el) {
+      // Службові класи коментатора не мають потрапити ні у відбиток, ні в html піна (інакше `styleHash` розійдеться з живим елементом).
+      return this._withoutOwnClasses(el, () => {
+        let where = null, whereNoHead = null;
+        try { where = captureContext(el, this.target, { heading: true }); } catch (e) { where = null; }
+        try { whereNoHead = captureContext(el, this.target, { heading: false }); } catch (e) { whereNoHead = null; }
+        return {
+          url: location.href, route: location.pathname + location.hash, version: this.appVersion,
+          viewport: { w: window.innerWidth, h: window.innerHeight },
+          fp: fingerprint(el, this.target), outerHTML: el.outerHTML, text: el.textContent,
+          where, whereNoHead,
+        };
+      });
     },
 
     _addComment(el, text, sel, extra, aud) {
       const user = getUser(this.user, this.opts && this.opts.defaultUser, this._hostOpts);
+      const at = extra && extra.at;   // зафіксовано при виборі цілі; без нього (інші виклики) — як і раніше, у мить збереження
       const ctx = buildContextBundle({
-        outerHTML: el.outerHTML,
-        text: el.textContent,
-        url: location.href,
-        route: location.pathname + location.hash,
-        version: this.appVersion,
-        viewport: { w: window.innerWidth, h: window.innerHeight },
+        outerHTML: at ? at.outerHTML : el.outerHTML,
+        text: at ? at.text : el.textContent,
+        url: at ? at.url : location.href,
+        route: at ? at.route : location.pathname + location.hash,
+        version: at ? at.version : this.appVersion,
+        viewport: at ? at.viewport : { w: window.innerWidth, h: window.innerHeight },
         ts: nowStamp(),
       });
       ctx.meta.seq = this._nextSeq();   // stable display number, assigned once
@@ -1260,13 +1365,19 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (extra && extra.rect) ctx.meta.rect = extra.rect;      // area: drawn region
       if (extra && extra.count) ctx.meta.count = extra.count;
       // TD-36: заголовок (там може бути ПІБ) пишемо лише в локальний пін; командний їде в спільне сховище без нього.
-      try { const where = captureContext(el, this.target, { heading: this.appLocal || this._audPrivate(aud) }); if (where) ctx.meta.ctx = where; } catch (e) { /* контекст — підказка, не умова */ }
+      try {
+        // TD-36: заголовок лише для локального/приватного піна — і для знімка з вибору (`at`), і для старого шляху без нього.
+        const where = at ? ((this.appLocal || this._audPrivate(aud)) ? at.where : at.whereNoHead)
+          : captureContext(el, this.target, { heading: this.appLocal || this._audPrivate(aud) });
+        if (where) ctx.meta.ctx = where;
+      } catch (e) { /* контекст — підказка, не умова */ }
       this.comments.push({
         id: genId(), author: user.name, text, status: 'open',
-        fp: fingerprint(el, this.target),
+        fp: at ? at.fp : fingerprint(el, this.target),
         htmlSnapshot: ctx.htmlSnapshot, meta: ctx.meta,
         bornV: this._version(), ts: nowStamp(),
         _pending: true,   // unsynced until _persist confirms — protects it from live-merge drop
+        _awaitShot: true, // знімок ще триває: `_persist` цей пін не пише, поки `_finishComment` не зніме позначку (перший запис — одразу з shot/shotUrl)
         ...(aud ? { _aud: aud } : {}),
       });
       // Пин показуємо одразу (оптимістично) + негайний бекап; РЕАЛЬНИЙ persist
@@ -1277,55 +1388,95 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._backupNow(); this._relocate(); this._render();
       // Захват — завжди ELEMENT-render (faithful across pages): для element/text це
       // елемент, для area — якір під областю, для multi — спільний предок (extra.shotEl).
-      const shotTarget = (extra && extra.shotEl && extra.shotEl.nodeType === 1) ? extra.shotEl : el;
+      let shotTarget = (extra && extra.shotEl && extra.shotEl.nodeType === 1) ? extra.shotEl : el;
+      // Ціль перемальовано між вибором і збереженням (SPA): шукаємо її наново за відбитком — лише на тому ж маршруті й не для multi.
+      if (at && shotTarget === el && !el.isConnected && !(extra && extra.mode === 'multi') && at.route === location.pathname + location.hash) {
+        try { const m = findMatch(at.fp, this.target); if (m.el && m.score >= MATCH_THRESHOLD) shotTarget = m.el; } catch (e) { /* без знімка */ }
+      }
       this._finishComment(newId, shotTarget);
     },
 
     // Захват скриншота → (за наявності) заливка в Storage → перший persist. Fail-soft:
     // таймаут/помилка захвату або заливки → зберігаємо коментар без скриншота.
     async _finishComment(id, shotTarget) {
+      let miss = null;
       try {
-        const shot = await this._withTimeout(this._captureShot(shotTarget), 8000);
+        const r = await this._captureShot(shotTarget);
         const c = this.comments.find((x) => x.id === id);
-        if (c && shot) {
-          c.meta = c.meta || {}; c.meta.shot = shot;
-          if (this.store && typeof this.store.uploadShot === 'function') {
-            const url = await this._withTimeout(this.store.uploadShot(id, shot, c), 8000);   // `c` — для комбінованого сховища (поправка 5 плану Б2)
-            if (url) c.meta.shotUrl = url;
+        if (r && r.shot) {
+          if (c) {
+            c.meta = c.meta || {}; c.meta.shot = r.shot;
+            const up = await this._uploadShot(id, r.full || r.shot, c);   // повний знімок (мініатюра — лише inline); `c` — для комбінованого сховища (поправка 5 плану Б2)
+            if (up.failed) miss = 'upload'; else if (up.url) c.meta.shotUrl = up.url;
           }
-        }
-      } catch (e) { /* fail-soft */ }
+        } else miss = (r && r.miss) || 'render';
+      } catch (e) { miss = miss || 'render'; }
+      finally { const cf = this.comments.find((x) => x.id === id); if (cf) delete cf._awaitShot; }   // усі await вище обмежені за часом: пін не лишається в затримці назавжди
+      const c2 = this.comments.find((x) => x.id === id);
+      if (miss && c2) { c2.meta = c2.meta || {}; c2.meta.shotMiss = miss; }   // ДО першого persist (він — INSERT із тригером Teams)
       this._persist(); this._render(); this._placePins();
+    },
+
+    // Заливка знімка: одна повторна спроба через 500 мс — лише після ШВИДКОЇ відмови (null/виняток), не після таймауту. `failed` — сховище є, а URL так і нема (null/таймаут/виняток).
+    // Відповідь сховища `{ skipped: true }` — «для цього піна тут нічого заливати»: одразу без повтору й без `upload`.
+    async _uploadShot(id, shot, c) {
+      if (!this.store || typeof this.store.uploadShot !== 'function') return { url: null, failed: false };
+      for (let i = 0; i < 2; i++) {
+        if (i) await new Promise((res) => setTimeout(res, 500));
+        try {
+          const url = await raceTimeout(this.store.uploadShot(id, shot, c), 8000);
+          if (url && typeof url === 'object' && url.skipped === true) return { url: null, failed: false };
+          if (url === SHOT_TIMEOUT) break;   // після таймауту не повторюємо: найгірший час першого persist і гонка з зависшою спробою
+          if (url) return { url, failed: false };
+        } catch (e) { /* швидка відмова — повтор */ }
+      }
+      return { url: null, failed: true };
     },
 
     // target = an element. Element renders are the only html2canvas path that
     // stays faithful across pages; coordinate-cropped document renders drift.
+    // Повертає `{ shot }` або `{ miss: код }` (too-big | no-lib | timeout | render | detached).
     async _captureShot(target) {
       try {
-        if (target && target.nodeType === 1 && (target.getElementsByTagName('*').length > SHOT_MAX_NODES
-          || target.getElementsByTagNameNS('http://www.w3.org/2000/svg', '*').length > SHOT_MAX_SVG)) return null;
-        const h2c = await loadShotLib();
-        const base = { backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false };
+        const picked = target;
+        target = liftSvgTarget(target);   // іконка-SVG → її HTML-предок (html2canvas не знаходить клон SVG-цілі); лише для знімка
+        if (!target || target.nodeType !== 1 || !target.isConnected) return { miss: 'detached' };
+        const trim = svgTrim(target);
+        if (target.getElementsByTagName('*').length - trim.dropped > SHOT_MAX_NODES) return { miss: 'too-big' };
+        const libSrc = shotLibSrc(this.opts && this.opts.shotLib);
+        let h2c;
+        const libP = loadShotLib(libSrc);
+        try {
+          const lib = await raceTimeout(libP, 8000);   // свій бюджет 8 с — не їсть бюджет рендеру
+          if (lib === SHOT_TIMEOUT) { dropShotLib(libSrc, libP); return { miss: 'no-lib' }; }
+          h2c = lib;
+        } catch (e) { return { miss: 'no-lib' }; }
+        if (typeof h2c !== 'function') return { miss: 'no-lib' };
+        if (!target.isConnected) return { miss: 'detached' };   // поки вантажилась бібліотека, ціль могли прибрати
+        const r = target.getBoundingClientRect();
+        const base = { backgroundColor: '#ffffff', scale: shotScale(r.width, r.height, window.devicePixelRatio), useCORS: true, logging: false };
+        if (picked.classList) picked.classList.remove('cl-hl');
+        target.classList.remove('cl-hl');            // don't bake the hover outline into the shot
+        // Без сусідів розкладка цілі в клоні може попливти (flex:1, grid, space-between) — фіксуємо її бокс.
+        const onclone = (doc, el) => {
+          if (!el || !el.style) return;
+          const set = (n, v) => el.style.setProperty(n, v, 'important');
+          set('width', r.width + 'px'); set('height', r.height + 'px'); set('box-sizing', 'border-box');
+          set('flex', '0 0 auto'); set('max-width', 'none'); set('min-width', '0'); set('max-height', 'none');
+          // Переходи в клоні вимкнути, сучасні кольори (color-mix/oklab/oklch…) переписати в rgba — html2canvas їх не розбирає.
+          try { normalizeClone(doc, el, canvasColorConverter(document)); } catch (e) { /* збій нормалізації не губить знімок, що вдався б і так */ }
+        };
         let canvas;
-        if (target && target.nodeType === 1) {
-          target.classList.remove('cl-hl');            // don't bake the hover outline into the shot
-          // Без сусідів розкладка цілі в клоні може попливти (flex:1, grid, space-between) — фіксуємо її бокс.
-          const r = target.getBoundingClientRect();
-          const onclone = (doc, el) => {
-            if (!el || !el.style) return;
-            const set = (n, v) => el.style.setProperty(n, v, 'important');
-            set('width', r.width + 'px'); set('height', r.height + 'px'); set('box-sizing', 'border-box');
-            set('flex', '0 0 auto'); set('max-width', 'none'); set('min-width', '0'); set('max-height', 'none');
-          };
-          canvas = await h2c(target, { ...base, ignoreElements: shotScope(target), onclone });
-        } else { return null; }
-        const maxW = 360, k = Math.min(1, maxW / (canvas.width || maxW)) || 1;
-        const out = document.createElement('canvas');
-        out.width = Math.max(1, Math.round(canvas.width * k));
-        out.height = Math.max(1, Math.round(canvas.height * k));
-        out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
-        return out.toDataURL('image/jpeg', 0.6);      // small; stored inline in the comment meta
-      } catch (e) { return null; }
+        try {
+          canvas = await raceTimeout(h2c(target, { ...base, ignoreElements: shotScope(target, trim.roots), onclone }), 8000);
+        } catch (e) { return { miss: 'render' }; }
+        if (canvas === SHOT_TIMEOUT) return { miss: 'timeout' };
+        if (!canvas) return { miss: 'render' };
+        const thumb = fitCanvas(canvas, SHOT_THUMB_MAX).toDataURL('image/jpeg', 0.7);   // мініатюра: inline у `meta.shot`
+        let full = null;
+        try { full = await canvasToJpegDataUrl(fitCanvas(canvas, SHOT_FULL_MAX), 0.85); } catch (e) { full = null; }   // повний: у сховище → `meta.shotUrl`
+        return { shot: thumb, full: full || thumb };
+      } catch (e) { return { miss: 'render' }; }
     },
 
     // The core loop: call after the UI is regenerated.
@@ -1334,6 +1485,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       let resolved = 0, carried = 0;
       for (const c of this.comments) {
         if (c.status !== 'open') continue;
+        if (this._otherPage(c)) continue;   // хост: пін іншої сторінки не належить цьому DOM — не вирішуємо й не переякорюємо
         const res = classify(c.fp, this.target);
         if (res.decision === 'RESOLVE') {
           c.status = 'resolved'; c.resolveReason = res.reason; c.resolvedV = this._version(); c.meta = c.meta || {}; c.meta.resolvedAt = Date.now(); resolved++;
@@ -1356,12 +1508,18 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       return !c._el || !c._el.isConnected || c._el.getClientRects().length === 0;
     },
 
+    /** Режим хоста: пін іншої СТОРІНКИ за тегом версії (`"<ітерація>/<сторінка>"`). Маршрут тут не показник: у превʼю це адреса Deai. */
+    _otherPage(c) {
+      return !!(this._hostOpts && !this.anchors && this.appVersion != null && c && c.meta && c.meta.version != null
+        && pageOf(c.meta.version) !== pageOf(this.appVersion));
+    },
+
     _relocate() { // find each open comment's current element in the live DOM
       // Полотно: елемента в цьому документі немає — точку дає постачальник.
       if (this.anchors) { for (const c of this.comments) c._el = null; return; }
       for (const c of this.comments) {
         // Поза-скоупний пін (чужа ітерація) не якоримо → _placePins його не ставить.
-        if (c.status !== 'open' || !this._inScope(c)) { c._el = null; continue; }
+        if (c.status !== 'open' || !this._inScope(c) || this._otherPage(c)) { c._el = null; continue; }
         try { const m = findMatch(c.fp, this.target); c._el = (m.el && m.score >= MATCH_THRESHOLD) ? m.el : null; }
         catch (e) { c._el = null; } // one malformed comment must never break the panel
       }
@@ -1499,15 +1657,21 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       // Comment made on another page → navigate there (multi-page apps). The widget
       // re-inits on that page and its pin/element will be present.
       const route = location.pathname + location.hash;
-      if (c.meta && c.meta.route && c.meta.route !== route && c.meta.url) { location.href = c.meta.url; return; }
+      const hosted = !!this._hostOpts;   // у хості `meta.url` — адреса Deai: переходити нікуди, сторінку визначає тег версії
+      if (hosted && this._otherPage(c)) {
+        const src = c.meta && (c.meta.shotUrl || c.meta.shot);
+        if (src) this._openLightbox(src, c.meta.shot);
+        return;
+      }
+      if (!hosted && c.meta && c.meta.route && c.meta.route !== route && c.meta.url) { location.href = c.meta.url; return; }
       let el = c._el;
       if (!el) { const m = findMatch(c.fp, this.target); el = (m.el && m.score >= MATCH_THRESHOLD) ? m.el : null; c._el = el; }
       /* Елемента немає або він схований (інший крок `@switch`, закритий оверлей):
          раніше тут був мовчазний `return` — дизайнер клікав і не розумів, що
          сталось (fb-06102026-c38f46). Тепер — знімок елемента, якщо є. */
       if (!el || el.getClientRects().length === 0) {
-        const src = c.meta && (c.meta.shot || c.meta.shotUrl);
-        if (src) this._openLightbox(src);
+        const src = c.meta && (c.meta.shotUrl || c.meta.shot);
+        if (src) this._openLightbox(src, c.meta.shot);
         return;
       }
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1516,10 +1680,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     },
 
     // Full-screen preview of a comment's screenshot; click anywhere (or Esc) to close.
-    _openLightbox(src) {
+    // `fallback` — вбудована мініатюра: повна адреса могла вмерти (інший порт, інша задача) — один перехід, без циклу.
+    _openLightbox(src, fallback) {
       if (!src) return;
       const lb = document.createElement('div'); lb.className = 'cllb';
-      const img = document.createElement('img'); img.src = src; img.alt = 'comment snapshot';
+      const img = document.createElement('img'); img.alt = 'comment snapshot';
+      img.onerror = () => { img.onerror = null; if (fallback && fallback !== src) img.src = fallback; };
+      img.src = src;
       lb.appendChild(img); lb.onclick = () => lb.remove();
       this._sh.appendChild(lb);
     },
@@ -1595,7 +1762,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         ? `<span class="mtag">${mm === 'multi' ? icon('multi', 12) + (c.meta.count || '') : mm === 'area' ? icon('area', 12) + 'area' : icon('text', 12) + 'text'}</span>` : '';
       // Technical anchor info (pinned tag / version / fp / html snapshot) stays in the stored
       // comment for AI export & debugging, but is intentionally NOT shown to the reviewer.
-      const when = `<div class="when">${icon('clock', 12)}${c.ts ? markMatch(c.ts, this._query) : 'time unknown'}</div>`;
+      const when = `<div class="when">${icon('clock', 12)}${c.ts ? markMatch(c.ts, this._query) : 'time unknown'}</div>`
+        + (Array.isArray(c.replies) && c.replies.length ? `<div class="when">${c.replies.length} ${c.replies.length === 1 ? 'reply' : 'replies'}</div>` : '');
       /* Ширина — поруч із часом, не в технічному блоці: вона міняє СМИСЛ
          коментаря, а не пояснює його походження. */
       const vp = (c.meta && c.meta.viewport) || null;
@@ -1650,13 +1818,22 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         new Promise((res) => setTimeout(() => res(null), ms))]);
     },
     async _persist() {
-      const plain = this.comments.map(stripRuntime);
+      // Лічильник поколінь: лише НАЙНОВІШИЙ запис знімає «в польоті» (старіший, що встиг раніше, не знімає позначки новіших змін).
+      const gen = this._saveGen = (this._saveGen || 0) + 1;
+      const plain = this.comments.filter((c) => !c._awaitShot).map(stripRuntime);   // пін, чий знімок ще триває, у сховище не йде (бекап і панель його мають)
       this._backupNow();
       try {
         const res = this.store.save(plain);
         if (res && typeof res.then === 'function') await res;   // Supabase adapter throws on failure
-        this.comments.forEach((c) => { c._pending = false; });  // confirmed synced
-        this._backupNow();                                      // нічого не висить → ключ прибрано
+        if (gen === this._saveGen) {
+          this.comments.forEach((c) => {                        // confirmed synced
+            if (c._awaitShot) return;                           // його в цьому записі не було
+            c._pending = false;
+            delete c._goneReplies;
+            if (Array.isArray(c.replies)) c.replies.forEach((r) => { if (r) r._pending = false; });
+          });
+          this._backupNow();                                    // нічого не висить → ключ прибрано
+        }
       } catch (e) {
         console.warn('[comment-layer] primary store save failed; comments kept in local backup for retry', e && e.message);
       }
@@ -1767,6 +1944,75 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     toggle() { this._panel.classList.contains('show') ? this._closePanel() : this._openPanel(); },
     getComments() { return this.comments.map(stripRuntime); },
 
+    /* ---- Вигляд і мова форм від хоста (`host.theme`, `host.labels`) ---- */
+    /** Токени теми хоста → `.root` (`--<ключ>`, клас `themed`, один `<style data-cl-theme>`). Без `host.theme`, при винятку чи коли
+     *  жодне значення не пройшло фільтр, нічого не ставиться (а раніше поставлене знімається). Кличеться при побудові й при
+     *  кожному відкритті форми, тож зміна теми оболонки діє з наступної форми. */
+    _applyTheme() {
+      const root = this._sh; if (!root) return;
+      const h = this._hostOpts;
+      let raw = null;
+      if (h && typeof h.theme === 'function') { try { raw = h.theme(); } catch (e) { raw = null; } }
+      const ok = themeFilter(raw);
+      const keys = Object.keys(ok);
+      this._themeOk = ok;
+      /* Токени — лише на самих формах (`.mcompose` постійна, `.compose` — кожна при відкритті, `_themeForm`): піни, `.pinpop`,
+         лайтбокс і решта шару лишаються з власною палітрою. Клас `themed` на `.root` — лише для селекторів. */
+      root.querySelectorAll('.mcompose,.compose').forEach((f) => this._themeForm(f));
+      const sr = root.getRootNode();
+      const have = sr && sr.querySelector ? sr.querySelector('style[data-cl-theme]') : null;
+      if (!keys.length) {
+        if (have) have.remove();
+        root.classList.remove('themed'); this._themeKeys = [];
+        return;
+      }
+      root.classList.add('themed');
+      if (!have && sr && sr.appendChild) {
+        const st = document.createElement('style'); st.setAttribute('data-cl-theme', ''); st.textContent = THEME_STYLE; sr.appendChild(st);
+      }
+      this._themeKeys = keys;
+    },
+    /** Токени поточної теми — на форму `f` (і зняття тих, яких у темі вже нема). */
+    _themeForm(f) {
+      const ok = this._themeOk || {};
+      (this._themeKeys || []).forEach((k) => { if (!(k in ok)) f.style.removeProperty('--' + k); });
+      Object.keys(ok).forEach((k) => f.style.setProperty('--' + k, ok[k]));
+    },
+    /** Підписи форм від хоста: лише непорожні рядки відомих ключів; решта — англійський текст як був. */
+    _labels() {
+      const h = this._hostOpts; const r = {};
+      if (!h || typeof h.labels !== 'function') return r;
+      let o = null; try { o = h.labels(); } catch (e) { o = null; }
+      if (o && typeof o === 'object') LABEL_KEYS.forEach((k) => { if (typeof o[k] === 'string' && o[k]) r[k] = o[k]; });
+      return r;
+    },
+    /** Рядок цілі для форми: тег (у темі — чипом `<code>`) і, коли є текст, шаблон `target`; без тексту — самий тег. */
+    _targetHTML(L, tag, text) {
+      const tg = this._sh.classList.contains('themed') ? '<code>' + esc(tag) + '</code>' : '&lt;' + esc(tag) + '&gt;';
+      const tx = (text || '').slice(0, 50);
+      if (L.target) return tx ? fillLabel(L.target, { tag: tg, text: esc(tx) }) : tg;
+      return tg + (tx ? ' · “' + esc(tx) + '”' : '');
+    },
+    /** Підписи форми «Кілька» (вона одна на весь час життя): переписуємо лише коли набір підписів змінився. Без підписів — розмітка
+     *  не чіпається взагалі. `.mccount` після переписування знаходимо знову й наповнюємо поточним лічильником. */
+    _applyMultiLabels() {
+      const mc = this._mcompose; if (!mc) return;
+      const L = this._labels(); const key = JSON.stringify(L);
+      if (key === (this._mlabKey || '{}')) return;
+      this._mlabKey = key;
+      const head = mc.querySelector('.mchead');
+      if (head) {
+        const n = '<b class="mccount">' + (this._multiSel ? this._multiSel.length : 0) + '</b>';
+        head.innerHTML = icon('multi', 14) + (L.multiTitle ? fillLabel(L.multiTitle, { n }) : 'Comment on ' + n + ' element(s)');
+        this._mccount = head.querySelector('.mccount');
+      }
+      const ta = mc.querySelector('.mcta'); if (ta) ta.setAttribute('placeholder', L.placeholder || 'Leave a change request…');
+      const cl = mc.querySelector('.mccancel'); if (cl) cl.textContent = L.clear || 'Clear';
+      const sv = mc.querySelector('.mcsave'); if (sv) sv.innerHTML = icon('check') + esc(L.submit || 'Comment');
+    },
+    /** Показ форми «Кілька»: тема й підписи оболонки на цю мить. */
+    _prepMulti() { this._applyTheme(); this._applyMultiLabels(); },
+
     /* ---- API хоста (Deai 0.26.0) ---- */
     /** Скільки px справа у вікні коментатора займає ХОСТ (його панель): композер і підказки не лягають під неї. Без хоста,
      *  без колбека, нечисло чи виняток — 0. */
@@ -1792,7 +2038,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._mode = m;
       this._sh.querySelectorAll('.mode:not(.mstop):not(.mfreeze)').forEach((x) => x.classList.toggle('active', x.getAttribute('data-mode') === m));
       this._mcompose.classList.toggle('show', m === 'multi'); // multi uses a modal
-      if (m === 'multi') { this._refreshMultiAuds(); if (this._hostOpts) this._placeHostMulti(); }
+      if (m === 'multi') { this._prepMulti(); this._refreshMultiAuds(); if (this._hostOpts) this._placeHostMulti(); }
       this._armComment(true); // picking a mode readies commenting
     },
     /** Інструмент коментування для хоста (Deai 0.27.0, поправка 19): режим, заморозка, увімкнено, доступні режими
@@ -1905,7 +2151,11 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const route = location.pathname + location.hash;
       const where = (c) => {
         if (!this._inScope(c)) return 'here';   // не якоримо поза скоупом (_relocate) — «поза кадром» тут не про них
-        if (!this.anchors && c.meta && c.meta.route && c.meta.route !== route) return 'elsewhere';
+        if (this._hostOpts && !this.anchors) {
+          // Хост: сторінку дає тег версії; пін без тегу — за старим порівнянням маршруту.
+          if (this._otherPage(c)) return 'elsewhere';
+          if (c.meta && c.meta.version == null && c.meta.route && c.meta.route !== route) return 'elsewhere';
+        } else if (!this.anchors && c.meta && c.meta.route && c.meta.route !== route) return 'elsewhere';
         if (!this.anchors && c.status === 'open' && this._offscreen(c)) return 'offscreen';
         return 'here';
       };
@@ -1913,7 +2163,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       return {
         version: this.appVersion, iteration: this._curIter(), pinsHidden: !!this._pinsHidden,
         comments: this.comments.map((c) => {
-          const { _el, _pending, fp, htmlSnapshot, ...rest } = c;
+          const { _el, _pending, _goneReplies, _awaitShot, fp, htmlSnapshot, ...rest } = c;
+          if (Array.isArray(rest.replies)) rest.replies = rest.replies.filter((r) => r && typeof r === 'object').map(({ _pending: _rp, ...r }) => r);
           return Object.assign({}, rest, rest.meta && typeof rest.meta === 'object' ? { meta: Object.assign({}, rest.meta) } : {},
             { n: this._seqOf(c), scope: scope(c), where: where(c), iter: this._pinIter(c), pending: !!_pending });
         }),
@@ -1933,16 +2184,71 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this._persist(); this._render();
       return true;
     },
+    /** Відповідь у гілці піна (лише з хостом; лише під відкритим): повертає id відповіді чи `null`. `agent` коментатор не ставить. */
+    reply(id, text) {
+      const v = String(text == null ? '' : text).trim();
+      if (!this._hostOpts || !v) return null;
+      const c = this.comments.find((x) => x.id === id);
+      if (!c || c.status !== 'open') return null;
+      const r = { id: genId(), author: getUser(this.user, this.opts && this.opts.defaultUser, this._hostOpts).name, text: v, ts: nowStamp(), _pending: true };
+      c.replies = (c.replies || []).concat(r); c._pending = true;
+      this._emit('onReply', { comment: id, reply: r.id });   // ДО першого onChange, де є ця відповідь
+      this._persist(); this._render();
+      return r.id;
+    },
+    editReply(id, rid, text) {
+      const v = String(text == null ? '' : text).trim();
+      if (!this._hostOpts || !v) return false;
+      const c = this.comments.find((x) => x.id === id);
+      const r = c && Array.isArray(c.replies) && c.replies.find((x) => x && x.id === rid);
+      if (!r) return false;
+      r.text = v; r.editedTs = nowStamp(); r._pending = true; c._pending = true;
+      this._persist(); this._render();
+      return true;
+    },
+    removeReply(id, rid) {
+      if (!this._hostOpts) return false;
+      const c = this.comments.find((x) => x.id === id);
+      if (!c || !Array.isArray(c.replies) || !c.replies.some((x) => x && x.id === rid)) return false;
+      c.replies = c.replies.filter((x) => !(x && x.id === rid)); c._pending = true;
+      c._goneReplies = (c._goneReplies || []).concat(rid);
+      this._persist(); this._render();
+      return true;
+    },
     openShot(id) {
       const c = this.comments.find((x) => x.id === id);
-      const src = c && c.meta && (c.meta.shot || c.meta.shotUrl);
-      if (src) this._openLightbox(src);
+      const src = c && c.meta && (c.meta.shotUrl || c.meta.shot);
+      if (src) this._openLightbox(src, c.meta.shot);
     },
     togglePins() { if (!this._inited) return false; this._togglePins(); this._render(); return !!this._pinsHidden; },
     reset() { this.comments = []; this._ver = 1; this._persist(); this._render(); this._placePins(); },
   };
 
-  function stripRuntime(c) { const { _el, _pending, ...rest } = c; return rest; }
+  function stripRuntime(c) {
+    const { _el, _pending, _goneReplies, _awaitShot, ...rest } = c;
+    if (Array.isArray(rest.replies)) rest.replies = rest.replies.filter((r) => r && typeof r === 'object').map(({ _pending: _rp, ...r }) => r);
+    return rest;
+  }
+  // `ДД.ММ.РРРР ГГ:ХХ` → `РРРРММДДГГХХ` для порівняння; не за форматом — порожньо (йде першим).
+  function stampKey(ts) {
+    const m = /^(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})$/.exec(String(ts || ''));
+    return m ? m[3] + m[2] + m[1] + m[4] + m[5] : '';
+  }
+  // Злиття відповідей: локальні «у польоті» перекривають зовнішні з тим самим id, нові додаються;
+  // порядок — за `ts`, за рівних — початковий (зовнішні першими).
+  function mergeReplies(external, mine) {
+    const ok = (r) => r && typeof r === 'object';
+    const base = Array.isArray(external) ? external.filter(ok) : [];
+    for (const r of mine.filter(ok)) {
+      const i = base.findIndex((x) => x.id === r.id);
+      if (i >= 0) base[i] = r; else base.push(r);
+    }
+    // Сортуємо за ts лише коли ВСІ ts читаються; інакше — порядок зовнішніх, нові локальні в кінці.
+    if (!base.every((r) => stampKey(r.ts))) return base;
+    return base.map((r, i) => [r, i])
+      .sort((a, b) => stampKey(a[0].ts).localeCompare(stampKey(b[0].ts)) || a[1] - b[1])
+      .map((x) => x[0]);
+  }
   // Верх композера: під елементом, інакше над ним, інакше — притиснутий донизу,
   // але НЕ нижче `floor` (верх панелі режимів чи острівця хоста; елемент, що сам нижче межі, теж не опускає форму). Панель лежить вище за z-index, і
   // на великому <section> кнопки форми опинялись під нею: клік по «Comment»
@@ -2035,6 +2341,20 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   function hiddenFrame() {
     try { const f = window.frameElement; return !!f && f.getClientRects().length === 0; } catch (e) { return false; }
   }
+  /** Токени теми хоста: лише ключі білого списку; значення — рядок до 200 знаків без `;{}<>` (інакше вирвалось би з декларації). */
+  function themeFilter(o) {
+    const r = {};
+    if (!o || typeof o !== 'object') return r;
+    THEME_KEYS.forEach((k) => {
+      const v = Object.prototype.hasOwnProperty.call(o, k) ? o[k] : null;
+      if (typeof v === 'string' && v.trim() && v.length <= 200 && !/[;{}<>]/.test(v) && !/[\\]|\/\*|url\s*\(|image-set|@import/i.test(v)) r[k] = v.trim();
+    });
+    return r;
+  }
+  /** Підпис-шаблон у розмітку: сам шаблон екранується, а `{токен}` заміняється ОДНИМ проходом готовим (уже екранованим) значенням. */
+  function fillLabel(tpl, vals) {
+    return esc(tpl).replace(/\{(\w+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(vals, k) ? vals[k] : m));
+  }
   function esc(s) { return String(s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
   // Escape for HTML, then wrap case-insensitive matches of the search query in <mark> (amber highlighter).
   function markMatch(text, q) {
@@ -2063,18 +2383,107 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
   const SHOT_MAX_NODES = 1500;
   // SVG-вузли найдорожчі для клонування html2canvas (~10 мс кожен) — окремий ліміт.
   const SHOT_MAX_SVG = 300;
-  let _shotLibPromise = null;
-  function loadShotLib() {
+  const SHOT_CDN = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+  const SHOT_TIMEOUT = {};   // відрізняє таймаут від порожнього результату
+  // Розміри знімка: рендер min(DPR, 2) у межах стелі пікселів полотна; мініатюра (inline) і повний (у сховище) — вписані в квадрат.
+  const SHOT_MAX_PX = 6000000;
+  const SHOT_THUMB_MAX = 720;
+  const SHOT_FULL_MAX = 2400;
+  const SHOT_BLOB_MS = 4000;
+  function shotScale(w, h, dpr) {
+    let s = Math.max(1, Math.min(Number(dpr) || 1, 2));   // зум браузера < 100 % не опускає нижче масштабу 1 (як було до 0.35.1)
+    if (!(s > 0)) s = 1;
+    const area = (w > 0 && h > 0) ? w * h : 0;
+    if (area && area * s * s > SHOT_MAX_PX) s = Math.max(0.1, Math.sqrt(SHOT_MAX_PX / area));
+    return s;
+  }
+  // Вписати в max×max зі збереженням пропорцій, без збільшення.
+  function fitCanvas(canvas, max) {
+    const w = canvas.width || max, h = canvas.height || max;
+    const k = Math.min(1, max / w, max / h) || 1;
+    const out = document.createElement('canvas');
+    out.width = Math.max(1, Math.round(w * k));
+    out.height = Math.max(1, Math.round(h * k));
+    out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+    return out;
+  }
+  // JPEG-дані через `toBlob` (кодування поза головним потоком); нема `toBlob` або null — `toDataURL`.
+  function canvasToJpegDataUrl(canvas, q) {
+    const sync = () => canvas.toDataURL('image/jpeg', q);
+    if (typeof canvas.toBlob !== 'function') return Promise.resolve(sync());
+    return new Promise((resolve) => {
+      let done = false;
+      const fin = (v) => { if (!done) { done = true; clearTimeout(tm); resolve(v); } };
+      const tm = setTimeout(() => { try { fin(sync()); } catch (e) { fin(null); } }, SHOT_BLOB_MS);   // toBlob завис (сторінка завантажена) — синхронне кодування
+      try {
+        canvas.toBlob((blob) => {
+          if (!blob) return fin(sync());
+          const fr = new FileReader();
+          fr.onload = () => fin(typeof fr.result === 'string' ? fr.result : sync());
+          fr.onerror = () => fin(sync());
+          fr.readAsDataURL(blob);
+        }, 'image/jpeg', q);
+      } catch (e) { fin(sync()); }
+    });
+  }
+  function raceTimeout(p, ms) {
+    let t;
+    return Promise.race([Promise.resolve(p), new Promise((res) => { t = setTimeout(() => res(SHOT_TIMEOUT), ms); })])
+      .finally(() => clearTimeout(t));
+  }
+  // Опція `shotLib`: лише http(s):, протокол-відносна чи відносна адреса; javascript:/data: тощо ігноруються (→ CDN).
+  function shotLibSrc(v) {
+    if (typeof v !== 'string') return null;
+    const s = v.trim();
+    if (!s || /[\u0000-\u0020\u007f]/.test(s)) return null;
+    const m = /^([a-z][a-z0-9+.\-]*):/i.exec(s);
+    if (m) return /^https?$/i.test(m[1]) ? s : null;
+    return s;
+  }
+  // Кеш за адресою; відхилений (чи не встиглий) проміс не залишається — наступний пін пробує знову.
+  const _shotLibs = new Map();
+  // `expected` — проміс, якого чекав викликач: скидаємо лише власний запис (чужий, новіший, не чіпаємо).
+  function dropShotLib(src, expected) {
+    const e = _shotLibs.get(src || SHOT_CDN);
+    if (!e || (expected && e.p !== expected)) return;
+    _shotLibs.delete(src || SHOT_CDN);
+    if (e.s && e.s.parentNode) e.s.parentNode.removeChild(e.s);
+  }
+  function loadShotLib(src) {
     if (typeof window !== 'undefined' && window.html2canvas) return Promise.resolve(window.html2canvas);
-    if (_shotLibPromise) return _shotLibPromise;
-    _shotLibPromise = new Promise((resolve, reject) => {
+    const url = src || SHOT_CDN;
+    const hit = _shotLibs.get(url);
+    if (hit) return hit.p;
+    const e = { s: null, p: null };
+    e.p = new Promise((resolve, reject) => {
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
-      s.onload = () => resolve(window.html2canvas);
+      e.s = s;
+      s.src = url;
+      s.onload = () => (typeof window.html2canvas === 'function' ? resolve(window.html2canvas) : reject(new Error('html2canvas missing after load')));
       s.onerror = () => reject(new Error('html2canvas load failed'));
       document.head.appendChild(s);
     });
-    return _shotLibPromise;
+    e.p.catch(() => { dropShotLib(src, e.p); });
+    _shotLibs.set(url, e);
+    return e.p;
+  }
+  // Обрізка SVG: найзовнішні `svg` у цілі в порядку документа лишаються, поки сума SVG-елементів ≤ SHOT_MAX_SVG;
+  // решта — «порожні» корені (нащадки не йдуть у знімок, сам корінь тримає бокс).
+  function svgTrim(target) {
+    const NS = 'http://www.w3.org/2000/svg';
+    let all;
+    if (target.namespaceURI === NS) all = [target];   // ціль сама в SVG (svg чи його частина) — один корінь
+    else all = [...target.getElementsByTagNameNS(NS, 'svg')].filter((el) => {
+      const up = el.parentElement && el.parentElement.closest('svg');
+      return !up || !target.contains(up);
+    });
+    const roots = []; let sum = 0, over = false, dropped = 0;
+    for (const el of all) {
+      const n = el.getElementsByTagNameNS(NS, '*').length + 1;   // SVG-елементи кореня разом із ним
+      if (!over && sum + n <= SHOT_MAX_SVG) { sum += n; continue; }
+      over = true; roots.push(el); dropped += el.getElementsByTagName('*').length;   // у ліміт вузлів не йдуть усі нащадки кореня
+    }
+    return { roots, dropped };
   }
   function genId() {
     try { if (globalThis.crypto && globalThis.crypto.randomUUID) return globalThis.crypto.randomUUID(); } catch (e) {}

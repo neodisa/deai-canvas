@@ -1990,6 +1990,43 @@ body:not(.home-open) .cn-drawer{display:none}
 .cmt-aud--project{color:var(--open)}
 .cmt-badge{font-size:10px;padding:0 6px;border-radius:999px;border:1px solid var(--line2);color:var(--dim)}
 .cmt-h--new{color:var(--open)}
+/* Гілка відповідей у картці коментаря (0.35): рядок-згортка, список зі стовпчиком 1 px --line2, нова відповідь — тон --open 10 % без бічної смуги,
+   поле відповіді, «Без знімка: причина». Лише токени оболонки. */
+.cmt-thread{margin:6px 0 0;padding-top:6px;border-top:1px solid var(--line)}
+.cmt-rsum{display:flex;align-items:center;gap:6px;width:100%;min-height:var(--h-xs);border:0;background:none;padding:0;color:var(--mid);font:inherit;font-size:11.5px;cursor:pointer;text-align:left}
+.cmt-rsum:hover{color:var(--hi)}
+.cmt-rsum:focus-visible{outline:2px solid var(--sel);outline-offset:1px;border-radius:4px}
+.cmt-rsum .ico{width:14px;height:14px;flex:none}
+.cmt-rlast{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.cmt-rnew{flex:none;padding:0 6px;border-radius:999px;background:var(--open);color:var(--on-sel);font-size:10px;font-weight:600;line-height:15px}
+.cmt-replies{list-style:none;margin:6px 0 0;padding:0 0 0 10px;border-left:1px solid var(--line2)}
+.cmt-reply{padding:4px 0 6px}
+.cmt-reply+.cmt-reply{border-top:1px solid var(--line)}
+.cmt-reply--new{margin:0 -6px;padding:4px 6px 6px;border-radius:var(--r-sm);background:color-mix(in srgb,var(--open) 10%,transparent)}
+.cmt-reply--new+.cmt-reply{border-top-color:transparent}
+.cmt-rhead{display:flex;align-items:center;gap:6px;min-height:22px}
+.cmt-rwho{font-weight:600}
+.cmt-ragent{display:inline-flex;align-items:center;gap:5px}
+.cmt-ragent::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--local-pin)}
+.cmt-redited{font-size:10.5px;color:var(--dim)}
+.cmt-rhead .cmt-when{margin-left:auto}
+.cmt-rhead .cmt-ib{width:22px;height:22px}
+.cmt-rtext{margin:0;line-height:1.45;overflow-wrap:anywhere}
+.cmt-reply .cfm{margin-top:6px}
+.cmt-redit{width:100%;box-sizing:border-box;min-height:48px;background:var(--s1);color:var(--hi);border:1px solid var(--sel);border-radius:var(--r-sm);padding:6px 8px;font:inherit;font-size:12px;resize:vertical}
+.cmt-rbox{margin-top:6px}
+.cmt-rta{width:100%;box-sizing:border-box;height:30px;background:var(--s1);color:var(--hi);border:1px solid var(--line);border-radius:var(--r-sm);padding:6px 8px;font:inherit;font-size:12px;resize:none;display:block}
+.cmt-rta::placeholder{color:var(--dim)}
+.cmt-rbox--on .cmt-rta{height:64px;border-color:var(--sel)}
+.cmt-rta:focus{outline:none;border-color:var(--sel)}
+.cmt-rrow{display:none;align-items:center;gap:4px;margin-top:6px}
+.cmt-rbox--on .cmt-rrow{display:flex}
+.cmt-rhint{margin-right:auto;font-size:10.5px;color:var(--dim)}
+.cmt-act--pri{background:var(--sel);border-color:var(--sel);color:var(--on-sel);font-weight:600}
+.cmt-act--pri:hover{background:var(--sel-hover)}
+.cmt-rnote{margin:0;font-size:11px;color:var(--dim)}
+.cmt-shotmiss{display:flex;gap:5px;align-items:flex-start;margin:0 0 5px;color:var(--dim);font-size:11px;line-height:1.4}
+.cmt-shotmiss .ico{width:13px;height:13px;flex:none;margin-top:1px}
 /* «Налаштування» (етап Е): ліва навігація 224px + вміст. Скрол лишається на `#tasks-home` (його перемальовка зберігає `scrollTop`), тому
    навігація липка, а не окремий скрол-контейнер. */
 .set{display:grid;grid-template-columns:224px minmax(0,1fr);min-height:100%}

@@ -31,12 +31,15 @@ export const USER_KEY = "comment-layer:user";
 /** Префікс ключа «моїх» коментарів у localStorage; повний ключ — з каналом збірки. */
 export const OWN_PREFIX = "dc-own:";
 /** Посилки коментатора з рамки, які панель приймає (`PREVIEW_HOST_ARG`). */
-export const CMT_EVENTS = new Set(["ready", "change", "select", "mode", "add"]);
+export const CMT_EVENTS = new Set(["ready", "change", "select", "mode", "add", "reply"]);
 /** Що можна глядачеві: «Показати» всім; змінити/видалити — своїм; закритим — нічого. Закрити/відкрити/доручити тут немає зовсім. */
 export const PREVIEW_ACTIONS = { any: ["cmtshow", "cmtshot"], own: ["cmtedit", "cmtdel"], closed: [] };
+/** Відповіді (0.35): розгорнути гілку й відповісти — всім; змінити/видалити відповідь — лише свою (`canTouchReply`). */
+export const REPLY_ACTS = ["cmtthread", "cmtreply", "cmtreplysend", "cmtreplycancel", "cmtredit", "cmtreditsave", "cmtreditcancel",
+  "cmtrdel", "cmtrdelyes", "cmtrdelno"];
 /** Дії панелі, які оболонка перекладає в `EXT_ACTIONS`. Закрити/відкрити знову/доручити/перенести — свідомо поза цим переліком. */
 export const CMT_ACTS = ["comments", "cmtadd", "cmtshow", "cmtshot", "cmtedit", "cmteditsave", "cmteditcancel", "cmtdel", "cmtdelyes",
-  "cmtdelno", "cmtsec", "cmtpins"];
+  "cmtdelno", "cmtsec", "cmtpins", ...REPLY_ACTS];
 
 /** Імʼя з сирого значення: порожнє й старе службове «Anonymous» (до 0.32 рамка писала його після скасованого `prompt()`) — не імʼя. */
 export function cleanName(raw) {
@@ -56,6 +59,33 @@ export function canTouch(own, snap, id) {
   if (!own.has(id)) return false;
   const c = snap && Array.isArray(snap.comments) ? snap.comments.find((x) => x && x.id === id) : null;
   return !!c && c.status !== "resolved";
+}
+
+/** Чи вміє сховище коментатора відповіді. У превʼю шар живе на МОДУЛЬНОМУ адаптері напряму (не на комбінованому сховищі Deai):
+ *  `supportsReplies` — булеве (true лише після вдалого читання таблиці відповідей), `repliesDown` — `null` чи рядок причини.
+ *  Дві форми: функція `(канал) → boolean` (комбіноване) і булеве. Старий модуль, що не має жодного з геттерів, — «не вміє»:
+ *  зовнішнім глядачам про це не повідомляємо, а мовчки ховаємо поле й кнопки (адаптер без підтримки відкинув би відповідь). */
+export function storeRepliesOn(store) {
+  try {
+    if (!store) return false;
+    if (typeof store.repliesDown === "string" && store.repliesDown) return false;
+    const f = store.supportsReplies;
+    return typeof f === "function" ? !!f.call(store, "project") : f === true;
+  } catch (e) { return false; }
+}
+
+/** Коментар-батько відповіді за її id у знімку. */
+export function parentOfReply(snap, rid) {
+  const all = snap && Array.isArray(snap.comments) ? snap.comments : [];
+  return all.find((c) => c && Array.isArray(c.replies) && c.replies.some((r) => r && r.id === rid)) || null;
+}
+
+/** Чи можна глядачеві змінити/видалити відповідь `rid` під коментарем `cid`: вона СВОЯ (`own.has`), коментар ВІДКРИТИЙ і справді її
+ *  містить, відповіді увімкнені. Чужа, під закритим, під чужим `cid` чи за вимкнених відповідей — ні (хоч би й підробили `data-val`). */
+export function canTouchReply(own, snap, cid, rid, repliesOn) {
+  if (!repliesOn || !own.has(rid)) return false;
+  const c = snap && Array.isArray(snap.comments) ? snap.comments.find((x) => x && x.id === cid) : null;
+  return !!c && c.status === "open" && Array.isArray(c.replies) && c.replies.some((r) => r && r.id === rid);
 }
 
 /** Скільки останніх id авторства пам'ятаємо; більше — старі випадають (браузер не мусить рости від років коментування). */
@@ -125,7 +155,10 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   const own = ownStore(storage, `${OWN_PREFIX}${channel || location.pathname}`);
   const st = {
     open: false, active: true, adding: false, ready: false, readyDoc: null, snap: null, sel: null, query: "",
-    editing: null, draft: null, delAsk: null, expanded: { earlier: false, closed: false },
+    editing: null, draft: null, delAsk: null,
+    /* Відповіді (0.35): розгорнуті гілки, коментар із відкритим полем, чернетки полів (id → текст), правка відповіді `"cid|rid"`. */
+    threads: new Set(), sending: new Set(), replying: null, rdraft: new Map(), replyEdit: null, replyEditDraft: null, replyDelAsk: null,
+    expanded: { earlier: false, closed: false },
     wantAdd: false,
     /* Глядач САМ вимкнув додавання «+» за цієї відкритої панелі: нові сторінки його не вмикають (як у Deai, де це решта-режим). */
     userOff: false,
@@ -145,20 +178,31 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   /** Додавання ввімкнене чи ось-ось увімкнеться (рамка ще вантажиться): для «+» і підказки порожньої панелі. */
   const armed = () => st.adding || st.wantAdd;
 
+  let restoring = false;
   function paint() {
     const ownIds = own.all();
+    const repliesOn = storeRepliesOn(layer()?.store);
     const html = visible() ? commentsPanelHTML({
       snapshot: st.snap, query: st.query, selectedId: st.sel, editingId: st.editing, delAsk: st.delAsk,
       expanded: st.expanded, filter: "all", dual: false, teamDown: null, fresh: null, down: null,
       isOwn: (c) => ownIds.has(c.id), actions: PREVIEW_ACTIONS, adding: armed(),
       emptyKey: armed() ? "cmtEmpty" : "cmtEmptyPlus",
+      /* Відповіді: свою змінити/видалити може лише автор у цьому браузері, під відкритим, коли вони ввімкнені. Вимкнені — тихо:
+         без поля, кнопок і примітки (`repliesNote: false`) і без смуги `repliesDown`; наявні відповіді лишаються для читання. */
+      threads: st.threads, replying: st.replying, replyEdit: st.replyEdit, replyDelAsk: st.replyDelAsk, repliesNote: false,
+      isOwnReply: (r) => { const p = r && parentOfReply(st.snap, r.id); return !!p && canTouchReply(ownIds, st.snap, p.id, r.id, repliesOn); },
+      canDeleteReply: (r) => { const p = r && parentOfReply(st.snap, r.id); return !!p && canTouchReply(ownIds, st.snap, p.id, r.id, repliesOn); },
+      repliesOff: () => (repliesOn ? null : "off"),
     }) : "";
     /* Фокус і каретку поля пошуку / редагування — назад після перезапису (той самий прийом, що в `paintComments` Deai). */
     const act = document.activeElement;
     const inPanel = !!act && mount.contains(act);
-    const cfmSel = inPanel && act.closest(".cmt-acts--cfm") ? `.cmt-acts--cfm .${act.classList.contains("cfm-yes") ? "cfm-yes" : "cfm-no"}` : null;
-    const keep = inPanel && (act.id === "cmt-q" || act.classList.contains("cmt-edit"))
-      ? { sel: act.id === "cmt-q" ? "#cmt-q" : ".cmt-edit", range: [act.selectionStart, act.selectionEnd] }
+    const cfmSel = inPanel && act.closest(".cmt-acts--cfm") ? `.cmt-acts--cfm .${act.classList.contains("cfm-yes") ? "cfm-yes" : "cfm-no"}`
+      : (inPanel && act.closest(".cmt-reply .cfm") ? `.cmt-reply .cfm .${act.classList.contains("cfm-yes") ? "cfm-yes" : "cfm-no"}` : null);
+    const rKind = inPanel ? ["cmt-rta", "cmt-redit"].find((k) => act.classList.contains(k)) : null;   // полів відповіді кілька — за `data-val`
+    const keep = inPanel && (act.id === "cmt-q" || act.classList.contains("cmt-edit") || rKind)
+      ? { sel: rKind ? `.${rKind}[data-val="${CSS.escape(act.dataset.val || "")}"]` : (act.id === "cmt-q" ? "#cmt-q" : ".cmt-edit"),
+        range: [act.selectionStart, act.selectionEnd] }
       : (cfmSel ? { sel: cfmSel, range: [0, 0] } : null);
     const top = mount.querySelector(".cmt-body")?.scrollTop || 0;
     mount.hidden = !html;
@@ -167,24 +211,31 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     const body = mount.querySelector(".cmt-body");
     if (body && top) body.scrollTop = top;
     if (st.editing && st.draft != null) { const ed = mount.querySelector(".cmt-edit"); if (ed) ed.value = st.draft; }
+    /* Те саме для відповідей: набране в полі відповіді й у правці відповіді переживає перемальовування (знімки приходять самі). */
+    for (const ta of mount.querySelectorAll(".cmt-rta")) { const d = st.rdraft.get(ta.dataset.val); if (d != null) ta.value = d; }
+    if (st.replyEdit && st.replyEditDraft != null) { const ed = mount.querySelector(".cmt-redit"); if (ed) ed.value = st.replyEditDraft; }
     if (keep) {
       const el = mount.querySelector(keep.sel);
-      el?.focus();
+      restoring = true;                // фокус, повернутий перемальовкою, — не «вхід у поле»: `focusin` його ігнорує (Esc не мусить знову розгортати поле)
+      try { el?.focus(); } finally { restoring = false; }
       try { el?.setSelectionRange(...keep.range); } catch (e) { /* не текстове поле */ }
     }
     if (st.sel) mount.querySelector(`[data-cid="${CSS.escape(st.sel)}"]`)?.scrollIntoView({ block: "nearest" });
     onChange();
   }
 
-  function reset({ sel = true } = {}) {
-    if (sel) { st.sel = null; st.editing = null; st.draft = null; st.delAsk = null; }
+  function reset({ sel = true, keepDrafts = false } = {}) {
+    if (sel) {
+      st.sel = null; st.editing = null; st.draft = null; st.delAsk = null;
+      st.threads.clear(); if (!keepDrafts) st.rdraft.clear(); st.replying = null; st.replyEdit = null; st.replyEditDraft = null; st.replyDelAsk = null;
+    }
   }
 
   /** Рамка втратила свого коментатора (нова адреса, чужий документ): старі картки з мертвими діями не лишаємо. */
   function dropFrame({ keepWant = false } = {}) {
     st.ready = false; st.readyDoc = null; st.snap = null; st.adding = false;
     if (!keepWant) st.wantAdd = false;
-    reset();
+    reset({ keepDrafts: true });       // набрана відповідь переживає перехід рамки (канал той самий): чернетка чекає в полі, коли його відкриють знову
     paint();
   }
 
@@ -213,10 +264,16 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   }
 
   /** Імʼя перед ПЕРШИМ коментарем: є — `true` одразу; нема — діалог оболонки; «Скасувати» — `false` (додавання не вмикаємо). */
-  async function ensureName() {
-    if (readName()) return true;
+  let nameAsk = null;      // діалог імені, що висить: другий виклик (утримане ⌘↵, «+» і відповідь) чекає ТОЙ САМИЙ, а не відкриває ще один
+  function ensureName(opts) {
+    if (readName()) return Promise.resolve(true);
+    if (!nameAsk) nameAsk = askName(opts).finally(() => { nameAsk = null; });
+    return nameAsk;
+  }
+  /** `focusBack` — куди повернути фокус після закриття діалогу (типово кнопка «+»). */
+  async function askName({ focusBack = () => mount.querySelector('[data-act="cmtadd"]') } = {}) {
     const vals = await askForm(nameFormHTML, {
-      focusBack: () => mount.querySelector('[data-act="cmtadd"]'),
+      focusBack,
       onSubmit: (v, ctl) => {
         const name = String(v.name || "").trim();
         if (!name) { ctl.focus("name"); return t("cnFieldRequired"); }
@@ -280,7 +337,75 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       paint();
     },
     cmteditcancel: () => { st.editing = null; st.draft = null; paint(); },
+    /* Відповіді (0.35): те саме, що з коментарями, — права перевіряються тут, а не лише в розмітці (реєстр обійти не можна). */
+    cmtthread: (id) => { if (st.threads.has(id)) st.threads.delete(id); else st.threads.add(id); paint(); },
+    cmtreply: (id) => {
+      if (!replyOpenOk(id)) return;
+      st.replying = id; paint(); mount.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`)?.focus();
+    },
+    cmtreplysend: async (id) => {
+      const text = String(mount.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`)?.value ?? st.rdraft.get(id) ?? "").trim();
+      if (!text || !replyOpenOk(id) || st.sending.has(id)) return;     // друге ⌘↵ під тим самим коментарем, поки висить діалог імені, не дублює відповідь
+      st.sending.add(id);
+      try {
+        /* Імʼя — перед ПЕРШИМ записом (відповіддю чи коментарем): «Скасувати» — нічого не надсилаємо, чернетку лишаємо. */
+        if (!(await ensureName({ focusBack: () => mount.querySelector(`.cmt-rta[data-val="${CSS.escape(id)}"]`) }))) return;
+        if (!replyOpenOk(id)) return;           // за час діалогу рамка/коментар могли змінитись
+        let ok = false;
+        try { ok = !!layer()?.reply(id, text); } catch (e) { ok = false; }
+        if (ok) { st.rdraft.delete(id); if (st.replying === id) st.replying = null; st.threads.add(id); }
+        paint();
+      } finally { st.sending.delete(id); }
+    },
+    cmtreplycancel: (id) => { st.rdraft.delete(id); if (st.replying === id) st.replying = null; paint(); },
+    cmtredit: (key) => {
+      const [cid, rid] = splitReplyKey(key);
+      if (!replyGuard(cid, rid)) return;
+      st.replyEdit = key; st.replyEditDraft = null; st.replyDelAsk = null; paint(); mount.querySelector(".cmt-redit")?.focus();
+    },
+    cmtreditsave: () => {
+      const key = st.replyEdit;              // ключ зі стану, а не з кнопки: `data-val` можна підробити
+      if (!key) return;
+      const [cid, rid] = splitReplyKey(key);
+      if (!replyGuard(cid, rid)) return;
+      let ok = false;
+      try { ok = !!layer()?.editReply(cid, rid, mount.querySelector(".cmt-redit")?.value); } catch (e) { ok = false; }
+      if (ok) { st.replyEdit = null; st.replyEditDraft = null; }
+      paint();
+    },
+    cmtreditcancel: () => { st.replyEdit = null; st.replyEditDraft = null; paint(); },
+    cmtrdel: (key) => {
+      const [cid, rid] = splitReplyKey(key);
+      if (!replyGuard(cid, rid)) return;
+      st.replyDelAsk = key; paint(); mount.querySelector(".cmt-reply .cfm .cfm-no")?.focus();
+    },
+    cmtrdelyes: (key) => {
+      if (st.replyDelAsk !== key) return;
+      st.replyDelAsk = null;
+      const [cid, rid] = splitReplyKey(key);
+      if (replyGuard(cid, rid)) {
+        try { if (layer()?.removeReply(cid, rid) && st.replyEdit === key) { st.replyEdit = null; st.replyEditDraft = null; } } catch (e) { /* рамка пішла */ }
+      }
+      paint();
+    },
+    cmtrdelno: () => closeReplyDelAsk(true),
   };
+
+  /** Ключ `"cid|rid"` → `[cid, rid]`. */
+  function splitReplyKey(k) { const i = String(k).indexOf("|"); return i < 0 ? [String(k), ""] : [String(k).slice(0, i), String(k).slice(i + 1)]; }
+  /** Охоронець «своя відповідь»: СВОЯ, під ВІДКРИТИМ коментарем, відповіді ввімкнені. */
+  const replyGuard = (cid, rid) => canTouchReply(own, st.snap, cid, rid, storeRepliesOn(layer()?.store));
+  /** Можна відповісти під `id`: коментар відкритий у знімку й відповіді ввімкнені. */
+  function replyOpenOk(id) {
+    const c = st.snap && Array.isArray(st.snap.comments) ? st.snap.comments.find((x) => x && x.id === id) : null;
+    return !!c && c.status === "open" && storeRepliesOn(layer()?.store);
+  }
+  function closeReplyDelAsk(refocus) {
+    const key = st.replyDelAsk;
+    st.replyDelAsk = null;
+    paint();
+    if (refocus && key) mount.querySelector(`[data-act="cmtrdel"][data-val="${CSS.escape(key)}"]`)?.focus();
+  }
 
   function closeDelAsk(refocus) {
     const id = st.delAsk;
@@ -292,23 +417,46 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   /* Клік повз питання «Видалити назавжди?» — «ні», нічого не видаляючи (capture: раніше за інші кліки, що перемальовують). */
   document.addEventListener("click", (ev) => {
     if (st.delAsk && !ev.target.closest?.(".cmt-acts--cfm")) { st.delAsk = null; paint(); }
+    if (st.replyDelAsk && !ev.target.closest?.(".cmt-reply .cfm")) { st.replyDelAsk = null; paint(); }
   }, true);
   /* Клік у макет — це клік в iframe: до `document` він не долітає, зате вікно оболонки втрачає фокус. */
   window.addEventListener("blur", () => setTimeout(() => {
     if (st.delAsk && document.activeElement?.tagName === "IFRAME") { st.delAsk = null; paint(); }
+    if (st.replyDelAsk && document.activeElement?.tagName === "IFRAME") { st.replyDelAsk = null; paint(); }
   }, 0));
   mount.addEventListener("input", (ev) => {
     if (ev.target.classList?.contains("cmt-edit")) { st.draft = ev.target.value; return; }
+    /* Набір у полі знову розгортає рядок: після Esc фокус лишається в полі, а `focusin` вдруге не спрацює. */
+    if (ev.target.classList?.contains("cmt-rta")) { st.rdraft.set(ev.target.dataset.val, ev.target.value); armReplyBox(ev.target); return; }
+    if (ev.target.classList?.contains("cmt-redit")) { st.replyEditDraft = ev.target.value; return; }
     if (ev.target.id !== "cmt-q") return;
     st.query = ev.target.value;
     paint();
   });
+  /* Фокус у полі відповіді відкриває рядок «Надіслати / Скасувати» (у розгорнутій гілці з відповідями поле стоїть без нього): `replying` = цей
+     коментар, `cmt-rbox--on` ставимо прямо, БЕЗ перемальовки — вона замінила б textarea посеред mousedown і згубила б каретку. */
+  function armReplyBox(ta) {
+    const id = ta.dataset.val;
+    if (!replyOpenOk(id) || st.replying === id) return;
+    st.replying = id;
+    const box = ta.closest?.(".cmt-rbox");
+    for (const b of mount.querySelectorAll(".cmt-rbox--on")) if (b !== box) b.classList.remove("cmt-rbox--on");   // розгорнутий рядок — один
+    box?.classList.add("cmt-rbox--on");
+  }
+  mount.addEventListener("focusin", (ev) => {
+    if (restoring) return;
+    const ta = ev.target.closest?.(".cmt-rta");
+    if (ta) armReplyBox(ta);
+  });
   /* ⌘/Ctrl+Enter зберігає редагування, Esc скасовує; `stopPropagation`, щоб Esc не пішов далі в оболонку. */
   mount.addEventListener("keydown", (ev) => {
-    const ta = ev.target.closest?.(".cmt-edit");
+    if (ev.key === "Escape" && st.replyDelAsk && ev.target.closest?.(".cmt-reply .cfm")) { ev.preventDefault(); ev.stopPropagation(); closeReplyDelAsk(true); return; }
+    const ta = ev.target.closest?.(".cmt-edit, .cmt-rta, .cmt-redit");
     if (!ta) return;
-    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); actions.cmteditsave(); }
-    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); actions.cmteditcancel(); }
+    const [save, cancel] = ta.classList.contains("cmt-rta") ? ["cmtreplysend", "cmtreplycancel"]
+      : ta.classList.contains("cmt-redit") ? ["cmtreditsave", "cmtreditcancel"] : ["cmteditsave", "cmteditcancel"];
+    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); if (!ev.repeat) actions[save](ta.dataset.val); }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); actions[cancel](ta.dataset.val); }
   });
 
   /** Посилка коментатора з рамки. ⛔ Джерело: `ev.source` — саме наша рамка І `ev.origin === location.origin`: рамка, що
@@ -341,8 +489,8 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
     } else if (m.ev === "mode") {
       st.adding = !!m.on;
       paint();
-    } else if (m.ev === "add") {
-      own.add(m.id);
+    } else if (m.ev === "add" || m.ev === "reply") {
+      own.add(m.id);       // `reply` приходить ДО першого `change` з цією відповіддю: на його перемальовуванні відповідь уже «своя»
       paint();
     }
   }

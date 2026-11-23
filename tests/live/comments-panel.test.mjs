@@ -700,3 +700,232 @@ test("26: кошик у картці — питання на місці; Esc / �
   await page.waitForSelector('#cmt-panel .cmt-card[data-cid="d1"]', { state: "detached" });
   assert.equal(dialogs, 0, "з'явилось нативне вікно браузера");
 });
+
+/* ───────── 0.35: відповіді в картці (локальний пін) ───────── */
+const localRows = (dir) => { try { return JSON.parse(readFileSync(path.join(dir, ".dc-local-comments.json"), "utf8")); } catch (e) { return []; } };
+const repTexts = (page) => page.$$eval("#cmt-panel .cmt-reply .cmt-rtext", (els) => els.map((e) => e.textContent));
+
+test("27: відповідь на локальний пін — «1 відповідь», запис у файлі задачі; пошук за текстом відповіді; змінити свою, ⌘↵ друга, видалити з питанням", async (t) => {
+  const { page, frame, dir } = await boot(t, PORT_BASE + 70);
+  await page.click('#hud [data-act="comments"]');
+  await until(() => modesShown(frame));
+  await addComment(frame, "Для відповідей");
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  const card = "#cmt-panel .cmt-card";
+
+  await page.click(`${card} [data-act="cmtreply"]`);
+  await page.waitForSelector("#cmt-panel textarea.cmt-rta");
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cmt-rta")), true, "поле відповіді не отримало фокус");
+  await page.fill("#cmt-panel textarea.cmt-rta", "Перша відповідь");
+  await page.click(`${card} [data-act="cmtreplysend"]`);
+  await until(async () => /1 відповідь/.test((await page.textContent(`${card} .cmt-rsum`)) ?? ""));
+  await until(async () => (await repTexts(page)).join() === "Перша відповідь");
+  await until(() => localRows(dir).some((c) => (c.replies || []).some((r) => r.text === "Перша відповідь")));
+
+  /* пошук — і за текстом відповіді */
+  await page.fill("#cmt-q", "Перша відпов");
+  await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === 1);
+  await page.fill("#cmt-q", "нема-такого-слова");
+  await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === 0);
+  await page.fill("#cmt-q", "");
+  await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === 1);
+
+  /* змінити свою */
+  await page.click(`${card} .cmt-reply [data-act="cmtredit"]`);
+  await page.waitForSelector("#cmt-panel textarea.cmt-redit");
+  await page.fill("#cmt-panel textarea.cmt-redit", "Змінена відповідь");
+  await page.click(`${card} [data-act="cmtreditsave"]`);
+  await until(async () => (await repTexts(page)).join() === "Змінена відповідь");
+  assert.equal(await page.locator(`${card} .cmt-redited`).count(), 1, "нема позначки «змінено»");
+  await until(() => localRows(dir).some((c) => (c.replies || []).some((r) => r.text === "Змінена відповідь")));
+
+  /* ⌘↵ у полі відповіді шле */
+  await page.click("#cmt-panel textarea.cmt-rta");
+  await page.keyboard.type("Друга відповідь");
+  await page.keyboard.press("Meta+Enter");
+  await until(async () => (await repTexts(page)).join("|") === "Змінена відповідь|Друга відповідь");
+  await until(async () => /2 відповіді/.test((await page.textContent(`${card} .cmt-rsum`)) ?? ""));
+
+  /* прибрати: питання; «ні» нічого не прибирає; «так» прибирає */
+  await page.click(`${card} .cmt-reply:first-child [data-act="cmtrdel"]`);
+  await page.waitForSelector(`${card} [data-act="cmtrdelyes"]`);
+  await page.click(`${card} [data-act="cmtrdelno"]`);
+  await until(async () => (await page.locator(`${card} [data-act="cmtrdelyes"]`).count()) === 0);
+  assert.equal((await repTexts(page)).length, 2, "«Скасувати» прибрало відповідь");
+  await page.click(`${card} .cmt-reply:first-child [data-act="cmtrdel"]`);
+  await page.waitForSelector(`${card} [data-act="cmtrdelyes"]`);
+  await page.keyboard.press("Escape");   // Esc знімає лише питання, панель лишається
+  await until(async () => (await page.locator(`${card} [data-act="cmtrdelyes"]`).count()) === 0);
+  assert.equal(await panelOpen(page), true, "Esc при питанні закрив панель");
+  assert.equal((await repTexts(page)).length, 2, "Esc прибрав відповідь");
+  await page.click(`${card} .cmt-reply:first-child [data-act="cmtrdel"]`);
+  await page.click(`${card} [data-act="cmtrdelyes"]`);
+  await until(async () => (await repTexts(page)).join() === "Друга відповідь");
+  await until(() => { const r = localRows(dir).find((c) => c.text === "Для відповідей"); return !!r && (r.replies || []).map((x) => x.text).join() === "Друга відповідь"; });
+});
+
+test("28: закритий коментар — рядок гілки без поля й без дій над відповідями", async (t) => {
+  const { page, frame } = await boot(t, PORT_BASE + 80);
+  await page.click('#hud [data-act="comments"]');
+  await until(() => modesShown(frame));
+  await addComment(frame, "Закриємо");
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  await page.click('#cmt-panel [data-act="cmtreply"]');
+  await page.fill("#cmt-panel textarea.cmt-rta", "Відповідь до закриття");
+  await page.click('#cmt-panel [data-act="cmtreplysend"]');
+  await page.waitForSelector("#cmt-panel .cmt-reply");
+  await page.click('#cmt-panel [data-act="cmtres"]');
+  await page.waitForSelector('#cmt-panel .cmt-fold[data-val="closed"]');
+  await page.click('#cmt-panel .cmt-fold[data-val="closed"]');
+  await page.waitForSelector("#cmt-panel .cmt-card--closed .cmt-rsum");
+  /* гілка після відповіді вже розгорнута; закриття її не згортає */
+  assert.equal(await page.getAttribute("#cmt-panel .cmt-card--closed .cmt-rsum", "aria-expanded"), "true");
+  await page.waitForSelector("#cmt-panel .cmt-card--closed .cmt-reply");
+  for (const sel of ["textarea.cmt-rta", '[data-act="cmtreply"]', '[data-act="cmtredit"]', '[data-act="cmtrdel"]']) {
+    assert.equal(await page.locator(`#cmt-panel .cmt-card--closed ${sel}`).count(), 0, `у закритому є ${sel}`);
+  }
+});
+
+/* ───────── 0.35: відповідь AI на ЛОКАЛЬНИЙ пін у проєкті без команди — новина ───────── */
+const seedOpenPin = (dir, pins) => writeFileSync(path.join(dir, ".dc-local-comments.json"), JSON.stringify(pins.map((p) => seedPin({
+  meta: { iteration: "1", version: "1", seq: 1, viewport: { w: 1280, h: 900 } }, ...p }))));
+/** Як `inbox.py`: дописує відповідь агента в файл задачі; вікно оболонки отримує `focus` і перечитує локальні піни. */
+async function agentWrites(page, dir, cid, reply) {
+  const file = path.join(dir, ".dc-local-comments.json");
+  const rows = JSON.parse(readFileSync(file, "utf8"));
+  const row = rows.find((c) => c.id === cid);
+  row.replies = [...(row.replies || []), { author: "Claude", agent: true, ts: "20.11.2026 12:00", ...reply }];
+  writeFileSync(file, JSON.stringify(rows, null, 1));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+}
+/* база «бачив» (у цій фікстурі головний маркер пишеться: простір без модуля тут не заведено — «без команди» перевіряє comments-team, 15) */
+const replyMarker = (page) => page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith("dc-seen")));
+const newBadge = (page) => page.evaluate(() => document.querySelector('#hud [data-act="comments"] .isl-count--new')?.textContent ?? null);
+const NEWS = '.cv-notice[data-notice="cmt-news"]';
+
+test("30: перше відкриття панелі зі старою відповіддю агента — вона НЕ нова", async (t) => {
+  const { page } = await boot(t, PORT_BASE + 100, (d) => seedOpenPin(d, [{ id: "a1", text: "Для агента",
+    replies: [{ id: "old", author: "Claude", agent: true, text: "Давня відповідь", ts: "19.11.2026 10:00" }] }]));
+  assert.equal(await newBadge(page), null);
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  assert.equal(await page.locator("#cmt-panel .cmt-sec--new").count(), 0, "стара відповідь у «Нове»");
+  assert.equal(await page.locator("#cmt-panel .cmt-rnew").count(), 0, "стара відповідь із позначкою «нова»");
+  assert.match(await page.textContent("#cmt-panel .cmt-card .cmt-rsum"), /1 відповідь/);
+});
+
+test("31: тост відповіді очищає пошук, що ховав батька: після «Показати» картка й гілка видимі, поле пошуку порожнє", async (t) => {
+  const { page, dir } = await boot(t, PORT_BASE + 110, (d) => seedOpenPin(d, [{ id: "a1", text: "Перший пін", meta: { iteration: "1", version: "1", seq: 1, viewport: { w: 1280, h: 900 } } },
+    { id: "a2", text: "Другий пін", meta: { iteration: "1", version: "1", seq: 2, viewport: { w: 1280, h: 900 } } }]));
+  await until(() => replyMarker(page));
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  await page.fill("#cmt-q", "Другий");
+  await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === 1);
+  await page.click('#hud [data-act="comments"]');   // закрити панель; пошук лишається в стані
+  await page.waitForSelector("#cmt-panel", { state: "hidden" });
+  await agentWrites(page, dir, "a1", { id: "ra1", text: "Відповідь на перший" });
+  await page.waitForSelector(NEWS, { timeout: 8000 });
+  await page.click(`${NEWS} [data-act="cmtshownew"]`);
+  await page.waitForSelector('#cmt-panel .cmt-card[data-cid="a1"] .cmt-reply');
+  assert.equal(await page.inputValue("#cmt-q"), "", "пошук не очищено");
+});
+
+test("32: тост відповіді на пін «З попередніх ітерацій» — картка з гілкою видима й вибрана", async (t) => {
+  const { page, dir } = await boot(t, TWO_IT_PORT_BASE + 20, (d) => {
+    cpSync(path.join(d, "iterations", "it1"), path.join(d, "iterations", "it2"), { recursive: true });
+    writeFileSync(path.join(d, "iterations.json"), JSON.stringify({ iterations: [
+      { id: "it1", date: "24.08.2026 12:00", note: "перша", published: true },
+      { id: "it2", date: "25.08.2026 12:00", note: "друга", published: true }] }));
+    seedOpenPin(d, [{ id: "o1", text: "Лишилось з першої", meta: { iteration: "1", version: "1", seq: 3, viewport: { w: 1280, h: 900 } } }]);
+  });
+  await until(() => replyMarker(page));
+  await agentWrites(page, dir, "o1", { id: "ra1", text: "Відповідь на старий" });
+  await page.waitForSelector(NEWS, { timeout: 8000 });
+  await page.click(`${NEWS} [data-act="cmtshownew"]`);
+  await page.waitForSelector('#cmt-panel .cmt-card[data-cid="o1"] .cmt-reply');
+  assert.equal(await page.locator('#cmt-panel .cmt-card--sel[data-cid="o1"]').count(), 1);
+});
+
+test("33: розгорнута гілка з відповідями — фокус у полі відкриває «Надіслати»/«Скасувати»; кнопка клікабельна й шле", async (t) => {
+  const { page, dir } = await boot(t, PORT_BASE + 120, (d) => seedOpenPin(d, [{ id: "a1", text: "Для агента",
+    replies: [{ id: "old", author: "Claude", agent: true, text: "Давня", ts: "19.11.2026 10:00" }] }]));
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  await page.click("#cmt-panel .cmt-rsum");   // розгорнути гілку
+  await page.waitForSelector("#cmt-panel textarea.cmt-rta");
+  const send = '#cmt-panel [data-act="cmtreplysend"]';
+  assert.equal(await page.isVisible(send), false, "кнопка видна ще до фокуса");
+  /* Чернетка вже є (набрана без фокуса); клік у КІНЕЦЬ поля: каретка від кліку мусить пережити відкриття рядка кнопок
+     (перемальовка в focusin замінила б textarea й скинула б її на початок). */
+  await page.evaluate(() => { const ta = document.querySelector("#cmt-panel textarea.cmt-rta"); ta.value = "Дякую за"; ta.dispatchEvent(new Event("input", { bubbles: true })); });
+  const box = await page.locator("#cmt-panel textarea.cmt-rta").boundingBox();
+  await page.click("#cmt-panel textarea.cmt-rta", { position: { x: box.width - 3, y: box.height - 3 } });
+  await page.waitForSelector(send, { state: "visible" });
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cmt-rta")), true, "фокус втрачено");
+  await page.keyboard.type(" все");
+  assert.equal(await page.inputValue("#cmt-panel textarea.cmt-rta"), "Дякую за все", "каретка від кліку не пережила відкриття рядка кнопок");
+  await page.click(send);
+  await until(() => { const r = JSON.parse(readFileSync(path.join(dir, ".dc-local-comments.json"), "utf8")).find((c) => c.id === "a1"); return (r.replies || []).some((x) => x.text === "Дякую за все"); });
+});
+
+test("34: поле відповіді — розгорнуте одне (друге забирає рядок); Esc згортає рядок і він лишається згорнутим навіть після перемальовування", async (t) => {
+  const reps = (id) => [{ id, author: "Claude", agent: true, text: "Давня", ts: "19.11.2026 10:00" }];
+  const { page } = await boot(t, PORT_BASE + 130, (d) => seedOpenPin(d, [
+    { id: "a1", text: "Перший", replies: reps("o1"), meta: { iteration: "1", version: "1", seq: 1, viewport: { w: 1280, h: 900 } } },
+    { id: "a2", text: "Другий", replies: reps("o2"), meta: { iteration: "1", version: "1", seq: 2, viewport: { w: 1280, h: 900 } } }]));
+  await page.click('#hud [data-act="comments"]');
+  await page.waitForSelector("#cmt-panel .cmt-card");
+  for (const b of await page.locator("#cmt-panel .cmt-rsum").all()) await b.click();
+  const ta = (id) => `#cmt-panel .cmt-card[data-cid="${id}"] textarea.cmt-rta`;
+  const send = (id) => `#cmt-panel .cmt-card[data-cid="${id}"] [data-act="cmtreplysend"]`;
+  await page.click(ta("a1"));
+  assert.deepEqual([await page.isVisible(send("a1")), await page.isVisible(send("a2"))], [true, false]);
+  await page.click(ta("a2"));
+  assert.deepEqual([await page.isVisible(send("a1")), await page.isVisible(send("a2"))], [false, true], "перший бокс лишився розгорнутим");
+  await page.fill(ta("a2"), "Чернетка");
+  await page.press(ta("a2"), "Escape");
+  assert.equal(await page.locator("#cmt-panel .cmt-rbox--on").count(), 0, "Esc не згорнув поле");
+  assert.equal(await page.isVisible(send("a2")), false);
+  assert.equal(await page.inputValue(ta("a2")), "", "Esc не скинув чернетку");
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cmt-rta")), true, "фокус не лишився в полі");
+  // N1: фокус лишився в полі, а focusin вдруге не спрацює — набір знову розгортає рядок
+  await page.keyboard.type("Знову");
+  assert.equal(await page.isVisible(send("a2")), true, "набір після Esc не повернув «Надіслати»");
+  await page.press(ta("a2"), "Escape");
+  await page.click('#cmt-panel [data-act="cmtthread"][data-val="a1"]');       // перемальовка панелі (згорнути/розгорнути гілку)
+  await page.click('#cmt-panel [data-act="cmtthread"][data-val="a1"]');
+  await page.waitForSelector(ta("a1"));
+  assert.equal(await page.locator("#cmt-panel .cmt-rbox--on").count(), 0, "перемальовка знову розгорнула поле");
+});
+
+/* ───────── 0.35: форма над макетом — у токенах і мові оболонки (`host.theme`, `host.labels`) ───────── */
+test("20: форма коментаря над макетом — themed, фон = --s2 оболонки, підписи мовою оболонки (uk), тег чипом", async (t) => {
+  const { page, frame } = await boot(t, PORT_BASE + 50);
+  await page.click('#hud [data-act="comments"]');
+  await until(() => modesShown(frame));
+  await frame.click("#p");
+  await frame.waitForFunction(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea"));
+  const shell = await page.evaluate(() => {
+    const p = document.createElement("i"); p.style.background = "var(--s2)"; document.body.appendChild(p);
+    const o = { bg: getComputedStyle(p).backgroundColor, tok: getComputedStyle(document.body).getPropertyValue("--s2").trim() };
+    p.remove(); return o;
+  });
+  assert.ok(shell.tok, "у оболонки нема --s2");
+  const form = await frame.evaluate(() => {
+    const sh = document.querySelector("[data-comment-layer]").shadowRoot;
+    const c = sh.querySelector(".compose");
+    return { themed: sh.querySelector(".root").classList.contains("themed"), bg: getComputedStyle(c).backgroundColor,
+      ph: c.querySelector("textarea").getAttribute("placeholder"), cancel: c.querySelector(".cancel").textContent,
+      save: c.querySelector(".save").textContent, code: c.querySelector(".csel code")?.textContent ?? null,
+      styles: sh.querySelectorAll("style[data-cl-theme]").length };
+  });
+  assert.equal(form.themed, true);
+  assert.equal(form.bg, shell.bg, "фон форми — не --s2 оболонки");
+  assert.equal(form.ph, "Що змінити?");
+  assert.equal(form.cancel, "Скасувати");
+  assert.equal(form.save, "Коментувати");
+  assert.equal(form.code, "p");
+  assert.equal(form.styles, 1);
+  if (process.env.DC_SHOT_DIR) await page.screenshot({ path: path.join(process.env.DC_SHOT_DIR, "deai-compose.png") });   // для ревʼю вигляду
+});

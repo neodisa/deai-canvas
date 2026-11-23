@@ -3,7 +3,7 @@
  * `BAR_ACTIONS` (делегація з `#cmt-panel` в `app.js`). Класи — лише `cmt-*`: `pin`/`cp`/`cbadge` належать коментатору
  * (`tests/principle6.test.mjs`). Тексти людей — лише через `esc()`; мініатюра — лише з `shotSrc`.
  */
-import { FILTERS, assignedToClaude, audOf, commentSections, filterCounts, openCount, shotSrc } from "./comments-model.js";
+import { FILTERS, assignedToClaude, audOf, commentSections, filterCounts, openCount, repliesOf, shotSrc } from "./comments-model.js";
 import { esc } from "./esc.js";
 import { confirmHTML } from "./inline-confirm.js";
 import { ico } from "./icons.js";
@@ -12,7 +12,7 @@ import { t } from "./i18n.js";
 // Службове значення, яким коментатор закриває вручну (`commenter/src/comment-layer.js`, `resolveComment`): не текст людини.
 const MANUAL_REASON = "resolved manually";
 
-const btn = (act, val, label, icon) => `<button type="button" class="${icon ? "cmt-ib" : "cmt-act"}" data-act="${act}" data-val="${esc(val)}"`
+const btn = (act, val, label, icon, extra = "") => `<button type="button" class="${icon ? "cmt-ib" : "cmt-act"}${extra}" data-act="${act}" data-val="${esc(val)}"`
   + ` aria-label="${esc(label)}" title="${esc(label)}">${icon ? ico(icon) : esc(label)}</button>`;
 
 /** Де був елемент (`meta.ctx` коментатора: `{ active: [кроки/вкладки], heading }`) — для піна, якого зараз нема на екрані;
@@ -28,6 +28,74 @@ function modeTag(m) {
   if (!m || !m.mode || m.mode === "element") return "";
   const txt = m.mode === "multi" ? (m.count > 0 ? t("cmtModeMulti", m.count) : t("cmtModeMultiBare")) : m.mode === "area" ? t("cmtModeArea") : t("cmtModeText");
   return `<span class="cmt-tag">${esc(txt)}</span>`;
+}
+
+/** Коди, якими коментатор позначає відсутній знімок (`meta.shotMiss`, рядок; `commenter/src/comment-layer.js`). Невідомий код — мовчимо. */
+const SHOT_MISS = ["too-big", "no-lib", "timeout", "render", "detached", "upload"];
+
+/** Хто автор відповіді: агент (`agent === true`) — «AI», решта — імʼя з відповіді. */
+const replyWho = (r) => (r.agent === true ? t("cmtAudLocal") : String(r.author || ""));
+/** `ДД.ММ.РРРР ГГ:ХХ` → `ДД.ММ ГГ:ХХ` для згорнутого рядка; інший формат лишається як є. */
+const shortWhen = (ts) => {
+  const m = /^(\d{2}\.\d{2})\.\d{4} (\d{2}:\d{2})$/.exec(String(ts || ""));
+  return m ? `${m[1]} ${m[2]}` : String(ts || "");
+};
+
+/** Одна відповідь у гілці. `own`/`del` — права на дії (лише відкритий коментар); `key` — `cid|rid`. */
+function replyHTML(c, r, st, open) {
+  const key = `${c.id}|${r.id}`;
+  const isFresh = !!(st.fresh && st.fresh.has(r.id));
+  const editing = open && st.replyEdit === key;
+  const agent = r.agent === true;
+  const who = `<span class="cmt-rwho${agent ? " cmt-ragent" : ""}">${esc(replyWho(r))}</span>`;
+  let acts = "";
+  if (open && !editing) {
+    if (typeof st.isOwnReply === "function" && st.isOwnReply(r)) acts += btn("cmtredit", key, t("cmtReplyEdit"), "pencil");
+    if (typeof st.canDeleteReply === "function" && st.canDeleteReply(r)) acts += btn("cmtrdel", key, t("cmtReplyDelete"), "trash");
+  }
+  const head = `<div class="cmt-rhead">${who}${isFresh ? `<span class="cmt-rnew">${esc(t("cmtReplyNewChip"))}</span>` : ""}`
+    + `${r.editedTs ? `<span class="cmt-redited">${esc(t("cmtReplyEdited"))}</span>` : ""}`
+    + `<span class="cmt-when">${esc(r.ts || t("cmtNoTime"))}</span>${acts}</div>`;
+  const body = editing
+    ? `<textarea class="cmt-redit" data-val="${esc(key)}" aria-label="${esc(t("cmtReplyEdit"))}">${esc(r.text || "")}</textarea>`
+      + `<div class="cmt-acts">${btn("cmtreditsave", key, t("cmtSave"))}${btn("cmtreditcancel", key, t("cmtCancel"))}</div>`
+    : `<p class="cmt-rtext">${esc(r.text || "")}</p>`;
+  const cfm = open && st.replyDelAsk === key ? confirmHTML({ title: t("cfmDelReply"), yes: t("cmtDelete"), no: t("cmtCancel"),
+    yesAttrs: `data-act="cmtrdelyes" data-val="${esc(key)}"`, noAttrs: 'data-act="cmtrdelno"' }) : "";
+  return `<li class="cmt-reply${isFresh ? " cmt-reply--new" : ""}">${head}${body}${cfm}</li>`;
+}
+
+/** Гілка відповідей під текстом картки (0.35). Лише коли виклик передав `st.threads` (Set розгорнутих id) — без нього картка
+ *  така, як була, хоч би й мала `replies`. Закритий коментар: згорнутий/розгорнутий список без поля й без дій. */
+function threadHTML(c, st) {
+  if (!(st.threads instanceof Set)) return "";
+  const open = c.status === "open";
+  const list = repliesOf(c);
+  const n = list.length;
+  const expanded = st.threads.has(c.id);
+  const off = open && typeof st.repliesOff === "function" ? st.repliesOff(c) : null;
+  const canReply = open && typeof st.repliesOff === "function" && off == null;
+  const replying = canReply && st.replying === c.id;
+  let sum = "";
+  if (n) {
+    const k = list.filter((r) => st.fresh && st.fresh.has(r.id)).length;
+    const last = list[n - 1];
+    const lastWhen = shortWhen(last.ts);
+    sum = `<button type="button" class="cmt-rsum" data-act="cmtthread" data-val="${esc(c.id)}" aria-expanded="${expanded}">`
+      + `${ico(expanded ? "chevdown" : "chevright")}<span>${esc(t("cmtReplies", n))}</span>`
+      + (k ? `<span class="cmt-rnew">${esc(t("cmtReplyNew", k))}</span>` : "")
+      + (expanded ? "" : `<span class="cmt-rlast">${esc(`· ${replyWho(last)}${lastWhen ? `, ${lastWhen}` : ""}`)}</span>`) + "</button>";
+  } else if (canReply && !replying) {
+    sum = `<button type="button" class="cmt-rsum" data-act="cmtreply" data-val="${esc(c.id)}">${ico("comment")}<span>${esc(t("cmtReply"))}</span></button>`;
+  }
+  const items = n && expanded ? `<ol class="cmt-replies">${list.map((r) => replyHTML(c, r, st, open)).join("")}</ol>` : "";
+  const box = canReply && (replying || (n && expanded))
+    ? `<div class="cmt-rbox${replying ? " cmt-rbox--on" : ""}"><textarea class="cmt-rta" data-val="${esc(c.id)}"`
+      + ` placeholder="${esc(t("cmtReplyPh"))}" aria-label="${esc(t("cmtReply"))}"></textarea>`
+      + `<div class="cmt-rrow"><span class="cmt-rhint">${esc(t("cmtReplyHint"))}</span>${btn("cmtreplycancel", c.id, t("cmtCancel"))}`
+      + `${btn("cmtreplysend", c.id, t("cmtReplySend"), null, " cmt-act--pri")}</div></div>` : "";
+  const note = open && typeof off === "string" && off && st.repliesNote !== false && (expanded || !n) ? `<p class="cmt-rnote">${esc(t("cmtRepliesOff"))}</p>` : "";
+  return sum || items || box || note ? `<div class="cmt-thread">${sum}${items}${box}${note}</div>` : "";
 }
 
 function cardHTML(c, st, kind) {
@@ -66,7 +134,8 @@ function cardHTML(c, st, kind) {
   let acts = "";
   if (c.id === st.delAsk) {
     /* Кошик (етап В): рядок дій стає питанням «Видалити назавжди?» — підтвердження на місці, без нативного `confirm()`. */
-    acts = `<div class="cmt-acts cmt-acts--cfm">${confirmHTML({ title: t("cfmDelCmt"), yes: t("cmtDelete"), no: t("cmtCancel"),
+    const nRep = st.threads instanceof Set ? repliesOf(c).length : 0;   // питання про відповіді — лише з гілкою (без неї картка як була)
+    acts = `<div class="cmt-acts cmt-acts--cfm">${confirmHTML({ title: nRep ? t("cfmDelCmtReplies", nRep) : t("cfmDelCmt"), yes: t("cmtDelete"), no: t("cmtCancel"),
       yesAttrs: `data-act="cmtdelyes" data-val="${esc(c.id)}"`, noAttrs: 'data-act="cmtdelno"' })}</div>`;
   } else if (c.id !== st.editingId) {
     /* Типовий набір дій за видом картки — порядок і розмітка Deai. */
@@ -89,7 +158,10 @@ function cardHTML(c, st, kind) {
     acts = list.map(([, markup]) => markup).join("");
     if (acts) acts = `<div class="cmt-acts">${acts}</div>`;
   }
-  return `<article class="cmt-card${sel}${closed}" data-cid="${esc(c.id)}">${head}${iter}${body}${quote}${vp}${where}${shot}${done}${acts}</article>`;
+  /* «Без знімка: причина» — замість мовчання, коли коментатор не зміг зняти знімок (`meta.shotMiss`) і зображення нема. */
+  const miss = typeof m.shotMiss === "string" && SHOT_MISS.includes(m.shotMiss) && !m.shot && !m.shotUrl
+    ? `<p class="cmt-shotmiss">${ico("camera")}<span>${esc(t(`cmtShotMiss_${m.shotMiss}`))}</span></p>` : "";
+  return `<article class="cmt-card${sel}${closed}" data-cid="${esc(c.id)}">${head}${iter}${body}${quote}${vp}${where}${shot}${done}${miss}${threadHTML(c, st)}${acts}</article>`;
 }
 
 function foldHTML(key, title, items, st, kind) {
@@ -103,6 +175,8 @@ function foldHTML(key, title, items, st, kind) {
 const FILTER_KEY = { local: "cmtFLocal", project: "cmtFTeam", all: "cmtFAll" };
 
 /** st: {snapshot, query, selectedId, editingId, delAsk (id картки з питанням «Видалити назавжди?»), expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down}
+ *  Гілка відповідей (0.35; без `threads` картка як була): `threads: Set` (розгорнуті id коментарів), `replying: id`, `replyEdit: "cid|rid"`,
+ *  `replyDelAsk: "cid|rid"`, `repliesDown: рядок причини` (смуга «відповіді команди недоступні», коли команда жива), `isOwnReply(r)`, `canDeleteReply(r)`, `repliesOff(c) → рядок причини|null`, `repliesNote: false` (превʼю: «відповіді вимкнені» — тихо, без рядка-примітки під карткою); `fresh` — id коментарів І відповідей.
  *  Необовʼязково (превʼю, 0.32.0; без них — Deai як було): `isOwn(c)`, `actions: {any, own, closed}` (дозволені `data-act`), `adding: boolean` (кнопка «Додати коментар»), `emptyKey` (ключ i18n порожнього списку; за замовчуванням `cmtEmpty`). */
 export function commentsPanelHTML(st) {
   const filter = FILTERS.includes(st.filter) ? st.filter : "local";
@@ -125,10 +199,11 @@ export function commentsPanelHTML(st) {
     seg = `<div class="cmt-filter" role="group" aria-label="${esc(t("cmtFilter"))}">`
       + FILTERS.map((f) => `<button type="button" data-act="cmtfilter" data-val="${f}" aria-pressed="${filter === f}">`
         + `<span>${esc(t(FILTER_KEY[f]))}</span><span class="cmt-fn">${n[f]}</span>`
-        + (f === "project" && n.fresh ? `<span class="cmt-fnew" title="${esc(t("cmtNewTitle"))}">+${n.fresh}</span>` : "")
+        + (n.fresh[f] ? `<span class="cmt-fnew" title="${esc(t("cmtNewTitle"))}">+${n.fresh[f]}</span>` : "")
         + "</button>").join("") + "</div>";
   }
-  const down = st.teamDown ? `<p class="cmt-teamdown" role="alert">${esc(t("cmtTeamDown", st.teamDown))}</p>` : "";
+  const down = st.teamDown ? `<p class="cmt-teamdown" role="alert">${esc(t("cmtTeamDown", st.teamDown))}</p>`
+    : (typeof st.repliesDown === "string" && st.repliesDown ? `<p class="cmt-teamdown" role="alert">${esc(t("cmtTeamRepliesDown", st.repliesDown))}</p>` : "");
   let body;
   if (!st.snapshot) {
     body = st.down ? `<p class="cmt-down" role="alert">${esc(t("cmtDown", st.down))}</p>` : `<p class="insp-hint">${esc(t("cmtLoading"))}</p>`;

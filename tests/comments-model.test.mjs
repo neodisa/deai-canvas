@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FILTERS, assignedToClaude, audOf, commentSections, filterCounts, forClaude, matchQuery, openCount, shotSrc } from "../app/comments-model.js";
+import { FILTERS, assignedToClaude, audOf, commentSections, filterCounts, forClaude, matchQuery, openCount, repliesOf, shotSrc } from "../app/comments-model.js";
 
 const C = (o) => ({ id: o.id, n: o.n, text: o.text || "", author: o.author || "Автор А", ts: o.ts || "",
   status: o.status || "open", scope: o.scope || "current", where: "here", meta: o.meta || {} });
@@ -90,9 +90,9 @@ test("commentSections: «Для AI» = локальні + доручені ко�
 
 test("filterCounts: відкриті поточні за правилом вкладки; fresh — відкриті нові командні; пошук не враховано", () => {
   const snap = { comments: [...ASG.comments, A("e1", 6, "project", { scope: "earlier" }), A("q", 7, "project")] };
-  assert.deepEqual(filterCounts(snap, new Set(["q", "p2", "l1"])), { local: 3, project: 3, all: 5, fresh: 1 });
-  assert.deepEqual(filterCounts(snap), { local: 3, project: 3, all: 5, fresh: 0 });
-  assert.deepEqual(filterCounts(null), { local: 0, project: 0, all: 0, fresh: 0 });
+  assert.deepEqual(filterCounts(snap, new Set(["q", "p2", "l1"])), { local: 3, project: 3, all: 5, fresh: { local: 0, project: 1 } });
+  assert.deepEqual(filterCounts(snap), { local: 3, project: 3, all: 5, fresh: { local: 0, project: 0 } });
+  assert.deepEqual(filterCounts(null), { local: 0, project: 0, all: 0, fresh: { local: 0, project: 0 } });
 });
 
 test("commentSections: «нові» не дублюються у «Відкритих»; закритий у fresh не потрапляє", () => {
@@ -113,4 +113,51 @@ test("Б2 ревʼю M5: локальний id у fresh не потрапляє 
   const s = commentSections(MIX, { fresh: new Set(["l1", "l2"]) });
   assert.deepEqual(s.fresh, []);
   assert.deepEqual(s.open.map((c) => c.id).sort(), ["l1", "l2", "p1"]);
+});
+
+/* ── Відповіді (0.35) ── */
+const R = (id, ts, o = {}) => ({ id, author: "Автор Б", text: "відп", ts, ...o });
+const withReplies = (id, n, aud, replies, o = {}) => ({ ...A(id, n, aud, o), replies });
+
+test("matchQuery: знаходить коментар за текстом відповіді і за автором відповіді", () => {
+  const c = withReplies("a", 1, undefined, [R("r1", "19.11.2026 12:05", { text: "Темніший синій", author: "Олена Т" })]);
+  assert.equal(matchQuery(c, "темніший"), true);
+  assert.equal(matchQuery(c, "олена"), true);
+  assert.equal(matchQuery(c, "зеленіший"), false);
+  assert.equal(matchQuery(A("b", 2), "темніший"), false);
+});
+
+test("repliesOf: за ts; стабільно для рівних хвилин; нерозібраний ts — порядок сховища; не обʼєкти відкидаються", () => {
+  const c = { replies: [R("late", "20.11.2026 10:00"), R("e1", "19.11.2026 09:00"), R("e2", "19.11.2026 09:00"), null, "x"] };
+  assert.deepEqual(repliesOf(c).map((r) => r.id), ["e1", "e2", "late"]);
+  const bad = { replies: [R("b", "20.11.2026 10:00"), R("a", "сміття"), R("c", "19.11.2026 09:00")] };
+  assert.deepEqual(repliesOf(bad).map((r) => r.id), ["b", "a", "c"]);
+  assert.deepEqual(repliesOf({}), []);
+  assert.deepEqual(repliesOf(null), []);
+  assert.deepEqual(repliesOf({ replies: "x" }), []);
+});
+
+test("commentSections: нова відповідь робить коментар свіжим — і локальний теж (відповідь AI)", () => {
+  const snap = { comments: [
+    withReplies("l1", 1, undefined, [R("rn", "20.11.2026 10:00", { agent: true, author: "AI" })]),
+    withReplies("p1", 2, "project", [R("rp", "20.11.2026 10:01")]),
+    withReplies("l2", 3, undefined, [R("old", "20.11.2026 10:02")]),
+    withReplies("l3", 4, undefined, [R("rn2", "20.11.2026 10:03")], { status: "resolved" }),
+  ] };
+  const s = commentSections(snap, { fresh: new Set(["rn", "rp", "rn2"]) });
+  assert.deepEqual(s.fresh.map((c) => c.id).sort(), ["l1", "p1"], "закритий з новою відповіддю — не свіжий");
+  assert.deepEqual(s.open.map((c) => c.id), ["l2"]);
+  assert.deepEqual(commentSections(snap, { fresh: new Set(["rn"]), filter: "project" }).fresh, [], "фільтр діє й на свіжі");
+  assert.deepEqual(commentSections(snap, { fresh: new Set(["l1"]) }).fresh, [], "id локального коментаря сам по собі не свіжить");
+});
+
+test("filterCounts.fresh: {local, project} — свіжі відкриті за фільтром кожної вкладки", () => {
+  const snap = { comments: [
+    withReplies("l1", 1, undefined, [R("rl", "20.11.2026 10:00")]),
+    A("p1", 2, "project"),
+    withReplies("p2", 3, "project", [R("rp", "20.11.2026 10:00")], { meta: { assignee: "claude" } }),
+    withReplies("p3", 4, "project", [R("rq", "20.11.2026 10:00")]),
+  ] };
+  assert.deepEqual(filterCounts(snap, new Set(["rl", "p1", "rp", "rq"])).fresh, { local: 2, project: 3 });
+  assert.deepEqual(filterCounts(snap, new Set(["rl"])).fresh, { local: 1, project: 0 });
 });
