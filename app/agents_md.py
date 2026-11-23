@@ -2,10 +2,12 @@
 
 Блок НЕ залежить від компʼютера (тека простору спільна через git): жодних абсолютних шляхів, імені користувача й імені
 простору; єдина підстановка шаблону — `{version}` у маркері begin. Шляхи установки віддає лише відповідь API (`paths`).
+Блок (23.11.2026) — каркас + індекс тем (`docs/agents/*.md`, `app/modules/<id>/agent.md`) і видима мітка `guide <хеш>`: хеш змісту без версії, тож підняття версії без зміни тексту файла не переписує.
 Текст користувача (до й після блоку) зберігається байт-у-байт: читання/запис без перекладу рядків, `surrogateescape`.
 Нечитний файл (права, тека замість файла, симлінк) — `OSError` із `status`/`write`; запис ще раз звіряє файл перед заміною (`ValueError('changed')`).
 Файл із НОВІШОЇ версії Deai ніколи не «понижується» (`write` → `ValueError('newer')`). Запис атомарний.
 """
+import hashlib
 import os
 import re
 import tempfile
@@ -14,6 +16,11 @@ NAME = 'AGENTS.md'
 BEGIN_RE = re.compile(r'^<!-- deai:begin v(?P<v>[0-9.]+)[^\n]*-->\r?$', re.M)
 END = '<!-- deai:end -->'
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'agents.md')
+#: Теми довідки агента (23.11.2026): `docs/agents/<тема>.md` цієї установки й `agent.md` вбудованих модулів (`module-<id>`).
+DOCS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'docs', 'agents')
+MODULES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules')
+TOPIC_RE = re.compile(r'^[a-z][a-z0-9-]*$')
+GUIDE_RE = re.compile(r'\(guide ([0-9a-f]{8})\)')
 _VER_RE = re.compile(r'^[0-9]+(\.[0-9]+)*$')
 _ENC = {'encoding': 'utf-8', 'errors': 'surrogateescape', 'newline': ''}
 
@@ -25,13 +32,71 @@ def version_tuple(v):
     return tuple(int(x) for x in v.split('.'))
 
 
+def _text_of(path):
+    with open(path, encoding='utf-8', newline='') as f:
+        return f.read()
+
+
+def topics():
+    """`[(імʼя, шлях)]`: `docs/agents/<тема>.md` за абеткою (імʼя не за `TOPIC_RE`, зокрема з `_` на початку, — не тема), далі
+    `module-<id>` для кожного `app/modules/<id>/agent.md` за абеткою. Теки нема — порожньо."""
+    out = []
+    try:
+        names = sorted(os.listdir(DOCS))
+    except OSError:
+        names = []
+    for fn in names:
+        stem = fn[:-3]
+        if fn.endswith('.md') and TOPIC_RE.match(stem) and os.path.isfile(os.path.join(DOCS, fn)):
+            out.append((stem, os.path.join(DOCS, fn)))
+    try:
+        mods = sorted(os.listdir(MODULES))
+    except OSError:
+        mods = []
+    for mid in mods:
+        p = os.path.join(MODULES, mid, 'agent.md')
+        if TOPIC_RE.match(mid) and os.path.isfile(p):
+            out.append((f'module-{mid}', p))
+    return out
+
+
+def topic_summary(text):
+    """Рядок 2 теми (рядок індексу) без пробілів по краях; нема — `''`."""
+    lines = text.replace('\r\n', '\n').split('\n')
+    return lines[1].strip() if len(lines) > 1 else ''
+
+
+def topic_text(name):
+    """Текст теми `name` або `None`. Шукаємо лише серед `topics()`: імʼя із запиту ніколи не стає шляхом."""
+    for n, p in topics():
+        if n == name:
+            return _text_of(p)
+    return None
+
+
+def index_lines():
+    """Індекс блоку: по рядку на тему, `` - `<тема>` — <рядок 2> ``; тем нема — `''`."""
+    return '\n'.join(f'- `{n}` — {topic_summary(_text_of(p))}' for n, p in topics())
+
+
+def guide_hash(text):
+    """Мітка `guide`: перші 8 hex sha256 блоку БЕЗ рядка begin (версія не впливає), у якому кожен `{guide}` уже замінено на `''`."""
+    return hashlib.sha256(_body(text).encode('utf-8', 'surrogateescape')).hexdigest()[:8]
+
+
+def guide_of(block):
+    """Мітка `guide` з тексту блоку (`(guide xxxxxxxx)`); нема — `None`."""
+    m = GUIDE_RE.search(block) if isinstance(block, str) else None
+    return m.group(1) if m else None
+
+
 def render_block(*, version):
-    """Блок із маркерами, закінчується `\\n`. Версія не числова → `ValueError('version')` (маркер не розібрався б назад)."""
+    """Блок із маркерами, закінчується `\\n`: каркас, `{version}` (рядок begin), `{index}` (`index_lines`), `{guide}` (`guide_hash`).
+    Версія не числова → `ValueError('version')` (маркер не розібрався б назад)."""
     if version_tuple(version) is None:
         raise ValueError('version')
-    with open(TEMPLATE, encoding='utf-8', newline='') as f:
-        text = f.read()
-    return text.replace('{version}', version)
+    text = _text_of(TEMPLATE).replace('{version}', version).replace('{index}', index_lines())
+    return text.replace('{guide}', guide_hash(text.replace('{guide}', '')))
 
 
 def _parts(text):
