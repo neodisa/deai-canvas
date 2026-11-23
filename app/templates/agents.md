@@ -40,11 +40,13 @@ Create a task:
 
   A folder created by hand is not registered and does not show in the canvas.
 - Deleting an iteration moves it to the task's trash for 7 days (`.trash/`, outside git); the answer carries the slot to
-  restore it. The only iteration of a task cannot be deleted.
+  restore it. The only iteration of a task cannot be deleted. The trash, newest first, comes with the task, and the
+  designer sees it as «Видалені» at the bottom of the iteration list.
 
       POST http://127.0.0.1:8765/api/iteration-delete  {"id": "itN"}          → {"ok": true, "trash": "<slot>"}
       POST http://127.0.0.1:8765/api/iteration-restore {"trash": "<slot>"}    → {"ok": true, "id": "itN", "renamed": false}
       header: X-Canvas-Task: <task-id>
+      GET  http://127.0.0.1:8765/api/task → "iteration_trash": [{"trash": "<slot>", "id": "itN", "label_text": "…", "deleted_at": "…Z", "expires_at": "…Z"}]
 
 - The change history of an iteration comes from the task folder's git:
   `GET http://127.0.0.1:8765/api/iteration-history?id=itN` (header `X-Canvas-Task`). When you have finished changing the
