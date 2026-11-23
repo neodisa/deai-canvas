@@ -624,12 +624,13 @@ class HookRoutes(base.Fixture):
         self.assertEqual((st, body['hook']['state']), (200, 'missing'))
         self.assertEqual(self.doc(), foreign)
 
-    def test_disconnect_of_an_unreadable_file_is_503_and_changed_is_409(self):
+    def test_disconnect_of_an_unreadable_file_is_503(self):
         self.put_settings(b'{not json')
         st, body = self.post('/api/agents-md', {'space': self.p_id, 'hook': False})
         self.assertEqual((st, body['code']), (503, 'unreadable'))
         self.assertEqual(_get(self.settings), b'{not json')
-        os.remove(self.settings)
+
+    def test_disconnect_with_a_change_during_the_write_is_409(self):
         self.post('/api/agents-md', {'space': self.p_id, 'claude': True})
         doc = self.doc()
         doc['hooks']['Stop'].append({'hooks': [{'type': 'command', 'command': 'echo keep'}]})
@@ -647,6 +648,56 @@ class HookRoutes(base.Fixture):
             st, body = self.post('/api/agents-md', {'space': self.p_id, 'hook': False})
         self.assertEqual((st, body['code']), (409, 'changed'))
         self.assertEqual(_get(self.settings), b'{"theirs": 1}')
+
+    def test_an_oserror_from_the_hook_write_is_hook_error_unreadable(self):
+        with mock.patch.object(claude_hook, 'connect', side_effect=OSError('x')):
+            st, body = self.post('/api/agents-md', {'space': self.p_id, 'claude': True})
+        self.assertEqual((st, body['hookError'], body['claude']['state'], body['hook']['state']), (200, 'unreadable', 'ok', 'missing'))
+
+    def test_a_free_form_valueerror_never_leaks_into_hook_error(self):
+        with mock.patch.object(claude_hook, 'connect', side_effect=ValueError('something else')):
+            st, body = self.post('/api/agents-md', {'space': self.p_id, 'claude': True})
+        self.assertEqual((st, body['hookError'], body['claude']['state']), (200, 'unreadable', 'ok'))
+
+    def test_disconnect_without_a_settings_file_is_a_no_op(self):
+        st, body = self.post('/api/agents-md', {'space': self.p_id, 'hook': False})
+        self.assertEqual((st, body['hook']['state']), (200, 'missing'))
+        self.assertFalse(os.path.exists(self.dotclaude))
+
+    def test_disconnect_without_our_entry_does_not_write(self):
+        raw = json.dumps({'model': 'x', 'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo mine'}]}]}}, indent=4).encode()
+        self.put_settings(raw)
+        before = os.stat(self.settings)
+        st, body = self.post('/api/agents-md', {'space': self.p_id, 'hook': False})
+        after = os.stat(self.settings)
+        self.assertEqual((st, body['hook']['state']), (200, 'missing'))
+        self.assertEqual(_get(self.settings), raw)
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+
+    def test_disconnect_in_a_space_inside_another_repository_removes_a_leftover_entry(self):
+        claude_hook.connect(self.p_path, self.port)
+        doc = self.doc()
+        doc['hooks']['Stop'].append({'hooks': [{'type': 'command', 'command': 'echo keep'}]})
+        self.put_settings(json.dumps(doc).encode())
+        os.makedirs(self.outer_git)
+        self.assertEqual(self.jget(f'/api/agents-md?space={self.p_id}')[1]['hook']['state'], 'elsewhere')
+        st, body = self.post('/api/agents-md', {'space': self.p_id, 'hook': False})
+        self.assertEqual((st, body['hook']['state']), (200, 'elsewhere'))
+        self.assertEqual(self.doc(), {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo keep'}]}]}})
+
+    def test_connecting_twice_leaves_the_file_byte_identical(self):
+        self.post('/api/agents-md', {'space': self.p_id, 'claude': True})
+        first = _get(self.settings)
+        st, body = self.post('/api/agents-md', {'space': self.p_id, 'claude': True})
+        self.assertEqual((st, body['hook']['state']), (200, 'ok'))
+        self.assertEqual(_get(self.settings), first)
+        self.assertEqual(len(self.doc()['hooks']['Stop']), 1)
+
+    def test_hook_false_wins_over_claude_true_in_one_post(self):
+        claude_hook.connect(self.p_path, self.port)
+        st, body = self.post('/api/agents-md', {'space': self.p_id, 'claude': True, 'hook': False})
+        self.assertEqual((st, body['hook']['state'], body['claude']['state']), (200, 'missing', 'missing'))
+        self.assertFalse(os.path.lexists(self.claude), 'CLAUDE.md не підключено: спрацював лише hook:false')
 
     def test_hook_true_is_not_a_command_it_is_the_old_create_or_update(self):
         st, body = self.post('/api/agents-md', {'space': self.p_id, 'hook': True})

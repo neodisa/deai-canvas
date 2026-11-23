@@ -9478,7 +9478,7 @@ class Handler(SimpleHTTPRequestHandler):
     def _agents_md(self, want, write):
         """`GET|POST /api/agents-md[?space=]` → `{ok, space, …agents_md.status, paths}`. POST створює/оновлює блок (`ValueError('newer')` →
         409 `newer`, файл цілий). `claude` — стан CLAUDE.md теки простору (`agents_md.claude_status`); `write='claude'` —
-        лише підключити його. Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
+        лише підключити його. `write` — `False | True | 'claude' | 'unhook'`; `hook: false` у POST має перевагу над `claude: true`. Неявний простір чи простір без теки → 409 `no-folder`. `paths` — абсолютні шляхи ЦІЄЇ установки: лише
         у відповіді, у файл вони не потрапляють. Версія — та сама, що `current` у `GET /api/update`.
         `hook` — стан Stop-хука Claude Code (`claude_hook.status`: `ok`/`missing`/`stale`/`unreadable`/`elsewhere`, абсолютний шлях —
         лише тут). `hookError` (`changed`/`unreadable`) зʼявляється, коли CLAUDE.md підключено, а хук поставити не вдалося (200; клієнт
@@ -9534,7 +9534,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             claude_hook.connect(folder, port)
         except ValueError as e:
-            return str(e)
+            return 'changed' if str(e) == 'changed' else 'unreadable'   # у `hookError` — лише відомі коди, не вільний текст
         except OSError:
             return 'unreadable'
         return None
