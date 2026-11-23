@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { barModel } from "../app/bar-model.js";
-import { barHTML } from "../app/shell-bar.js";
+import { barHTML, initials } from "../app/shell-bar.js";
 import { setLang, t } from "../app/i18n.js";
 
 const S = (o = {}) => ({
@@ -167,7 +167,7 @@ test("без ітерацій крошки ітерації немає, назв
    означає платити за них на кожному рендері й ловити їхні `id` пошуком. */
 test("дропдаун малюється лише для відкритого меню", () => {
   assert.doesNotMatch(html(), /class="dd"/);
-  assert.match(barHTML(barModel(S()), S({ openDd: "iter" })), /class="dd"/);
+  assert.match(barHTML(barModel(S()), S({ openDd: "iter" })), /class="dd dd--iters"/);
 });
 
 /* Принцип 6 PRODUCT.md: контролів коментатора у смузі оболонки немає.
@@ -229,7 +229,7 @@ test("дропдаун ітерації малює перелік із data-act=
    видалити ПОВНІСТЮ, і тест лишався зеленим. Охоронець, який не може впасти,
    гірший за відсутній. */
 const iterParts = (h) => {
-  const at = h.indexOf('<div class="dd">');
+  const at = h.indexOf('<div class="dd dd--iters">');
   assert.ok(at > 0, "дропдауна ітерацій немає — різати нічого");
   return { crumb: h.slice(0, at), dd: h.slice(at) };
 };
@@ -258,7 +258,8 @@ test("КРОШКА чужої ітерації підписана автором
 test("ПУНКТ ПЕРЕЛІКУ чужої ітерації теж підписаний і помічений", () => {
   const st = S(FOREIGN);
   const { dd } = iterParts(barHTML(barModel(st), st));
-  assert.match(dd, /Ольга Сидорук/, "у переліку автора не видно");
+  assert.match(dd, /class="it-who" title="Ольга Сидорук/, "у переліку автора (кружок з підказкою) не видно");
+  assert.doesNotMatch(dd, /dd-sub">·/, "підпису автора під рядком бути не мусить");
   assert.match(dd, /dd-item--foreign/, "пункт переліку не помічений як чужий");
   assert.match(dd, /Іт\.3/, "походження («в автора це Іт.3») у переліку немає");
 });
@@ -273,7 +274,7 @@ test("своя ітерація мітки чужої не має ніде", () 
   assert.ok(!/crumb--foreign/.test(crumb), "своя крошка помічена як чужа");
   assert.ok(!/dd-item--foreign/.test(dd), "свій пункт переліку помічений як чужий");
   assert.ok(!/Lead/.test(crumb), "автор у крошці");
-  assert.match(dd, /Lead/, "підпис автора в рядку переліку зник");
+  assert.doesNotMatch(dd, /Lead|it-who/, "свій рядок кружка автора не має");
 });
 
 /* Гейт превʼю — НЕ захист, і смуга мусить це казати саме там, де людина
@@ -881,38 +882,72 @@ test("розмітка смуги збалансована за тегами", (
   }
 });
 
-/* Етап В (0.28.0): «Видалити ітерацію» питає в самому дропдауні. */
-test("дропдаун ітерації: пункт видалення — delitask (питання), а не одразу delit", () => {
-  const h = html({ openDd: "iter" });
-  assert.match(h, /data-act="delitask"/);
-  assert.doesNotMatch(h, /data-act="delit"/);
+/* Фаза И (Р3–Р6): перелік ітерацій — рядки з «⋯», меню рядка праворуч, поле й питання на місці рядка. */
+const IT = (o = {}) => S({ iterList: [
+  { id: "it1", label: "Іт.1", note: "Чернетка", pub: false, onGl: false, author: "Олена Д.", mine: true },
+  { id: "it2", label: "Іт.2", note: "Фільтри", pub: true, onGl: true, author: "Марта К.", mine: false, origin: { it: "it2" } },
+  { id: "it3", label: "Іт.3", note: "Правки", pub: false, onGl: false, author: "Олена Д.", mine: true },
+], iterId: "it3", openDd: "iter", ...o });
+const itHtml = (o) => { const s = IT(o); return barHTML(barModel(s), s); };
+
+test("фаза И (Р3): рядок — «Іт.N · назва», без підпису автора; чужа — кружок ініціалів з підказкою", () => {
+  setLang("uk");
+  const h = itHtml();
+  assert.match(h, /<span class="dd-t">Іт\.3 · Правки<\/span>/);
+  assert.doesNotMatch(h, /dd-sub">· Олена/);
+  assert.match(h, /<span class="it-who" title="Марта К\. · в автора це Іт\.2 — ітерація колеги[^"]*">МК<\/span>/);
+  assert.equal((h.match(/class="it-more"/g) || []).length, 3);
 });
 
-test("дропдаун ітерації: iterDelAsk — лише питання, «Ні» перед «Видалити», без переліку ітерацій", () => {
-  const iterList = [{ id: "it2", label: "Іт.2", note: "", pub: false, onGl: false }, { id: "it3", label: "Іт.3", note: "", pub: false, onGl: false }];
-  const h = html({ openDd: "iter", iterDelAsk: true, iterList, iterId: "it3" });
-  assert.match(h, /data-val="confirmed:it3"/, "«Видалити» привʼязане до id ітерації з питання");
-  assert.match(h, /class="dd dd--confirm"/);
-  assert.match(h, /class="cfm"/);
-  assert.match(h, /class="cfm-yes" data-act="delit" data-val="confirmed:it3"/);
-  assert.match(h, /class="cfm-no" data-act="delitno"/);
-  assert.ok(h.includes(t("cfmDelIter", "Іт.3")), "питання називає ітерацію");
-  assert.doesNotMatch(h, /data-act="iter"/);
-  assert.ok(h.indexOf('class="cfm-no"') < h.indexOf('class="cfm-yes"'));
+test("фаза И (Р3): під переліком лише «Нова ітерація»", () => {
+  const h = itHtml();
+  assert.match(h, /data-act="newit"/);
+  for (const a of ["renit", "dupit", "delitask", "modact"]) assert.doesNotMatch(h, new RegExp(`data-act="${a}"`));
 });
 
-test("питання лише при відкритому дропдауні ітерації", () => {
-  assert.doesNotMatch(html({ openDd: null, iterDelAsk: true }), /class="cfm"/);
+test("фаза И (Р4): меню рядка — праворуч, пункти й дії модулів над ЦІЄЮ ітерацією; єдина — «Видалити» вимкнене", () => {
+  setLang("uk");
+  const h = itHtml({ iterUi: { menu: "it2", ren: null, del: null }, modActs: [{ key: "notes/ping", label: "Пінг" }] });
+  assert.match(h, /<div class="dd dd--itmenu" role="menu" data-for="it2">/);
+  for (const a of ['data-act="itren" data-val="it2"', 'data-act="itdup" data-val="it2"', 'data-act="ithist" data-val="it2"',
+    'data-act="itmodact" data-val="it2::notes\\/ping"', 'data-act="itdel" data-val="it2"']) assert.match(h, new RegExp(a));
+  const one = barHTML(barModel(S({ iterList: [{ id: "it1", label: "Іт.1", note: "", mine: true }], iterId: "it1", openDd: "iter",
+    iterUi: { menu: "it1", ren: null, del: null } })), S({ openDd: "iter", iterUi: { menu: "it1", ren: null, del: null } }));
+  assert.match(one, /data-act="itdel" data-val="it1"[^>]*disabled/);
 });
 
-test("дропдаун ітерації: дії модулів перед «Видалити», сирий підпис екранується; без дій розмітка та сама", () => {
-  const base = S({ openDd: "iter", iterList: [], iterId: "it1" });
-  const plain = barHTML(barModel(base), base);
-  assert.equal(barHTML(barModel(base), { ...base, modActs: [] }), plain);
-  const st = { ...base, modActs: [{ key: "m/a", label: 'P"<b>', module: "m", id: "a", moduleName: "M" }] };
-  const h = barHTML(barModel(st), st);
-  assert.match(h, /data-act="modact" data-val="m\/a"/);
-  assert.ok(h.includes("P&quot;&lt;b&gt;") && !h.includes("<b>"));
-  assert.ok(h.indexOf('data-act="dupit"') < h.indexOf('data-act="modact"') && h.indexOf('data-act="modact"') < h.indexOf('data-act="delitask"'));
-  assert.equal(h.replace(/<div class="dd-sep"><\/div>\s*<button class="dd-item"[^>]*data-act="modact"[\s\S]*?<\/button>/, ""), plain);
+test("фаза И (Р5, Р6): поле перейменування й питання видалення стоять на місці рядка", () => {
+  setLang("uk");
+  const r = itHtml({ iterUi: { menu: null, ren: "it3", del: null } });
+  assert.match(r, /<input id="it-ren-in" class="it-ren-in" type="text" maxlength="40" value="Правки" data-val="it3"/);
+  const d = itHtml({ iterUi: { menu: null, ren: null, del: "it1" } });
+  assert.match(d, /Видалити Іт\.1 · Чернетка\?/);
+  assert.match(d, /data-act="itdelyes" data-val="it1"/);
+  assert.match(d, /data-act="itdelno"/);
+});
+
+test("фаза И (Р4): меню не відкрите — його розмітки нема; закритий дропдаун не малює ні меню, ні поля, ні питання", () => {
+  const h = itHtml({ openDd: null, iterUi: { menu: "it1", ren: "it2", del: "it3" } });
+  assert.doesNotMatch(h, /dd--itmenu|it-ren-in|itdelyes|class="it-more"/);
+});
+
+test("фаза И (Р4): без дій модулів у меню рядка роздільник перед «Видалити» один, а `itmodact` немає", () => {
+  const h = itHtml({ iterUi: { menu: "it1", ren: null, del: null } });
+  const menu = h.slice(h.indexOf("dd--itmenu"));
+  assert.doesNotMatch(menu, /itmodact/);
+  assert.equal((menu.match(/dd-sep/g) || []).length, 1);
+});
+
+test("фаза И (Р3): підпис автора в назві й підказці екранується (ПІБ — дані, не розмітка)", () => {
+  const h = itHtml({ iterList: [{ id: "it1", label: "Іт.1", note: 'A"<b>', author: '<i>Zed</i> Q', mine: false }], iterId: "it1" });
+  assert.doesNotMatch(h, /<b>|<i>Zed/);
+  assert.match(h, /A&quot;&lt;b&gt;/);
+});
+
+test("initials: перші літери двох перших слів; порожнє — «?»", () => {
+  assert.equal(initials("Марта Коваль"), "МК");
+  assert.equal(initials("lead"), "L");
+  assert.equal(initials("  ана  бе  ве "), "АБ");
+  assert.equal(initials(""), "?");
+  assert.equal(initials(undefined), "?");
 });

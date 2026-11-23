@@ -34,10 +34,11 @@ test("deleteNodes: confirmed пропускає лише питання yesno", 
   assert.match(body, /if \(!confirmed && !\(await askYesNo\(t\('menuDeletePageConfirm'\)/);
 });
 
-test("дропдаун ітерації: delitask питає на місці, delit(val) пропускає питання лише з 'confirmed'", () => {
-  assert.match(app, /if \(act === 'delitask'\) \{ iterDelAsk = true; paintBar\(\);/);
-  assert.match(app, /const pre = confirmedId\(val\);\s*if \(pre !== null && pre !== it\.id\) return;\s*const go = pre !== null \|\| await askYesNo\(t\('menuDeleteIterationConfirm'/);
-  assert.match(app, /if \(openDd !== 'iter'\) iterDelAsk = false;/);
+test("фаза И (Р6): «Видалити» в меню рядка питає на місці (iterUi.del), «Видалити» питання — deleteIteration; закриття дропдауна скидає iterUi", () => {
+  assert.match(app, /if \(act === 'itdel'\) \{ iterUi = \{ \.\.\.IT_NONE, del: el\.dataset\.val \}; paintBar\(\);/);
+  assert.match(app, /if \(act === 'itdelyes'\) \{ deleteIteration\(el\.dataset\.val\); return; \}/);
+  assert.match(app, /if \(openDd !== 'iter'\) iterUi = IT_NONE;/);
+  assert.doesNotMatch(app, /iterDelAsk\s*=|delitask/);
 });
 
 test("confirmedId: лише `confirmed:<id>`; голе `confirmed`, порожнє й чуже — null (питання не пропускається)", () => {
@@ -46,7 +47,30 @@ test("confirmedId: лише `confirmed:<id>`; голе `confirmed`, порожн
   for (const v of ["confirmed", "", undefined, null, 5, "it3", "xconfirmed:it3"]) assert.equal(confirmedId(v), null, String(v));
 });
 
-test("delit: id з питання не збігається з поточною ітерацією — вихід до будь-якого запиту (нічого не видаляється)", () => {
-  const body = app.slice(app.indexOf("  delit: async (val) => {"), app.indexOf("  // ── дропдаун синку з git"));
-  assert.ok(body.indexOf("if (pre !== null && pre !== it.id) return;") < body.indexOf("/api/iteration-delete"));
+test("фаза И: єдиний шлях видалення ітерації — deleteIteration (кошик + «Повернути»); ⌘K `delit` лише відкриває питання", () => {
+  assert.equal((app.match(/\/api\/iteration-delete/g) || []).length, 1);
+  const del = app.slice(app.indexOf("async function deleteIteration("), app.indexOf("async function restoreIteration("));
+  assert.match(del, /\/api\/iteration-delete/);
+  assert.match(del, /toast\(t\('iterDeleted', label\), \{ ms: 8000, action: \{ label: t\('iterRestore'\)/);
+  const cmdK = app.slice(app.indexOf("  delit: () => {"), app.indexOf("  ithist:"));
+  assert.doesNotMatch(cmdK, /api\/iteration-delete|askYesNo/);
+  assert.match(cmdK, /iterUi = \{ \.\.\.IT_NONE, del: picked \}/);
 });
+
+test("фаза И (Р5): перейменування — без діалогів; Esc скидає стан ДО перемальовки, blur під час перемальовки й повторний blur не зберігають", () => {
+  const bars = app.slice(app.indexOf("  newit: () => createIteration(picked),"), app.indexOf("  ithist:"));
+  assert.doesNotMatch(bars, /\bask\(/);
+  const save = app.slice(app.indexOf("async function saveItRen("), app.indexOf("async function deleteIteration("));
+  assert.ok(save.indexOf("if (iterUi.ren !== id) return;") < save.indexOf("iterUi = IT_NONE;"), "охоронець повторного/скасованого збереження");
+  assert.ok(save.indexOf("iterUi = IT_NONE;") < save.indexOf("/api/iteration-rename"));
+  assert.match(app, /if \(barRepainting \|\| ev\.target\.id !== 'it-ren-in'\) return;/);
+  assert.match(app, /iterUi = IT_NONE; paintBar\(\);\n\s+bar\.querySelector\('\.it-row \.dd-item--on'\)/);
+});
+
+test("фаза И: перемальовка смуги не губить набране в полі назви (значення й виділення вертаються)", () => {
+  const paint = app.slice(app.indexOf("function paintBar() {"), app.indexOf("paintTabs();", app.indexOf("function paintBar() {")));
+  assert.match(paint, /renKeep/);
+  assert.match(paint, /inp\.value = renKeep\.v;/);
+  assert.match(paint, /setSelectionRange\(renKeep\.a, renKeep\.b\)/);
+});
+

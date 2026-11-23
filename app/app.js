@@ -14,7 +14,7 @@ import { canMove } from './page-order.js';
 import { assetsPageOf, followDecision, hashFor } from './frame-nav.js';
 import { readFlow, shotKey, shotVersion, stateQuery } from './flow-model.js';
 import { flowLayout } from './flow-layout.js';
-import { confirmHTML, confirmedId } from './inline-confirm.js';
+import { confirmHTML } from './inline-confirm.js';
 import { ask, askChoice, askForm, askYesNo, formValues, makeFormCtl, tell, tellError } from './ask.js';
 import { composeDeleteNote, deleteDialogModel, resolveDrop, shouldCommitDrop, shouldRefreshPanel, vanishedFolders, zoneOfHit, groupTargetIds, pageMenuItems, runSequential, treeBusyGate, treeTarget as pickTreeTarget } from './tree-actions.js';
 import {
@@ -217,7 +217,10 @@ let shootProgress = null;
 /* ===== Смуга (Task 3 Плану B): стан, якого нема більш ніде ===== */
 /** Який дропдаун смуги розкритий: `'task'|'iter'|'gl'|'pub'|'more'|'space'|null`. */
 let openDd = null;
-let iterDelAsk = false;   // дропдаун ітерації показує питання «Видалити Іт.N?» (етап В)
+/* Перелік ітерацій (фаза И): відкрите меню рядка, рядок-поле назви, рядок-питання про видалення — id ітерації або null.
+   Живе лише у відкритому дропдауні ітерації: його закриття скидає все (`paintBar`). Замінює колишній `iterDelAsk`. */
+let iterUi = { menu: null, ren: null, del: null };
+const IT_NONE = { menu: null, ren: null, del: null };
 /* Відкритий екран «Задачі» (вхід — логотип у смузі). Прапорець ділять смуга
    (`barState().homeOpen` міняє її склад) і сам екран (`enterHome`/`leaveHome`
    нижче ставлять ще й клас `home-open` на `body`). */
@@ -1111,7 +1114,7 @@ function barState() {
     figmaBusy,
     tasksErr,
     tasksErrKey,
-    openDd, iterDelAsk,
+    openDd, iterUi,
     /* Дії модулів у дропдауні ітерації (ціль — відкрита задача й ітерація `picked`). */
     modActs: actionItems(modExtNow(), 'iteration'),
     /* Дропдаун крошки задачі (фаза И, Р2): дії модулів над задачею й адреса превʼю (та сама ціль, що в «Опублікувати»). Лише
@@ -1270,9 +1273,15 @@ function rememberTab(task, taskList) {
  * треба окремо памʼятати про панель: забути другий виклик поруч із першим —
  * рівно та вада, від якої застерігає задача («два шляхи до одного стану»).
  */
+let barRepainting = false;
 function paintBar() {
   barSeeded = true;
-  if (openDd !== 'iter') iterDelAsk = false;   // питання про видалення живе лише в відкритому дропдауні ітерації
+  if (openDd !== 'iter') iterUi = IT_NONE;   // меню рядка, поле назви й питання живуть лише у відкритому дропдауні ітерації
+  /* Поле назви ітерації в фокусі: `innerHTML` знищує вузол, а з ним набраний текст і виділення. Фоновий `render()`
+     (опит, подія агента) не повинен його стирати — запамʼятовуємо значення й виділення, після малювання вертаємо. */
+  const renIn = bar.querySelector('#it-ren-in');
+  const renKeep = renIn && document.activeElement === renIn && iterUi.ren === renIn.dataset.val
+    ? { id: renIn.dataset.val, v: renIn.value, a: renIn.selectionStart, b: renIn.selectionEnd } : null;
   /* Фокус дропдауна просторів: `innerHTML` знищує вузол, а з ним і фокус.
      Запамʼятовуємо ІНДЕКС рядка (ідентичність вузла після перемальовки інша) і те,
      що фокус стояв на фішці. */
@@ -1285,7 +1294,31 @@ function paintBar() {
   spaceDdWasOpen = openDd === 'space';
   const st = barState();
   paintSpaceColor();
-  bar.innerHTML = barHTML(barModel(st), st);
+  barRepainting = true;   // знищення вузла з фокусом може кинути `focusout` — поле назви його НЕ має сприймати як «зберегти»
+  try { bar.innerHTML = barHTML(barModel(st), st); } finally { barRepainting = false; }
+  if (renKeep) {
+    const inp = bar.querySelector('#it-ren-in');
+    if (inp && inp.dataset.val === renKeep.id) {
+      inp.value = renKeep.v;
+      inp.focus({ preventScroll: true });
+      try { inp.setSelectionRange(renKeep.a, renKeep.b); } catch { /* поле без виділення */ }
+    }
+  }
+  /* Меню рядка ітерації — праворуч від переліку на висоті рядка (`position:fixed`, не обрізається прокруткою `.dd`). */
+  const itm = bar.querySelector('.dd--itmenu');
+  if (itm) {
+    const row = bar.querySelector(`.it-row[data-it="${CSS.escape(itm.dataset.for)}"]`);
+    const list = bar.querySelector('.dd--iters');
+    if (row && list) {
+      positionCtxMenu(itm, { x: list.getBoundingClientRect().right + 6, y: row.getBoundingClientRect().top - 5 });
+      /* `.bar` — `container-type:inline-size`: залежно від рушія це може зробити її вмістом для `position:fixed` нащадків, і
+         тоді координати вікна зсунуті. Міряємо, де меню справді опинилось, і вносимо різницю. */
+      const want = { x: parseFloat(itm.style.left), y: parseFloat(itm.style.top) };
+      const got = itm.getBoundingClientRect();
+      if (Math.abs(got.left - want.x) > 0.5) itm.style.left = `${want.x - (got.left - want.x)}px`;
+      if (Math.abs(got.top - want.y) > 0.5) itm.style.top = `${want.y - (got.top - want.y)}px`;
+    }
+  }
   paintTabs();
   paintIsland();
   paintInsp();
@@ -1391,27 +1424,106 @@ const iterMine = (it) => {
   return !key || !my || key === my;
 };
 
+/** Примітка/назва рядка переліку без префікса «Іт.N · » — те, що стоїть у полі перейменування. */
+const iterNoteOf = (it) => (it?.label_text || '').replace(new RegExp(`^Іт\\.${itNum(it?.id ?? '')}\\s*(?:·\\s*)?`), '');
+
 /**
- * Нова ітерація — копія обраної, з приміткою. Тіло СПІЛЬНЕ для крошкових
- * `newit` і `dupit`: у поточному сервері обидва означають рівно одну дію
- * (`POST /api/iteration {from, note}`) — так само, як у старій смузі
- * ідентичну дію мали й «＋ ітерація» панелі, і «Дублювати» контекстного меню
- * пілюлі, лише під різними підписами. Вигадувати ДРУГУ, «тиху» операцію без
- * підтвердження під `dupit` означало б додати функціональність, якої немає
- * ніде в коді, — а не перенести наявну.
+ * «Нова ітерація» / «Дублювати» в переліку (фаза И, Р3): копія `from` на сервері (`POST /api/iteration {from, note}`), нова
+ * стає обраною, а її рядок одразу відкритий для перейменування — окремого питання про примітку нема. Тіло спільне для
+ * кнопки внизу переліку, пункту «Дублювати» меню рядка й ⌘K.
  */
-async function dupIteration() {
-  const it = curIter();
-  if (!it) return;
-  const from = it.id;
-  const label = it.label_text || it.id;
-  const note = await ask(t('menuDuplicateIterationPrompt', label));
-  if (note === null) return;              // Esc — нічого не міняємо
+async function createIteration(from) {
+  if (!from) return;
+  const note = iterNoteOf((curTask?.iterations || []).find((x) => x.id === from));
   try {
     const r = await post('/api/iteration', { from, note });
     picked = r.iteration.id;
-    await refreshGitlab(); render();
+    openDd = 'iter';
+    iterUi = { ...IT_NONE, ren: r.iteration.id };
+    await refreshGitlab(); await render();
+    focusItRen();
   } catch (e) { tellError(t('errTDupIter'), e.message); }
+}
+
+/** Відкрити поле назви на рядку ітерації `id` (дропдаун — відкритий) і поставити в нього фокус. */
+function startItRen(id) {
+  openDd = 'iter';
+  iterUi = { ...IT_NONE, ren: id };
+  paintBar();
+  focusItRen();
+}
+
+/** Після Enter у полі фокус вертається на рядок (вузол поля зник) — клавіатурна людина не губиться. */
+function focusItRow(id) {
+  if (openDd === 'iter') bar.querySelector(`.it-row[data-it="${CSS.escape(id)}"] .dd-item`)?.focus({ preventScroll: true });
+}
+
+function focusItRen() {
+  const inp = bar.querySelector('#it-ren-in');
+  if (inp) { inp.focus({ preventScroll: true }); inp.select(); }
+}
+
+/* Тиснуть мишею: перемальовка смуги між `mousedown` і `mouseup` знищила б цільову кнопку, і її `click` не дійшов би. Поле
+   назви зберігається на `focusout` (він і є `mousedown` по сусідній кнопці) — оновлення DOM чекає відпускання. */
+let ptrDown = false;
+window.addEventListener('pointerdown', () => { ptrDown = true; }, true);
+for (const e of ['pointerup', 'pointercancel']) window.addEventListener(e, () => { ptrDown = false; }, true);
+const afterPointer = () => (ptrDown
+  ? new Promise((ok) => {
+    window.addEventListener('pointerup', () => setTimeout(ok, 0), { once: true, capture: true });
+    setTimeout(ok, 1500);                 // страховка: втрачене `pointerup` не повинне заморозити оновлення смуги
+  })
+  : Promise.resolve());
+
+let itRenSaving = false;
+/**
+ * Зберегти поле назви (Enter / втрата фокуса): пише `label` ітерації (≤40; порожнє — прибирає, і рядок знову показує
+ * примітку). Незмінене значення запиту не робить. Другий виклик (blur після Enter) ігнорується: після першого `iterUi.ren`
+ * вже скинуто, а `itRenSaving` тримає запит.
+ */
+async function saveItRen(inp, { refocus = false } = {}) {
+  if (itRenSaving || !inp) return;
+  const id = inp.dataset.val;
+  if (iterUi.ren !== id) return;               // Esc, повторний blur після Enter або інше перемкнуло рядок
+  const it = (curTask?.iterations || []).find((x) => x.id === id);
+  const next = inp.value.trim();
+  iterUi = IT_NONE;
+  if (!it || next === iterNoteOf(it)) { await afterPointer(); paintBar(); if (refocus) focusItRow(id); return; }
+  itRenSaving = true;
+  try {
+    await post('/api/iteration-rename', { id, label: next });
+    await afterPointer();
+    await render();
+    if (refocus) focusItRow(id);
+  } catch (e) { await afterPointer(); paintBar(); tellError(t('errTRenameIter'), e.message); }
+  finally { itRenSaving = false; }
+}
+
+/**
+ * Видалити ітерацію з переліку (фаза И, Р6): сервер переносить теку в кошик, тост 8 с тримає «Повернути».
+ * Усі шляхи видалення (питання в рядку, ⌘K) ідуть сюди.
+ */
+async function deleteIteration(id) {
+  const it = (curTask?.iterations || []).find((x) => x.id === id);
+  const label = it?.label_text || id;
+  iterUi = IT_NONE;
+  try {
+    const r = await post('/api/iteration-delete', { id });
+    if (picked === id) picked = null;
+    if (typeof closeHistory === 'function') closeHistory(id);
+    await render();
+    toast(t('iterDeleted', label), { ms: 8000, action: { label: t('iterRestore'), run: () => restoreIteration(r.trash, label) } });
+  } catch (e) { paintBar(); tellError(t('errTDeleteIter'), e.message); }
+}
+
+/** «Повернути» з тосту: теку й запис назад із кошика; номер зайнятий — сервер дає наступний вільний, тост про це каже. */
+async function restoreIteration(slot, label) {
+  try {
+    const r = await post('/api/iteration-restore', { trash: slot });
+    picked = r.id;
+    await render();
+    if (r.renamed) toast(t('iterRestoredAs', r.iteration?.label_text || t('iterTag', itNum(r.id))));
+  } catch (e) { toast(t('iterRestoreFailed', label)); }
 }
 
 /**
@@ -1933,7 +2045,7 @@ async function editTaskTags(id) {
  * Нові тіла (перемикання задачі, дії над ітерацією в її дропдауні, GitLab-
  * дропдаун, публікація-дропдаун) написані для Task 3, бо в старій смузі цих
  * контролів не було зовсім — їхня логіка складена з того, що вже робили
- * `pillMenu`/`#pp-newit`/`paintGitlab`/`#pp-copy` (перенесене СЮДИ, а не
+ * колишнє меню пілюлі (прибране у фазі И)/`#pp-newit`/`paintGitlab`/`#pp-copy` (перенесене СЮДИ, а не
  * звідти: `renderPanel()` — межа Task 4, її тіло не чіпаємо).
  */
 /* ===== Панель «Коментарі» (0.26.0) ===== */
@@ -2828,7 +2940,7 @@ const BAR_ACTIONS = {
   updatecheck: () => checkUpdateNow(),
 
   // ── крошка ітерації: дії, яких у старій смузі не було зовсім (лише в
-  // панелі) — логіка та сама, що в `pillMenu`/`#pp-newit`, написана тут
+  // панелі) — логіка та сама, що в колишнє меню пілюлі (прибране у фазі И)/`#pp-newit`, написана тут
   // наново, бо `renderPanel()` — межа Task 4. ──────────────────────────────
   /* Перемкнути ітерацію. Гілка `freshen()`+`maybeAutoShoot()` — та сама, що
      була в обробнику `#pp-itsel` старої панелі: без неї перемикання в
@@ -2842,36 +2954,25 @@ const BAR_ACTIONS = {
     if (mode === 'canvas') { await freshen(); maybeAutoShoot(); }
     render();
   },
-  newit: dupIteration,
-  dupit: dupIteration,
-
-  renit: async () => {
-    const it = curIter();
-    if (!it) return;
-    const cur = it.label || (it.note || '').replace(/^\s*[A-Z]+-\d+\s*[·:-]\s*/, '');
-    const next = await ask(t('menuRenameIterationPrompt', itNum(it.id)), cur);
-    if (next === null) return;
-    try { await post('/api/iteration-rename', { id: it.id, label: next }); render(); }
-    catch (e) { tellError(t('errTRenameIter'), e.message); }
+  /* ⌘K і смуга — ті самі дії, що й меню рядка переліку: без діалогів `prompt`. «Перейменувати» й «Видалити» відкривають
+     дропдаун ітерації з полем/питанням на поточній; «Нова»/«Дублювати» — копія поточної з відкритим полем назви. */
+  newit: () => createIteration(picked),
+  dupit: () => createIteration(picked),
+  renit: () => { if (picked) { openDd = 'iter'; startItRen(picked); } },
+  delit: () => {
+    if (!picked) return;
+    openDd = 'iter';
+    iterUi = { ...IT_NONE, del: picked };
+    paintBar();
+    bar.querySelector('.it-cfm .cfm-no')?.focus({ preventScroll: true });
   },
 
-  /* `val === 'confirmed'` — питання вже поставлено в дропдауні ітерації (`data-val` у розмітці смуги, етап В); з палітри
-     ⌘K дія йде без значення — темна картка, як було. «Ні» в дропдауні — порожня дія: дропдаун уже закрито делегуванням. */
-  delitno: () => {},
-  delit: async (val) => {
-    const it = curIter();
-    if (!it) return;
-    const label = it.label_text || it.id;
-    /* `confirmed:<id>` — питання в дропдауні назвало саме цю ітерацію: коли «поточною» стала інша, не видаляємо нічого. */
-    const pre = confirmedId(val);
-    if (pre !== null && pre !== it.id) return;
-    const go = pre !== null || await askYesNo(t('menuDeleteIterationConfirm', label), { yes: t('menuDeleteYes'), danger: true });
-    if (!go) return;
-    try {
-      await post('/api/iteration-delete', { id: it.id });
-      if (picked === it.id) picked = null;
-      render();
-    } catch (e) { tellError(t('errTDeleteIter'), e.message); }
+  /* Меню рядка ітерації (фаза И, Р4): історія та дії модулів над ЦІЄЮ ітерацією (`id::ключ`). Видалення, перейменування,
+     «Дублювати» й «Нова» — у делегації кліку смуги (лишають дропдаун відкритим). */
+  ithist: (id) => { if (typeof openHistory === 'function') openHistory(id); },
+  itmodact: (v) => {
+    const i = String(v).indexOf('::');
+    if (i > 0) runModuleAction(v.slice(i + 2), 'iteration', currentTaskId, v.slice(0, i));
   },
 
   // ── дропдаун синку з git: адреси `vcs-*` (старі, з префіксом gitlab, лишились псевдонімами для хука) ──────
@@ -3500,8 +3601,19 @@ bar.addEventListener('click', (ev) => {
     return;
   }
   const act = el.dataset.act;
-  /* «Видалити ітерацію» в дропдауні (етап В): дропдаун лишається відкритим і стає питанням. */
-  if (act === 'delitask') { iterDelAsk = true; paintBar(); bar.querySelector('.dd--confirm .cfm-no')?.focus(); return; }
+  /* Фаза И: дії, що лишають дропдаун ітерації ВІДКРИТИМ (меню рядка, поле назви, питання про видалення, «Нова»/«Дублювати»). */
+  if (act === 'itmenu') {
+    iterUi = { ...IT_NONE, menu: iterUi.menu === el.dataset.val ? null : el.dataset.val };
+    paintBar();
+    bar.querySelector('.dd--itmenu .dd-item')?.focus({ preventScroll: true });
+    return;
+  }
+  if (act === 'itren') { startItRen(el.dataset.val); return; }
+  if (act === 'itdel') { iterUi = { ...IT_NONE, del: el.dataset.val }; paintBar(); bar.querySelector('.it-cfm .cfm-no')?.focus({ preventScroll: true }); return; }
+  if (act === 'itdelno') { iterUi = IT_NONE; paintBar(); bar.querySelector('.it-row .dd-item--on')?.focus({ preventScroll: true }); return; }
+  if (act === 'itdelyes') { deleteIteration(el.dataset.val); return; }
+  if (act === 'newit') { createIteration(picked); return; }
+  if (act === 'itdup') { createIteration(el.dataset.val); return; }
   const hadOpenDd = !!openDd;
   /* Рядок дропдауна просторів — фокус після закриття вернемо на фішку (див. нижче). */
   const fromSpaces = openDd === 'space' && !!el.closest('.dd--spaces');
@@ -3519,6 +3631,63 @@ bar.addEventListener('click', (ev) => {
      (`spacenew`/`spaceedit`) далі запамʼятає її як відкривача. */
   if (fromSpaces) focusChip();
   BAR_ACTIONS[act]?.(el.dataset.val, el, ev);
+});
+
+/* Перелік ітерацій (фаза И): клавіатура й контекстне меню рядка. Делеговано на `bar`, бо рядки перемальовуються цілком. */
+function openItMenu(id) {
+  iterUi = { ...IT_NONE, menu: id };
+  paintBar();
+  bar.querySelector('.dd--itmenu .dd-item')?.focus({ preventScroll: true });
+}
+bar.addEventListener('keydown', (ev) => {
+  if (ev.isComposing) return;
+  const inp = ev.target.closest?.('#it-ren-in');
+  if (inp) {
+    if (ev.key === 'Enter') { ev.preventDefault(); saveItRen(inp, { refocus: true }); }
+    else if (ev.key === 'Escape') {
+      /* Скасувати правку, лишити дропдаун відкритим (не закривати його разом із полем): `stopPropagation` не пускає Esc до
+         загального закриття дропдауна. Скидання стану ДО перемальовки — інакше знищення поля кинуло б `focusout` → «зберегти». */
+      ev.preventDefault(); ev.stopPropagation();
+      iterUi = IT_NONE; paintBar();
+      bar.querySelector('.it-row .dd-item--on')?.focus({ preventScroll: true });
+    }
+    return;
+  }
+  if (openDd !== 'iter') return;
+  const menu = ev.target.closest?.('.dd--itmenu');
+  const row = ev.target.closest?.('.it-row');
+  if (ev.key === 'Escape' && (menu || iterUi.del)) {
+    /* Esc у меню рядка чи в питанні закриває лише їх: перелік лишається, фокус — на «⋯» цього рядка. */
+    ev.preventDefault(); ev.stopPropagation();
+    const id = menu ? menu.dataset.for : iterUi.del;
+    iterUi = IT_NONE; paintBar();
+    bar.querySelector(`.it-row[data-it="${CSS.escape(id)}"] .it-more`)?.focus({ preventScroll: true });
+    return;
+  }
+  if (menu && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp')) {
+    const items = [...menu.querySelectorAll('.dd-item:not([disabled])')];
+    const at = items.indexOf(document.activeElement);
+    if (!items.length) return;
+    ev.preventDefault();
+    items[(at + (ev.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus({ preventScroll: true });
+    return;
+  }
+  const id = row?.dataset.it || menu?.dataset.for;
+  if (!id) return;
+  if (ev.key === 'F2') { ev.preventDefault(); startItRen(id); }
+  else if (ev.key === 'F10' && ev.shiftKey) { ev.preventDefault(); openItMenu(id); }
+});
+/* Втрата фокуса полем назви = «зберегти» (Enter, повторний blur і Esc гасить `saveItRen`). Не під час перемальовки смуги:
+   знищення вузла не є рішенням людини. */
+bar.addEventListener('focusout', (ev) => {
+  if (barRepainting || ev.target.id !== 'it-ren-in') return;
+  saveItRen(ev.target);
+});
+bar.addEventListener('contextmenu', (ev) => {
+  const row = openDd === 'iter' ? ev.target.closest?.('.it-row') : null;
+  if (!row) return;
+  ev.preventDefault();
+  openItMenu(row.dataset.it);
 });
 
 /* Рядок вкладок і острівець: той самий шлях, що в смуги, — `data-act` → `BAR_ACTIONS`. Відкритий дропдаун смуги закриває
@@ -5769,53 +5938,6 @@ async function refreshGitlab(task) {
   } catch { if (seq === glSeq) { glCache = null; glKey = null; } }
 }
 
-// --- контекст-меню итерации: дублювати / видалити ---
-// ⛔ БЕЗ ВИКЛИКІВ від Task 4 Плану B: єдиний виклик жив у старій панелі
-// (`#pp-itmenu`), яку `renderPanel()` замінив цілком — ті самі дії
-// (перейменувати/дублювати/видалити ітерацію) уже живуть у дропдауні крошки
-// ітерації (`BAR_ACTIONS.renit`/`dupit`/`delit`, Task 3). Лишена НЕ вживаною
-// свідомо, тим самим рядком думки, що й стара розмітка панелі (`.pp-*`,
-// `app/styles.css`) — «мертвий код» прибирає Task 8, а не побічний ефект
-// цього перенесення.
-function pillMenu(ev, it, label) {
-  document.getElementById('cv-ctx')?.remove();
-  const m = document.createElement('div');
-  m.id = 'cv-ctx';
-  m.className = 'cv-ctx';
-  m.style.left = `${ev.clientX}px`;
-  m.style.top = `${ev.clientY}px`;
-  m.innerHTML = `<button data-a="rename">${t('menuRename')}</button>
-    <button data-a="dup">${t('menuDuplicateIteration')}</button>
-    <button data-a="delete">${t('menuDeleteIteration')}</button>`;
-  document.body.appendChild(m);
-  const close = () => { m.remove(); document.removeEventListener('click', close); };
-  setTimeout(() => document.addEventListener('click', close), 0);
-  // Перейменування: коли ітерації — це різні СТОРІНКИ одного макета, «Іт.3» ні про що
-  // не говорить. Порожній ввід прибирає підпис і вертає «Іт.N».
-  m.querySelector('[data-a="rename"]').onclick = async () => {
-    close();
-    const cur = it.label || (it.note || '').replace(/^\s*[A-Z]+-\d+\s*[·:-]\s*/, '');
-    const next = await ask(t('menuRenameIterationPrompt', String(it.id).replace(/^it/, '')), cur);
-    if (next === null) return;                       // Esc — нічого не міняємо
-    try { await post('/api/iteration-rename', { id: it.id, label: next }); render(); }
-    catch (e) { tell(t('errFailed', e.message)); }
-  };
-  m.querySelector('[data-a="dup"]').onclick = async () => {
-    close();
-    const note = await ask(t('menuDuplicateIterationPrompt', label));
-    if (note === null) return;        // скасування скасовує — див. «＋ ітерація» в renderPanel()
-    try { const r = await post('/api/iteration', { from: it.id, note }); picked = r.iteration.id; await refreshGitlab(); render(); }
-    catch (e) { tell(t('errFailed', e.message)); }
-  };
-  m.querySelector('[data-a="delete"]').onclick = async () => {
-    close();
-    const go = await askYesNo(t('menuDeleteIterationConfirm', label), { yes: t('menuDeleteYes'), danger: true });
-    if (!go) return;
-    try { await post('/api/iteration-delete', { id: it.id }); if (picked === it.id) picked = null; render(); }
-    catch (e) { tell(t('errFailed', e.message)); }
-  };
-}
-
 // ===== Панель шарів (Task 4 Плану B) =====
 // Розмітка — чиста `panelHTML()` (`shell-panel.js`), проводка — ТА САМА
 // ідіома, що в смузі (Task 3): один делегований `click` на контейнер,
@@ -6111,7 +6233,7 @@ const PANEL_ACTIONS = {
   // те саме меню (`pageMenu`): спека Task 4, п.1 вимагає ОБИДВА шляхи, не
   // лише правий клік. `el` тут — сама кнопка «⋯» (делегація передає елемент,
   // на якому знайшовся `data-act`), її `getBoundingClientRect()` і дає
-  // якір — координати вікна, як уже працює в `pillMenu`.
+  // якір — координати вікна, як уже працює в колишнє меню пілюлі (прибране у фазі И).
   pagemenu: (val, el) => {
     const b = el.getBoundingClientRect();
     pageMenu({ x: b.left, y: b.bottom + 4 }, val);
@@ -6464,13 +6586,13 @@ function wirePageDrag(el) {
 
 /**
  * Позиціювання `.cv-ctx`: `position:fixed` із координатами від
- * `getBoundingClientRect()` — ТА САМА ідіома, що вже працює в `pillMenu`
+ * `getBoundingClientRect()` — ТА САМА ідіома, що вже працює в колишнє меню пілюлі (прибране у фазі И)
  * (нижче). У прототипі це меню малюється дитиною рамки з `transform` на
  * предку (`docs/proto/shell.html`); у бою такого предка нема, а
  * `.panel-body` має `overflow:auto` й зрізала б `position:absolute` дитину —
  * звідси `fixed`, а не спроба повторити прототип буквально.
  *
- * Клемпінг — те, чого нема в `pillMenu`/старому `pageMenu`: обидва
+ * Клемпінг — те, чого нема в колишнє меню пілюлі (прибране у фазі И)/старому `pageMenu`: обидва
  * відкривались лише правим кліком УСЕРЕДИНІ полотна, де вихід за край вікна
  * малоймовірний. Тут другий відкривач — кнопка «⋯» у панелі 246px (чи 46px
  * у рейці), і без клемпінгу меню поїхало б за правий (а в рейці й лівий)
@@ -6705,7 +6827,7 @@ function pageMenu(anchor, pageId) {
   document.body.appendChild(m);
   positionCtxMenu(m, anchor);
   // Клік повз ЗАКРИВАЄ, Escape ЗАКРИВАЄ (спека Task 4, п.3) — жодного з двох
-  // не мав ані цей менюшник, ані `pillMenu` раніше: обидва рятував лише клік
+  // не мав ані цей менюшник, ані колишнє меню пілюлі (прибране у фазі И) раніше: обидва рятував лише клік
   // повз. `setTimeout(…,0)` — щоб клік, який ВІДКРИВ меню, не долетів сюди й
   // не закрив його тієї ж миті.
   const close = () => {

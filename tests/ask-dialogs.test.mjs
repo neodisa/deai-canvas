@@ -79,13 +79,11 @@ test("заголовки помилок дій — є в обох мовах і 
   setLang("uk");
 });
 
-test("кожен живий tell(t('errFailed', …)) у app.js замінено на tellError, крім мертвого pillMenu", () => {
+test("кожен живий tell(t('errFailed', …)) у app.js замінено на tellError; мертвий pillMenu прибрано (фаза И)", () => {
   const app = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
-  const start = app.indexOf("function pillMenu(");
-  const end = app.indexOf("\n}\n", start);
-  const live = app.slice(0, start) + app.slice(end);
-  assert.equal((live.match(/tell\(t\('errFailed'/g) || []).length, 0);
-  assert.equal((live.match(/tellError\(t\('errT/g) || []).length, 13);
+  assert.equal((app.match(/tell\(t\('errFailed'/g) || []).length, 0);
+  assert.equal((app.match(/tellError\(t\('errT/g) || []).length, 13);
+  assert.doesNotMatch(app, /function pillMenu\(/);
 });
 
 test("заголовок питання — короткий перший рядок", () => {

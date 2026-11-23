@@ -162,50 +162,69 @@ export function mark(text, q) {
    смаком): сегмент у смузі коштував ~180px там, де на 1440 бракує одного
    пікселя; меню «⋯» робило контрол недосяжним на будь-якій ширині понад
    1060px, бо CSS ховає «⋯» — знайдено живим тестом, не оком. */
-function crumbIter(model, openDd, iterDelAsk = false, modActs = []) {
+/** Ініціали для кружка чужої ітерації: перші літери двох перших слів. */
+export function initials(name) {
+  const w = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return w.slice(0, 2).map((x) => [...x][0].toUpperCase()).join("") || "?";
+}
+
+/* Фаза И (Р3–Р6). `ui` — `{menu, ren, del}` (id ітерації або null) зі стану смуги; `null` — нічого не розкрито. Рядок — або
+   звичайний (вибір + «⋯»), або поле назви, або питання про видалення: на місці рядка, не поверх. */
+function iterRow(x, ui) {
+  const title = x.note ? `${x.label} · ${x.note}` : x.label;
+  if (ui?.ren === x.id) {
+    return `<div class="it-ren">${ico("iter")}<b>${esc(x.label)} ·</b>`
+      + `<input id="it-ren-in" class="it-ren-in" type="text" maxlength="40" value="${esc(x.note)}" data-val="${esc(x.id)}"`
+      + ` aria-label="${esc(t("iterRenameAria", x.label))}" autocomplete="off" spellcheck="false"></div>`;
+  }
+  if (ui?.del === x.id) {
+    return `<div class="it-cfm">${confirmHTML({ title: t("cfmDelIter", title), yes: t("menuDeleteYes"), no: t("cfmNo"),
+      yesAttrs: `data-act="itdelyes" data-val="${esc(x.id)}"`, noAttrs: 'data-act="itdelno"' })}</div>`;
+  }
+  /* Автор — лише в підказці кружка (чужа ітерація): під рядком підпису нема; походження («в автора це Іт.3») відповідає на
+     питання «чи це та версія, яку вона показувала?», пояснення «працювати у своїй» — про межу. */
+  const tip = [x.origin ? t("iterOriginTitle", x.author || "", String(x.origin.it || "").replace(/^it/, "")) : x.author, t("iterForeign")]
+    .filter(Boolean).join(" — ");
+  const who = x.mine ? "" : `<span class="it-who" title="${esc(tip)}">${esc(initials(x.author))}</span>`;
+  /* Позначки ті самі, що на крошці: крапка «у превʼю», хмара «збігається з GitLab». */
+  const marks = `${x.pub ? `<span class="dot dot--ok" title="${esc(t("markPreview"))}"></span>` : ""}${x.onGl ? ico("cloud", 13, "ico") : ""}`;
+  return `<div class="it-row" data-it="${esc(x.id)}">`
+    + `<button class="dd-item${x.on ? " dd-item--on" : ""}${x.mine ? "" : " dd-item--foreign"}" data-act="iter" data-val="${esc(x.id)}">`
+    + `${ico("iter")}<span class="dd-body"><span class="dd-t">${esc(title)}</span></span><span class="dd-marks">${marks}${who}</span></button>`
+    + `<button class="it-more" data-act="itmenu" data-val="${esc(x.id)}" aria-haspopup="menu" aria-expanded="${ui?.menu === x.id}"`
+    + ` aria-label="${esc(t("iterMenuAria", title))}" title="${esc(t("iterMenuTitle"))}">${ico("dots")}</button></div>`;
+}
+
+/* Меню «⋯» рядка: усе діє на ЦЮ ітерацію (не на поточну). Позицію (праворуч від переліку, на висоті рядка) ставить `paintBar`. */
+function iterMenu(x, count, modActs) {
+  const id = esc(x.id);
+  return `<div class="dd dd--itmenu" role="menu" data-for="${id}">
+    ${ddItem({ act: "itren", val: x.id, icon: "pencil", title: t("iterRename"), marks: "<kbd>F2</kbd>" })}
+    ${ddItem({ act: "itdup", val: x.id, icon: "copy", title: t("dupIteration") })}
+    ${ddItem({ act: "ithist", val: x.id, icon: "refresh", title: t("iterHistory") })}
+    ${modActs.length ? `<div class="dd-sep"></div>${modActs.map((a) => ddItem({ act: "itmodact", val: `${x.id}::${a.key}`, icon: "puzzle", title: a.label })).join("")}` : ""}
+    <div class="dd-sep"></div>
+    ${ddItem({ act: "itdel", val: x.id, icon: "trash", title: t("iterDelete"), danger: true, why: count <= 1 ? t("iterDelOnly") : "" })}
+  </div>`;
+}
+
+function crumbIter(model, openDd, ui = null, modActs = []) {
   const it = model.zone1.find((x) => x.id === "iter");
   if (!it) return "";
   const open = openDd === "iter";
+  const items = it.items || [];
   const marks = `<span class="crumb-marks">
     ${it.pub ? `<span class="dot dot--ok" title="${esc(t("markPreview"))}"></span>` : ""}
     ${it.onGl ? ico("cloud", 13, "ico") : ""}</span>`;
-  /* Перелік ітерацій — ПЕРШИМ, перед діями: дропдаун крошки відповідає на
-     питання «де я», і перемикання між версіями тут головне, а створення й
-     видалення — рідше. Позначки ті самі, що на самій крошці: крапка «у
-     превью», хмара «збігається з GitLab» — інакше довелось би відкривати
-     кожну, щоб дізнатись, яку бачить колега. */
-  const list = (it.items || []).map((x) => ddItem({
-    act: "iter", val: x.id, icon: "iter", on: !!x.on,
-    title: x.note ? `${x.label} · ${x.note}` : x.label,
-    /* Автор — у ПІДПИСІ пункту, а походження («у неї це Іт.3») у `sub`: воно
-       відповідає на питання «а це та версія, яку вона показувала?», яке й
-       зникало разом із чужим номером. */
-    sub: x.author ? (x.origin
-      ? t("iterOriginTitle", x.author, String(x.origin.it || "").replace(/^it/, ""))
-      : t("iterBy", x.author)) : "",
-    /* Тільки `dd-item--foreign`: `crumb--foreign` малює пунктирну рамку,
-       спроєктовану для ПІЛЮЛІ крошки, і в рядку переліку вона зайва. */
-    cls: x.mine ? "" : "dd-item--foreign",
-    marks: `${x.pub ? `<span class="dot dot--ok" title="${esc(t("markPreview"))}"></span>` : ""}`
-      + `${x.onGl ? ico("cloud", 13, "ico") : ""}`,
-  })).join("");
-  /* «Видалити ітерацію» (етап В): дропдаун лишається відкритим і стає питанням — підтвердження там, де дія.
-     Стан питання — у стані смуги (`iterDelAsk`), закриття дропдауна його скидає. */
-  const curId = (it.items || []).find((x) => x.on)?.id ?? "";
-  const ask = `<div class="dd dd--confirm">${confirmHTML({ title: t("cfmDelIter", it.label),
-    yes: t("menuDeleteYes"), no: t("cfmNo"), yesAttrs: `data-act="delit" data-val="confirmed:${esc(curId)}"`, noAttrs: 'data-act="delitno"' })}</div>`;
-  /* Дії модулів — над поточною ітерацією (як «Перейменувати»/«Дублювати»); підпис сирий, `ddItem` його екранує. */
-  const mods = modActs.length
-    ? `<div class="dd-sep"></div>\n    ${modActs.map((x) => ddItem({ act: "modact", val: x.key, icon: "puzzle", title: x.label })).join("")}` : "";
-  const dd = iterDelAsk ? ask : `<div class="dd">
-    ${list}${list ? '<div class="dd-sep"></div>' : ""}
+  /* Перелік ітерацій — перше, що бачить людина в дропдауні: він відповідає на «де я», а створення — рідше («Нова ітерація»
+     лише внизу). Дії над ітерацією — у меню рядка, а не тут. */
+  const menuFor = ui?.menu ? items.find((x) => x.id === ui.menu) : null;
+  const dd = open ? `<div class="dd dd--iters">
+    ${items.map((x) => iterRow(x, ui)).join("")}${items.length ? '<div class="dd-sep"></div>' : ""}
     ${ddItem({ act: "newit", icon: "plus", title: t("newIteration"), sub: t("newIterationSub") })}
-    ${ddItem({ act: "renit", icon: "pencil", title: t("renameIteration") })}
-    ${ddItem({ act: "dupit", icon: "copy", title: t("dupIteration") })}${mods}
-    <div class="dd-sep"></div>
-    ${ddItem({ act: "delitask", icon: "trash", title: t("delIteration"), danger: true })}</div>`;
+  </div>${menuFor ? iterMenu(menuFor, items.length, modActs) : ""}` : "";
   /* Імені автора в крошці нема (власник: лише ітерація та її назва); чужа ітерація — видимий клас `crumb--foreign`
-     і title-підказка: про межу треба дізнатись ДО того, як почав у ній працювати. Автор лишився в рядках переліку. */
+     і title-підказка: про межу треба дізнатись ДО того, як почав у ній працювати. Автор — у підказці кружка чужого рядка переліку. */
   const foreign = it.mine ? "" : " crumb--foreign";
   /* Пояснення («працювати у своїй») у title ЗАВЖДИ, а походження — додатком.
      Раніше `origin` витісняв пояснення, а він є майже в кожній реальній чужій
@@ -453,8 +472,8 @@ function crumbTask(model, openDd, state) {
 export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
   const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
-  /* Третій аргумент `crumbIter` — поки лише питання «Видалити ітерацію?» (`iterDelAsk`); обʼєкт `state.iterUi` для Task 7 ще не читається. */
-  const iter = home ? "" : crumbIter(model, openDd, !!state?.iterDelAsk, Array.isArray(state?.modActs) ? state.modActs : []);
+  /* Третій аргумент `crumbIter` — `state.iterUi` `{menu, ren, del}`: меню рядка, поле назви, питання видалення (фаза И). */
+  const iter = home ? "" : crumbIter(model, openDd, state?.iterUi ?? null, Array.isArray(state?.modActs) ? state.modActs : []);
   const zone1 = home
     ? `${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
     : `<div class="crumbs">${crumbTask(model, openDd, state)}${iter ? `<span class="crumb-sep" aria-hidden="true">/</span>${iter}` : ""}</div>`;

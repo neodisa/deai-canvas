@@ -1013,6 +1013,28 @@ body.with-panel.panel-collapsed.with-mod .cv-canvas{width:calc(100% - var(--pane
    Стереже tests/live/task-dropdown.test.mjs. */
 .dd>*{flex-shrink:0}
 .dd--right{left:auto;right:0}
+/* ── Фаза И: перелік ітерацій з «⋯» (після `.dd`: інакше його `top/left` перекрили б меню рядка) ── */
+.dd--iters{width:330px;max-width:330px}
+.it-row{position:relative}
+.it-row>.dd-item{padding-right:40px}
+.dd-marks{display:inline-flex;align-items:center;gap:6px;flex:none}
+.it-more{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:var(--h-sm);height:var(--h-sm);
+  border:0;background:none;border-radius:var(--r-sm);color:var(--mid);display:grid;place-items:center;opacity:0;cursor:pointer}
+.it-row:hover .it-more,.it-row:focus-within .it-more,.it-row:has(.dd-item--on) .it-more,.it-more[aria-expanded=true]{opacity:1}
+.it-more:hover,.it-more[aria-expanded=true]{background:var(--s4);color:var(--hi)}
+.it-more:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
+.it-who{flex:none;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;
+  font-size:10px;font-weight:600;background:var(--s4);color:var(--hi)}
+.it-ren{display:flex;align-items:center;gap:8px;padding:4px 6px 4px 10px;min-height:var(--h-ctl);
+  border-radius:var(--r-sm);background:var(--s3)}
+.it-ren .ico{flex:none;color:var(--mid)}
+.it-ren b{flex:none;font-weight:600;color:var(--hi);font-size:13px}
+.it-ren-in{flex:1;min-width:0;height:var(--h-sm);padding:0 8px;border:1px solid var(--line2);border-radius:var(--r-sm);
+  background:var(--s0);color:var(--hi);font:inherit;font-size:13px;outline:none}
+.it-ren-in:focus{border-color:var(--sel)}
+.it-cfm{padding:2px 0}
+/* Меню рядка — fixed, позицію ставить `app.js` (праворуч від переліку на висоті рядка). */
+.dd--itmenu{position:fixed;top:0;left:0;min-width:210px;max-width:280px}
 /* Навмисно ЛИШЕ transform, без opacity: headless-рендер `bin/shoot.mjs` не
    чекає кадр анімації так, як людське око, і дропдаун приїжджав би порожнім
    у знімку. Не «покращуй» додаванням прозорості — це стереже
