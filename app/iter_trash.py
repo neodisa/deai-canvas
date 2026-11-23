@@ -80,7 +80,7 @@ def next_id(task_dir, ids):
 
 def restore(task_dir, slot, taken_ids):
     """Повернути ітерацію зі слота. `(entry, renamed)`; id зайнятий → наступний вільний номер, `git` прибирається
-    (історія новоїʼ теки починається з повернення, а не з коміту створення старої)."""
+    (історія нової теки починається з повернення, а не з коміту створення старої)."""
     if not isinstance(slot, str) or not SLOT_RE.fullmatch(slot):
         raise IterTrashError('bad-slot', 'not a trash slot name')
     base = os.path.join(trash_root(task_dir), slot)

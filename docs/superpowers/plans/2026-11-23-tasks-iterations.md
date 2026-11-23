@@ -17,7 +17,7 @@
 - Робоча тека — worktree `deai-canvas-dev`, гілка `feat/tasks-iterations`. Інші гілки не перемикати, `git add -A` / `reset` / `stash` без унікальної мітки / `--amend` — заборонено.
 - Коміт лише так (нові файли спершу `git add -- <шляхи>`):
   `git -c user.name=neodisa -c user.email=neodisa@users.noreply.github.com commit -m "<тема>" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- <шляхи>`
-- Тести: `node --test tests/*.test.mjs`; `python3 -B -m unittest`; живі — ОДИН файл за раз під спільним замком, з тимчасовим HOME:
+- Тести: `node --test tests/*.test.mjs`; Python — `python3 -B -m unittest discover -s tests -p "test_*.py"` (голий `unittest` у цьому репо знаходить 0 тестів; повний набір ~19 хв); новий файл тестів на `Fixture` мусить сам писати `os.environ['DEAI_HOME'] = …` (охоронець `test_serve.TestsCannotWriteLiveConfig` шукає це присвоєння у файлі); живі — ОДИН файл за раз під спільним замком, з тимчасовим HOME:
   `until mkdir /private/tmp/deai-live.lock 2>/dev/null; do sleep 10; done; HOME=$(mktemp -d) node --test --import ./tests/live/_env.mjs tests/live/<файл>.test.mjs; rmdir /private/tmp/deai-live.lock`
   (`rmdir` лише після СВОГО успішного `mkdir`; живі — не паралельно з Python-набором; під час живого прогону код не правити).
 - Ніколи: порти 8765/4317, жива тека `deai-canvas`, справжні `~/.deai`, `~/deai-published`, `~/deai-work`, `~/.gitconfig`, `tasks.json`, мережа, `pkill`/`killall` за шаблоном, `while pgrep -f`, `rm -rf` (лише `mktemp -d`). Завжди `python3 -B`.
