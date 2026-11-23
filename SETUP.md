@@ -98,6 +98,12 @@ The island shows what the agent is doing only from a heartbeat: `POST /api/claud
 "note", "session"}`. Without it everything else works. Add hooks that send it to the person's Claude Code only if the
 person asks for it.
 
+For Claude Code the canvas installs the Stop hook itself: the person presses the Connect button of the "Claude Code" row in
+Settings -> AGENTS.md. That press also connects `CLAUDE.md` and writes the hook into `.claude/settings.local.json` of the
+space folder (the per-user local file, not the team's `.claude/settings.json`), so the agent's edits to iterations are
+committed in the history as AI without any skill. Do not write that hook by hand: tell the person to press the button (the
+row lists exactly what it writes). Start Claude Code in the space folder, not inside a task folder.
+
 Agents read `AGENTS.md` once, when a session starts. To also give Claude Code the live state of the canvas (the space,
 the current task, modules, and the current guide when the file is out of date), add a `SessionStart` hook — again only if
 the person asks for it — to `.claude/settings.json` of the space folder (merge it into existing `hooks` instead of
