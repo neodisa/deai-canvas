@@ -16,8 +16,8 @@ call in a session:
 It says whether this guide is current and gives the live state: Deai version, the space and its id, the current task,
 enabled modules. When this file is out of date it also gives the current guide: follow that one. A 404 means the canvas
 is older than this file: ask the designer to update Deai Canvas. If the canvas is not running, ask the designer to start
-it (`python3 <deai>/app/serve.py`); `<deai>` is the installation folder, `GET http://127.0.0.1:8765/api/agents-md`
-answers it in `paths.deai`.
+it (`python3 <deai>/app/serve.py`); `<deai>` is the installation folder: the check prints `<deai>/docs/agents`, and
+`GET http://127.0.0.1:8765/api/agents-md?space=<space-id>` answers it in `paths.deai`.
 
 ## Tasks and iterations
 
