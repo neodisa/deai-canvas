@@ -80,8 +80,10 @@
 класифікації — той самий, що в `_deploy_hint` 0.8.0: вхід → скоуп → доступ → решта.
 Прибирання старих публікацій (`_cli_cleanup`): `vercel list <проєкт> --json` (≤ `CLI_LIST_PAGES` сторінок, `--next`),
 кандидати — лише `name == проєкт`; поточна (`deploy_url`) лишається завжди, разом із нею `KEEP`; решта — `vercel remove <хост>
---safe --yes` (⛔ ІМЕНІ проєкту в `remove` нема: CLI видалив би весь проєкт). Список не розібрано — не видаляємо нічого. Будь-який
-збій — `cleanup_warning` (і в `warnings`), не помилка. `--scope` — лише коли скоуп відомий.
+--safe --confirm-name <хост>` (⛔ ІМЕНІ проєкту в `remove` нема: CLI видалив би весь проєкт; підтвердження — іменем, не `--yes`: CLI 66
+ігнорує `--yes`, коли бачить в оточенні агента). Список не розібрано — не видаляємо нічого. Публікація, яку `--safe` лишив через
+активний alias, — окремий рядок попередження, не збій. Будь-який збій — `cleanup_warning` (і в `warnings`), не помилка.
+`--scope` — лише коли скоуп відомий.
 
 Довіра до стану в режимі `cli` залежить від ДЖЕРЕЛА (`_cli_pick`). Звичайний простір: стан із `iterations.json` (їздить через git)
 недовірений — імʼя проєкту береться з нього лише коли воно `pv-<8 цифр>` (інакше новий `pv-…` і попередження), скоуп — ЛИШЕ з
@@ -123,6 +125,9 @@ POLL_TRANSIENT = 3
 UPLOAD_RETRIES = 1
 #: Скільки публікацій проєкту лишаємо після прибирання (разом із поточною).
 KEEP = 3
+#: Відповідь `vercel remove --safe`, коли на публікацію ще вказує alias (CLI свідомо її лишив): «Could not find unaliased
+#: deployments or projects matching …» (CLI 65–66). Це не збій прибирання, а окремий рядок попередження.
+CLI_REMOVE_ALIASED = 'could not find unaliased deployments'
 API_TIMEOUT_S = 30
 UPLOAD_TIMEOUT_S = 60
 PREVIEW_TIMEOUT_S = 20
@@ -903,7 +908,10 @@ def _cli_cleanup(npx, project, scope, current_urls, cwd):
     публікації: вивід `deploy`, вивід `inspect`, обрана адреса).
     Вертає `None` або текст попередження; НІКОЛИ не кидає (збій прибирання не робить вдалу публікацію помилкою).
     ⛔ `vercel remove` отримує ЛИШЕ адреси публікацій (хост `….vercel.app`): з імʼям проєкту CLI видаляє ВЕСЬ проєкт.
-    `--safe` — CLI сам пропускає публікації з активним alias. Чіпаємо лише записи з `name == project` (спільний акаунт:
+    `--safe` — CLI сам пропускає публікації з активним alias (така відповідь — `CLI_REMOVE_ALIASED`, код 1 — рахується окремо як
+    «лишено», а не як збій). Підтвердження — `--confirm-name <хост>`, той самий хост, що й аргумент: CLI 66 ігнорує `--yes`, коли
+    процес запущено з оточенням агента (`CLAUDECODE`, `AI_AGENT`…), і відмовляв «without approval» на КОЖНЕ видалення (23.11.2026);
+    підтвердження іменем він приймає і від людини, і від агента. Чіпаємо лише записи з `name == project` (спільний акаунт:
     чужі проєкти в списку не наші). Не вдалось розібрати список (код ≠ 0, не JSON, незнайома форма, запис без адреси чи
     `createdAt`) — НЕ видаляємо нічого: без повного розуміння списку не знаємо, що є «старе». Поточна публікація лишається
     завжди (список міг відстати чи хтось опублікував паралельно). Порівнюємо ХОСТИ: список дає голий хост, `deploy_url` —
@@ -944,21 +952,31 @@ def _cli_cleanup(npx, project, scope, current_urls, cwd):
             break
     old = [h for _t, h in sorted(((t, h) for h, t in items.items()), reverse=True) if h not in curs]
     doomed = old[KEEP - 1:]                                         # поточна + `KEEP - 1` найновіших решти
-    failed, timed_out = 0, False
+    failed, kept, timed_out = 0, 0, False
     for h in doomed:
         now = time.monotonic()
         if now >= deadline:
             failed, timed_out = failed + 1, True
             continue
         try:
-            r = _vc(npx, ['remove', h, '--safe', '--yes', *sc], cwd, min(CLI_REMOVE_S, max(1, deadline - now)))
-            failed += r.returncode != 0
+            r = _vc(npx, ['remove', h, '--safe', '--confirm-name', h, *sc], cwd, min(CLI_REMOVE_S, max(1, deadline - now)))
         except (OSError, ValueError, subprocess.SubprocessError):
             failed += 1
-    if not failed:
-        return None
-    return (f'Старі публікації прибрано не всі: не вдалося {failed} з {len(doomed)}'
-            + (' (вичерпано ліміт часу).' if timed_out else '.'))
+            continue
+        if r.returncode == 0:
+            continue
+        if CLI_REMOVE_ALIASED in ((r.stderr or '') + '\n' + (r.stdout or '')).lower():
+            kept += 1
+        else:
+            failed += 1
+    notes = []
+    if failed:
+        notes.append(f'Старі публікації прибрано не всі: не вдалося {failed} з {len(doomed)}'
+                     + (' (вичерпано ліміт часу).' if timed_out else '.'))
+    if kept:
+        notes.append(f'Лишено старих публікацій: {kept} з {len(doomed)} — на них ще вказує alias (Vercel такі не видаляє; '
+                     'перелік — `vercel alias ls`).')
+    return ' '.join(notes) or None
 
 
 def _publish_cli(ctx, build_dir, task):
