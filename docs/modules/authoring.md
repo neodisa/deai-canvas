@@ -164,7 +164,9 @@ target = {"repo": str, "path": str, "branch": str, "task": <task id>, "ssh_key"?
   setting of the same name).
 * The core reads these settings of your module by name: `repo`, `branch`, `path` (the target defaults above) and
   `autosync` (a boolean). While `autosync` is not true, `POST /api/autosync` — what an agent's Stop hook calls after
-  every reply — does nothing and answers `reason: "autosync-off"`. Declare them in the manifest to get these features.
+  every reply — sends nothing and answers `reason: "autosync-off"`. Local history is separate from sending: after every
+  reply the core still commits the agent's edits to your own iterations locally (`itN: зміни AI`, one commit per
+  iteration, never pushed). Declare them in the manifest to get these features.
 
 **The functions.** Each takes `ctx` first and reports a failure with `ctx["ModuleError"]` (the codes are below).
 

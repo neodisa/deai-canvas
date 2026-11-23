@@ -18,6 +18,7 @@ for _p in (os.path.join(os.path.dirname(_HERE), 'app'), _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import spaces_guard  # noqa: E402
+from phase_i_subjects import amend_subjects  # noqa: E402
 from test_liga_migrate import _WriteStand  # noqa: E402  (стенд запису 4d-3a: тимчасові HOME/DEAI_HOME, CLI, пошук секретів)
 
 _REAL = None
@@ -40,7 +41,7 @@ class Before4d3bShape(unittest.TestCase):
     def setUpClass(cls):
         with open(BEFORE, encoding='utf-8') as f:
             cls.raw = f.read()
-        cls.snap = json.loads(cls.raw)
+        cls.snap = amend_subjects(json.loads(cls.raw))
 
     def test_top_level_sections(self):
         self.assertEqual(sorted(self.snap), ['comments', 'meta', 'non_loopback_attempts', 'vcs'])
@@ -567,7 +568,7 @@ class ProjectCommentsParity(_ChanStand):
     def setUpClass(cls):
         super().setUpClass()
         with open(BEFORE, encoding='utf-8') as f:
-            cls.snap = json.load(f)
+            cls.snap = amend_subjects(json.load(f))
 
     def test_label_and_legacy_scheme(self):
         serve = self.serve
@@ -847,7 +848,7 @@ class VcsCompat(_VcsStand):
     def test_explicit_compat_record_equals_the_0_17_snapshot(self):
         """Запис `git-sync{compat: design-canvas}` дає РІВНО знімок 0.17.0: дзеркала, тексти всіх споживачів, прапорці форми."""
         with open(BEFORE, encoding='utf-8') as f:
-            snap = json.load(f)['vcs']
+            snap = amend_subjects(json.load(f)['vcs'])
         rig, space, cfg = self.vstand()
         got = self.sections(rig, cfg, space)
         self.assertEqual(got['provider']['module'], VCS_ID)
@@ -887,7 +888,7 @@ class VcsCompat(_VcsStand):
     def test_without_compat_texts_and_mirrors_are_neutral(self):
         """Контроль: той самий запис БЕЗ `compat` — інші тексти, інша тека дзеркал, форма з полем «Репозиторій»."""
         with open(BEFORE, encoding='utf-8') as f:
-            snap = json.load(f)['vcs']
+            snap = amend_subjects(json.load(f)['vcs'])
         rig, space, cfg = self.vstand(compat=None)
         got = self.sections(rig, cfg, space)
         self.assertIs(got['provider']['legacy'], False)
@@ -2534,7 +2535,7 @@ class AfterMigrationParity4d3b(unittest.TestCase):
         import liga_migrate as lm
         cls.mock, cls.g, cls.lm = mock, g, lm
         with open(BEFORE, encoding='utf-8') as f:
-            cls.before = json.load(f)
+            cls.before = amend_subjects(json.load(f))
         cls.after, cls.results = {}, {}
         for name in cls.CONFIGS:
             cls.after[name], cls.results[name] = cls._build(name)

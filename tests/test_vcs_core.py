@@ -1909,11 +1909,10 @@ class Http(Core):
         """`git-sync` за замовчуванням має `autosync: false`: відповідь `autosync-off`, жодного коміту ні в origin, ні в теці задачі."""
         before = self.heads()
         write(os.path.join(self.p_dir, 'iterations', 'it1', 'index.html'), '<h1>брудна</h1>')
-        # Фаза И: правки AI комітяться локально ЗАВЖДИ (історія ітерації), навіть коли автосинк вимкнено; відправки нема.
-        st, body = self.post('/api/autosync', {}, 'p')
-        self.assertEqual((st, body['ok'], body['changed'], body['reason'], body['ai']['it']), (200, True, False, 'autosync-off', 'it1'))
+        # Фаза И: ключ `ai` є завжди; тека без `.git` (початковий імпорт) — не AI, тож локального коміту й тут нема.
+        self.assertEqual(self.post('/api/autosync', {}, 'p'), (200, {'ok': True, 'changed': False, 'reason': 'autosync-off', 'ai': None}))
         self.assertEqual(self.heads(), before, 'вимкнений автосинк відправив')
-        self.assertEqual(self.out(self.p_dir, 'log', '-1', '--format=%s'), 'it1: зміни AI')
+        self.assertFalse(os.path.isdir(os.path.join(self.p_dir, '.git')), 'вимкнений автосинк зробив локальний коміт')
         self.assertNotIn('mockup/p/index.html', self.out(self.origin, 'ls-tree', '-r', '--name-only', 'main'))
 
     def test_autosync_switched_on_sends_a_change_once(self):
@@ -2129,8 +2128,8 @@ class Http(Core):
             with self.subTest(task=tid):
                 st, body = self.post('/api/autosync', {}, tid)
                 self.assertEqual((st, body['ok'], body['synced']), (200, True, True), body)
-                # фаза И: маршрут спершу комітить правки AI, тож автокоміт `автосинк (…)` у `autosync()` уже порожній
-                self.assertEqual(self.out(d, 'log', '-1', '--format=%s'), 'it1: зміни AI', tool)
+                # теки без `.git` AI-коміту не отримують (фаза И): підпис простору ставить автокоміт `autosync()`
+                self.assertEqual(self.out(d, 'log', '-1', '--format=%s'), f'it1: автосинк ({tool})')
 
     # ---------------------------------------------------------------- маска адреси
     def test_a_token_in_an_exception_never_reaches_a_response_of_the_routes(self):

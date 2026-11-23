@@ -220,7 +220,7 @@ def registry_allowed():
     return bool(sp) and sp.get('legacy') is True and deai_modules.vcs_outbound(sp)
 
 
-def git_autocommit(task_dir, msg, push=None):
+def git_autocommit(task_dir, msg, push=None, paths=None):
     """Автосохранение папки задачи в git — скриптом, без участия AI.
     init при первом вызове; push best-effort, если настроен remote (GitLab).
 
@@ -230,14 +230,18 @@ def git_autocommit(task_dir, msg, push=None):
 
     ⚠️ Питаємо простір ЛІНИВО й лише коли `origin` є: автокоміт без `origin` (кожна нова задача,
     кожна правка сторінки) не читає реєстр просторів. Реєстр, що не читається, — «не пушимо»
-    (`_vcs_outbound_here`): коміт уже вийшов, і 503 після нього був би гіршим за пропущений пуш."""
+    (`_vcs_outbound_here`): коміт уже вийшов, і 503 після нього був би гіршим за пропущений пуш.
+
+    `paths` (фаза И) — коміт ЛИШЕ цих шляхів: `git add -A -- <шляхи>` і `git commit -- <шляхи>`; решта брудного й навіть уже
+    застейдженого лишається як є (так комітить `ai_commit`: свою ітерацію, а не весь стан теки)."""
     try:
         if not os.path.isdir(os.path.join(task_dir, '.git')):
             subprocess.run(['git', 'init', '-q'], cwd=task_dir, check=True, timeout=20)
         # ПЕРЕД `add -A` і на КОЖНОМУ виклику, не лише при `init`: див. докстрінг.
         ensure_task_gitignore(task_dir)
-        subprocess.run(['git', 'add', '-A'], cwd=task_dir, check=True, timeout=30)
-        subprocess.run(['git', 'commit', '-q', '-m', msg],
+        only = ['--', *paths] if paths else []
+        subprocess.run(['git', 'add', '-A', *only], cwd=task_dir, check=True, timeout=30)
+        subprocess.run(['git', 'commit', '-q', '-m', msg, *only],
                        cwd=task_dir, capture_output=True, text=True, timeout=30)
         h = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
                            cwd=task_dir, capture_output=True, text=True, timeout=10)
@@ -1425,21 +1429,36 @@ def _record_sync(task, it, sha):
     return meta
 
 
+def _git_head(task_dir):
+    """Повний sha HEAD або `None` (нема коміту / збій git)."""
+    r = subprocess.run(['git', 'rev-parse', '--verify', '-q', 'HEAD'], cwd=task_dir, capture_output=True, text=True, timeout=10)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
 def ai_commit(task):
-    """Правки AI окремим комітом (фаза И, Р9). Кличе `/api/autosync` (Stop-хук після кожної відповіді Claude): найсвіжіша
-    СВОЯ брудна ітерація → `itN: зміни AI` з трейлером `Deai-Actor: ai`. Без пушу: пуш — справа автосинку GitLab нижче.
-    Чужі ітерації не комітимо під своїм підписом (той самий принцип, що в `autosync`). Чисто → `None`.
-    ⚠️ `git_autocommit` робить `add -A`: коміт забирає й інші брудні файли теки задачі (як і сам автосинк)."""
+    """Правки AI окремими комітами (фаза И, Р9). Кличе `/api/autosync` (Stop-хук після кожної відповіді Claude): кожна СВОЯ брудна
+    ітерація (найстаріша за mtime першою, тож найсвіжіша — останній коміт) → `itN: зміни AI` з трейлером `Deai-Actor: ai`, лише
+    шляхи `iterations/<itN>/` (`paths`): чужі ітерації й інші файли теки лишаються незакоміченими. Без пушу: пуш — справа
+    автосинку GitLab нижче. Коміт рахується, лише коли HEAD справді зсунувся. Теки без `.git` не чіпаємо (репо створює перша дія
+    канваса; початковий імпорт не можна підписувати як AI). Нічого не закомічено → `None`; інакше `{'it', 'sha', 'its'}`
+    (`it`/`sha` — найсвіжіша)."""
+    if not os.path.exists(os.path.join(task['dir'], '.git')):
+        return None
     meta = load_meta(task)
     _, my_key = machine_identity()
-    by_id = {x['id']: x for x in meta.get('iterations', [])}
+    by_id = {x['id']: x for x in meta.get('iterations', []) if isinstance(x, dict) and 'id' in x}
     dirty = [i for i in iter_history.dirty_iterations(task['dir'])
              if i in by_id and iteration_is_mine(by_id[i], my_key) and os.path.isdir(_iter_dir(task, i))]
-    if not dirty:
+    done = []
+    for it in sorted(dirty, key=lambda i: (_dir_mtime(_iter_dir(task, i)), i)):
+        before = _git_head(task['dir'])
+        g = git_autocommit(task['dir'], f'{it}: зміни AI\n\n{iter_history.AI_TRAILER}', push=False, paths=[f'iterations/{it}/'])
+        after = _git_head(task['dir'])
+        if after is not None and after != before:
+            done.append((it, g['sha']))
+    if not done:
         return None
-    it = max(dirty, key=lambda i: _dir_mtime(_iter_dir(task, i)))
-    g = git_autocommit(task['dir'], f'{it}: зміни AI\n\n{iter_history.AI_TRAILER}', push=False)
-    return {'it': it, 'sha': g['sha']}
+    return {'it': done[-1][0], 'sha': done[-1][1], 'its': [it for it, _ in done]}
 
 
 def autosync(tid, task, gl, vcs=None):
@@ -6751,7 +6770,11 @@ class Handler(SimpleHTTPRequestHandler):
             if it is None:
                 return
             _, task = self._current_task()
-            entry = next((i for i in load_meta(task).get('iterations', []) if i['id'] == it), None)
+            try:
+                entry = next((i for i in load_meta(task).get('iterations', []) if isinstance(i, dict) and i.get('id') == it), None)
+            except (OSError, ValueError, AttributeError, TypeError):      # `iterations.json` не читається чи не тієї форми
+                self._send_json({'ok': False, 'error': 'meta-unreadable', 'entries': [], 'pending': None, 'degraded': True})
+                return
             if entry is None:
                 self._send_json({'ok': False, 'error': 'iteration-not-found'}, status=404)
                 return

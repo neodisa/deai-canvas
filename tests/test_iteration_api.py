@@ -218,6 +218,102 @@ class HistoryAndAi(_Base):
         pub = [m for m in subjects if m.startswith('publish:')]
         self.assertEqual(pub, ['publish: 2 iteration(s) · it1 it2'])
 
+    # ---- фаза И, раунд виправлень: обсяг AI-коміту, чесний успіх, стійкість маршруту історії
+    def edit(self, it, name='index.html', text='<p>AI</p>', mtime=None):
+        path = os.path.join(self.x_dir, 'iterations', it, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(text)
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
+        return path
+
+    def status(self):
+        return _git(self.x_dir, 'status', '--porcelain', '--untracked-files=all')
+
+    def test_only_own_iterations_are_committed_never_foreign_or_other_files(self):
+        """M1: чужа ітерація й сторонній файл лишаються незакоміченими, коміт не торкається їх."""
+        meta = _meta(self.x_dir)
+        meta['iterations'].append({'id': 'it3', 'date': '23.11.2026 12:00', 'note': 'чужа', 'author': 'Other',
+                                   'author_key': 'other@example.com'})
+        with open(os.path.join(self.x_dir, 'iterations.json'), 'w', encoding='utf-8') as f:
+            json.dump(meta, f)
+        self.edit('it3', text='<p>foreign</p>')
+        self.edit('it2')
+        with open(os.path.join(self.x_dir, 'notes.txt'), 'w', encoding='utf-8') as f:
+            f.write('stray')
+        st, body = self.post('/api/autosync', {})
+        self.assertEqual((st, body['ai']['it'], body['ai']['its']), (200, 'it2', ['it2']))
+        files = _git(self.x_dir, 'show', '--name-only', '--format=', 'HEAD').split()
+        self.assertEqual(files, ['iterations/it2/index.html'])
+        left = self.status()
+        self.assertIn('iterations/it3/index.html', left)       # чужа лишилась брудною
+        self.assertIn('notes.txt', left)                       # (d) сторонній файл не потрапив у коміт
+        self.assertNotIn('iterations/it2', left)
+
+    def test_two_own_dirty_iterations_make_two_commits_freshest_last(self):
+        """M4: найстарша — першим комітом, найсвіжіша — останнім; `it` називає найсвіжішу."""
+        import time
+        now = time.time()        # у майбутньому: файли копії ітерації мають менший mtime, ніж ці правки
+        self.edit('it1', mtime=now + 1000)
+        self.edit('it2', mtime=now + 2000)
+        st, body = self.post('/api/autosync', {})
+        self.assertEqual((body['ai']['it'], body['ai']['its']), ('it2', ['it1', 'it2']))
+        subjects = _git(self.x_dir, 'log', '-2', '--format=%s').split('\n')
+        self.assertEqual(subjects[:2], ['it2: зміни AI', 'it1: зміни AI'])
+        self.assertEqual(_git(self.x_dir, 'rev-parse', '--short', 'HEAD').strip(), body['ai']['sha'])
+
+    def test_ai_commit_is_never_pushed(self):
+        """M6: з origin і вимкненим автосинком origin не рухається, локальний HEAD — рухається."""
+        origin = os.path.join(self.deai, 'origin-bare')
+        subprocess.run(['git', 'init', '-q', '--bare', origin], check=True)
+        _git(self.x_dir, 'remote', 'add', 'origin', origin)
+        _git(self.x_dir, 'push', '-q', '-u', 'origin', 'HEAD')
+        before = _git(origin, 'rev-parse', 'HEAD')
+        local = _git(self.x_dir, 'rev-parse', 'HEAD')
+        self.edit('it2')
+        st, body = self.post('/api/autosync', {})
+        self.assertEqual((st, body['reason']), (200, 'no-gitlab'))
+        self.assertNotEqual(_git(self.x_dir, 'rev-parse', 'HEAD'), local)
+        self.assertEqual(_git(origin, 'rev-parse', 'HEAD'), before)
+
+    def test_gitless_task_is_not_labelled_ai_and_gets_no_repo(self):
+        shutil.rmtree(os.path.join(self.x_dir, '.git'))
+        self.edit('it2')
+        st, body = self.post('/api/autosync', {})
+        self.assertEqual((st, body['ai']), (200, None))
+        self.assertFalse(os.path.exists(os.path.join(self.x_dir, '.git')))
+
+    def test_no_false_success_when_head_did_not_move(self):
+        self.edit('it2')
+        head = _git(self.x_dir, 'rev-parse', '--short', 'HEAD').strip()
+        with mock.patch.object(serve, 'git_autocommit', return_value={'sha': head, 'pushed': False}):
+            self.assertIsNone(serve.ai_commit({'dir': self.x_dir}))
+
+    def test_history_route_survives_broken_meta(self):
+        with open(os.path.join(self.x_dir, 'iterations.json'), 'w', encoding='utf-8') as f:
+            f.write('{не json')
+        st, body = self.jget('/api/iteration-history?id=it2')
+        self.assertEqual((st, body['ok'], body['error'], body['degraded']), (200, False, 'meta-unreadable', True))
+        self.assertEqual((body['entries'], body['pending']), ([], None))
+
+    def test_history_route_survives_entry_without_id(self):
+        meta = _meta(self.x_dir)
+        meta['iterations'].insert(0, {'note': 'без id'})
+        with open(os.path.join(self.x_dir, 'iterations.json'), 'w', encoding='utf-8') as f:
+            json.dump(meta, f)
+        st, body = self.jget('/api/iteration-history?id=it2')
+        self.assertEqual((st, body['ok']), (200, True))
+
+    def test_git_autocommit_with_paths_commits_only_them(self):
+        self.edit('it2')
+        with open(os.path.join(self.x_dir, 'notes.txt'), 'w', encoding='utf-8') as f:
+            f.write('stray')
+        _git(self.x_dir, 'add', 'notes.txt')                     # навіть ЗАСТЕЙДЖЕНЕ стороннє не входить
+        serve.git_autocommit(self.x_dir, 'only it2', push=False, paths=['iterations/it2/'])
+        self.assertEqual(_git(self.x_dir, 'show', '--name-only', '--format=', 'HEAD').split(), ['iterations/it2/index.html'])
+        self.assertIn('A  notes.txt', self.status())
+
 
 if __name__ == '__main__':
     unittest.main()
