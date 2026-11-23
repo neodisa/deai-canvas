@@ -772,6 +772,17 @@ class ThreadOutput(InboxCase):
             self.set_local([_pin('11111111-aaaa', 'пін', meta={'version': '3', 'shotMiss': miss})])
             self.assertNotIn('без знімка', self.listing(), repr(miss))
 
+    def test_a_pin_with_a_shot_prints_no_shot_miss(self):
+        """0.35.0 записував `shotMiss: 'upload'` локальним пінам поруч зі знімком: такий код — хибний, рядка нема."""
+        for meta in ({'shot': 'data:image/png;base64,AAAA'}, {'shotUrl': 'https://example.com/s.png'}):
+            with self.subTest(meta=list(meta)):
+                self.set_local([_pin('11111111-aaaa', 'пін', meta={'version': '3', 'shotMiss': 'upload', **meta})])
+                self.assertNotIn('без знімка', self.listing())
+        for empty in ({'shot': ''}, {'shot': '  ', 'shotUrl': None}, {'shotUrl': 5}):
+            with self.subTest(empty=empty):
+                self.set_local([_pin('11111111-aaaa', 'пін', meta={'version': '3', 'shotMiss': 'upload', **empty})])
+                self.assertIn('↳ без знімка: знімок не завантажився в сховище', self.listing())
+
     def test_the_list_hint_shows_a_reply_example_with_the_task_flag(self):
         self.set_local([_pin('11111111-aaaa', 'пін')])
         out = self.listing()
