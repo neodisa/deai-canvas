@@ -54,7 +54,7 @@ list (`[]` clears it; `400 bad-tags`); answer `{"ok", "tags"}`.
 
 `task-delete` moves the task folder to the trash of its space: answer `{"ok", "id", "current", "trash"}`; if it was the
 current task, `current` moves to another one. `task-restore` brings it back (`404 not-in-trash`, `409 task-exists`,
-`409 task-dir-exists`). `task-purge` deletes it for good; ask the person before you call it.
+`409 task-dir-exists`). `task-purge` deletes it for good and cannot be undone.
 
 ## Where we are
 

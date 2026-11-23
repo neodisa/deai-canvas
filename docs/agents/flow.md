@@ -33,6 +33,6 @@ back. Answer `{"ok": true}`, or `{"ok": false, "error"}` when the file could not
   same page in the same state.
 - An edge joins two node ids with `from` and `to`, and an optional `label`; an edge from a node to itself is dropped.
 - A flow with a closed loop of edges is dropped as a whole lane. The canvas lists every problem it finds (a missing page, a
-  duplicate id, a loop) and keeps the rest, so read the problems it shows after a save. Pages that appear in no node are
+  duplicate id, a loop) and keeps the rest, the problems are in `report.problems` of `POST /api/shoot` and printed as `FLOW.JSON:` lines by `shoot.mjs`. Pages that appear in no node are
   shown as «not in a flow».
 - Screenshots of the nodes are taken with the topic `shots`; a node with a `state` gets its own frame.

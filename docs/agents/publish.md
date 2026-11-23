@@ -2,8 +2,8 @@
 Publish marked iterations as a preview link; preview password; import someone's preview.
 
 Publishing is done by the space's module with the role `publish` (see the topic `modules`). Every call acts on one task:
-send the header `X-Canvas-Task: <task-id>` (or the `/t/<task-id>` prefix); without it, on the current task. Publish only when
-the person asks: the link is shown to others.
+send the header `X-Canvas-Task: <task-id>` (or the `/t/<task-id>` prefix); without it, on the current task. Publishing deploys the marked
+iterations; the link is visible to anyone who has it.
 
 ## Mark iterations
 
@@ -21,12 +21,14 @@ topic `pages`.
 Builds the preview from the marked iterations and hands it to the publish module. `build_only` only builds it and does not
 deploy. Refusals: `400` when no iteration is marked («toggle the green dot first»); `409 no-publish-module` when the space
 has no module with the role `publish`; `409 publish-busy` (folder modules) when another publish of the same task is running. The answer
-starts with `"ok": true` and then depends on the module:
+starts with `"ok": true` and then depends on the kind of publisher:
 
 - a module that publishes to a folder: `{"local": {"path", "url": "/published/<space>/<task>/"}, "iterations", "frames"}`;
   the canvas shows the page at that address;
 - the Vercel module: `url` (the preview link), `deploy_url`, `verified`; a failed deploy still answers `200` with
-  `deploy_error` (and `deploy_blocked: "no-node"` when Node is missing).
+  `deploy_error` (and `deploy_blocked: "no-node"` when Node is missing). The `deploy_*` keys exist only on this path;
+- a module with `publish_target: "url"` (publishes to a remote address): `{"url", "verified", "warnings"?, "frames_warnings"?}`;
+  its failures are module errors (`{"ok": false, "code", "error"}`), not `deploy_error`.
 
 `comments_unavailable` in the answer means the preview was built without team comments (the reason is its value).
 
@@ -38,7 +40,7 @@ Sets the password of this task's preview gate (the Vercel module's gate): a stri
 characters; an empty string brings back the default password of the space. Answer `{"ok": true, "preview_password",
 "preview_password_custom", "preview_gate"}`. The new password reaches the preview with the NEXT publish: until then
 `preview_gate` says it is stale. `409` when the space's publisher has no such gate (other modules keep their own `password`
-in the module secrets, see the topic `modules`). Passwords are the person's choice: ask first, do not invent one.
+in the module secrets, see the topic `modules`). A password, like any secret, comes from the person; never invent it.
 
 ## Import someone's preview
 

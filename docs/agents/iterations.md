@@ -48,6 +48,7 @@ iteration's label or note. The originals stay as they are.
 
 Copies a built single-page app (many files) into an iteration; build it with `--base-href=/it-assets/<itN>/`. The target
 is `~/deai-work/<task-id>/iterations/<itN>` unless the environment variable `DC_ITERATION_DIR` names the iteration folder:
-set it when the task lives elsewhere. The script removes hashed `*.js` and `*.css` bundles of an earlier build that the new
+set it to `<task dir>/iterations/<itN>` (`dir` from `POST /api/task-new` or `GET /api/tasks`), because new tasks usually do not
+live in the default folder. The script removes hashed `*.js` and `*.css` bundles of an earlier build that the new
 build does not have, and leaves other files (`pages.json`, `shots/`, page folders) alone. Create the iteration first with
 `POST /api/iteration`: the script only copies files.

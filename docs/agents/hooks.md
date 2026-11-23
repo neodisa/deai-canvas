@@ -33,6 +33,6 @@ own iteration to the repository when it changed since the last send. It never an
 sent the answer is `{"ok": true, "changed": false, "reason": …}`: `no-gitlab` (no `vcs` role or no repository for the task),
 `autosync-off` (the module's «Send after every agent reply» is off; nothing is sent or committed), `no-iterations`,
 `foreign-only` (only colleagues' iterations), `clean` (nothing new). A failed send is `reason: "offline"` (usually the
-network; with a `code` when the module gave one), and `reason: "error"` is a local failure that is written to the server
-log: say it aloud, do not hide it. When a send happens the answer is the result of the send, as for `POST /api/vcs-push`,
+network; with a `code` when the module gave one), and `reason: "error"` is a local failure (unreadable task files,
+permissions): it is written to the server log, and the Stop hook reports it instead of staying silent. When a send happens the answer is the result of the send, as for `POST /api/vcs-push`,
 plus `it` and `local_sha`. The task is named by `X-Canvas-Task`, as everywhere; without it, the current one.

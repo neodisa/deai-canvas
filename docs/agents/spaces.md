@@ -36,7 +36,7 @@ answer `{"ok": true, "id"}`. A folder that is already a space is refused (`path-
     POST http://127.0.0.1:8765/api/agents-md {"space": "<id>", "claude": true}
 
 `GET` reports the state of the space's `AGENTS.md` (`exists`, `hasBlock`, `outdated`, `newer`, the text) and of `CLAUDE.md`
-(`claude.state`: `ok`, `missing`, `no-import`), plus `paths` of this installation: `deai`, `inbox`, `authoring`, `agents`.
+(`claude.state`: `ok`, `missing`, `no-import`, `unreadable`), plus `paths` of this installation: `deai`, `inbox`, `authoring`, `agents`.
 `POST` creates or updates the generated block between the `deai:begin` and `deai:end` markers and keeps your text around it
 byte for byte; when it creates `AGENTS.md` it also creates `CLAUDE.md` with the line `@AGENTS.md` if there is none.
 With `"claude": true` it only connects `CLAUDE.md` (adds `@AGENTS.md` at the top, or creates the file) and leaves `AGENTS.md`

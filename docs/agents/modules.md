@@ -11,7 +11,7 @@ A module gives the space one or more roles. Built-in modules: `css-tokens` (`tok
 - `vcs`: git sync of a task (topic `vcs`).
 - `dashboard`: the team dashboard, a shared board of the team's task cards.
 - `tracker`: shows a task's status from an issue tracker (read-only).
-- `notify`: sends a notification to a chat for every new comment.
+- `notify`: chat notifications about new comments: the service behind the module sends them; the canvas keeps a per-task mute switch.
 
 These calls act on a space, not on a task: the space is the `space` parameter (query of `GET`, key of the body), the task
 header is ignored, and the `/t/<task-id>/` prefix is `400`. Without `space` the current space is used.

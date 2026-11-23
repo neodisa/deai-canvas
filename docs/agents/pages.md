@@ -9,8 +9,9 @@ arranges the tree in the canvas, and writing the whole file silently destroys th
 
 Every call acts on one task: send the header `X-Canvas-Task: <task-id>` (or the `/t/<task-id>` prefix); without it, on the
 current task. Every body has `"it": "itN"`. Refusals are `{"ok": false, "error", "code"}`: `stale` `409`, `busy` `503`,
-`not-found` `404`, `corrupt` `500` (`pages.json` does not parse), others `400` (`bad-iteration`, `empty-name`, `bad-kind`,
-`bad-ids`, `cycle`, `not-siblings`, `state-has-children`, `bad-index`, `missing-rev`).
+`not-found` `404`, `corrupt` `500` (`pages.json` does not parse), others `400`, among them `bad-iteration`, `bad-page`, `bad-ids`, `bad-id`,
+`bad-mode`, `bad-prev`, `bad-form`, `bad-kind`, `bad-index`, `empty-name`, `dup-id`, `cycle`, `not-siblings`, `too-deep`,
+`state-has-children`, `state-outside-page`, `missing-rev`.
 
 ## Read and rev
 
@@ -77,5 +78,5 @@ tree `prev` (what the canvas saw before the file was rewritten from outside) bac
     python3 <deai>/bin/pages.py kind   --task-dir <task folder> --it itN --id ID --kind page|state
 
 `<task folder>` is the one that holds `iterations/` (`dir` in the answer of `POST /api/task-new`). `add` without a target puts
-the node at the end of the root; `move` needs exactly one of `--into`, `--after`, `--root`. Success prints JSON; a refused
+the node at the end of the root; `move` needs exactly one of `--into`, `--after`, `--root`. `add`, `move`, `rename` and `kind` print JSON on success; `list` prints the tree as text, one line `id  [kind]  name` per node, indented by depth. A refused
 rule exits with code 2 and `error <code>: <text>` on stderr, and the tree is unchanged. The tool does not commit to git.
