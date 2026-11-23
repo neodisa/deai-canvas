@@ -355,7 +355,7 @@ test("впалий запис не зупиняє чергу: наступний
   assert.ok(server.rows.some((c) => c.id === "next"), "після впалого запису черга стала");
 });
 
-/* ---------- Відповіді піна (0.34) ---------- */
+/* ---------- Відповіді піна (0.35) ---------- */
 const reply = (id, ts, extra = {}) => ({ id, author: "Lead", text: `відповідь ${id}`, ts, ...extra });
 const copyOf = (s) => s.load().map((c) => JSON.parse(JSON.stringify(c)));
 

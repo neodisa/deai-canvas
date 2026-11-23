@@ -1,5 +1,5 @@
 /**
- * Гілка відповідей у картці панелі коментарів (0.34, Task 7a): розмітка, права, «Без знімка: …» і ЕТАЛОН сумісності.
+ * Гілка відповідей у картці панелі коментарів (0.35, Task 7a): розмітка, права, «Без знімка: …» і ЕТАЛОН сумісності.
  * Еталон (`_comments-view-golden.json`) знято з коду ДО змін: без нових полів `st` розмітка — байт у байт та сама, навіть
  * коли коментарі несуть `replies`.
  */
@@ -35,7 +35,7 @@ const snapB = snap(C({ id: "a", n: 1, replies: REPLIES }),
   C({ id: "c", n: 3, replies: REPLIES, scope: "earlier" }), C({ id: "d", n: 4, replies: [] }));
 const snapC = snap(C({ id: "p", n: 1, _aud: "project", replies: REPLIES, meta: { assignee: "claude" } }), C({ id: "l", n: 2, replies: REPLIES }));
 
-test("ЕТАЛОН: без нових полів st картка без відповідей і картки З відповідями — байт у байт як до 0.34", () => {
+test("ЕТАЛОН: без нових полів st картка без відповідей і картки З відповідями — байт у байт як до 0.35", () => {
   assert.equal(commentsPanelHTML(base({ snapshot: snapA })), GOLD.noReplies);
   assert.equal(commentsPanelHTML(base({ snapshot: snapB })), GOLD.withReplies);
   assert.equal(commentsPanelHTML(base({ snapshot: snapB, delAsk: "a" })), GOLD.withRepliesDelAsk);
@@ -56,7 +56,14 @@ test("cmtReplies: українська множина 1/2/5/11/21/22; англі
   finally { setLang("uk"); }
 });
 
-test("тексти 0.34: однакові ключі в uk і en", () => {
+test("cmtReplyNew: «+N нова/нові/нових» за українською множиною 1/3/5/11/21; англійська «+N new»", () => {
+  assert.deepEqual([1, 3, 5, 11, 21].map((n) => t("cmtReplyNew", n)), ["+1 нова", "+3 нові", "+5 нових", "+11 нових", "+21 нова"]);
+  setLang("en");
+  try { assert.deepEqual([1, 3].map((n) => t("cmtReplyNew", n)), ["+1 new", "+3 new"]); }
+  finally { setLang("uk"); }
+});
+
+test("тексти 0.35: однакові ключі в uk і en", () => {
   for (const k of Object.keys(DICT.uk).filter((x) => /^(cmtRepl|cfmDelReply|cfmDelCmtReplies|cmtShotMiss_|cmtTeamRepliesDown)/.test(x))) assert.ok(k in DICT.en, k);
   assert.equal(t("cmtNewTitle"), "Нове");
 });

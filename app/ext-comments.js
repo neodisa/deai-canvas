@@ -34,7 +34,7 @@ export const OWN_PREFIX = "dc-own:";
 export const CMT_EVENTS = new Set(["ready", "change", "select", "mode", "add", "reply"]);
 /** Що можна глядачеві: «Показати» всім; змінити/видалити — своїм; закритим — нічого. Закрити/відкрити/доручити тут немає зовсім. */
 export const PREVIEW_ACTIONS = { any: ["cmtshow", "cmtshot"], own: ["cmtedit", "cmtdel"], closed: [] };
-/** Відповіді (0.34): розгорнути гілку й відповісти — всім; змінити/видалити відповідь — лише свою (`canTouchReply`). */
+/** Відповіді (0.35): розгорнути гілку й відповісти — всім; змінити/видалити відповідь — лише свою (`canTouchReply`). */
 export const REPLY_ACTS = ["cmtthread", "cmtreply", "cmtreplysend", "cmtreplycancel", "cmtredit", "cmtreditsave", "cmtreditcancel",
   "cmtrdel", "cmtrdelyes", "cmtrdelno"];
 /** Дії панелі, які оболонка перекладає в `EXT_ACTIONS`. Закрити/відкрити знову/доручити/перенести — свідомо поза цим переліком. */
@@ -156,7 +156,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   const st = {
     open: false, active: true, adding: false, ready: false, readyDoc: null, snap: null, sel: null, query: "",
     editing: null, draft: null, delAsk: null,
-    /* Відповіді (0.34): розгорнуті гілки, коментар із відкритим полем, чернетки полів (id → текст), правка відповіді `"cid|rid"`. */
+    /* Відповіді (0.35): розгорнуті гілки, коментар із відкритим полем, чернетки полів (id → текст), правка відповіді `"cid|rid"`. */
     threads: new Set(), sending: new Set(), replying: null, rdraft: new Map(), replyEdit: null, replyEditDraft: null, replyDelAsk: null,
     expanded: { earlier: false, closed: false },
     wantAdd: false,
@@ -337,7 +337,7 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
       paint();
     },
     cmteditcancel: () => { st.editing = null; st.draft = null; paint(); },
-    /* Відповіді (0.34): те саме, що з коментарями, — права перевіряються тут, а не лише в розмітці (реєстр обійти не можна). */
+    /* Відповіді (0.35): те саме, що з коментарями, — права перевіряються тут, а не лише в розмітці (реєстр обійти не можна). */
     cmtthread: (id) => { if (st.threads.has(id)) st.threads.delete(id); else st.threads.add(id); paint(); },
     cmtreply: (id) => {
       if (!replyOpenOk(id)) return;

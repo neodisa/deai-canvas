@@ -386,7 +386,7 @@ class ProviderTest(CommentsEnv):
 # --------------------------------------------------------------------------------------- comments_client
 
 class OptionalReplyTest(CommentsEnv):
-    """0.34: `reply` — НЕобовʼязкова функція ролі `comments` (як `recent`): модуль без неї валідний, з нею — ядро її бере."""
+    """0.35: `reply` — НЕобовʼязкова функція ролі `comments` (як `recent`): модуль без неї валідний, з нею — ядро її бере."""
 
     def test_a_module_without_reply_is_valid_and_has_no_reply_fn(self):
         self.mkcm('plain')
@@ -1955,7 +1955,7 @@ class DualPagesTest(PagesEnv):
         self.assertIn('bottomInset: () => islandInsetOver(canvasEl.getBoundingClientRect())', js)
 
     def test_host_args_ask_the_shell_for_theme_and_labels(self):
-        """Пара «Python ↔ JS» (0.34): форма коментатора бере токени й підписи в оболонки через `window.parent.__dcCmtTheme` /
+        """Пара «Python ↔ JS» (0.35): форма коментатора бере токени й підписи в оболонки через `window.parent.__dcCmtTheme` /
         `__dcCmtLabels`; оболонки (`app.js`, `ext-shell.js`) їх виставляють. Обидва хости — і Deai, і превʼю — мають обидві функції,
         причому виняток чи відсутність провайдера дають `null` (коментатор тоді лишає свій вигляд)."""
         base = os.path.dirname(serve.__file__)

@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SEEN_MAX, arrived, baseline, isNew, markSeen, newsByPage, countNew, newsItems, readSeen, seenKey, teamOf, writeSeen } from "../app/comment-news.js";
+import { SEEN_MAX, arrived, baseline, isNew, markSeen, newsByPage, countNew, newsItems, readSeen, replySeenKey, seenKey, teamOf, writeSeen } from "../app/comment-news.js";
 
 test("seenKey: простір і задача; без простору — «-»", () => {
   assert.equal(seenKey("liga", "t1"), "dc-seen:liga:t1");
   assert.equal(seenKey(null, "t1"), "dc-seen:-:t1");
+});
+
+test("replySeenKey: окремий ключ відповідей, байт у байт `dc-seen-r:<простір>:<задача>`; без простору — «-»", () => {
+  assert.equal(replySeenKey("liga", "t1"), "dc-seen-r:liga:t1");
+  assert.equal(replySeenKey(null, "t1"), "dc-seen-r:-:t1");
+  assert.equal(replySeenKey("", "t1"), "dc-seen-r:-:t1");
+  assert.notEqual(replySeenKey("liga", "t1"), seenKey("liga", "t1"));
 });
 
 test("readSeen: сміття, чужа версія — null; не-рядки в ids відкидаються", () => {

@@ -182,7 +182,7 @@ test("підписник, що кидає виняток, не валить ре
   assert.deepEqual(seen, [1]);
 });
 
-test("supportsReplies === true, а replies їдуть із коментарем і вертаються з сервера (0.34)", async () => {
+test("supportsReplies === true, а replies їдуть із коментарем і вертаються з сервера (0.35)", async () => {
   const r = { id: "r1", author: "B", text: "відповідь", ts: "20.11.2026 10:00", editedTs: "20.11.2026 10:05", agent: true };
   const w = world();
   const s = w.sandbox.DeaiComments.create(cfg());

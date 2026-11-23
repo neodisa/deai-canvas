@@ -1943,7 +1943,7 @@ body:not(.home-open) .cn-drawer{display:none}
 .cmt-aud--project{color:var(--open)}
 .cmt-badge{font-size:10px;padding:0 6px;border-radius:999px;border:1px solid var(--line2);color:var(--dim)}
 .cmt-h--new{color:var(--open)}
-/* Гілка відповідей у картці коментаря (0.34): рядок-згортка, список зі стовпчиком 1 px --line2, нова відповідь — тон --open 10 % без бічної смуги,
+/* Гілка відповідей у картці коментаря (0.35): рядок-згортка, список зі стовпчиком 1 px --line2, нова відповідь — тон --open 10 % без бічної смуги,
    поле відповіді, «Без знімка: причина». Лише токени оболонки. */
 .cmt-thread{margin:6px 0 0;padding-top:6px;border-top:1px solid var(--line)}
 .cmt-rsum{display:flex;align-items:center;gap:6px;width:100%;min-height:var(--h-xs);border:0;background:none;padding:0;color:var(--mid);font:inherit;font-size:11.5px;cursor:pointer;text-align:left}

@@ -718,7 +718,7 @@ class ServeTest(unittest.TestCase):
                                            {'id': 'c2', 'text': 'u'}])
 
     def test_local_comments_drop_reply_runtime_fields(self):
-        """0.34: `_goneReplies` піна і `_pending` у відповідях — runtime коментатора, на диск не лягають.
+        """0.35: `_goneReplies` піна і `_pending` у відповідях — runtime коментатора, на диск не лягають.
 
         Решта полів відповіді (і записи не-обʼєкти, і спадок без id) — дані, їх не чіпаємо.
         """
@@ -5418,7 +5418,7 @@ class PreviewHostArg(unittest.TestCase):
         for need in ('host: (function', "'dc-comments'", 'onReady', 'onChange', 'onSelect', 'onMode',
                      "ev: 'add'", 'userName: function', "localStorage.getItem('comment-layer:user')"):
             self.assertIn(need, js)
-        # 0.34: відповідь теж «своя» — `onReply` шле id ВІДПОВІДІ (`o.reply`), не коментаря; лише превʼю, у Deai цього нема.
+        # 0.35: відповідь теж «своя» — `onReply` шле id ВІДПОВІДІ (`o.reply`), не коментаря; лише превʼю, у Deai цього нема.
         self.assertIn("onReply: function (o) { send({ ev: 'reply', id: o && o.reply }); }", js)
         self.assertNotIn('onReply', serve.HOST_ARG)
         # 0.32.1: острівця внизу превʼю нема — відступу під нього теж (інструменти в смузі згори).

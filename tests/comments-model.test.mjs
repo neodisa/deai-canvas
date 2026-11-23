@@ -115,7 +115,7 @@ test("Б2 ревʼю M5: локальний id у fresh не потрапляє 
   assert.deepEqual(s.open.map((c) => c.id).sort(), ["l1", "l2", "p1"]);
 });
 
-/* ── Відповіді (0.34) ── */
+/* ── Відповіді (0.35) ── */
 const R = (id, ts, o = {}) => ({ id, author: "Автор Б", text: "відп", ts, ...o });
 const withReplies = (id, n, aud, replies, o = {}) => ({ ...A(id, n, aud, o), replies });
 

@@ -336,7 +336,7 @@ test("3: чужий коментар (посіяний, інший браузе�
   await page.locator('#cmt-panel [data-act="cmtsec"][data-val="closed"]').click();
   const all = await until(async () => { const c = await cards(page); return c.length === 4 ? c : null; }, "усі картки (3 відкриті + 1 закрита)");
   for (const c of all) {
-    const allowed = c.closed ? [] : ["cmtreply", "cmtshow"];   // відповісти може будь-хто (0.34)
+    const allowed = c.closed ? [] : ["cmtreply", "cmtshow"];   // відповісти може будь-хто (0.35)
     assert.deepEqual(c.acts, allowed, `картка ${c.id}: дозволено лише ${JSON.stringify(allowed)}`);
   }
   const forbidden = ["cmtedit", "cmtdel", "cmtres", "cmtreopen", "cmtassign", "cmtunassign", "cmtcarry", "cmtfilter"];
@@ -711,7 +711,7 @@ test("18: форма коментаря в превʼю — у токенах і
   assert.deepEqual(o.errors, []);
 });
 
-/* ── Відповіді (0.34, Task 8) ───────────────────────────────────────────────────────────────────────────────────────────── */
+/* ── Відповіді (0.35, Task 8) ───────────────────────────────────────────────────────────────────────────────────────────── */
 const reply = (id, author, text, extra = {}) => ({ id, author, text, ts: "19.11.2026 13:00", ...extra });
 const REPLY_SEED = [
   { id: "seed-open", author: "Олена", text: "Кнопка зливається з фоном", extra: { replies: [reply("fr1", "Хтось", "Чужа відповідь")] } },

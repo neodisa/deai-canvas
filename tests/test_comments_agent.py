@@ -116,7 +116,7 @@ class Net:
         self.calls, self.rows, self.bodies, self.error = [], [], [], None
 
     def comment_calls(self):
-        """Виклики таблиці `comments`: `list` (0.34) додатково читає `comment_replies` — тут той другий запит не рахується."""
+        """Виклики таблиці `comments`: `list` (0.35) додатково читає `comment_replies` — тут той другий запит не рахується."""
         return [c for c in self.calls if '/rest/v1/comment_replies' not in c[1]]
 
     def __call__(self, req, timeout=None, context=None):
@@ -1259,7 +1259,7 @@ class AgentNewsUnitTest(unittest.TestCase):
 
 
 class ProjectCommentsReplyTest(AgentEnv):
-    """`ProjectComments.reply` (0.34): необовʼязкова `reply` модуля; без неї — `None`, а не помилка."""
+    """`ProjectComments.reply` (0.35): необовʼязкова `reply` модуля; без неї — `None`, а не помилка."""
 
     def replier(self, sp):
         self.mkcm('replier', server=REPLY_SERVER, settings=[])
@@ -1545,7 +1545,7 @@ class CommentNewsRouteTest(ServerEnv):
         st, raw = self.news()
         self.assertEqual((st, json.loads(raw)), (200, {'supported': False, 'team': False, 'items': []}), 'модуль `answer` не має `recent`')
 
-    # --- 0.34: відповіді агента на відкриті локальні піни ---
+    # --- 0.35: відповіді агента на відкриті локальні піни ---
     def lpin(self, pid, status='open', replies=None, version='3/p', **kw):
         p = self.local_pin(pid, 'локальний', status=status)
         p['meta'] = {'version': version}

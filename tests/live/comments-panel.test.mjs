@@ -701,7 +701,7 @@ test("26: кошик у картці — питання на місці; Esc / �
   assert.equal(dialogs, 0, "з'явилось нативне вікно браузера");
 });
 
-/* ───────── 0.34: відповіді в картці (локальний пін) ───────── */
+/* ───────── 0.35: відповіді в картці (локальний пін) ───────── */
 const localRows = (dir) => { try { return JSON.parse(readFileSync(path.join(dir, ".dc-local-comments.json"), "utf8")); } catch (e) { return []; } };
 const repTexts = (page) => page.$$eval("#cmt-panel .cmt-reply .cmt-rtext", (els) => els.map((e) => e.textContent));
 
@@ -786,7 +786,7 @@ test("28: закритий коментар — рядок гілки без п�
   }
 });
 
-/* ───────── 0.34: відповідь AI на ЛОКАЛЬНИЙ пін у проєкті без команди — новина ───────── */
+/* ───────── 0.35: відповідь AI на ЛОКАЛЬНИЙ пін у проєкті без команди — новина ───────── */
 const seedOpenPin = (dir, pins) => writeFileSync(path.join(dir, ".dc-local-comments.json"), JSON.stringify(pins.map((p) => seedPin({
   meta: { iteration: "1", version: "1", seq: 1, viewport: { w: 1280, h: 900 } }, ...p }))));
 /** Як `inbox.py`: дописує відповідь агента в файл задачі; вікно оболонки отримує `focus` і перечитує локальні піни. */
@@ -899,7 +899,7 @@ test("34: поле відповіді — розгорнуте одне (дру�
   assert.equal(await page.locator("#cmt-panel .cmt-rbox--on").count(), 0, "перемальовка знову розгорнула поле");
 });
 
-/* ───────── 0.34: форма над макетом — у токенах і мові оболонки (`host.theme`, `host.labels`) ───────── */
+/* ───────── 0.35: форма над макетом — у токенах і мові оболонки (`host.theme`, `host.labels`) ───────── */
 test("20: форма коментаря над макетом — themed, фон = --s2 оболонки, підписи мовою оболонки (uk), тег чипом", async (t) => {
   const { page, frame } = await boot(t, PORT_BASE + 50);
   await page.click('#hud [data-act="comments"]');

@@ -79,7 +79,7 @@
       return Promise.race([settled, guard]);
     }
     store.ready = Promise.all([Promise.resolve(local.ready), teamReady()]).then(function () {});
-    /* Причина, чому відповіді командного каналу недоступні (0.34): лише коли команда жива, а її модуль сам сказав. */
+    /* Причина, чому відповіді командного каналу недоступні (0.35): лише коли команда жива, а її модуль сам сказав. */
     Object.defineProperty(store, 'repliesDown', { enumerable: true, get: function () {
       if (!team || store.teamDown) return null;
       return typeof team.repliesDown === 'string' && team.repliesDown ? team.repliesDown : null;

@@ -1,4 +1,4 @@
-/** Вигляд і мова форми коментатора (0.34): що оболонка віддає в `host.theme` / `host.labels`. */
+/** Вигляд і мова форми коментатора (0.35): що оболонка віддає в `host.theme` / `host.labels`. */
 import assert from "node:assert/strict";
 import test from "node:test";
 

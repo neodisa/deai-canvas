@@ -4,7 +4,7 @@
 Для Claude:
   `python3 bin/inbox.py` — усе до відпрацювання скопом;
   `python3 bin/inbox.py resolve <id> --reason "що зроблено"` — закрити пін(и);
-  `python3 bin/inbox.py reply <id> --text "питання чи примітка"` — відповісти в гілці під пінем (0.34);
+  `python3 bin/inbox.py reply <id> --text "питання чи примітка"` — відповісти в гілці під пінем (0.35);
   `python3 bin/inbox.py -h` — довідка;
   `python3 bin/inbox.py --task <id> …` — про названу задачу, а не поточну.
 ДВА джерела:

@@ -178,6 +178,7 @@ function pollHarness({ tabs, current = "T0", space = "s1", visible = true, repli
     spaceNow: () => ({ id: spaceBox.id }),
     api: async (p) => { calls.push(p); if (onApi) onApi(spaceBox); const r = replies[decodeURIComponent(p.split("task=")[1])]; if (r instanceof Error) throw r; return r; },
     seenKey: (s, t) => `${s}:${t}`,
+    replySeenKey: (s, t) => `dc-seen-r:${s}:${t}`,
     loadSeen: (k) => seenStore[k] ?? null,
     saveSeen: (k, v) => { saved.push(k); seenStore[k] = v; },
     baseline: (items) => new Set(items.map((c) => c.id)),
@@ -217,7 +218,7 @@ test("pollTabNews: рахує нові інших вкладок, пише ма�
   assert.deepEqual(h2.f.news(), {});
 });
 const withReplies = [{ id: "t1" }, { id: "r1", parent: "p" }, { id: "r2", parent: "p" }];
-test("pollTabNews 0.34: «бачене» — обʼєднання головного маркера й маркера відповідей (`dc-seen-r:`), як у виду", async () => {
+test("pollTabNews 0.35: «бачене» — обʼєднання головного маркера й маркера відповідей (`dc-seen-r:`), як у виду", async () => {
   const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
     replies: { T1: { supported: true, team: true, items: withReplies } },
     seenStore: { "s1:T1": new Set(["t1"]), "dc-seen-r:s1:T1": new Set(["r1", "r2"]) } });
@@ -229,7 +230,7 @@ test("pollTabNews 0.34: «бачене» — обʼєднання головно
   await h2.f.run();
   assert.deepEqual(h2.f.news(), { T1: 1 }, "r2 ще не бачено ніким — одна нова відповідь");
 });
-test("pollTabNews 0.34: є лише маркер відповідей (вид без команди) — основа без відповідей, нова відповідь не губиться", async () => {
+test("pollTabNews 0.35: є лише маркер відповідей (вид без команди) — основа без відповідей, нова відповідь не губиться", async () => {
   const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
     replies: { T1: { supported: true, team: true, items: withReplies } },
     seenStore: { "dc-seen-r:s1:T1": new Set(["r1"]) } });
@@ -237,7 +238,7 @@ test("pollTabNews 0.34: є лише маркер відповідей (вид б
   assert.deepEqual(h.f.news(), { T1: 1 }, "r2 прийшла після останнього погляду — лишається новою, а не поглинається основою");
   assert.deepEqual([...h.seenStore["s1:T1"]], ["t1"], "головний маркер — основа лише командних (без `parent`)");
 });
-test("pollTabNews 0.34: відповідь без `team` (проєкт без команди, зламаний модуль) ніколи не пише ГОЛОВНИЙ маркер `dc-seen:`", async () => {
+test("pollTabNews 0.35: відповідь без `team` (проєкт без команди, зламаний модуль) ніколи не пише ГОЛОВНИЙ маркер `dc-seen:`", async () => {
   const local = [{ id: "r1", parent: "p" }, { id: "r2", parent: "p" }];
   const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }], replies: { T1: { supported: true, team: false, items: local } } });
   await h.f.run();
@@ -253,7 +254,7 @@ test("pollTabNews 0.34: відповідь без `team` (проєкт без к
   assert.equal(h.seenStore["s1:T1"], undefined, "головний маркер і далі не заданий");
   assert.deepEqual(h.saved, ["dc-seen-r:s1:T1"], "жодного нового запису");
 });
-test("pollTabNews 0.34: team:false не змінює вже наявний головний маркер, а лічить за обʼєднанням", async () => {
+test("pollTabNews 0.35: team:false не змінює вже наявний головний маркер, а лічить за обʼєднанням", async () => {
   const main = new Set(["t1"]);
   const h = pollHarness({ tabs: [{ id: "T1", space: "s1" }],
     replies: { T1: { supported: true, team: false, items: [{ id: "t1" }, { id: "r1", parent: "p" }] } },
@@ -344,7 +345,7 @@ test("кошик у картці (етап В): cmtdel питає, cmtdelyes в�
   assert.match(src, /editingId: cmtEditing, delAsk: cmtDelAsk,/);
 });
 
-/* --- Відповіді в картці (0.34, Task 7b) --- */
+/* --- Відповіді в картці (0.35, Task 7b) --- */
 test("відповіді: усі 10 дій у BAR_ACTIONS (кожна в окремому рядку), виклики шару — у try", () => {
   for (const k of ["cmtthread", "cmtreply", "cmtreplysend", "cmtreplycancel", "cmtredit", "cmtreditsave", "cmtreditcancel", "cmtrdel", "cmtrdelyes", "cmtrdelno"]) act(k);
   assert.match(act("cmtreplysend"), /cmtreplysend: \(id\) => \{$/);
@@ -467,11 +468,11 @@ test("маркер відповідей без команди: окремий к
     ${/^const cmtReplySeenKey = .*$/m.exec(src)[0]}
     ${/^const cmtSeenKey = .*$/m.exec(src)[0]}
     return { cmtSeenSet, cmtMarkSeen };`;
-  const mk = (team) => new Function("localStorage", "readSeen", "writeSeen", "baseline", "markSeen", "seenKey", "spaceNow", "currentTaskId", "cmtTeamDown", "noTeamComments", code)(
+  const mk = (team) => new Function("localStorage", "readSeen", "writeSeen", "baseline", "markSeen", "seenKey", "replySeenKey", "spaceNow", "currentTaskId", "cmtTeamDown", "noTeamComments", code)(
     { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) },
     (raw) => (raw ? new Set(JSON.parse(raw)) : null), (set) => JSON.stringify([...set]),
     (items) => new Set(items.map((c) => c.id)), (seen, ids) => new Set([...(seen || []), ...ids]),
-    (sp, t) => `dc-seen:${sp || "-"}:${t}`, () => ({ id: "s" }), "T1", team ? null : "down", () => !team);
+    (sp, t) => `dc-seen:${sp || "-"}:${t}`, (sp, t) => `dc-seen-r:${sp || "-"}:${t}`, () => ({ id: "s" }), "T1", team ? null : "down", () => !team);
   const old = { id: "r-old", parent: "c1" }, comm = { id: "c-col" };
   /* без команди: головний маркер НЕ пишеться, маркер відповідей — з базою лише відповідей */
   const k = mk(false);

@@ -1,5 +1,5 @@
 /**
- * Відповіді в коментаторі (0.34, Task 3): `reply/editReply/removeReply` лише з хостом, `onReply` до першого `onChange`
+ * Відповіді в коментаторі (0.35, Task 3): `reply/editReply/removeReply` лише з хостом, `onReply` до першого `onChange`
  * з відповіддю, злиття відповідей «у польоті» із зовнішнім оновленням, рядок «N replies» у власній панелі.
  * Сервер не потрібен: голий бандл `app/vendor/comment-layer.min.js` і сховище в памʼяті.
  */

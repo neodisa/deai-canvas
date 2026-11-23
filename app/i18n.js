@@ -1395,9 +1395,9 @@ const UK = {
   cmtAssignedBadge: 'Доручено AI',
   cmtTeamDown: (why) => `Командні коментарі недоступні: ${why}`,
   cmtNewTitle: 'Нове',
-  // Відповіді в коментарях (0.34): гілка в картці, «Без знімка: …», стан «відповіді команди недоступні».
+  // Відповіді в коментарях (0.35): гілка в картці, «Без знімка: …», стан «відповіді команди недоступні».
   cmtReplies: (n) => `${n} ${plural(n, 'відповідь', 'відповіді', 'відповідей')}`,
-  cmtReplyNew: (k) => `+${k} нова`,
+  cmtReplyNew: (k) => `+${k} ${plural(k, 'нова', 'нові', 'нових')}`,
   cmtReplyNewChip: 'нова',
   cmtReply: 'Відповісти',
   cmtReplyPh: 'Відповісти…',
@@ -2733,7 +2733,7 @@ const EN = {
   cmtAssignedBadge: 'Assigned to AI',
   cmtTeamDown: (why) => `Team comments are unavailable: ${why}`,
   cmtNewTitle: 'New',
-  // Comment replies (0.34): the thread in a card, "No screenshot: …", the "team replies unavailable" state.
+  // Comment replies (0.35): the thread in a card, "No screenshot: …", the "team replies unavailable" state.
   cmtReplies: (n) => `${n} ${n === 1 ? 'reply' : 'replies'}`,
   cmtReplyNew: (k) => `+${k} new`,
   cmtReplyNewChip: 'new',

@@ -77,7 +77,7 @@ class FakeNet:
     def __init__(self, project=None, get_error=None, replies=None):
         self.project = project or []
         self.get_error = get_error
-        self.replies = replies or []           # рядки `comment_replies` (0.34): `list` модуля читає їх поруч із коментарями
+        self.replies = replies or []           # рядки `comment_replies` (0.35): `list` модуля читає їх поруч із коментарями
         self.calls = []
 
     def __call__(self, req, timeout=None, context=None):
@@ -602,7 +602,7 @@ def _reply(rid, text, author='Ольга', ts='20.09.2026 10:05', **kw):
 
 
 class ThreadOutput(InboxCase):
-    """0.34: під пінем — гілка відповідей (`↳ відповіді (N):`) і причина відсутнього знімка (`↳ без знімка:`)."""
+    """0.35: під пінем — гілка відповідей (`↳ відповіді (N):`) і причина відсутнього знімка (`↳ без знімка:`)."""
 
     def listing(self, argv=()):
         rc, out, err = self.run_main(list(argv))

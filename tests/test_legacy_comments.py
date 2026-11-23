@@ -673,7 +673,7 @@ class LegacyAgentTest(_Env):
                         self.assertEqual({k: got[field].get(k) for k in want[field]}, want[field])
                     else:
                         self.assertEqual(got[field], want[field])
-        # `list` (0.34) після коментарів читає ще й `comment_replies`: звіряємо запит до `comments`
+        # `list` (0.35) після коментарів читає ще й `comment_replies`: звіряємо запит до `comments`
         [req] = [r for r in self.seen if '/rest/v1/comment_replies' not in r['url']]
         self.assertEqual(req['method'], 'GET')
         self.assertEqual(re.search(r'project_id=eq\.([^&]+)', req['url']).group(1), self.base['pins_query_channel'])

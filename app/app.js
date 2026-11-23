@@ -76,7 +76,7 @@ import { islandToolsHTML } from './island.js';
 import { cmtLabels, cmtTheme } from './cmt-form.js';
 import { commentsPanelHTML } from './comments-view.js';
 import { FILTERS, audOf, openCount } from './comments-model.js';
-import { arrived, baseline, countNew, isNew, markSeen, newsByPage, newsItems, readSeen, seenKey, writeSeen } from './comment-news.js';
+import { arrived, baseline, countNew, isNew, markSeen, newsByPage, newsItems, readSeen, replySeenKey, seenKey, writeSeen } from './comment-news.js';
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
@@ -153,7 +153,7 @@ let cmtTool = null;   // `CommentLayer.tool()` поточного виду дл�
 let cmtDelAsk = null;   // id картки, де показано питання «Видалити назавжди?» (етап В)
 let cmtOpen = false, cmtSnap = null, cmtSel = null, cmtQuery = '', cmtEditing = null, cmtDraft = null, frameCmtReady = false;
 const cmtExpanded = { earlier: false, closed: false };
-/** Відповіді (0.34): розгорнуті гілки (id коментарів), коментар із відкритим полем, чернетки полів (id → текст), правка відповіді
+/** Відповіді (0.35): розгорнуті гілки (id коментарів), коментар із відкритим полем, чернетки полів (id → текст), правка відповіді
  *  `"cid|rid"` із чернеткою, питання «Видалити відповідь?» `"cid|rid"`. Скидаються там, де `cmtEditing`/`cmtDelAsk`. */
 const cmtThreads = new Set();
 const cmtReplyDraft = new Map();
@@ -2089,7 +2089,7 @@ function snapIds(all) {
 }
 /** Маркер «бачив» відповідей без команди: окремий від головного (`dc-seen:`), бо головний не пишемо, поки команди нема чи вона впала
  *  (інакше колеги, що зʼявляться пізніше, залили б «Нове»), а відповідь агента на ЛОКАЛЬНИЙ пін мусить бути новиною й тоді. */
-const cmtReplySeenKey = () => `dc-seen-r:${spaceNow()?.id || '-'}:${currentTaskId}`;
+const cmtReplySeenKey = () => replySeenKey(spaceNow()?.id, currentTaskId);
 /** Усе «бачене» для `isNew`: головний маркер (з базою, коли команда жива) ∪ маркер відповідей (база — лише відповіді). */
 function cmtSeenSet(news) {
   const key = cmtSeenKey(), rkey = cmtReplySeenKey();
@@ -2154,7 +2154,7 @@ function setCmtFilter(f) {
   try { localStorage.setItem('dc-cmt-filter', f); } catch (e) {}
   paintComments();
 }
-/** Тост про нову відповідь (0.34): автор і номер піна-батька; «Показати» відкриває панель, вибирає батька й розгортає його гілку. */
+/** Тост про нову відповідь (0.35): автор і номер піна-батька; «Показати» відкриває панель, вибирає батька й розгортає його гілку. */
 function replyNewsToast(r) {
   const par = cmtSnap?.comments?.find((c) => c && c.id === r.parent);
   notice('cmt-news', t('cmtReplyToast', r.author || '—', par ? par.n : '—'), [{
@@ -2744,7 +2744,7 @@ const BAR_ACTIONS = {
     paintComments();
   },
   cmteditcancel: () => { cmtEditing = null; cmtDraft = null; paintComments(); },
-  /* Відповіді (0.34): права й `repliesOff` перевіряємо ще раз тут, а не лише в розмітці; виклики шару — у try, як і решта. */
+  /* Відповіді (0.35): права й `repliesOff` перевіряємо ще раз тут, а не лише в розмітці; виклики шару — у try, як і решта. */
   cmtthread: (id) => { if (cmtThreads.has(id)) cmtThreads.delete(id); else cmtThreads.add(id); paintComments(); },
   cmtreply: (id) => {
     const c = cmtSnap?.comments?.find((x) => x && x.id === id);
@@ -6932,7 +6932,7 @@ const ovc = overviewComments({
     rightInset: () => (cmtOpen && !cmtEl.hidden ? cmtEl.getBoundingClientRect().width : 0),
     /* Скільки знизу полотна перекриває острівець: форма піна й «Кілька» лягають над ним. */
     bottomInset: () => islandInsetOver(canvasEl.getBoundingClientRect()),
-    /* Вигляд і мова форми піна — ті самі, що в рамці (0.34): токени `<body>` і підписи `t()`; провайдери — `__dcCmtTheme/__dcCmtLabels`. */
+    /* Вигляд і мова форми піна — ті самі, що в рамці (0.35): токени `<body>` і підписи `t()`; провайдери — `__dcCmtTheme/__dcCmtLabels`. */
     theme: () => window.__dcCmtTheme(),
     labels: () => window.__dcCmtLabels(),
     /* `onReady` летить ВСЕРЕДИНІ `init()`, коли `ovc.layer` ще не присвоєно (присвоєння — після повернення з `init`):
@@ -7464,9 +7464,9 @@ async function pollTabNews(force = false) {
       try { r = await api(`/api/comment-news?task=${encodeURIComponent(x.id)}`); } catch (e) { r = null; }
       /* `error` при supported:true — команда впала (квота/мережа): порожній список НЕ основа, інакше після одужання усе «нове». */
       if (!r || !r.supported || r.error || !Array.isArray(r.items)) continue;
-      /* Два маркера, як у `cmtSeenSet` (0.34): головний `dc-seen:` і відповідей `dc-seen-r:`; «бачене» — їх обʼєднання, інакше
+      /* Два маркера, як у `cmtSeenSet` (0.35): головний `dc-seen:` і відповідей `dc-seen-r:`; «бачене» — їх обʼєднання, інакше
          відповідь агента в проєкті без команди (її бачив відкритий вид, а головного маркера немає) висіла б «новою» вічно. */
-      const key = seenKey(sp, x.id), rkey = `dc-seen-r:${sp || '-'}:${x.id}`;
+      const key = seenKey(sp, x.id), rkey = replySeenKey(sp, x.id);
       let seen = loadSeen(key), rseen = loadSeen(rkey);
       /* Як `cmtSeenSet`: ГОЛОВНИЙ маркер — «команда жива», його пишемо лише з відповіді, де `recent` модуля справді опитано без
          помилки (`team`); інакше (проєкт без команди, зламаний модуль) основа — маркер відповідей, а головний лишається

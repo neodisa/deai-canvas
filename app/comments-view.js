@@ -65,7 +65,7 @@ function replyHTML(c, r, st, open) {
   return `<li class="cmt-reply${isFresh ? " cmt-reply--new" : ""}">${head}${body}${cfm}</li>`;
 }
 
-/** Гілка відповідей під текстом картки (0.34). Лише коли виклик передав `st.threads` (Set розгорнутих id) — без нього картка
+/** Гілка відповідей під текстом картки (0.35). Лише коли виклик передав `st.threads` (Set розгорнутих id) — без нього картка
  *  така, як була, хоч би й мала `replies`. Закритий коментар: згорнутий/розгорнутий список без поля й без дій. */
 function threadHTML(c, st) {
   if (!(st.threads instanceof Set)) return "";
@@ -175,7 +175,7 @@ function foldHTML(key, title, items, st, kind) {
 const FILTER_KEY = { local: "cmtFLocal", project: "cmtFTeam", all: "cmtFAll" };
 
 /** st: {snapshot, query, selectedId, editingId, delAsk (id картки з питанням «Видалити назавжди?»), expanded:{earlier,closed}, filter:'local'|'project'|'all', dual, teamDown, fresh:Set|null, down}
- *  Гілка відповідей (0.34; без `threads` картка як була): `threads: Set` (розгорнуті id коментарів), `replying: id`, `replyEdit: "cid|rid"`,
+ *  Гілка відповідей (0.35; без `threads` картка як була): `threads: Set` (розгорнуті id коментарів), `replying: id`, `replyEdit: "cid|rid"`,
  *  `replyDelAsk: "cid|rid"`, `repliesDown: рядок причини` (смуга «відповіді команди недоступні», коли команда жива), `isOwnReply(r)`, `canDeleteReply(r)`, `repliesOff(c) → рядок причини|null`, `repliesNote: false` (превʼю: «відповіді вимкнені» — тихо, без рядка-примітки під карткою); `fresh` — id коментарів І відповідей.
  *  Необовʼязково (превʼю, 0.32.0; без них — Deai як було): `isOwn(c)`, `actions: {any, own, closed}` (дозволені `data-act`), `adding: boolean` (кнопка «Додати коментар»), `emptyKey` (ключ i18n порожнього списку; за замовчуванням `cmtEmpty`). */
 export function commentsPanelHTML(st) {

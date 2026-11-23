@@ -3704,7 +3704,7 @@ def agent_pin(c):
             'html_snapshot': snap if snap and (snap['text'] or snap['outerHTML']) else None,
             'resolved_v': _agent_version(c.get('resolvedV')),
             'resolve_reason': agent_line(c.get('resolveReason'), 1000) or None}
-    if replies:                                                     # лише коли є: пін без відповідей — як до 0.34
+    if replies:                                                     # лише коли є: пін без відповідей — як до 0.35
         pin['replies'] = replies
     return pin
 
@@ -3760,7 +3760,7 @@ def agent_news(raw):
         item = {'id': pid, 'ts': agent_line(c.get('ts'), 40), 'author': agent_line(c.get('author'), 200),
                 'status': 'open', 'version': ver or None}
         parent = c.get('parent')
-        if isinstance(parent, str) and _AGENT_ID.fullmatch(parent):  # відповідь: `parent` — id коментаря (0.34)
+        if isinstance(parent, str) and _AGENT_ID.fullmatch(parent):  # відповідь: `parent` — id коментаря (0.35)
             item['parent'] = parent
         out.append(item)
         if len(out) >= MAX_NEWS:
@@ -7568,7 +7568,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(task, dict):
             self._send_json({'ok': False, 'error': 'unknown task'}, status=404)
             return
-        # 0.34: відповіді агента на ВІДКРИТІ локальні піни (їх дописує `inbox.py reply` у локальний файл) — теж новини вкладки.
+        # 0.35: відповіді агента на ВІДКРИТІ локальні піни (їх дописує `inbox.py reply` у локальний файл) — теж новини вкладки.
         local = local_agent_news(self._local_file(task))
         pc = ProjectComments(spaces.active_space())
         if pc.kind != 'module':
@@ -7609,7 +7609,7 @@ class Handler(SimpleHTTPRequestHandler):
         # дані піна. Адаптер їх і так не шле; тут — рубіж для будь-якого писаря
         # і самоочищення старих файлів, де `_el` осів у кожному піні (fb 05.11.2026).
         # `_aud` — службова позначка адресата комбінованого сховища (0.27.0).
-        # 0.34: `_goneReplies` (надгробки відповідей) і `_pending` у самих відповідях — теж runtime.
+        # 0.35: `_goneReplies` (надгробки відповідей) і `_pending` у самих відповідях — теж runtime.
         def _scrub(c):
             if not isinstance(c, dict):
                 return c
