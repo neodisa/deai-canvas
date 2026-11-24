@@ -100,6 +100,8 @@ API_VERSIONS = (1, 2)
 API_VERSION = 2
 #: Інструменти (`tools`) і дії (`actions`) модуля api 2: скільки їх буває, куди дії можна повісити, типовий тайм-аут дії.
 MAX_TOOLS = 4
+#: Дозволи інструмента на роботу з макетом (М2), у канонічному порядку. Решта вимагає `read`: без нього нема посилань.
+PAGE_PERMS = ('read', 'mark', 'change', 'listen')
 MAX_ACTIONS = 8
 ACTION_WHERE = ('palette', 'task', 'iteration')
 ACTION_TIMEOUT = 15
@@ -251,7 +253,7 @@ class Module:
         # `None` — ключа в маніфесті нема: `check` бере `CHECK_TIMEOUT` у момент виклику (тести його підміняють)
         self.check_timeout_s = check_timeout_s if type(check_timeout_s) is int else None
         self.client = tuple(client)
-        self.tools = tuple(dict(t) for t in tools)          # api 2: `{id, label, icon, panel, key}`
+        self.tools = tuple(dict(t) for t in tools)          # api 2: `{id, label, icon, panel, key, page}`
         self.actions = tuple(dict(a) for a in actions)      # api 2: `{id, label, where: tuple, timeout_s}`
         self.status = status
         self.error = error
@@ -553,8 +555,8 @@ def _check_tools(man, api, d):
             return None, f'{at}: must be an object'
         for k in t:
             if k == 'frame':
-                return None, f'{at}.frame: not supported yet'
-            if k not in ('id', 'label', 'icon', 'panel', 'key'):
+                return None, f'{at}.frame: not supported — use "page"'
+            if k not in ('id', 'label', 'icon', 'panel', 'key', 'page'):
                 return None, f'{at}: unknown key {str(k)[:40]!r}'
         tid = t.get('id')
         if not isinstance(tid, str) or not ID_RE.fullmatch(tid):
@@ -587,7 +589,21 @@ def _check_tools(man, api, d):
             if key in keys:
                 return None, f'{at}.key: duplicate {key!r}'
             keys.add(key)
-        out.append({'id': tid, 'label': label.strip(), 'icon': icon, 'panel': panel, 'key': key})
+        page = ()
+        if 'page' in t:
+            pg = t['page']
+            if not isinstance(pg, list) or not pg:
+                return None, f'{at}.page: must be a non-empty list'
+            if len({repr(x) for x in pg}) != len(pg):
+                return None, f'{at}.page: duplicate permission'
+            for x in pg:
+                if not isinstance(x, str) or x not in PAGE_PERMS:
+                    return None, f'{at}.page: unknown permission {str(x)[:40]!r}'
+            if 'read' not in pg:
+                need = next(x for x in PAGE_PERMS if x in pg)
+                return None, f'{at}.page: "{need}" requires "read"'
+            page = tuple(sorted(pg, key=PAGE_PERMS.index))
+        out.append({'id': tid, 'label': label.strip(), 'icon': icon, 'panel': panel, 'key': key, 'page': page})
     return tuple(out), None
 
 
@@ -1295,7 +1311,7 @@ def extensions(space):
     for mid, m in _ext_modules(space):
         for t in m.tools:
             tools.append({'module': mid, 'module_name': m.name, 'id': t['id'], 'label': t['label'], 'icon': t['icon'],
-                          'key': t['key'],
+                          'key': t['key'], 'page': list(t['page']),
                           'panel': '/api/module-ui/%s/%s/%s' % (quote(sid, safe=''), quote(mid, safe=''),
                                                                  quote(t['panel'], safe='/'))})
         for a in m.actions:
@@ -2691,7 +2707,7 @@ def trust_view(space, mid):
     files, removed = module_trust.diff(sc.files, rec['files'] if rec else None)
     out.update(state=state, name=meta['name'], version=meta['version'], roles=list(meta['roles']),
                settings=[_trust_setting(s) for s in meta['settings']],
-               tools=[{'label': t['label'], 'icon': t['icon']} for t in meta['tools']],
+               tools=[{'label': t['label'], 'icon': t['icon'], 'page': list(t['page'])} for t in meta['tools']],
                actions=[{'label': a['label']} for a in meta['actions']], hash=sc.hash, files=files, removed=removed,
                total={'files': len(sc.files), 'bytes': sc.total})
     return out

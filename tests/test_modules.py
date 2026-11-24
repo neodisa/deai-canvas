@@ -664,7 +664,7 @@ class ManifestApi2(Env):
         self.api2(tools=[TOOL], actions=[dict(ACTION, timeout_s=30)])
         m = dm.catalog()['tl']
         self.assertEqual((m.status, m.api), ('ok', 2), m.error)
-        self.assertEqual(m.tools, ({'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'panel/index.html', 'key': 'B'},))
+        self.assertEqual(m.tools, ({'id': 'board', 'label': 'Board', 'icon': 'task', 'panel': 'panel/index.html', 'key': 'B', 'page': ()},))
         self.assertEqual(m.actions, ({'id': 'run-it', 'label': 'Run it', 'where': ('palette', 'task'), 'timeout_s': 30},))
         self.assertTrue(callable(m.fn('action_run_it')))
 
@@ -703,7 +703,29 @@ class ManifestApi2(Env):
         m = self.bad('t-long', 'unknown key')
         self.assertLess(len(m.error), 80)
         self.api2('t-frame', tools=[dict(TOOL, frame='x.js')])
-        self.bad('t-frame', 'tools[0].frame: not supported yet')
+        self.bad('t-frame', 'tools[0].frame: not supported — use "page"')
+
+    def test_tool_page_valid(self):
+        for i, page in enumerate((['read'], ['read', 'mark'], ['read', 'mark', 'change', 'listen'], ['listen', 'read'])):
+            mid = f'pg-ok{i}'
+            self.api2(mid, tools=[self.tool(page=page)])
+            m = dm.catalog()[mid]
+            self.assertEqual(m.status, 'ok', m.error)
+            self.assertEqual(m.tools[0]['page'], tuple(sorted(page, key=dm.PAGE_PERMS.index)))
+
+    def test_tool_page_refusals(self):
+        for i, (page, frag) in enumerate((([], 'must be a non-empty list'), ('read', 'must be a non-empty list'),
+                                          (['read', 'read'], 'duplicate'), (['read', 'write'], "unknown permission 'write'"),
+                                          (['read', 5], 'unknown permission'), (['mark'], '"mark" requires "read"'),
+                                          (['change'], '"change" requires "read"'), (['listen'], '"listen" requires "read"'))):
+            mid = f'pg-bad{i}'
+            self.api2(mid, tools=[self.tool(page=page)])
+            m = self.bad(mid, 'tools[0].page')
+            self.assertIn(frag, m.error)
+
+    def test_tool_without_page_has_empty_tuple(self):
+        self.api2(tools=[TOOL])
+        self.assertEqual(dm.catalog()['tl'].tools[0]['page'], ())
 
     def test_tool_id_label_icon(self):
         for mid, kw, needle in (('t-id1', {'id': 'Up'}, 'tools[0].id'), ('t-id2', {'id': 5}, 'tools[0].id'),

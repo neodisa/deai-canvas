@@ -1717,7 +1717,7 @@ class ExtensionsTest(OwnEnv):
         self.mod('acme', [dict(self.TOOL, key='q')], [{'id': 'go', 'label': 'Go', 'where': ['palette']}])
         ext = dm.extensions(self.sp)
         self.assertEqual(ext['tools'], [{'module': 'acme', 'module_name': 'Acme', 'id': 'board', 'label': 'Board',
-                                         'icon': 'task', 'key': 'Q',
+                                         'icon': 'task', 'key': 'Q', 'page': [],
                                          'panel': '/api/module-ui/%s/acme/ui/panel.html' % self.sp['id']}])
         self.assertEqual(ext['actions'], [{'module': 'acme', 'module_name': 'Acme', 'id': 'go', 'label': 'Go',
                                            'where': ['palette']}])
@@ -1773,11 +1773,17 @@ class ExtensionsTest(OwnEnv):
             self.assertEqual(dm.extensions(self.sp)['tools'][0]['panel'],
                              '/api/module-ui/Q<%s|>/Q<acme|>/Q<ui/panel.html|/>' % self.sp['id'])
 
+    def test_page_permissions_reach_ext_and_trust_view(self):
+        self.mod('acme', [dict(self.TOOL, page=['listen', 'read'])], trusted=False, enabled=False)
+        self.assertEqual(dm.trust_view(self.sp, 'acme')['tools'], [{'label': 'Board', 'icon': 'task', 'page': ['read', 'listen']}])
+        d = self.mod('own', [dict(self.TOOL, page=['mark', 'read'])])
+        self.assertEqual(dm.extensions(self.sp)['tools'][0]['page'], ['read', 'mark'])
+
     def test_trust_view_carries_tools_and_actions_of_the_folder(self):
         d = self.mod('acme', [self.TOOL, dict(self.TOOL, id='two', label='Two', icon='doc')],
                      [{'id': 'go', 'label': 'Go', 'where': ['palette']}], trusted=False, enabled=False)
         v = dm.trust_view(self.sp, 'acme')
-        self.assertEqual(v['tools'], [{'label': 'Board', 'icon': 'task'}, {'label': 'Two', 'icon': 'doc'}])
+        self.assertEqual(v['tools'], [{'label': 'Board', 'icon': 'task', 'page': []}, {'label': 'Two', 'icon': 'doc', 'page': []}])
         self.assertEqual(v['actions'], [{'label': 'Go'}])
 
     def test_trust_view_without_tools_has_empty_lists(self):
