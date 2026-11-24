@@ -3,6 +3,59 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.38.0] — 24.11.2026
+
+Claude Code's edits show as AI in the history without a hook of your own. «Підключити» in the «Claude Code» row also
+installs a Stop hook, which tells the canvas after every Claude reply to commit the changed iterations as AI edits.
+
+### Додано
+- Settings → AGENTS.md, row «Claude Code»: «Підключити» connects `CLAUDE.md` (as before) and writes one Stop hook into
+  `<space>/.claude/settings.local.json`, the per-user local file of Claude Code on this computer only. Before the first
+  connect the row lists what will be written.
+  - The hook is a silent `curl` to `POST /api/autosync`. It ends with the mark `# deai-autosync`; other hooks and keys
+    in the file are kept, and the file is rewritten with 2-space indentation.
+  - When the canvas creates the file in a repository root (`.git` a real folder), one line goes to `.git/info/exclude`.
+  - Current Claude Code picks the hook up in sessions that are already open; older versions may need a restart.
+  - «Оновити» when the hook points at another canvas port (the canvas moved) or is an older copy of ours. «Відключити»
+    removes only this hook; a file left as `{}` is deleted, the `.claude/` folder stays.
+  - No hook when the file cannot be read safely (for example a symlink, invalid JSON, a read-only file) or when the
+    space folder is inside another git repository; once `CLAUDE.md` is connected, the row says why.
+- `GET /api/agents-md` returns `hook: {state, path}`. `POST /api/agents-md {space, claude: true}` also installs the hook
+  when it is missing or stale; `{space, hook: false}` removes it. When `CLAUDE.md` is connected but the hook fails, the
+  answer is still 200 with `hookError` (`changed` or `unreadable`).
+- `POST /api/autosync` by folder: with no task in the request (no `X-Canvas-Task`, no `/t/<task>` prefix) and an
+  absolute `cwd` in the body (what the Stop hook sends), the canvas finds the space by the longest matching path and
+  commits the agent's edits in every task of that space that has `.git`. Then, as before, it sends the current task when
+  autosync is on and its newest own iteration changed.
+  - The answer adds `ai_tasks`, plus the reasons `no-space` and `no-task`.
+  - Only `cwd` is read from the body. A body over 2 MiB gets 413 before it is read.
+- Local commits in one task folder are serialised (the push is not). A second Stop hook calling `/api/autosync` after
+  the same reply finds the iterations already committed.
+- `docs/agents/hooks.md` and `SETUP.md` describe the hook and the autosync by folder.
+
+### Виправлено
+- The send step of autosync (`itN: автосинк (…)`) no longer marks what it commits as an AI edit. That commit holds what
+  is left after the agent's own iterations: colleagues' iterations, files outside iterations, the first commit of a task
+  folder. The history now shows it as a person's sync. Older autosync commits keep showing as AI.
+
+### Owner actions after update
+- In each space, open Settings → AGENTS.md and press «Підключити» in the «Claude Code» row. If the row says the hook
+  does not apply there (the space folder is inside another git repository) or the file cannot be read, there is nothing
+  to press. Start Claude Code in the space folder, not inside a task folder.
+
+### Known limits
+- When the hook fires, everything uncommitted in this computer's own iterations is committed as AI. That includes a
+  person's edit made outside the canvas (in an editor) and not yet committed; edits made through the canvas are already
+  committed under the person's name.
+- The other way round: in a task folder without `.git`, or when the AI commit fails, the agent's edits are committed
+  later (by the send step or the next canvas action) and show as a person's.
+- After every reply the hook commits in every task of the space. In a space with many tasks this can take longer than 5
+  seconds: Claude Code waits at most 5 seconds for the hook (it never fails the reply), and the canvas finishes the
+  commits.
+- A canvas restart on another port does not rewrite the hook: the row shows «Оновити» until you press it.
+- Only Claude Code. Codex and other agents still rely on the instruction in `AGENTS.md`.
+- The hook uses `sh` and `curl` syntax and is not checked on Windows.
+
 ## [0.37.1] — 24.11.2026
 
 Two safety fixes: only the canvas's own pages can write to it, and the iteration trash keeps its 7-day promise.
