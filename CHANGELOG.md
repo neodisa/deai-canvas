@@ -3,6 +3,37 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.39.0] — 24.11.2026
+
+A module tool can work with the mockup page. Its code still never runs inside the mockup: a helper of the core does the
+work in the canvas window, and the tool's sandboxed panel asks it through the bridge (`deai.page.*`), method by method,
+within the permissions the person trusted.
+
+### Додано
+- Manifest: a tool may declare `"page": [...]` — a non-empty list of `read`, `mark`, `change`, `listen`; `mark`,
+  `change` and `listen` need `read`. The key `frame` is refused with a hint to use `page`. Deai before 0.39 refuses a
+  manifest with `page` as an unknown key.
+- The trust dialog shows a block «Робота з макетом, поки панель інструмента відкрита» with one line per permission.
+  Without `page` the dialog is unchanged.
+- `deai.page` in the panel bridge, every call checked against the tool's permissions:
+  - `read`: `info`, `query`, `get`, `snapshot`, `pick`, `cancelPick`, `reveal` — elements as plain descriptions with
+    opaque `ref`s; the canvas's own overlays, `script`, `style` are never returned.
+  - `mark`: `mark`, `unmark`, `clearMarks` — frames with a tone and a short label, drawn by the core above the page
+    and left out of «В Figma».
+  - `change`: `setStyle`, `setClass`, `setAttr`, `setText`, `revert`, `revertAll` — temporary changes with a journal
+    (up to 500), a restricted set of attributes and style values (nothing that loads a URL, no markup).
+  - `listen`: `page-click`, `page-hover` — only the person's real input, hover at most 10 times a second.
+  - Event `page` after `init` and after every page load (`{page: null}` when there is no live page); a handler that
+    subscribes late still gets the latest one.
+- Everything a tool marked or changed is undone when its panel closes, on another page or a reload. A value the page
+  changed after the tool is never overwritten; when the page did not touch the element's inline style, its `style`
+  attribute comes back byte for byte, including shorthands written with CSS variables.
+- Picking an element: the click does not reach the page; Esc cancels it in the canvas, in the mockup and in the panel.
+- Example module «Контраст» (`docs/modules/examples/contrast/`): text contrast, fields without a label, images
+  without a description — marks, «Показати», a temporary fix, «Скасувати», element picking. `docs/modules/authoring.md`
+  §7 «Working with the mockup (`deai.page`)», §8 rewritten («Code inside the mockup — no; the core helper instead»).
+- `GET /api/module-ext` and the trust view give each tool a `page` list (empty for tools without it).
+
 ## [0.38.0] — 24.11.2026
 
 Claude Code's edits show as AI in the history without a hook of your own. «Підключити» in the «Claude Code» row also
