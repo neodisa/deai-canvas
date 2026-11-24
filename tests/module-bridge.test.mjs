@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import vm from "node:vm";
+import { METHOD_PERM } from "../app/page-rules.js";
 
 const SRC = readFileSync(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "app", "module-kit", "bridge.js"), "utf8");
@@ -196,4 +197,36 @@ test("запит без відповіді спливає за 60 с (timeout), 
   dispatch({ deai: 1, re: sent[2].msg.id, ok: true, value: 2 });   // пізня відповідь — тиша
   for (let i = 0; i < 64; i++) win.deai.context().catch(() => {});
   await assert.rejects(win.deai.context(), (e) => e.code === "busy");
+});
+
+test("deai.page.query шле page.query з аргументами", () => {
+  const { win, sent } = load();
+  win.deai.page.query("a", { limit: 2 }).catch(() => {});
+  assert.deepEqual(plain([sent[1].msg.method, sent[1].msg.args]), ["page.query", ["a", { limit: 2 }]]);
+});
+
+test("deai.page має рівно 16 методів METHOD_PERM, кожен шле своє імʼя", () => {
+  const { win, sent } = load();
+  const names = Object.keys(METHOD_PERM).map((m) => m.slice(5));
+  assert.equal(names.length, 16);
+  assert.deepEqual(Object.keys(win.deai.page).sort(), [...names].sort());
+  for (const n of names) {
+    const before = sent.length;
+    win.deai.page[n]().catch(() => {});
+    assert.equal(sent[before].msg.method, `page.${n}`);
+  }
+});
+
+test("page.pick без таймера; інші page.* — 60 с; pick-у польоті рахується в ліміт 64", async () => {
+  const { win, timers } = load();
+  const base = timers.length;
+  win.deai.page.pick().catch(() => {});
+  assert.equal(timers.length, base);
+  win.deai.page.info().catch(() => {});
+  assert.equal(timers.at(-1).ms, 60000);
+  const { win: w2 } = load();
+  const open = [w2.deai.page.pick()];
+  for (let i = 0; i < 63; i++) open.push(w2.deai.context());
+  await assert.rejects(w2.deai.page.info(), (e) => e.code === "busy");
+  open.forEach((p) => p.catch(() => {}));
 });

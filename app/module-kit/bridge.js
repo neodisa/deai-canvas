@@ -1,7 +1,8 @@
 /* Bridge between a module panel and the Deai Canvas shell (classic script, no imports).
    The panel lives in a sandboxed iframe: no access to the shell or the network, only postMessage to the parent.
    Outgoing: {deai: 1, id, method, args}. Incoming, ONLY from window.parent with deai === 1:
-   a reply {deai: 1, re, ok, value | error, detail} or an event {deai: 1, event, data}. */
+   a reply {deai: 1, re, ok, value | error, detail} or an event {deai: 1, event, data}.
+   deai.page.* proxies the page helper (needs the "page" permissions); pick() has no timeout: the shell resolves it with null when the panel closes. */
 (function () {
   "use strict";
   var win = window;
@@ -18,7 +19,7 @@
     win.parent.postMessage({ deai: 1, id: id, method: method, args: args }, "*");
   }
 
-  function request(method, args) {
+  function request(method, args, ms) {
     return new Promise(function (resolve, reject) {
       if (pending.size >= MAX_PENDING) {
         var busy = new Error("too many pending requests");
@@ -27,12 +28,12 @@
         return;
       }
       var id = nextId++;
-      var timer = win.setTimeout(function () {
+      var timer = ms === 0 ? 0 : win.setTimeout(function () {
         if (!pending.delete(id)) return;
         var err = new Error("no reply from the shell");
         err.code = "timeout";
         reject(err);
-      }, PENDING_MS);
+      }, ms || PENDING_MS);
       pending.set(id, { resolve: resolve, reject: reject, timer: timer });
       post(id, method, args);
     });
@@ -93,6 +94,24 @@
     context: function () { return request("context", []); },
     selection: function () { return request("selection", []); },
     call: function (fn, args) { return request("call", [fn, args]); },
+    page: {
+      info: function () { return request("page.info", []); },
+      query: function (selector, opts) { return request("page.query", [selector, opts]); },
+      get: function (ref, opts) { return request("page.get", [ref, opts]); },
+      snapshot: function (opts) { return request("page.snapshot", [opts]); },
+      pick: function () { return request("page.pick", [], 0); },
+      reveal: function (ref) { return request("page.reveal", [ref]); },
+      mark: function (ref, opts) { return request("page.mark", [ref, opts]); },
+      unmark: function (id) { return request("page.unmark", [id]); },
+      clearMarks: function () { return request("page.clearMarks", []); },
+      setStyle: function (ref, map) { return request("page.setStyle", [ref, map]); },
+      setClass: function (ref, ch) { return request("page.setClass", [ref, ch]); },
+      setAttr: function (ref, name, value) { return request("page.setAttr", [ref, name, value]); },
+      setText: function (ref, text) { return request("page.setText", [ref, text]); },
+      revert: function (id) { return request("page.revert", [id]); },
+      revertAll: function () { return request("page.revertAll", []); },
+      listen: function (opts) { return request("page.listen", [opts]); }
+    },
     toast: function (text) { post(nextId++, "toast", [text]); },
     close: function () { post(nextId++, "close", []); },
     on: function (event, fn) {

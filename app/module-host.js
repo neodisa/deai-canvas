@@ -5,6 +5,7 @@
  */
 
 import { ICONS } from "./icons.js";
+import { METHOD_PERM, allowed } from "./page-rules.js";
 
 /** Скільки інструментів модулів вміщає острівець (решта — лише в ⌘K і клавішею). */
 export const MAX_ISLAND_TOOLS = 3;
@@ -62,8 +63,10 @@ const fail = (id, error, detail) => ({ deai: 1, re: id, ok: false, error, detail
  * Хост мосту: `handle(msg)` → відповідь панелі (або `null`, коли відповідати нема чим), `event(name, data)` → повідомлення-подія.
  * Модуль виклику хост НЕ бере з повідомлення: `callTool(fn, args)` уже привʼязаний до модуля відкритої панелі.
  * `hello` відповіді не має — викликач після нього шле подію `init` з `initData()`.
+ * `page.*` (М2): `perms` — дозволи інструмента (`page: [...]`), `getPage()` — живий помічник ядра (`createPageAgent`) чи `null`.
+ * Без дозволу — `not-allowed`, без живої сторінки — `no-page`; службові методи помічника (`destroy`, `cancelPick`…) недосяжні.
  */
-export function createBridgeHost({ getContext, getSelection, getVars, getTheme, callTool, toast, close }) {
+export function createBridgeHost({ getContext, getSelection, getVars, getTheme, callTool, toast, close, perms = [], getPage = () => null }) {
   let calls = 0;
 
   /** `null` — повідомлення придатне; інакше код відмови. Чуже (без `deai: 1` чи цілого `id`) — `"ignore"`. */
@@ -74,7 +77,7 @@ export function createBridgeHost({ getContext, getSelection, getVars, getTheme, 
     try { size = JSON.stringify(msg).length; } catch (e) { /* цикл — не передати */ }
     if (size > MAX_MSG) return "too-big";
     if (typeof msg.method !== "string" || (msg.args !== undefined && !Array.isArray(msg.args))) return "bad-message";
-    if (!METHODS.includes(msg.method)) return "unknown-method";
+    if (!METHODS.includes(msg.method) && !Object.hasOwn(METHOD_PERM, msg.method)) return "unknown-method";
     return null;
   }
 
@@ -84,6 +87,16 @@ export function createBridgeHost({ getContext, getSelection, getVars, getTheme, 
     const id = msg.id;
     if (bad) return fail(id, bad, bad === "unknown-method" ? msg.method : bad);
     const args = msg.args || [];
+    if (Object.hasOwn(METHOD_PERM, msg.method)) {
+      if (!allowed(msg.method, perms)) return fail(id, "not-allowed", `${msg.method} needs the "${METHOD_PERM[msg.method]}" permission`);
+      const page = getPage();
+      if (!page || !page.alive) return fail(id, "no-page", "no live mockup page");
+      try {
+        return ok(id, await page[msg.method.slice(5)](...args));
+      } catch (e) {
+        return fail(id, typeof e?.code === "string" ? e.code : "error", e && e.message);
+      }
+    }
     try {
       switch (msg.method) {
         case "hello": return null;

@@ -160,6 +160,67 @@ test("хост: event — повідомлення для панелі", () => {
   assert.equal(init.vars["--s1"], "#111");
 });
 
+const pageStub = (extra = {}) => {
+  const calls = [];
+  const p = new Proxy({}, { get: (_, k) => {
+    if (k === "alive") return extra.alive ?? true;
+    return (...a) => { calls.push([k, a]); if (k === "pick") return Promise.resolve({ ref: "r1" });
+      if (k === "query" && a[0] === "[") { const e = new Error("bad"); e.code = "bad-selector"; throw e; }
+      if (k === "get" && extra.errCode !== undefined) { const e = new Error("x"); e.code = extra.errCode; throw e; }
+      if (k === "reveal") return undefined;
+      return { k, a }; };
+  } });
+  return { p, calls };
+};
+const mkHost = (perms, page) => createBridgeHost({ getContext: () => ({}), getSelection: () => null, getVars: () => ({}),
+  getTheme: () => "dark", callTool: async () => null, toast() {}, close() {}, perms, getPage: () => page });
+
+test("page.*: дозвіл, відсутній помічник, проксі аргументів, коди помилок", async () => {
+  const { p, calls } = pageStub();
+  const h = mkHost(["read", "mark"], p);
+  assert.deepEqual(await h.handle({ deai: 1, id: 1, method: "page.query", args: ["a", { limit: 3 }] }),
+    { deai: 1, re: 1, ok: true, value: { k: "query", a: ["a", { limit: 3 }] } });
+  assert.equal((await h.handle({ deai: 1, id: 2, method: "page.setStyle", args: ["r1", {}] })).error, "not-allowed");
+  assert.equal((await h.handle({ deai: 1, id: 3, method: "page.query", args: ["["] })).error, "bad-selector");
+  assert.equal((await mkHost(["read"], null).handle({ deai: 1, id: 4, method: "page.info", args: [] })).error, "no-page");
+  assert.equal((await mkHost([], p).handle({ deai: 1, id: 5, method: "page.info", args: [] })).error, "not-allowed");
+  assert.deepEqual((await h.handle({ deai: 1, id: 6, method: "page.pick", args: [] })).value, { ref: "r1" });
+  assert.ok(calls.every(([k]) => k !== "setStyle"));
+});
+
+test("М1-хост без perms/getPage — page.* → not-allowed, решта як була", async () => {
+  const h = createBridgeHost({ getContext: () => ({ a: 1 }), getSelection: () => null, getVars: () => ({}), getTheme: () => "dark",
+    callTool: async () => null, toast() {}, close() {} });
+  assert.equal((await h.handle({ deai: 1, id: 1, method: "page.info", args: [] })).error, "not-allowed");
+  assert.deepEqual((await h.handle({ deai: 1, id: 2, method: "context", args: [] })).value, { a: 1 });
+});
+
+test("page.*: мертва сторінка (alive=false) → no-page, виклику немає", async () => {
+  const { p, calls } = pageStub({ alive: false });
+  assert.equal((await mkHost(["read"], p).handle({ deai: 1, id: 1, method: "page.info", args: [] })).error, "no-page");
+  assert.equal(calls.length, 0);
+});
+
+test("page.*: службові імена помічника недосяжні → unknown-method", async () => {
+  const { p, calls } = pageStub();
+  const h = mkHost(["read", "mark", "change", "listen"], p);
+  for (const n of ["destroy", "cancelPick", "picking", "__proto__", "constructor", "toString"]) {
+    assert.equal((await h.handle({ deai: 1, id: 1, method: `page.${n}`, args: [] })).error, "unknown-method", n);
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(h.check({ deai: 1, id: 1, method: "page.destroy", args: [] }), "unknown-method");
+  assert.equal(h.check({ deai: 1, id: 1, method: "page.info", args: [] }), null);
+});
+
+test("page.*: code помилки не рядок → error; undefined → value null", async () => {
+  const { p } = pageStub({ errCode: 12 });
+  const h = mkHost(["read"], p);
+  const r = await h.handle({ deai: 1, id: 1, method: "page.get", args: ["r1"] });
+  assert.deepEqual([r.ok, r.error], [false, "error"]);
+  const r2 = await h.handle({ deai: 1, id: 2, method: "page.reveal", args: ["r1"] });
+  assert.deepEqual([r2.ok, r2.value], [true, null]);
+});
+
 const act = (m, id, where, label = id) => ({ module: m, module_name: `${m} name`, id, label, where });
 const AEXT = { tools: [], actions: [act("m1", "a", ["palette", "task"], "A <b>"), act("m2", "b", ["iteration"]), act("m1", "c", ["palette", "task", "iteration"], 'C "q"')] };
 
