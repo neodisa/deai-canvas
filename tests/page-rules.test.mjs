@@ -164,8 +164,8 @@ test("stillOurs: відкат лише коли поточне досі «ста
 });
 
 // Статичний охоронець: помічник ніколи не пише розмітку чи код, а `setAttribute` — лише з відомими іменами.
-const SAFE_ATTRS = new Set(["data-deai-marks", "data-h2d-ignore"]);
-const NEW_FORBIDDEN = [/\bFunction\s*\(/, /setAttribute(NS|Node)\b/, /\.cssText\b/, /createContextualFragment|DOMParser|srcdoc/, /[\w$)\]]\[\s*["'`]/];
+const SAFE_ATTRS = new Set(["data-deai-marks", "data-h2d-ignore", "style"]);
+const NEW_FORBIDDEN = [/\bFunction\s*\(/, /setAttribute(NS|Node)\b/, /\.cssText\b/, /createContextualFragment|DOMParser|srcdoc/, /(?:[\w$)\]]|\?\.)\[\s*["'`]/];
 const FORBIDDEN = [/innerHTML/, /outerHTML/, /insertAdjacentHTML/, /\beval\(/, /new\s+Function/, /document\.write/, ...NEW_FORBIDDEN];
 function guardViolations(raw) {
   const out = [];
@@ -194,9 +194,11 @@ test("охоронець page-agent.js: нема innerHTML/eval/…, setAttribut
 test("охоронець ловить порушення (мутації тексту)", () => {
   const src = readFileSync(new URL("../app/page-agent.js", import.meta.url), "utf8");
   for (const bad of ["el.innerHTML = x;", "el.outerHTML = x;", "el.insertAdjacentHTML('a', x);", "eval(x);", "new Function(x);", "document.write(x);",
-    'el.setAttribute("onclick", x);', "el.setAttribute(k, v);", "el.setAttribute(attr, v);"]) {
+    'el.setAttribute("onclick", x);', "el.setAttribute(k, v);", "el.setAttribute(attr, v);", 'el.setAttribute("href", x);', 'el.setAttribute("styles", x);',
+    "el.setAttribute(styleName, x);"]) {
     assert.ok(guardViolations(`${src}\n${bad}\n`).length > 0, bad);
   }
+  assert.deepEqual(guardViolations(`${src}\nel.setAttribute("style", raw);\n`), [], "літерал style дозволений");
   assert.ok(/setAttribute\(\s*name/.test(src), "setAttr використовує name");
   assert.ok(guardViolations(src.replace(/attrAllowed\(name\)/g, "ok(name)")).length > 0);
 });
@@ -208,7 +210,7 @@ test("охоронець: кожен новий шаблон спрацьову�
     ["el.style.cssText = x;", NEW_FORBIDDEN[2]],
     ["r.createContextualFragment(x);", NEW_FORBIDDEN[3]], ["new DOMParser();", NEW_FORBIDDEN[3]], ["f.srcdoc = x;", NEW_FORBIDDEN[3]],
     ['el["inner" + "HTML"] = x;', NEW_FORBIDDEN[4]], ["el['x'] = 1;", NEW_FORBIDDEN[4]], ["el[`x`] = 1;", NEW_FORBIDDEN[4]],
-    ['f()["x"];', NEW_FORBIDDEN[4]], ['a[0]["x"];', NEW_FORBIDDEN[4]], ['a[ "x" ];', NEW_FORBIDDEN[4]]];
+    ['f()["x"];', NEW_FORBIDDEN[4]], ['a[0]["x"];', NEW_FORBIDDEN[4]], ['a[ "x" ];', NEW_FORBIDDEN[4]], ['el?.["innerHTML"];', NEW_FORBIDDEN[4]]];
   for (const [bad, re] of cases) assert.ok(guardViolations(`${src}\n${bad}\n`).includes(`forbidden: ${re}`), bad);
   assert.equal(guardViolations(src).filter((v) => NEW_FORBIDDEN.some((re) => v === `forbidden: ${re}`)).length, 0);
   assert.deepEqual(guardViolations("for (const [k, v] of [[\"a\", 1], [\"b\", 2]]) {}\nconst m = [\"x\", \"y\"];\n"), [], "масиви-літерали не хибні спрацювання");

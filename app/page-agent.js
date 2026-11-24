@@ -275,6 +275,17 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     }
     return m;
   }
+  /** Чернетка в документі рамки (ніколи не вставляється): значення, яке браузер прийняв, дає непорожній перелік декларацій
+   *  (скорочення розкладається на довгі, `var()` теж); порожній перелік — браузер відмовив. `CSS.supports` не потрібен. */
+  let scratch = null;
+  function probe(p, v) {
+    scratch ??= doc.createElement("div");
+    scratch.removeAttribute("style");
+    scratch.style.setProperty(p, v, "important");
+    const names = [];
+    for (let i = 0; i < scratch.style.length; i++) names.push(scratch.style.item(i));
+    return names;
+  }
   const NO_STYLE = Object.freeze({ v: "", pr: "" });
   const sameStyle = (a, b) => stillOurs(a.v, b.v) && stillOurs(a.pr, b.pr);
   /** Повернути елемент до знімка: кожна декларація, що відрізняється (значенням чи пріоритетом), знімається й ставиться як було. */
@@ -307,22 +318,40 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       } },
     text: { now: (el) => el.textContent, same: stillOurs, put(el, _k, val) { el.textContent = val; } },
   };
-  /** Відкат одного запису → {reverted, skipped}. Пункт рахується, лише якщо поточне досі «наше». Якщо ту саму річ (елемент,
-   *  вид, ключ) пізніше змінив НОВІШИЙ живий запис — шар знімається без зміни документа: «було» цього запису переходить до
-   *  новішого, і коли той відкотиться, сторінка повернеться до свого початкового, а не до проміжного значення. */
+  /** Відкат одного запису → {reverted, skipped}. Пункт рахується, лише якщо поточне досі «наше».
+   *  1) Точний шлях (style): якщо новіших записів на цьому елементі нема і атрибут `style` дослівно такий, яким його лишив
+   *     запис (`raw1`) — повертаємо `raw0` рядком (це зберігає й `var()` у скороченнях, які довгими властивостями не читаються).
+   *  2) Якщо ту саму річ (елемент, вид, ключ) пізніше змінив НОВІШИЙ живий запис — шар знімається без зміни документа: «було»
+   *     переходить до новішого, але лише коли шари СУМІЖНІ (його «було» == наше «стало»); інакше між ними щось змінила
+   *     сторінка — наш пункт skipped, а «було» новішого лишається (виграє значення сторінки).
+   *  3) `hadStyle`/`hadClass` (і `raw0`, коли сторінка між шарами нічого не змінила) переходять до найближчого новішого запису
+   *     того ж елемента й виду незалежно від ключів — щоб після розмотування не лишився порожній `style=""`/`class=""`. */
   function revertEntry(e, newer = []) {
     const el = e.el.deref();
     if (!el || !el.isConnected) return { reverted: 0, skipped: e.items.length };
     const K = KIND[e.kind];
+    const same = (n) => n.kind === e.kind && n.el.deref() === el;
+    const nearest = newer.find(same) ?? null;
+    if (!nearest && e.kind === "style" && e.raw1 !== undefined && el.getAttribute("style") === e.raw1) {
+      if (e.raw0 === null) dropEmptyAttr(el, "style"); else el.setAttribute("style", e.raw0);   // рядок — сторінки власний, не наш
+      return { reverted: e.items.length, skipped: 0 };
+    }
+    if (nearest) {
+      if (e.kind === "style") { nearest.hadStyle = e.hadStyle; if (nearest.raw0 === e.raw1) nearest.raw0 = e.raw0; }
+      else if (e.kind === "class") nearest.hadClass = e.hadClass;
+    }
     let reverted = 0, skipped = 0;
     for (const it of e.items) {
       let next = null;
       for (const n of newer) {
-        if (n.kind !== e.kind || n.el.deref() !== el) continue;
+        if (!same(n)) continue;
         next = n.items.find((x) => x.key === it.key);
-        if (next) { next.before = it.before; if (e.kind === "style") n.hadStyle = e.hadStyle; else if (e.kind === "class") n.hadClass = e.hadClass; break; }
+        if (next) break;
       }
-      if (next) { reverted++; continue; }
+      if (next) {
+        if (K.same(next.before, it.after)) { next.before = it.before; reverted++; } else skipped++;
+        continue;
+      }
       if (K.same(K.now(el, it.key), it.after)) { K.put(el, it.key, it.before); reverted++; } else skipped++;
     }
     if (e.kind === "style" && !e.hadStyle) dropEmptyStyle(el);
@@ -451,9 +480,9 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     reveal(ref) {
       const el = elOf(ref);
       const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      ensureHost();                                         // ДО пошуку міток: хост, прибраний сторінкою, скидає `marks`
       let own = null;
       for (const [id, m] of marks) if (!m.temp && m.el.deref() === el) { own = id; break; }
-      ensureHost();
       let id = own;
       if (!id) for (const [k, m] of marks) if (m.temp && m.el.deref() === el) { id = k; break; }   // та сама тимчасова — перезапуск
       if (!id && tempCount() < TEMP_MAX) id = addMark(el, "info", "", true);                         // без мітки — тимчасова рамка
@@ -468,29 +497,31 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     setStyle(ref, map) {
       const el = elOf(ref);
       const { ok, rejected } = checkStyleMap(map);
-      const applied = [];
+      const applied = [], assigned = new Set();
       const hadStyle = el.hasAttribute("style");
       if (ok.length) notFull();
+      const raw0 = el.getAttribute("style");
       const s0 = snapStyle(el);
       for (const [p, v] of ok) {
         if (v === null) { el.style.removeProperty(p); applied.push(p); continue; }
-        if (!p.startsWith("--") && win.CSS?.supports && !win.CSS.supports(p, v)) { rejected.push(p); continue; }   // не чіпаємо документ даремно
-        const sp = snapStyle(el);
+        const names = probe(p, v);                          // перевірка на чернетці: сторінка не чіпається, скорочення розкладається
+        if (!names.length) { rejected.push(p); continue; }
         el.style.setProperty(p, v, "important");
-        if (el.style.getPropertyValue(p) === "") { restoreTo(el, sp); rejected.push(p); continue; }   // браузер не прийняв
+        for (const n of names) assigned.add(n);
         applied.push(p);
       }
       const s1 = snapStyle(el);
       const items = [];
-      for (const key of new Set([...s0.keys(), ...s1.keys()])) {
+      for (const key of new Set([...s0.keys(), ...s1.keys(), ...assigned])) {   // призначені, але незмінні, теж шар: їх тримає цей запис
         const before = s0.get(key) ?? NO_STYLE, after = s1.get(key) ?? NO_STYLE;
-        if (!sameStyle(before, after)) items.push({ key, before, after });
+        if (assigned.has(key) || !sameStyle(before, after)) items.push({ key, before, after });
       }
       if (!items.length) {
         if (!hadStyle) dropEmptyStyle(el);
         return { id: null, applied, rejected };
       }
-      return { id: journal.add({ kind: "style", el: new WeakRef(el), items, hadStyle }), applied, rejected };
+      const raw1 = el.getAttribute("style");
+      return { id: journal.add({ kind: "style", el: new WeakRef(el), items, hadStyle, raw0, raw1 }), applied, rejected };
     },
     setClass(ref, ch) {
       const el = elOf(ref);
@@ -509,8 +540,9 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       const el = elOf(ref);
       if (!attrAllowed(name)) throw new PageError("not-allowed", `attribute ${String(name).slice(0, 40)} is not allowed`);
       const v = checkAttrValue(value);
-      notFull();
       const before = el.getAttribute(name);
+      if (v === before) return { id: null };                // як setStyle/setClass: нічого не змінюємо — слота нема
+      notFull();
       if (v === null) el.removeAttribute(name); else el.setAttribute(name, v);
       const after = el.getAttribute(name);
       return { id: journal.add({ kind: "attr", el: new WeakRef(el), items: [{ key: name, before, after }] }) };
@@ -519,8 +551,9 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       const el = elOf(ref);
       if (el.children.length) throw new PageError("not-leaf", "the element has child elements");
       const t = checkText(text);
-      notFull();
       const before = el.textContent;
+      if (t === before) return { id: null };
+      notFull();
       el.textContent = t;
       const after = el.textContent;
       return { id: journal.add({ kind: "text", el: new WeakRef(el), items: [{ key: "#text", before, after }] }) };

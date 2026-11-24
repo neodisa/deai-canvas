@@ -912,7 +912,7 @@ test("listen hover: page-hover лише при зміні елемента, не
     const elapsed = Date.now() - t;
     const t0 = await evCount(page, "page-hover");
     assert.ok(t0 <= 2 + Math.floor(elapsed / 100), `за ${ids.length} рухів за ${elapsed} мс — подій ${t0}`);
-    assert.ok(t0 < ids.length, "обмеження частоти працює");
+    assert.ok(t0 >= 1, "хоч одна подія дійшла");               // нижню межу «менше за рухи» не ставимо: рухи можуть розтягнутись у часі
     await page.waitForTimeout(300);
     const evs = await page.evaluate(() => window.EV.filter((e) => e[0] === "page-hover").map((e) => e[1].node.id));
     assert.equal(evs[evs.length - 1], "cta", "відкладена остання");
@@ -1004,7 +1004,7 @@ test("I1: shorthand margin поверх page margin-top → відкат пов�
     assert.deepEqual((await call(page, "revert", [r.v.id])).v, { reverted: 4, skipped: 0 });
     assert.equal(await sty(page, "#m1", "margin-top"), "5px");
     for (const side of ["right", "bottom", "left"]) assert.equal(await sty(page, "#m1", `margin-${side}`), "", side);
-    assert.equal(await attrIn(page, "#m1", "style"), "margin-top: 5px;");
+    assert.equal(await attrIn(page, "#m1", "style"), "margin-top:5px");   // точний рядок сторінки, не переписаний
   } finally { await page.close(); }
 });
 
@@ -1033,7 +1033,7 @@ test("I1: відхилений shorthand не стирає довгі декла
     const a = await call(page, "setStyle", [ref, { margin: bad }]);
     assert.deepEqual({ id: a.v.id, applied: a.v.applied, rejected: a.v.rejected }, { id: null, applied: [], rejected: ["margin"] });
     assert.equal(await cssOf(page, "#m3"), "margin-top:5px;");
-    // без CSS.supports працює післяперевірка: браузер відмовив → стан відновлено зі знімка
+    // чернетка-проба не залежить від CSS.supports: відмова браузера → документ не чіпано
     await inFrame(page, (d) => { d.defaultView.CSS = undefined; return true; });
     const b = await call(page, "setStyle", [ref, { margin: bad, color: "green" }]);
     assert.deepEqual([b.v.applied, b.v.rejected], [["color"], ["margin"]]);
@@ -1213,5 +1213,162 @@ test("resetHost: хост зник під час pick, а модуль одра�
     assert.match(id.v, /^m\d+$/);
     assert.equal(await pickResult(page), null);
     assert.equal(await page.evaluate(() => window.A.picking), false);
+  } finally { await page.close(); }
+});
+
+// ---------- другий раунд: точний рядок style, var() у скороченнях, пробa, суміжні шари ----------
+const setVar = (page) => inFrame(page, (d) => { d.documentElement.style.setProperty("--g", "7px"); return true; });
+
+test("I-1: style=\"margin:var(--g)\" → setStyle({margin:0}) + відкат → var(--g) на місці, margin-top 7px", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "v1", { style: "margin:var(--g)" });
+    const ref = await refOf(page, "#v1");
+    const r = await call(page, "setStyle", [ref, { margin: "0" }]);
+    assert.equal(await comp(page, "#v1", "margin-top"), "0px");
+    assert.deepEqual((await call(page, "revert", [r.v.id])).v.skipped, 0);
+    assert.equal(await inFrame(page, (d) => d.getElementById("v1").style.margin), "var(--g)");
+    assert.equal(await comp(page, "#v1", "margin-top"), "7px");
+  } finally { await page.close(); }
+});
+
+test("I-1: margin:var(--g) + setStyle({margin-top:0}) → відкат → той самий var(--g)", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "v2", { style: "margin:var(--g)" });
+    const ref = await refOf(page, "#v2");
+    const r = await call(page, "setStyle", [ref, { "margin-top": "0" }]);
+    assert.equal(await comp(page, "#v2", "margin-top"), "0px");
+    await call(page, "revert", [r.v.id]);
+    assert.equal(await inFrame(page, (d) => d.getElementById("v2").style.margin), "var(--g)");
+    assert.equal(await comp(page, "#v2", "margin-top"), "7px");
+  } finally { await page.close(); }
+});
+
+test("I-1: var() у скороченні й revertAll (LIFO двох шарів) — точно повертає початковий рядок", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "v3", { style: "margin:var(--g)" });
+    const ref = await refOf(page, "#v3");
+    await call(page, "setStyle", [ref, { margin: "0" }]);
+    await call(page, "setStyle", [ref, { color: "red" }]);
+    await call(page, "revertAll");
+    assert.equal(await attrIn(page, "#v3", "style"), "margin:var(--g)");
+  } finally { await page.close(); }
+});
+
+test("I-1: передача шару несе й рядок — revert(A), потім revert(B) повертає var()-скорочення", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "v4", { style: "margin:var(--g)" });
+    const ref = await refOf(page, "#v4");
+    const a = await call(page, "setStyle", [ref, { "margin-top": "0" }]);
+    const b = await call(page, "setStyle", [ref, { "margin-top": "1px" }]);
+    await call(page, "revert", [a.v.id]);
+    await call(page, "revert", [b.v.id]);
+    assert.equal(await inFrame(page, (d) => d.getElementById("v4").style.margin), "var(--g)");
+    assert.equal(await comp(page, "#v4", "margin-top"), "7px");
+  } finally { await page.close(); }
+});
+
+test("M-2: A margin-top:0, B margin:0; revert(A) → margin-top лишається (B живий); revert(B) → без margin і без style", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "w1");
+    const ref = await refOf(page, "#w1");
+    const a = await call(page, "setStyle", [ref, { "margin-top": "0" }]);
+    const b = await call(page, "setStyle", [ref, { margin: "0" }]);
+    assert.ok(b.v.id);
+    await call(page, "revert", [a.v.id]);
+    assert.equal(await sty(page, "#w1", "margin-top"), "0px");
+    await call(page, "revert", [b.v.id]);
+    assert.equal(await hasAttr(page, "#w1", "style"), false);
+  } finally { await page.close(); }
+});
+
+test("M-2: призначене, але незмінне, теж пункт: сторінка вже мала margin-top:0 !important → id не null", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "w2", { style: "margin-top:0px !important" });
+    const r = await call(page, "setStyle", [await refOf(page, "#w2"), { "margin-top": "0px" }]);
+    assert.ok(r.v.id);
+    assert.deepEqual((await call(page, "revert", [r.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await attrIn(page, "#w2", "style"), "margin-top:0px !important");
+  } finally { await page.close(); }
+});
+
+test("M-3: A red, сторінка green, B blue; revert(A) → skipped; revert(B) → green сторінки", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "x1");
+    const ref = await refOf(page, "#x1");
+    const a = await call(page, "setStyle", [ref, { color: "red" }]);
+    await inFrame(page, (d) => d.getElementById("x1").style.setProperty("color", "green"));
+    const b = await call(page, "setStyle", [ref, { color: "blue" }]);
+    assert.deepEqual((await call(page, "revert", [a.v.id])).v, { reverted: 0, skipped: 1 });
+    assert.equal(await sty(page, "#x1", "color"), "blue");
+    await call(page, "revert", [b.v.id]);
+    assert.equal(await sty(page, "#x1", "color"), "green");
+    assert.equal(await prio(page, "#x1", "color"), "");
+  } finally { await page.close(); }
+});
+
+test("M-1: без style: A color, B background; revert(A), revert(B) → атрибута style нема; те саме для class", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "y1");
+    await mkEl(page, "y2");
+    const r1 = await refOf(page, "#y1"), r2 = await refOf(page, "#y2");
+    const a = await call(page, "setStyle", [r1, { color: "red" }]);
+    const b = await call(page, "setStyle", [r1, { background: "blue" }]);
+    await call(page, "revert", [a.v.id]); await call(page, "revert", [b.v.id]);
+    assert.equal(await hasAttr(page, "#y1", "style"), false);
+    const c = await call(page, "setClass", [r2, { add: ["x"] }]);
+    const d2 = await call(page, "setClass", [r2, { add: ["y"] }]);
+    await call(page, "revert", [c.v.id]); await call(page, "revert", [d2.v.id]);
+    assert.equal(await hasAttr(page, "#y2", "class"), false);
+  } finally { await page.close(); }
+});
+
+test("M-4: значення, яке браузер відхиляє, на елементі з color:blue → rejected, applied порожній, колір синій, слота нема", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "z1", { style: "color: blue" });
+    const ref = await refOf(page, "#z1");
+    const r = await call(page, "setStyle", [ref, { color: "notacolor" }]);
+    assert.deepEqual({ id: r.v.id, applied: r.v.applied, rejected: r.v.rejected }, { id: null, applied: [], rejected: ["color"] });
+    assert.equal(await attrIn(page, "#z1", "style"), "color: blue");
+    const ids = await page.evaluate((x) => { const out = []; for (let i = 0; i < 500; i++) out.push(window.A.setStyle(x, { color: "bad" }).id); return out; }, ref);
+    assert.ok(ids.every((v) => v === null));
+    assert.ok((await call(page, "setAttr", [ref, "title", "t"])).v.id, "журнал не заповнений");
+  } finally { await page.close(); }
+});
+
+test("M-6: setAttr з тим самим значенням і setText з тим самим текстом → id null; зняття відсутнього атрибута теж", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "q1", { title: "t" }, "txt");
+    const ref = await refOf(page, "#q1");
+    assert.equal((await call(page, "setAttr", [ref, "title", "t"])).v.id, null);
+    assert.equal((await call(page, "setAttr", [ref, "data-none", null])).v.id, null);
+    assert.equal((await call(page, "setText", [ref, "txt"])).v.id, null);
+    assert.ok((await call(page, "setText", [ref, "інший"])).v.id);
+  } finally { await page.close(); }
+});
+
+test("M-5: сторінка прибрала хост і reveal викликано в тому ж тіку → без помилки", async () => {
+  const page = await open();
+  try {
+    const ref = await refOf(page, "#cta");
+    await call(page, "mark", [ref, { label: "m" }]);
+    const err = await page.evaluate((r) => {
+      const d = document.getElementById("f").contentDocument;
+      try { d.documentElement.querySelector(":scope > [data-deai-marks]").remove(); window.A.reveal(r); return null; } catch (e) { return String(e); }
+    }, ref);
+    assert.equal(err, null);
   } finally { await page.close(); }
 });
