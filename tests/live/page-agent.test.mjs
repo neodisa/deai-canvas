@@ -518,3 +518,281 @@ test("pick: Esc → null; другий pick() → перший null; destroy() �
     assert.equal((await inFrame(page, MARKS)).hosts, 0);
   } finally { await page.close(); }
 });
+
+// ---------- Task 5: зміни вигляду з журналом і слухання ----------
+const sty = (page, sel, prop) => inFrame(page, (d, a) => d.querySelector(a[0]).style.getPropertyValue(a[1]), [sel, prop]);
+const comp = (page, sel, prop) => inFrame(page, (d, a) => d.defaultView.getComputedStyle(d.querySelector(a[0])).getPropertyValue(a[1]), [sel, prop]);
+const clsOf = async (page) => (await attrIn(page, "#cta", "class")).split(" ").sort().join(" ");
+const attrIn = (page, sel, name) => inFrame(page, (d, a) => d.querySelector(a[0]).getAttribute(a[1]), [sel, name]);
+
+test("setStyle: застосоване/відхилене, колір чорний, відкат без атрибута style", async () => {
+  const page = await open();
+  try {
+    const cta = await refOf(page, "#cta");
+    const r = await call(page, "setStyle", [cta, { color: "rgb(0, 0, 0)", background: "url(x)", width: "nope" }]);
+    assert.deepEqual(r.v.applied, ["color"]);
+    assert.deepEqual([...r.v.rejected].sort(), ["background", "width"]);
+    assert.equal(await comp(page, "#cta", "color"), "rgb(0, 0, 0)");
+    assert.equal(await sty(page, "#cta", "color-priority"), "");
+    assert.deepEqual((await call(page, "revert", [r.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await inFrame(page, (d) => d.getElementById("cta").hasAttribute("style")), false);
+    assert.ok(!/style=/.test(await inFrame(page, (d) => d.getElementById("cta").outerHTML)));
+  } finally { await page.close(); }
+});
+
+test("setStyle: усе відхилено → id null і нічого в журналі; не-рядок → bad-args", async () => {
+  const page = await open();
+  try {
+    const p = await refOf(page, "#p");
+    const r = await call(page, "setStyle", [p, { width: "nope", background: "url(x)" }]);
+    assert.deepEqual({ ...r.v, rejected: [...r.v.rejected].sort() }, { id: null, applied: [], rejected: ["background", "width"] });
+    assert.deepEqual((await call(page, "revertAll")).v, { reverted: 0, skipped: 0 });
+    assert.equal((await call(page, "setStyle", [p, { color: 5 }])).code, "bad-args");
+  } finally { await page.close(); }
+});
+
+test("setStyle: був style — відкат повертає green і атрибут на місці; null знімає властивість", async () => {
+  const page = await open();
+  try {
+    const p = await refOf(page, "#p");
+    await call(page, "setStyle", [p, { color: "red" }]);
+    assert.equal(await comp(page, "#p", "color"), "rgb(255, 0, 0)");
+    assert.deepEqual((await call(page, "revertAll")).v, { reverted: 1, skipped: 0 });
+    assert.equal(await sty(page, "#p", "color"), "green");
+    assert.ok(await attrIn(page, "#p", "style"));
+    const r = await call(page, "setStyle", [p, { color: null }]);
+    assert.deepEqual(r.v.applied, ["color"]);
+    assert.equal(await sty(page, "#p", "color"), "");
+    await call(page, "revert", [r.v.id]);
+    assert.equal(await sty(page, "#p", "color"), "green");
+  } finally { await page.close(); }
+});
+
+test("setStyle: сторінка сама змінила колір → відкат skipped, колір лишився; змінила лише пріоритет → теж skipped", async () => {
+  const page = await open();
+  try {
+    const p = await refOf(page, "#p");
+    const a = await call(page, "setStyle", [p, { color: "red" }]);
+    await inFrame(page, (d) => d.getElementById("p").style.color = "blue");
+    assert.deepEqual((await call(page, "revert", [a.v.id])).v, { reverted: 0, skipped: 1 });
+    assert.equal(await sty(page, "#p", "color"), "blue");
+    const b = await call(page, "setStyle", [p, { color: "red" }]);
+    await inFrame(page, (d) => d.getElementById("p").style.setProperty("color", "red", ""));   // те саме значення, інший пріоритет
+    assert.deepEqual((await call(page, "revert", [b.v.id])).v, { reverted: 0, skipped: 1 });
+    assert.equal(await sty(page, "#p", "color"), "red");
+  } finally { await page.close(); }
+});
+
+test("setStyle: LIFO — два записи на одну властивість відкочуються до початкового", async () => {
+  const page = await open();
+  try {
+    const p = await refOf(page, "#p");
+    await call(page, "setStyle", [p, { color: "red" }]);
+    await call(page, "setStyle", [p, { color: "black" }]);
+    assert.deepEqual((await call(page, "revertAll")).v, { reverted: 2, skipped: 0 });
+    assert.equal(await sty(page, "#p", "color"), "green");
+  } finally { await page.close(); }
+});
+
+test("setClass: add/remove, відкат; клас, що вже був, у журнал не йде; нема змін → id null", async () => {
+  const page = await open();
+  try {
+    const cta = await refOf(page, "#cta");
+    const r = await call(page, "setClass", [cta, { add: ["x"], remove: ["lo"] }]);
+    assert.ok(r.v.id);
+    assert.equal(await clsOf(page), "cta x");
+    assert.deepEqual((await call(page, "revert", [r.v.id])).v, { reverted: 2, skipped: 0 });   // по класу
+    assert.equal(await clsOf(page), "cta lo");
+    const n = await call(page, "setClass", [cta, { add: ["cta"], remove: ["nope"] }]);
+    assert.deepEqual(n.v, { id: null });
+    assert.deepEqual((await call(page, "revertAll")).v, { reverted: 0, skipped: 0 });
+    assert.equal(await clsOf(page), "cta lo");
+    // додали «cta», якого вже не було б, якби прибрали раніше: відкат не прибирає наявний
+    const m = await call(page, "setClass", [cta, { add: ["cta", "y"] }]);
+    await call(page, "revert", [m.v.id]);
+    assert.equal(await clsOf(page), "cta lo");
+    assert.equal((await call(page, "setClass", [cta, { add: ["bad name"] }])).code, "bad-args");
+    assert.equal((await call(page, "setClass", [cta, { add: "x" }])).code, "bad-args");
+  } finally { await page.close(); }
+});
+
+test("setClass: відкат не чіпає клас, який сторінка вже прибрала/додала сама", async () => {
+  const page = await open();
+  try {
+    const cta = await refOf(page, "#cta");
+    const r = await call(page, "setClass", [cta, { add: ["x"], remove: ["lo"] }]);
+    await inFrame(page, (d) => d.getElementById("cta").classList.remove("x"));
+    await inFrame(page, (d) => d.getElementById("cta").classList.add("lo"));
+    await call(page, "revert", [r.v.id]);
+    assert.equal(await clsOf(page), "cta lo");
+  } finally { await page.close(); }
+});
+
+test("setAttr: зміна/зняття, відкат; заборонені імена; значення завелике", async () => {
+  const page = await open();
+  try {
+    const cta = await refOf(page, "#cta");
+    const a = await call(page, "setAttr", [cta, "aria-label", "Інше"]);
+    assert.equal(await attrIn(page, "#cta", "aria-label"), "Інше");
+    await call(page, "revert", [a.v.id]);
+    assert.equal(await attrIn(page, "#cta", "aria-label"), "Почати");
+    const b = await call(page, "setAttr", [cta, "aria-label", null]);
+    assert.equal(await attrIn(page, "#cta", "aria-label"), null);
+    await call(page, "revert", [b.v.id]);
+    assert.equal(await attrIn(page, "#cta", "aria-label"), "Почати");
+    for (const n of ["href", "onclick", "style", "class", "data-deai-x"]) assert.equal((await call(page, "setAttr", [cta, n, "x"])).code, "not-allowed", n);
+    assert.equal((await call(page, "setAttr", [cta, "title", "я".repeat(301)])).code, "bad-args");
+    assert.equal((await call(page, "setAttr", [cta, "title", 5])).code, "bad-args");
+    const c = await call(page, "setAttr", [cta, "data-new", "1"]);
+    await inFrame(page, (d) => d.getElementById("cta").setAttribute("data-new", "page"));
+    assert.deepEqual((await call(page, "revert", [c.v.id])).v, { reverted: 0, skipped: 1 });
+    assert.equal(await attrIn(page, "#cta", "data-new"), "page");
+  } finally { await page.close(); }
+});
+
+test("setText: not-leaf для елемента з дітьми; розмітка лишається текстом; відкат; чужа зміна → skipped", async () => {
+  const page = await open();
+  try {
+    assert.equal((await call(page, "setText", [await refOf(page, "#h"), "x"])).code, "not-leaf");
+    const cta = await refOf(page, "#cta");
+    const r = await call(page, "setText", [cta, "<b>x</b>"]);
+    assert.equal(await inFrame(page, (d) => d.getElementById("cta").textContent), "<b>x</b>");
+    assert.equal(await inFrame(page, (d) => d.getElementById("cta").querySelectorAll("b").length), 0);
+    await call(page, "revert", [r.v.id]);
+    assert.equal(await inFrame(page, (d) => d.getElementById("cta").textContent), "Почати");
+    assert.equal((await call(page, "setText", [cta, "я".repeat(2001)])).code, "bad-args");
+    const s = await call(page, "setText", [cta, "один"]);
+    await inFrame(page, (d) => { d.getElementById("cta").textContent = "сторінка"; });
+    assert.deepEqual((await call(page, "revert", [s.v.id])).v, { reverted: 0, skipped: 1 });
+    assert.equal(await inFrame(page, (d) => d.getElementById("cta").textContent), "сторінка");
+  } finally { await page.close(); }
+});
+
+test("журнал: 501-ша зміна → too-many і документ НЕ змінено; зниклий елемент при відкаті → skipped; невідомий id", async () => {
+  const page = await open();
+  try {
+    const p = await refOf(page, "#p");
+    for (let i = 0; i < 500; i++) assert.ok((await call(page, "setAttr", [p, "data-n", String(i)])).v.id, String(i));
+    const over = await call(page, "setAttr", [p, "data-n", "лишнє"]);
+    assert.equal(over.code, "too-many");
+    assert.equal(await attrIn(page, "#p", "data-n"), "499", "після відмови документ не змінено");
+    assert.equal((await call(page, "setStyle", [p, { color: "red" }])).code, "too-many");
+    assert.equal(await sty(page, "#p", "color"), "green");
+    assert.equal((await call(page, "setClass", [p, { add: ["z"] }])).code, "too-many");
+    assert.equal((await call(page, "setText", [p, "t"])).code, "too-many");
+    assert.equal(await inFrame(page, (d) => d.getElementById("p").textContent), "Абзац");
+    assert.deepEqual((await call(page, "revertAll")).v, { reverted: 500, skipped: 0 });
+    assert.equal(await attrIn(page, "#p", "data-n"), null);
+    // зниклий елемент
+    const lt = await refOf(page, "#lt");
+    await call(page, "setAttr", [lt, "title", "t"]);
+    const st = await call(page, "setStyle", [lt, { color: "red", margin: "1px" }]);
+    await inFrame(page, (d) => d.getElementById("lt").remove());
+    assert.deepEqual((await call(page, "revertAll")).v, { reverted: 0, skipped: 3 });
+    assert.deepEqual((await call(page, "revert", ["c999"])).v, { reverted: 0, skipped: 0 });
+    assert.deepEqual((await call(page, "revert", [st.v.id])).v, { reverted: 0, skipped: 0 }, "вже забрано");
+  } finally { await page.close(); }
+});
+
+test("revertAll: збій в одному записі не губить решту", async () => {
+  const page = await open();
+  try {
+    const p = await refOf(page, "#p"), cta = await refOf(page, "#cta");
+    await call(page, "setAttr", [p, "title", "a"]);
+    await call(page, "setAttr", [cta, "title", "b"]);
+    await call(page, "setAttr", [p, "data-q", "c"]);
+    // перший за порядком відкату (newest) — на елементі, у якого removeAttribute кидає
+    await inFrame(page, (d) => { d.getElementById("p").removeAttribute = () => { throw new Error("boom"); }; });
+    const r = await call(page, "revertAll");
+    assert.equal(r.v.reverted + r.v.skipped, 3);
+    assert.ok(r.v.skipped >= 1);
+    assert.equal(await attrIn(page, "#cta", "title"), null, "елемент cta відкочено попри збій на p");
+  } finally { await page.close(); }
+});
+
+// слухання
+const evCount = (page, n) => page.evaluate((x) => window.EV.filter((e) => e[0] === x).length, n);
+test("listen click: подія page-click, клік доходить до сторінки; false → тиша; bad-args", async () => {
+  const page = await open();
+  try {
+    assert.equal((await call(page, "listen", [{ click: "yes" }])).code, "bad-args");
+    assert.equal((await call(page, "listen", [{ hover: 1 }])).code, "bad-args");
+    await call(page, "listen", [{ click: true }]);
+    const c = await centerOf(page, "#cta");
+    await page.keyboard.down("Shift"); await page.mouse.click(c.x, c.y); await page.keyboard.up("Shift");
+    const ev = await page.evaluate(() => window.EV.filter((e) => e[0] === "page-click"));
+    assert.equal(ev.length, 1);
+    assert.equal(ev[0][1].node.id, "cta");
+    assert.equal(ev[0][1].shift, true);
+    assert.equal(ev[0][1].button, 0);
+    assert.equal(typeof ev[0][1].x, "number");
+    assert.equal(await inFrame(page, (d) => d.defaultView.PAGE_CLICKS), 1);
+    await call(page, "listen", [{ click: false }]);
+    await page.mouse.click(c.x, c.y);
+    assert.equal(await evCount(page, "page-click"), 1);
+    assert.equal(await inFrame(page, (d) => d.defaultView.PAGE_CLICKS), 2);
+  } finally { await page.close(); }
+});
+
+test("listen click: під час pick подій нема; клік по нашому оверлею — теж", async () => {
+  const page = await open();
+  try {
+    await call(page, "listen", [{ click: true }]);
+    await startPick(page);
+    await page.waitForFunction(() => window.A.picking === true);
+    const c = await centerOf(page, "#cta");
+    await page.mouse.click(c.x, c.y);
+    await pickResult(page);
+    assert.equal(await evCount(page, "page-click"), 0);
+    await inFrame(page, (d) => d.getElementById("ours4").dispatchEvent(new d.defaultView.MouseEvent("click", { bubbles: true })));
+    assert.equal(await evCount(page, "page-click"), 0);
+  } finally { await page.close(); }
+});
+
+test("listen hover: page-hover лише при зміні елемента, не частіше 10/с, остання подія не губиться", async () => {
+  const page = await open();
+  try {
+    await call(page, "listen", [{ hover: true }]);
+    const n = await inFrame(page, (d) => {
+      const fire = (id) => d.getElementById(id).dispatchEvent(new d.defaultView.MouseEvent("mouseover", { bubbles: true }));
+      const ids = ["p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta"];
+      for (const id of ids) fire(id);
+      return ids.length;
+    });
+    assert.equal(n, 20);
+    const t0 = await evCount(page, "page-hover");
+    assert.ok(t0 <= 2, `за 20 рухів одразу ≤ 2 події, є ${t0}`);
+    await page.waitForTimeout(300);
+    const evs = await page.evaluate(() => window.EV.filter((e) => e[0] === "page-hover").map((e) => e[1].node.id));
+    assert.ok(evs.length <= 3, String(evs.length));
+    assert.equal(evs[evs.length - 1], "cta", "відкладена остання");
+    // той самий елемент — без події
+    const before = await evCount(page, "page-hover");
+    await inFrame(page, (d) => d.getElementById("cta").dispatchEvent(new d.defaultView.MouseEvent("mouseover", { bubbles: true })));
+    await page.waitForTimeout(250);
+    assert.equal(await evCount(page, "page-hover"), before);
+    await call(page, "listen", [{ hover: false }]);
+    await inFrame(page, (d) => d.getElementById("lt").dispatchEvent(new d.defaultView.MouseEvent("mouseover", { bubbles: true })));
+    await page.waitForTimeout(250);
+    assert.equal(await evCount(page, "page-hover"), before);
+  } finally { await page.close(); }
+});
+
+test("destroy(): відкочує зміни, знімає слухачів, клік після destroy подій не дає", async () => {
+  const page = await open();
+  try {
+    const p = await refOf(page, "#p");
+    await call(page, "setStyle", [p, { color: "red" }]);
+    await call(page, "setAttr", [p, "title", "t"]);
+    await call(page, "listen", [{ click: true, hover: true }]);
+    await page.evaluate(() => window.A.destroy());
+    assert.equal(await sty(page, "#p", "color"), "green");
+    assert.equal(await attrIn(page, "#p", "title"), null);
+    const c = await centerOf(page, "#cta");
+    await page.mouse.click(c.x, c.y);
+    await inFrame(page, (d) => d.getElementById("cta").dispatchEvent(new d.defaultView.MouseEvent("mouseover", { bubbles: true })));
+    await page.waitForTimeout(250);
+    assert.equal(await evCount(page, "page-click"), 0);
+    assert.equal(await evCount(page, "page-hover"), 0);
+  } finally { await page.close(); }
+});

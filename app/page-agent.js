@@ -5,7 +5,8 @@
  * лише `textContent`, `style.setProperty`, `classList`. Стереже статичний тест у `tests/page-rules.test.mjs`.
  * ⛔ Вузли — з ІНШОГО вікна: жодного `instanceof`, лише `nodeType`/`localName`.
  */
-import { LIMITS, PageError, TONE_COLORS, checkLabel, checkStyleNames, checkTone, isCoreAttr } from "./page-rules.js";
+import { LIMITS, PageError, TONE_COLORS, attrAllowed, checkAttrValue, checkClassList, checkLabel, checkStyleMap, checkStyleNames, checkText,
+  checkTone, createJournal, isCoreAttr, stillOurs } from "./page-rules.js";
 
 const OURS = "[data-canvas-inspector],[data-comment-layer],#cl-down,[data-deai-marks]";
 const SKIP = new Set(["script", "style", "template", "noscript"]);
@@ -224,6 +225,101 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     });
   }
 
+  // ---------- зміни вигляду з журналом ----------
+  // ⛔ Спершу `journal.full`, потім зміна документа: зміна без запису в журнал не відкотиться.
+  const journal = createJournal();
+  const notFull = () => { if (journal.full) throw new PageError("too-many", `at most ${LIMITS.changes} active changes`); };
+  const styleNow = (el, p) => ({ v: el.style.getPropertyValue(p), pr: el.style.getPropertyPriority(p) });
+  const sameStyle = (a, b) => stillOurs(a.v, b.v) && stillOurs(a.pr, b.pr);
+  /** Порожній `style=""` після відкату прибираємо (як тюнер). Спершу читаємо атрибут: Chrome серіалізує `style` ліниво, і
+   *  `removeAttribute` до цього лишає «брудний» стан, з якого `style=""` зʼявляється знову. */
+  function dropEmptyStyle(el) {
+    if (el.style.length !== 0) return;
+    el.getAttribute("style");
+    el.removeAttribute("style");
+  }
+  function putStyle(el, p, s) {
+    el.style.removeProperty(p);
+    if (s.v !== "") el.style.setProperty(p, s.v, s.pr);
+  }
+  /** Відкат одного запису → {reverted, skipped}; пункт рахується, лише якщо поточне досі «наше». */
+  function revertEntry(e) {
+    const el = e.el.deref();
+    const n = e.kind === "style" ? e.items.length : e.kind === "class" ? e.added.length + e.removed.length : 1;
+    if (!el || !el.isConnected) return { reverted: 0, skipped: n };
+    let reverted = 0, skipped = 0;
+    if (e.kind === "style") {
+      for (let i = e.items.length - 1; i >= 0; i--) {
+        const it = e.items[i];
+        if (sameStyle(styleNow(el, it.p), it.after)) { putStyle(el, it.p, it.before); reverted++; } else skipped++;
+      }
+      dropEmptyStyle(el);
+    } else if (e.kind === "class") {
+      for (const c of e.added) if (el.classList.contains(c)) { el.classList.remove(c); reverted++; } else skipped++;
+      for (const c of e.removed) if (!el.classList.contains(c)) { el.classList.add(c); reverted++; } else skipped++;
+    } else if (e.kind === "attr") {
+      const name = e.name;                                  // уже перевірене `attrAllowed` у setAttr
+      if (stillOurs(el.getAttribute(name), e.after)) {
+        if (e.before === null) el.removeAttribute(name); else el.setAttribute(name, e.before);
+        reverted++;
+      } else skipped++;
+    } else if (stillOurs(el.textContent, e.after)) { el.textContent = e.before; reverted++; } else skipped++;
+    return { reverted, skipped };
+  }
+  function revertSafe(e) {
+    try { return revertEntry(e); } catch { return { reverted: 0, skipped: 1 }; }   // збій в одному записі не губить решту
+  }
+
+  // ---------- слухання дій користувача ----------
+  const HOVER_MS = 100;
+  let onClick = null, onOver = null, hoverLast = null, hoverSent = null, hoverTimer = 0, hoverAt = 0;
+  const targetOf = (ev) => {
+    let t = ev.target;
+    if (t && t.nodeType === 3) t = t.parentElement;
+    if (!t || t.nodeType !== 1 || pickState || isOurs(t) || !inBody(t)) return null;
+    return t;
+  };
+  function emitHover() {
+    hoverTimer = 0;
+    const el = hoverLast;
+    if (!alive || !el || el === hoverSent || !el.isConnected) return;
+    hoverSent = el; hoverAt = Date.now();
+    onEvent("page-hover", { node: describe(el) });
+  }
+  function setClick(on) {
+    if (on && !onClick) {
+      onClick = (ev) => {
+        const el = targetOf(ev);
+        if (el) onEvent("page-click", { node: describe(el), x: ev.clientX, y: ev.clientY, button: ev.button,
+          alt: ev.altKey, shift: ev.shiftKey, meta: ev.metaKey, ctrl: ev.ctrlKey });
+      };
+      doc.addEventListener("click", onClick, { capture: true, passive: true });
+    } else if (!on && onClick) { doc.removeEventListener("click", onClick, { capture: true }); onClick = null; }
+  }
+  function setHover(on) {
+    if (on && !onOver) {
+      onOver = (ev) => {
+        const el = targetOf(ev);
+        if (!el) return;
+        hoverLast = el;
+        if (el === hoverSent || hoverTimer) return;
+        const wait = HOVER_MS - (Date.now() - hoverAt);
+        if (wait <= 0) emitHover(); else hoverTimer = win.setTimeout(emitHover, wait);   // остання подія не губиться
+      };
+      doc.addEventListener("mouseover", onOver, { capture: true, passive: true });
+    } else if (!on && onOver) {
+      doc.removeEventListener("mouseover", onOver, { capture: true }); onOver = null;
+      if (hoverTimer) { win.clearTimeout(hoverTimer); hoverTimer = 0; }
+      hoverLast = hoverSent = null;
+    }
+  }
+
+  function revertAllNow() {
+    const sum = { reverted: 0, skipped: 0 };
+    for (const e of journal.takeAll()) { const r = revertSafe(e); sum.reverted += r.reverted; sum.skipped += r.skipped; }
+    return sum;
+  }
+
   const api = {
     get alive() { return alive; },
     info() {
@@ -294,11 +390,81 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       m.timer = win.setTimeout(() => { m.timer = 0; if (own) m.box.classList.remove("fl"); else dropMark(id); }, FLASH_MS);
       return null;
     },
+    setStyle(ref, map) {
+      const el = elOf(ref);
+      const { ok, rejected } = checkStyleMap(map);
+      const items = [], applied = [];
+      const hadStyle = el.hasAttribute("style");
+      if (ok.length) notFull();
+      for (const [p, v] of ok) {
+        const before = styleNow(el, p);
+        if (v === null) el.style.removeProperty(p);
+        else { el.style.removeProperty(p); el.style.setProperty(p, v, "important"); }
+        const after = styleNow(el, p);
+        if (v !== null && after.v === "") { putStyle(el, p, before); rejected.push(p); continue; }   // браузер не прийняв
+        items.push({ p, before, after }); applied.push(p);
+      }
+      if (!items.length) {
+        if (!hadStyle) dropEmptyStyle(el);
+        return { id: null, applied: [], rejected };
+      }
+      return { id: journal.add({ kind: "style", el: new WeakRef(el), items }), applied, rejected };
+    },
+    setClass(ref, ch) {
+      const el = elOf(ref);
+      const add = checkClassList(ch?.add ?? []), remove = checkClassList(ch?.remove ?? []);
+      const added = [...new Set(add)].filter((c) => !el.classList.contains(c));
+      const removed = [...new Set(remove)].filter((c) => el.classList.contains(c) && !added.includes(c));
+      if (!added.length && !removed.length) return { id: null };
+      notFull();
+      for (const c of removed) el.classList.remove(c);
+      for (const c of added) el.classList.add(c);
+      return { id: journal.add({ kind: "class", el: new WeakRef(el), added, removed }) };
+    },
+    setAttr(ref, name, value) {
+      const el = elOf(ref);
+      if (!attrAllowed(name)) throw new PageError("not-allowed", `attribute ${String(name).slice(0, 40)} is not allowed`);
+      const v = checkAttrValue(value);
+      notFull();
+      const before = el.getAttribute(name);
+      if (v === null) el.removeAttribute(name); else el.setAttribute(name, v);
+      const after = el.getAttribute(name);
+      return { id: journal.add({ kind: "attr", el: new WeakRef(el), name, before, after }) };
+    },
+    setText(ref, text) {
+      const el = elOf(ref);
+      if (el.children.length) throw new PageError("not-leaf", "the element has child elements");
+      const t = checkText(text);
+      notFull();
+      const before = el.textContent;
+      el.textContent = t;
+      const after = el.textContent;
+      return { id: journal.add({ kind: "text", el: new WeakRef(el), before, after }) };
+    },
+    revert(id) {
+      live();
+      const e = typeof id === "string" ? journal.take(id) : null;
+      return e ? revertSafe(e) : { reverted: 0, skipped: 0 };
+    },
+    revertAll() {
+      live();
+      return revertAllNow();
+    },
+    listen(o = {}) {
+      live();
+      const click = o?.click, hover = o?.hover;
+      for (const [k, v] of [["click", click], ["hover", hover]]) if (v !== undefined && typeof v !== "boolean") throw new PageError("bad-args", `${k}: a boolean`);
+      if (click !== undefined) setClick(click);
+      if (hover !== undefined) setHover(hover);
+      return null;
+    },
     pick() { return startPick(); },
     cancelPick() { finishPick(null); },
     get picking() { return !!pickState; },
     destroy() {
       if (!alive) return;
+      if (doc.defaultView) revertAllNow();                  // поки документ живий
+      setClick(false); setHover(false);
       finishPick(null);
       for (const id of [...marks.keys()]) dropMark(id);
       detach();

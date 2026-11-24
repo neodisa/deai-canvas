@@ -147,3 +147,40 @@ test("stillOurs: відкат лише коли поточне досі «ста
   assert.equal(stillOurs("blue", "red"), false);
   assert.equal(stillOurs(null, null), true);
 });
+
+// Статичний охоронець: помічник ніколи не пише розмітку чи код, а `setAttribute` — лише з відомими іменами.
+const SAFE_ATTRS = new Set(["data-deai-marks", "data-h2d-ignore"]);
+const FORBIDDEN = [/innerHTML/, /outerHTML/, /insertAdjacentHTML/, /\beval\(/, /new\s+Function/, /document\.write/];
+function guardViolations(raw) {
+  const out = [];
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'])\/\/.*$/gm, "$1");   // коментарі не рахуються
+  for (const re of FORBIDDEN) if (re.test(src)) out.push(`forbidden: ${re}`);
+  const lines = src.split("\n");
+  lines.forEach((line, i) => {
+    for (const m of line.matchAll(/setAttribute\(\s*([^,)]*)/g)) {
+      const a = m[1].trim();
+      const lit = /^"([^"]*)"$/.exec(a);
+      if (lit ? SAFE_ATTRS.has(lit[1]) : a === "name") continue;
+      out.push(`setAttribute first arg ${a} at line ${i + 1}`);
+    }
+  });
+  // змінна `name` — лише там, де її щойно перевірив attrAllowed
+  const named = [...src.matchAll(/setAttribute\(\s*name\b/g)].length;
+  if (named && !/attrAllowed\(name\)/.test(src)) out.push("setAttribute(name) without attrAllowed(name)");
+  return out;
+}
+
+test("охоронець page-agent.js: нема innerHTML/eval/…, setAttribute лише з відомими іменами", () => {
+  const src = readFileSync(new URL("../app/page-agent.js", import.meta.url), "utf8");
+  assert.deepEqual(guardViolations(src), []);
+});
+
+test("охоронець ловить порушення (мутації тексту)", () => {
+  const src = readFileSync(new URL("../app/page-agent.js", import.meta.url), "utf8");
+  for (const bad of ["el.innerHTML = x;", "el.outerHTML = x;", "el.insertAdjacentHTML('a', x);", "eval(x);", "new Function(x);", "document.write(x);",
+    'el.setAttribute("onclick", x);', "el.setAttribute(k, v);", "el.setAttribute(attr, v);"]) {
+    assert.ok(guardViolations(`${src}\n${bad}\n`).length > 0, bad);
+  }
+  assert.ok(/setAttribute\(\s*name/.test(src), "setAttr використовує name");
+  assert.ok(guardViolations(src.replace(/attrAllowed\(name\)/g, "ok(name)")).length > 0);
+});
