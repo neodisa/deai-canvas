@@ -686,6 +686,7 @@ class Points(unittest.TestCase):
         видно — звідси заглушка з тим мінімумом, що має зовнішня заглушка Handler.)"""
         class Stub:
             headers = {'Origin': 'https://evil.example'}
+            server = type('S', (), {'server_address': ('127.0.0.1', 1)})()   # порт для `_local_origin`
 
             def __init__(self):
                 self.sent = []

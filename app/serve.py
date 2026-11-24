@@ -1333,12 +1333,32 @@ CLAUDE_LOCK = threading.Lock()
 TASK_CRUD_LOCK = threading.Lock()
 
 
-def _local_origin(origin):
-    """Origin відсутній (мод Claude Code, CLI) або локальний — так; чужий сайт — ні."""
+#: Хости, з яких канвас приймає запити (Host) і чиї сторінки можуть слати POST (Origin) — лише з портом канваса.
+_LOCAL_HOSTS = ('localhost', '127.0.0.1', '::1')
+
+
+def _local_origin(origin, port):
+    """Origin відсутній (curl, хук Stop, мод Claude Code) — так. Є — лише `http://<локальний хост>:<port>`: сторінка з
+    іншого локального порту (чужий dev-сервер) не пише в канвас простим POST без preflight. Битий Origin — ні, не виняток."""
     if not origin:
         return True
-    host = (urlparse(origin).hostname or '').lower()
-    return host in ('localhost', '127.0.0.1', '::1')
+    try:
+        u = urlparse(origin)
+        return u.scheme == 'http' and (u.hostname or '').lower() in _LOCAL_HOSTS and u.port == port
+    except ValueError:
+        return False
+
+
+_HOST_HDR_RE = re.compile(r'(localhost|127\.0\.0\.1|\[::1\]):(\d{1,5})', re.I)
+
+
+def _local_host(host, port):
+    """`Host` відсутній — так; є — лише `<локальний хост>:<port>` (захист від DNS rebinding: чужий домен, що
+    резолвиться в 127.0.0.1, приходить зі своїм іменем у Host)."""
+    if host is None:
+        return True
+    m = _HOST_HDR_RE.fullmatch(host)
+    return bool(m) and int(m.group(2)) == port
 #: Сторінка «змінена щойно» — файли молодші за стільки секунд.
 RECENT_PAGE_S = 120
 
@@ -6322,6 +6342,17 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
 
+    def parse_request(self):
+        """Host перевіряється ОДИН раз на весь запит (GET/HEAD/POST/OPTIONS, обидва класи обробника) — до маршрутів."""
+        if not super().parse_request():
+            return False
+        if not _local_host(self.headers.get('Host'), self.server.server_address[1]):
+            self.close_connection = True
+            self._drain_body()
+            self._send_json({'ok': False, 'error': 'bad-host'}, 403)
+            return False
+        return True
+
     def end_headers(self):
         if self._successor:                                  # 4d-4c: псевдонім `/api/gitlab-*` живе до 1.0
             self.send_header('Deprecation', 'true')
@@ -6703,7 +6734,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.split('?')[0] == '/api/setup':
             # Запускає `node` (перевірка знімків): чужа сторінка (`<img src=…>`) не сміє його смикати — та сама варта, що в
             # `update-notes`. Абсолютні шляхи — лише цієї машини й лише у відповіді (як `/api/agents-md`).
-            if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin')):
+            if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin'), self.server.server_address[1]):
                 self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
                 return
             fresh = parse_qs(urlparse(self.path).query).get('fresh', ['0'])[0] == '1'
@@ -6715,7 +6746,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.split('?')[0] == '/api/update-notes':
             # ⛔ GET, що може піти в мережу (`fetch` тега): чужа сторінка (`<img src=…>`) не сміє його смикати. `Sec-Fetch-Site` cross-/same-site
             # або чужий `Origin` → 403 до будь-якого `git`; без обох заголовків (curl, старі рушії) — пускаємо.
-            if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin')):
+            if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin'), self.server.server_address[1]):
                 self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
                 return
             self._send_json(_updater().notes())
@@ -7943,7 +7974,7 @@ class Handler(SimpleHTTPRequestHandler):
         # Свої клієнти проходять: канвас шле Origin localhost/127.0.0.1, а curl і
         # мод Claude Code не шлють його зовсім (`_local_origin` пускає обох).
         # Обробникові перевірки лишено — вони нешкідливі й дублюють це.
-        if not _local_origin(self.headers.get('Origin')):
+        if not _local_origin(self.headers.get('Origin'), self.server.server_address[1]):
             self._drain_body()
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
             return
@@ -8362,7 +8393,7 @@ class Handler(SimpleHTTPRequestHandler):
         """
         # Пароль — не той запит, який може зробити будь-яка сторінка в браузері
         # простим `text/plain` POST (ревʼю 1.51, той самий клас, що claude-status).
-        if not _local_origin(self.headers.get('Origin')):
+        if not _local_origin(self.headers.get('Origin'), self.server.server_address[1]):
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
             return
         # Origin — першим (як у `_teams_mute`): чужа сторінка не дізнається навіть про вимикач.
@@ -8411,7 +8442,7 @@ class Handler(SimpleHTTPRequestHandler):
         """Замовчати / увімкнути Teams-сповіщення для КАНАЛУ задачі (проєкт цілком,
         для всіх, хто його коментує). Підпис «хто» — особа машини. Порядок: Origin → постачальник ролі `notify` (нікого — 409
         `notify-off`) → `muted` (400) → модуль. ⛔ Аргументи перевіряються ДО виклику модуля: він не бачить поганих."""
-        if not _local_origin(self.headers.get('Origin')):
+        if not _local_origin(self.headers.get('Origin'), self.server.server_address[1]):
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
             return
         resolved, err = _notify_route_gate()
@@ -8660,7 +8691,7 @@ class Handler(SimpleHTTPRequestHandler):
         інакше будь-хто «освіжив» би статус заднім числом."""
         # Ревʼю 1.51: будь-яка сторінка в браузері могла простим POST `text/plain`
         # намалювати «Claude працює». Браузер ставить Origin на кросс-доменний POST.
-        if not _local_origin(self.headers.get('Origin')):
+        if not _local_origin(self.headers.get('Origin'), self.server.server_address[1]):
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
             return
         task, phase, status = payload.get('task'), payload.get('phase'), payload.get('status')
@@ -9472,7 +9503,7 @@ class Handler(SimpleHTTPRequestHandler):
         `guide` файла агента, версія, простір (за `space` чи найдовшим префіксом `path`; без обох — поточний) і стан його AGENTS.md,
         поточна задача, увімкнені модулі, свої модулі (ЛИШЕ шлях до `agent.md`), теми, поточний блок. `topic` — текст теми (невідома
         — 404 `unknown-topic`). Лише читання; чужа сторінка — 403 (абсолютні шляхи цієї машини). Типово markdown, `format=json` — обʼєкт."""
-        if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin')):
+        if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin'), self.server.server_address[1]):
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
             return
         q = parse_qs(urlparse(self.path).query)
@@ -9604,7 +9635,7 @@ class Handler(SimpleHTTPRequestHandler):
         Є й локальний І `Sec-Fetch-Site: same-origin` — інакше 403 `trust-needs-ui`. Це фільтр від curl агента, а не
         межа: межа — системне вікно ОС у `grant_trust` (скрипт сторінки макета шле ті самі заголовки)."""
         origin = self.headers.get('Origin')
-        if not origin or not _local_origin(origin) or self.headers.get('Sec-Fetch-Site') != 'same-origin':
+        if not origin or not _local_origin(origin, self.server.server_address[1]) or self.headers.get('Sec-Fetch-Site') != 'same-origin':
             self._space_error(403, 'trust-needs-ui', 'trust is granted only from the canvas page in a browser')
             return
         sp = self._module_space(payload.get('space'))

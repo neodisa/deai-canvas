@@ -2623,7 +2623,7 @@ class _PublishedTests:
     def raw_head(self, target):
         """Сирий запит із ТОЧНИМИ байтами цілі (http.client відмовив би на керівних): `(статус, {заголовок: байти}, голова)`."""
         with socket.create_connection(('127.0.0.1', self.port), timeout=10) as sock:
-            sock.sendall(b'GET ' + target + b' HTTP/1.0\r\nHost: x\r\n\r\n')
+            sock.sendall(b'GET ' + target + b' HTTP/1.0\r\nHost: 127.0.0.1:%d\r\n\r\n' % self.port)
             data = b''
             while True:
                 chunk = sock.recv(65536)
@@ -2704,7 +2704,7 @@ class _PublishedTests:
         before = self.fd_count()
         for _ in range(25):                                                                      # клієнт іде посеред відповіді
             sock = socket.create_connection(('127.0.0.1', self.port), timeout=10)
-            sock.sendall(b'GET ' + self.root.encode() + b'big.bin HTTP/1.0\r\nHost: x\r\n\r\n')
+            sock.sendall(b'GET ' + self.root.encode() + b'big.bin HTTP/1.0\r\nHost: 127.0.0.1:%d\r\n\r\n' % self.port)
             sock.recv(4096)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b'\x01\x00\x00\x00\x00\x00\x00\x00')   # RST при закритті
             sock.close()

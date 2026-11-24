@@ -415,7 +415,7 @@ class PreviewApi(unittest.TestCase):
 
     def test_origin_gate_bad_body_and_task_prefix(self):
         self.assertEqual(self.call({}, origin='https://evil.example')[0], 403)
-        for ok_origin in (None, 'http://localhost:8765', 'http://127.0.0.1:8765'):
+        for ok_origin in (None, self.base.replace('127.0.0.1', 'localhost'), self.base):
             self.assertEqual(self.call({}, origin=ok_origin)[0], 200, ok_origin)
         st, body = self.call(None, raw=b'[]')
         self.assertEqual((st, body.get('code')), (400, 'bad-body'))
