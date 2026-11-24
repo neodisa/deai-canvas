@@ -58,7 +58,7 @@ The change history of one iteration, read from the task folder's git: `{"ok": tr
 "degraded": false}`. `entries` come newest first (up to 300 commits are read); each is `{"sha", "at", "actor": {"kind":
 "ai" | "person", "name"}, "kind", "args", "text", "files", "more"}`: `kind` is `create`, `copy`, `merge`, `rename`, `delete`,
 `restore`, `page-new`, `page-rename`, `page-move`, `tree`, `publish`, `ai` (your edits), `sync` (a commit `itN: автосинк`
-without the AI trailer) or `other`; `files` are up to 5
+without the AI trailer; older ones with the trailer show as `ai` with `args.synced: true`) or `other`; `files` are up to 5
 files of this iteration the commit touched and `more` counts the rest. `pending` is the not yet committed changes of the
 iteration (`{"files", "more", "at"}`) or `null`. `"degraded": true` means the history is not read from git: the task
 folder has no `.git`, or a git call failed (error, timeout), and `entries` is then one `create` entry built from the
