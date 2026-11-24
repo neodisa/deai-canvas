@@ -435,7 +435,7 @@ test("reveal: елемент у видимій області; без мітки
     assert.equal((await inFrame(page, MARKS)).marks.length, 1, "тимчасова мітка");
     assert.equal((await inFrame(page, MARKS)).marks[0].label, "");
     await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; const r = d.getElementById("far").getBoundingClientRect(); return r.top >= 0 && r.bottom <= 600; });
-    await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; const h = [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")); return h.shadowRoot.querySelectorAll(".mk").length === 0; }, null, { timeout: 4000 });
+    await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; const h = [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")); return !h || h.shadowRoot.querySelectorAll(".mk").length === 0; }, null, { timeout: 4000 });
     // з міткою
     const cta = await refOf(page, "#cta");
     await call(page, "mark", [cta, { tone: "warn" }]);
@@ -549,7 +549,7 @@ test("reveal: сотня показів → не більше 20 коробок;
     for (let i = 0; i < 40; i++) refs.push(await refOf(page, "#q" + i));
     for (let k = 0; k < 100; k++) await call(page, "reveal", [refs[k % 40]]);
     assert.ok((await inFrame(page, MARKS)).marks.length <= 20, "межа тимчасових");
-    await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; return [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).shadowRoot.querySelectorAll(".mk").length === 0; }, null, { timeout: 5000 });
+    await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; const h = [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")); return !h || h.shadowRoot.querySelectorAll(".mk").length === 0; }, null, { timeout: 5000 });
     const far = await refOf(page, "#far");
     for (let i = 0; i < 5; i++) await call(page, "reveal", [far]);
     assert.equal((await inFrame(page, MARKS)).marks.length, 1, "та сама коробка");
@@ -840,7 +840,7 @@ test("журнал: 501-ша зміна → too-many і документ НЕ з
     await call(page, "setAttr", [lt, "title", "t"]);
     const st = await call(page, "setStyle", [lt, { color: "red", margin: "1px" }]);
     await inFrame(page, (d) => d.getElementById("lt").remove());
-    assert.deepEqual((await call(page, "revertAll")).v, { reverted: 0, skipped: 3 });
+    assert.deepEqual((await call(page, "revertAll")).v, { reverted: 0, skipped: 6 }, "атрибут 1 + color 1 + margin 4 довгі декларації");
     assert.deepEqual((await call(page, "revert", ["c999"])).v, { reverted: 0, skipped: 0 });
     assert.deepEqual((await call(page, "revert", [st.v.id])).v, { reverted: 0, skipped: 0 }, "вже забрано");
   } finally { await page.close(); }
@@ -901,32 +901,66 @@ test("listen click: під час pick подій нема; клік по наш
   } finally { await page.close(); }
 });
 
-test("listen hover: page-hover лише при зміні елемента, не частіше 10/с, остання подія не губиться", async () => {
+test("listen hover: page-hover лише при зміні елемента, не частіше 10/с, остання подія не губиться (справжній рух миші)", async () => {
   const page = await open();
   try {
     await call(page, "listen", [{ hover: true }]);
-    const n = await inFrame(page, (d) => {
-      const fire = (id) => d.getElementById(id).dispatchEvent(new d.defaultView.MouseEvent("mouseover", { bubbles: true }));
-      const ids = ["p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta"];
-      for (const id of ids) fire(id);
-      return ids.length;
-    });
-    assert.equal(n, 20);
+    const pts = { p: await centerOf(page, "#p"), cta: await centerOf(page, "#cta"), lt: await centerOf(page, "#lt") };
+    const ids = ["p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta", "lt", "p", "cta"];
+    const t = Date.now();
+    for (const id of ids) await page.mouse.move(pts[id].x, pts[id].y);
+    const elapsed = Date.now() - t;
     const t0 = await evCount(page, "page-hover");
-    assert.ok(t0 <= 2, `за 20 рухів одразу ≤ 2 події, є ${t0}`);
+    assert.ok(t0 <= 2 + Math.floor(elapsed / 100), `за ${ids.length} рухів за ${elapsed} мс — подій ${t0}`);
+    assert.ok(t0 < ids.length, "обмеження частоти працює");
     await page.waitForTimeout(300);
     const evs = await page.evaluate(() => window.EV.filter((e) => e[0] === "page-hover").map((e) => e[1].node.id));
-    assert.ok(evs.length <= 3, String(evs.length));
     assert.equal(evs[evs.length - 1], "cta", "відкладена остання");
-    // той самий елемент — без події
     const before = await evCount(page, "page-hover");
-    await inFrame(page, (d) => d.getElementById("cta").dispatchEvent(new d.defaultView.MouseEvent("mouseover", { bubbles: true })));
+    await page.mouse.move(pts.cta.x + 3, pts.cta.y);          // той самий елемент — без події
     await page.waitForTimeout(250);
     assert.equal(await evCount(page, "page-hover"), before);
     await call(page, "listen", [{ hover: false }]);
-    await inFrame(page, (d) => d.getElementById("lt").dispatchEvent(new d.defaultView.MouseEvent("mouseover", { bubbles: true })));
+    await page.mouse.move(pts.lt.x, pts.lt.y);
     await page.waitForTimeout(250);
     assert.equal(await evCount(page, "page-hover"), before);
+  } finally { await page.close(); }
+});
+
+test("listen: події, які скрипт сторінки породив сам (el.click(), dispatchEvent), не доходять до модуля", async () => {
+  const page = await open();
+  try {
+    await call(page, "listen", [{ click: true, hover: true }]);
+    await inFrame(page, (d) => {
+      const el = d.getElementById("cta");
+      for (let i = 0; i < 50; i++) { el.click(); el.dispatchEvent(new d.defaultView.MouseEvent("mouseover", { bubbles: true })); d.getElementById("p").dispatchEvent(new d.defaultView.MouseEvent("mouseover", { bubbles: true })); }
+      return true;
+    });
+    await page.waitForTimeout(300);
+    assert.equal(await evCount(page, "page-click"), 0);
+    assert.equal(await evCount(page, "page-hover"), 0);
+    // а справжній клік після цього — доходить
+    const c = await centerOf(page, "#cta");
+    await page.mouse.click(c.x, c.y);
+    assert.equal(await evCount(page, "page-click"), 1);
+  } finally { await page.close(); }
+});
+
+test("listen: збій у onEvent не стає помилкою сторінки", async () => {
+  const page = await open();
+  try {
+    await inFrame(page, (d) => { d.defaultView.ERR = []; d.defaultView.addEventListener("error", (e) => d.defaultView.ERR.push(String(e.message))); });
+    await page.evaluate(() => { window.A.destroy(); window.A = null; });
+    await page.evaluate(async () => {
+      const { createPageAgent } = await import("/app/page-agent.js");
+      window.A = createPageAgent({ doc: document.getElementById("f").contentDocument, onEvent: () => { throw new Error("boom"); } });
+    });
+    await call(page, "listen", [{ click: true, hover: true }]);
+    const c = await centerOf(page, "#cta");
+    await page.mouse.move(c.x, c.y);
+    await page.mouse.click(c.x, c.y);
+    await page.waitForTimeout(250);
+    assert.deepEqual(await inFrame(page, (d) => d.defaultView.ERR), []);
   } finally { await page.close(); }
 });
 
@@ -946,5 +980,238 @@ test("destroy(): відкочує зміни, знімає слухачів, к�
     await page.waitForTimeout(250);
     assert.equal(await evCount(page, "page-click"), 0);
     assert.equal(await evCount(page, "page-hover"), 0);
+  } finally { await page.close(); }
+});
+
+// ---------- відкат: декларації замість назв, передача шару, лише справжні дії ----------
+const mkEl = (page, id, attrs = {}, text = "x") => inFrame(page, (d, a) => {
+  const e = d.createElement("div"); e.id = a.id; e.textContent = a.text;
+  for (const [k, v] of Object.entries(a.attrs)) e.setAttribute(k, v);
+  d.body.appendChild(e); return true;
+}, { id, attrs, text });
+const prio = (page, sel, prop) => inFrame(page, (d, a) => d.querySelector(a[0]).style.getPropertyPriority(a[1]), [sel, prop]);
+const cssOf = (page, sel) => inFrame(page, (d, q) => d.querySelector(q).style.cssText.replace(/\s+/g, ""), sel);
+const hasAttr = (page, sel, name) => inFrame(page, (d, a) => d.querySelector(a[0]).hasAttribute(a[1]), [sel, name]);
+
+test("I1: shorthand margin поверх page margin-top → відкат повертає margin-top:5px, інших боків нема; лічильник по деклараціях", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "m1", { style: "margin-top:5px" });
+    const ref = await refOf(page, "#m1");
+    const r = await call(page, "setStyle", [ref, { margin: "0" }]);
+    assert.deepEqual(r.v.applied, ["margin"]);
+    assert.equal(await comp(page, "#m1", "margin-top"), "0px");
+    assert.deepEqual((await call(page, "revert", [r.v.id])).v, { reverted: 4, skipped: 0 });
+    assert.equal(await sty(page, "#m1", "margin-top"), "5px");
+    for (const side of ["right", "bottom", "left"]) assert.equal(await sty(page, "#m1", `margin-${side}`), "", side);
+    assert.equal(await attrIn(page, "#m1", "style"), "margin-top: 5px;");
+  } finally { await page.close(); }
+});
+
+test("I1: shorthand padding + page-longhand з !important → відкат повертає значення І пріоритет", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "m2", { style: "padding-left:7px !important; color: red" });
+    const ref = await refOf(page, "#m2");
+    const r = await call(page, "setStyle", [ref, { padding: "0", color: "blue" }]);
+    assert.deepEqual([...r.v.applied].sort(), ["color", "padding"]);
+    assert.deepEqual((await call(page, "revert", [r.v.id])).v, { reverted: 5, skipped: 0 });
+    assert.equal(await sty(page, "#m2", "padding-left"), "7px");
+    assert.equal(await prio(page, "#m2", "padding-left"), "important");
+    for (const side of ["top", "right", "bottom"]) assert.equal(await sty(page, "#m2", `padding-${side}`), "", side);
+    assert.equal(await sty(page, "#m2", "color"), "red");
+    assert.equal(await prio(page, "#m2", "color"), "");
+  } finally { await page.close(); }
+});
+
+test("I1: відхилений shorthand не стирає довгі декларації сторінки (і з перевіркою CSS.supports, і без неї)", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "m3", { style: "margin-top:5px" });
+    const ref = await refOf(page, "#m3");
+    const bad = "1px 2px 3px 4px 5px";
+    const a = await call(page, "setStyle", [ref, { margin: bad }]);
+    assert.deepEqual({ id: a.v.id, applied: a.v.applied, rejected: a.v.rejected }, { id: null, applied: [], rejected: ["margin"] });
+    assert.equal(await cssOf(page, "#m3"), "margin-top:5px;");
+    // без CSS.supports працює післяперевірка: браузер відмовив → стан відновлено зі знімка
+    await inFrame(page, (d) => { d.defaultView.CSS = undefined; return true; });
+    const b = await call(page, "setStyle", [ref, { margin: bad, color: "green" }]);
+    assert.deepEqual([b.v.applied, b.v.rejected], [["color"], ["margin"]]);
+    assert.equal(await sty(page, "#m3", "margin-top"), "5px");
+    assert.deepEqual((await call(page, "revert", [b.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await cssOf(page, "#m3"), "margin-top:5px;");
+  } finally { await page.close(); }
+});
+
+test("setStyle({color:null}) на елементі без color → id null, журнал не чіпано (500 викликів не дають too-many)", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "n1");
+    const ref = await refOf(page, "#n1");
+    const ids = await page.evaluate((r) => { const out = []; for (let i = 0; i < 500; i++) out.push(window.A.setStyle(r, { color: null }).id); return out; }, ref);
+    assert.ok(ids.every((x) => x === null));
+    assert.equal(await hasAttr(page, "#n1", "style"), false, "порожній style не лишився");
+    assert.ok((await call(page, "setAttr", [ref, "title", "t"])).v.id, "журнал не заповнений");
+    assert.deepEqual((await call(page, "revertAll")).v, { reverted: 1, skipped: 0 });
+  } finally { await page.close(); }
+});
+
+test("сторінка мала style=\"\" → після setStyle + відкату атрибут style лишається; без нього — зникає", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "s1", { style: "" });
+    await mkEl(page, "s2");
+    const r1 = await call(page, "setStyle", [await refOf(page, "#s1"), { color: "red" }]);
+    const r2 = await call(page, "setStyle", [await refOf(page, "#s2"), { color: "red" }]);
+    await call(page, "revert", [r1.v.id]); await call(page, "revert", [r2.v.id]);
+    assert.equal(await hasAttr(page, "#s1", "style"), true);
+    assert.equal(await hasAttr(page, "#s2", "style"), false);
+  } finally { await page.close(); }
+});
+
+test("I2 style: revert(A), потім revert(B) → сторінка повертається до свого синього", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "o1", { style: "color: blue" });
+    const ref = await refOf(page, "#o1");
+    const a = await call(page, "setStyle", [ref, { color: "red" }]);
+    const b = await call(page, "setStyle", [ref, { color: "green" }]);
+    assert.deepEqual((await call(page, "revert", [a.v.id])).v, { reverted: 1, skipped: 0 }, "шар знято");
+    assert.equal(await comp(page, "#o1", "color"), "rgb(0, 128, 0)", "видиме значення лишилось B");
+    assert.deepEqual((await call(page, "revert", [b.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await sty(page, "#o1", "color"), "blue");
+    assert.equal(await prio(page, "#o1", "color"), "");
+  } finally { await page.close(); }
+});
+
+test("I2: ланцюг із трьох шарів, знімаємо середній, потім інші в довільному порядку", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "o5", { style: "color: blue" });
+    const ref = await refOf(page, "#o5");
+    const a = await call(page, "setStyle", [ref, { color: "red" }]);
+    const b = await call(page, "setStyle", [ref, { color: "green" }]);
+    const c = await call(page, "setStyle", [ref, { color: "black" }]);
+    await call(page, "revert", [b.v.id]);
+    await call(page, "revert", [a.v.id]);
+    assert.equal(await comp(page, "#o5", "color"), "rgb(0, 0, 0)");
+    await call(page, "revert", [c.v.id]);
+    assert.equal(await sty(page, "#o5", "color"), "blue");
+  } finally { await page.close(); }
+});
+
+test("I2 attr: revert(A), потім revert(B) → початковий title", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "o2", { title: "orig" });
+    const ref = await refOf(page, "#o2");
+    const a = await call(page, "setAttr", [ref, "title", "a"]);
+    const b = await call(page, "setAttr", [ref, "title", "b"]);
+    assert.deepEqual((await call(page, "revert", [a.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await attrIn(page, "#o2", "title"), "b");
+    assert.deepEqual((await call(page, "revert", [b.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await attrIn(page, "#o2", "title"), "orig");
+  } finally { await page.close(); }
+});
+
+test("I2 class: A додає x, B прибирає x; revert(A), потім revert(B) → x відсутній, як було", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "o3", { class: "base" });
+    const ref = await refOf(page, "#o3");
+    const a = await call(page, "setClass", [ref, { add: ["x"] }]);
+    const b = await call(page, "setClass", [ref, { remove: ["x"] }]);
+    assert.deepEqual((await call(page, "revert", [a.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await attrIn(page, "#o3", "class"), "base");
+    assert.deepEqual((await call(page, "revert", [b.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await attrIn(page, "#o3", "class"), "base", "x відсутній, як було");
+  } finally { await page.close(); }
+});
+
+test("I2 class: A прибирає x (був), B додає x; revert(A), потім revert(B) → x повернувся", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "o6", { class: "base x" });
+    const ref = await refOf(page, "#o6");
+    const a = await call(page, "setClass", [ref, { remove: ["x"] }]);
+    const b = await call(page, "setClass", [ref, { add: ["x"] }]);
+    await call(page, "revert", [a.v.id]);
+    await call(page, "revert", [b.v.id]);
+    assert.equal(await attrIn(page, "#o6", "class"), "base x");
+  } finally { await page.close(); }
+});
+
+test("I2 text: revert(A), потім revert(B) → початковий текст", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "o4", {}, "orig");
+    const ref = await refOf(page, "#o4");
+    const a = await call(page, "setText", [ref, "a"]);
+    const b = await call(page, "setText", [ref, "b"]);
+    assert.deepEqual((await call(page, "revert", [a.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await inFrame(page, (d) => d.getElementById("o4").textContent), "b");
+    await call(page, "revert", [b.v.id]);
+    assert.equal(await inFrame(page, (d) => d.getElementById("o4").textContent), "orig");
+  } finally { await page.close(); }
+});
+
+test("I2: передача шару не заважає чужій зміні — сторінка змінила після B → шар A знято, B skipped, значення сторінки лишається", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "o7", { title: "orig" });
+    const ref = await refOf(page, "#o7");
+    const a = await call(page, "setAttr", [ref, "title", "a"]);
+    const b = await call(page, "setAttr", [ref, "title", "b"]);
+    await inFrame(page, (d) => d.getElementById("o7").setAttribute("title", "page"));
+    await call(page, "revert", [a.v.id]);
+    assert.deepEqual((await call(page, "revert", [b.v.id])).v, { reverted: 0, skipped: 1 });
+    assert.equal(await attrIn(page, "#o7", "title"), "page");
+  } finally { await page.close(); }
+});
+
+test("hadClass: елемент без атрибута class → setClass + відкат → атрибута class нема", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "k1");
+    const ref = await refOf(page, "#k1");
+    const r = await call(page, "setClass", [ref, { add: ["x"] }]);
+    assert.equal(await attrIn(page, "#k1", "class"), "x");
+    await call(page, "revert", [r.v.id]);
+    assert.equal(await hasAttr(page, "#k1", "class"), false);
+    // а коли class="" був у сторінки — лишається
+    await mkEl(page, "k2", { class: "" });
+    const r2 = await call(page, "setClass", [await refOf(page, "#k2"), { add: ["x"] }]);
+    await call(page, "revert", [r2.v.id]);
+    assert.equal(await hasAttr(page, "#k2", "class"), true);
+  } finally { await page.close(); }
+});
+
+test("порожній хост: reveal(ref) → після спалаху в документі нема [data-deai-marks]; нова мітка його відтворює", async () => {
+  const page = await open();
+  try {
+    const ref = await refOf(page, "#cta");
+    await call(page, "reveal", [ref]);
+    assert.equal((await inFrame(page, MARKS)).hosts, 1);
+    await page.waitForFunction(() => ![...document.getElementById("f").contentDocument.documentElement.children].some((e) => e.hasAttribute("data-deai-marks")), null, { timeout: 4000 });
+    const id = (await call(page, "mark", [ref, { label: "ще" }])).v;
+    assert.equal((await inFrame(page, MARKS)).marks.length, 1);
+    await call(page, "unmark", [id]);
+    assert.equal((await inFrame(page, MARKS)).hosts, 0, "останню мітку знято — хост прибрано");
+    await call(page, "reveal", [ref]);                       // і знову працює
+    assert.equal((await inFrame(page, MARKS)).marks.length, 1);
+  } finally { await page.close(); }
+});
+
+test("resetHost: хост зник під час pick, а модуль одразу просить mark() → pick завершується null", async () => {
+  const page = await open();
+  try {
+    await startPick(page);
+    await page.waitForFunction(() => window.A.picking === true);
+    await inFrame(page, (d) => { [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).remove(); return true; });
+    const ref = await refOf(page, "#cta");
+    const id = await call(page, "mark", [ref]);
+    assert.match(id.v, /^m\d+$/);
+    assert.equal(await pickResult(page), null);
+    assert.equal(await page.evaluate(() => window.A.picking), false);
   } finally { await page.close(); }
 });

@@ -114,7 +114,7 @@ export function checkTone(tone) {
 /** Відкат повертає «було» лише коли зараз досі «стало»: змінене після модуля (скрипт сторінки, тюнер) не чіпаємо. */
 export const stillOurs = (current, after) => current === after;
 
-/** Журнал змін: `add` → id (`c1`…), `take(id)` → запис чи null, `takeAll()` → новіші першими (порядок відкату). */
+/** Журнал змін: `add` → id (`c1`…), `take(id)` → запис чи null, `takeAll()` → новіші першими (порядок відкату), `newer(id)` → новіші за `id` (найстаріші першими). */
 export function createJournal(max = LIMITS.changes) {
   const items = new Map();
   let seq = 0;
@@ -129,6 +129,14 @@ export function createJournal(max = LIMITS.changes) {
       return id;
     },
     take(id) { const x = items.get(id) ?? null; if (x) items.delete(id); return x; },
+    /** Живі записи, додані ПІСЛЯ `id`, найстаріші першими (самі обʼєкти журналу, не копії): потрібні для передачі шару.
+     *  Викликати ДО `take(id)` — після нього id невідомий і відповідь порожня. */
+    newer(id) {
+      const out = [];
+      let seen = false;
+      for (const [k, v] of items) { if (seen) out.push(v); else if (k === id) seen = true; }
+      return out;
+    },
     takeAll() { const all = [...items.values()].reverse(); items.clear(); return all; },
   };
 }

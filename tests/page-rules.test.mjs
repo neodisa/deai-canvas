@@ -142,6 +142,21 @@ test("журнал: full, монотонні id, повторне add після
   assert.deepEqual(k.take(id), { id: "c1", n: 1 });
 });
 
+test("журнал: newer(id) — живі записи після id, найстаріші першими; невідомий id і вже забраний → []", () => {
+  const j = createJournal(5);
+  const a = j.add({ n: 1 }), b = j.add({ n: 2 }), c = j.add({ n: 3 });
+  assert.deepEqual(j.newer(a).map((x) => x.n), [2, 3]);
+  assert.deepEqual(j.newer(b).map((x) => x.n), [3]);
+  assert.deepEqual(j.newer(c), []);
+  assert.deepEqual(j.newer("c99"), []);
+  assert.deepEqual(j.newer(undefined), []);
+  j.take(b);
+  assert.deepEqual(j.newer(b), [], "після take — невідомий");
+  assert.deepEqual(j.newer(a).map((x) => x.n), [3], "забраний запис більше не «новіший»");
+  j.newer(a)[0].n = 30;                                   // живі обʼєкти: передача шару міняє їх
+  assert.equal(j.take(c).n, 30);
+});
+
 test("stillOurs: відкат лише коли поточне досі «стало»", () => {
   assert.equal(stillOurs("red", "red"), true);
   assert.equal(stillOurs("blue", "red"), false);
@@ -150,7 +165,8 @@ test("stillOurs: відкат лише коли поточне досі «ста
 
 // Статичний охоронець: помічник ніколи не пише розмітку чи код, а `setAttribute` — лише з відомими іменами.
 const SAFE_ATTRS = new Set(["data-deai-marks", "data-h2d-ignore"]);
-const FORBIDDEN = [/innerHTML/, /outerHTML/, /insertAdjacentHTML/, /\beval\(/, /new\s+Function/, /document\.write/];
+const NEW_FORBIDDEN = [/\bFunction\s*\(/, /setAttribute(NS|Node)\b/, /\.cssText\b/, /createContextualFragment|DOMParser|srcdoc/, /[\w$)\]]\[\s*["'`]/];
+const FORBIDDEN = [/innerHTML/, /outerHTML/, /insertAdjacentHTML/, /\beval\(/, /new\s+Function/, /document\.write/, ...NEW_FORBIDDEN];
 function guardViolations(raw) {
   const out = [];
   const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'])\/\/.*$/gm, "$1");   // коментарі не рахуються
@@ -183,4 +199,17 @@ test("охоронець ловить порушення (мутації тек�
   }
   assert.ok(/setAttribute\(\s*name/.test(src), "setAttr використовує name");
   assert.ok(guardViolations(src.replace(/attrAllowed\(name\)/g, "ok(name)")).length > 0);
+});
+
+test("охоронець: кожен новий шаблон спрацьовує на своїй мутації, а справжній код чистий", () => {
+  const src = readFileSync(new URL("../app/page-agent.js", import.meta.url), "utf8");
+  const cases = [["Function(x);", NEW_FORBIDDEN[0]], ["globalThis.Function(x);", NEW_FORBIDDEN[0]],
+    ["el.setAttributeNS(a, b, c);", NEW_FORBIDDEN[1]], ["el.setAttributeNode(n);", NEW_FORBIDDEN[1]],
+    ["el.style.cssText = x;", NEW_FORBIDDEN[2]],
+    ["r.createContextualFragment(x);", NEW_FORBIDDEN[3]], ["new DOMParser();", NEW_FORBIDDEN[3]], ["f.srcdoc = x;", NEW_FORBIDDEN[3]],
+    ['el["inner" + "HTML"] = x;', NEW_FORBIDDEN[4]], ["el['x'] = 1;", NEW_FORBIDDEN[4]], ["el[`x`] = 1;", NEW_FORBIDDEN[4]],
+    ['f()["x"];', NEW_FORBIDDEN[4]], ['a[0]["x"];', NEW_FORBIDDEN[4]], ['a[ "x" ];', NEW_FORBIDDEN[4]]];
+  for (const [bad, re] of cases) assert.ok(guardViolations(`${src}\n${bad}\n`).includes(`forbidden: ${re}`), bad);
+  assert.equal(guardViolations(src).filter((v) => NEW_FORBIDDEN.some((re) => v === `forbidden: ${re}`)).length, 0);
+  assert.deepEqual(guardViolations("for (const [k, v] of [[\"a\", 1], [\"b\", 2]]) {}\nconst m = [\"x\", \"y\"];\n"), [], "масиви-літерали не хибні спрацювання");
 });

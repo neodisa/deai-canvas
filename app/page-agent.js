@@ -107,10 +107,13 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
   let host = null, root = null, wrap = null;
   /** Сторінка прибрала хост (замінила `documentElement.innerHTML` чи сам `documentElement`): коробки в мертвому корені не рахуються. */
   function resetHost() {
+    finishPick(null);                                       // вибір на зниклому хості не має шансу завершитись
     for (const m of marks.values()) if (m.timer) win.clearTimeout(m.timer);
     marks.clear();
     host = root = wrap = null;
   }
+  /** Порожній хост не тримаємо в документі: коли міток нема й ніхто не вибирає — прибираємо; `ensureHost` відтворить. */
+  function dropHost() { host?.remove(); host = root = wrap = null; }
   function ensureHost() {
     if (host && host.isConnected) return;
     resetHost();
@@ -192,7 +195,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     if (!m) return;
     if (m.timer) win.clearTimeout(m.timer);
     m.box.remove(); marks.delete(id);
-    if (!marks.size && !pickState) detach();
+    if (!marks.size && !pickState) { detach(); dropHost(); }
   }
 
   // ---------- вибір елемента ----------
@@ -204,7 +207,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     doc.removeEventListener("keydown", st.onKey, true);
     st.cv.remove(); st.pk.remove();
     if (wrap) wrap.hidden = false;
-    if (!marks.size) detach();
+    if (!marks.size) { detach(); dropHost(); }
     st.resolve(value);
   }
   function topAt(x, y) {
@@ -262,45 +265,72 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
   // ⛔ Спершу `journal.full`, потім зміна документа: зміна без запису в журнал не відкотиться.
   const journal = createJournal();
   const notFull = () => { if (journal.full) throw new PageError("too-many", `at most ${LIMITS.changes} active changes`); };
-  const styleNow = (el, p) => ({ v: el.style.getPropertyValue(p), pr: el.style.getPropertyPriority(p) });
+  /** Усі інлайнові декларації елемента: імʼя → {v, pr}. `el.style` перелічує ДОВГІ властивості й кастомні (`--x`), тож
+   *  скорочення (`margin`) розкладається само, і «було» не губить довгі, які сторінка мала до нас. */
+  function snapStyle(el) {
+    const m = new Map();
+    for (let i = 0; i < el.style.length; i++) {
+      const name = el.style.item(i);
+      m.set(name, { v: el.style.getPropertyValue(name), pr: el.style.getPropertyPriority(name) });
+    }
+    return m;
+  }
+  const NO_STYLE = Object.freeze({ v: "", pr: "" });
   const sameStyle = (a, b) => stillOurs(a.v, b.v) && stillOurs(a.pr, b.pr);
+  /** Повернути елемент до знімка: кожна декларація, що відрізняється (значенням чи пріоритетом), знімається й ставиться як було. */
+  function restoreTo(el, snap) {
+    const cur = snapStyle(el);
+    for (const name of new Set([...cur.keys(), ...snap.keys()])) {
+      const c = cur.get(name) ?? NO_STYLE, w = snap.get(name) ?? NO_STYLE;
+      if (sameStyle(c, w)) continue;
+      el.style.removeProperty(name);
+      if (w.v !== "") el.style.setProperty(name, w.v, w.pr);
+    }
+  }
   /** Порожній `style=""` після відкату прибираємо (як тюнер). Спершу читаємо атрибут: Chrome серіалізує `style` ліниво, і
-   *  `removeAttribute` до цього лишає «брудний» стан, з якого `style=""` зʼявляється знову. */
-  function dropEmptyStyle(el) {
-    if (el.style.length !== 0) return;
-    el.getAttribute("style");
-    el.removeAttribute("style");
+   *  `removeAttribute` до цього лишає «брудний» стан, з якого `style=""` зʼявляється знову. Те саме для `class`. */
+  function dropEmptyAttr(el, name) {
+    el.getAttribute(name);
+    el.removeAttribute(name);
   }
-  function putStyle(el, p, s) {
-    el.style.removeProperty(p);
-    if (s.v !== "") el.style.setProperty(p, s.v, s.pr);
-  }
-  /** Відкат одного запису → {reverted, skipped}; пункт рахується, лише якщо поточне досі «наше». */
-  function revertEntry(e) {
+  const dropEmptyStyle = (el) => { if (el.style.length === 0) dropEmptyAttr(el, "style"); };
+  /** Ключі записів: style — імʼя декларації ({v,pr}), class — імʼя класу (булеве), attr — імʼя атрибута (рядок|null), text — "#text". */
+  const KIND = {
+    style: { now: (el, k) => ({ v: el.style.getPropertyValue(k), pr: el.style.getPropertyPriority(k) }), same: sameStyle,
+      put(el, k, val) { el.style.removeProperty(k); if (val.v !== "") el.style.setProperty(k, val.v, val.pr); } },
+    class: { now: (el, k) => el.classList.contains(k), same: stillOurs,
+      put(el, k, val) { if (val) el.classList.add(k); else el.classList.remove(k); } },
+    attr: { now: (el, k) => el.getAttribute(k), same: stillOurs,
+      put(el, name, val) {
+        if (!attrAllowed(name)) return;                     // ім'я перевірене у setAttr; тут — друга перевірка перед записом
+        if (val === null) el.removeAttribute(name); else el.setAttribute(name, val);
+      } },
+    text: { now: (el) => el.textContent, same: stillOurs, put(el, _k, val) { el.textContent = val; } },
+  };
+  /** Відкат одного запису → {reverted, skipped}. Пункт рахується, лише якщо поточне досі «наше». Якщо ту саму річ (елемент,
+   *  вид, ключ) пізніше змінив НОВІШИЙ живий запис — шар знімається без зміни документа: «було» цього запису переходить до
+   *  новішого, і коли той відкотиться, сторінка повернеться до свого початкового, а не до проміжного значення. */
+  function revertEntry(e, newer = []) {
     const el = e.el.deref();
-    const n = e.kind === "style" ? e.items.length : e.kind === "class" ? e.added.length + e.removed.length : 1;
-    if (!el || !el.isConnected) return { reverted: 0, skipped: n };
+    if (!el || !el.isConnected) return { reverted: 0, skipped: e.items.length };
+    const K = KIND[e.kind];
     let reverted = 0, skipped = 0;
-    if (e.kind === "style") {
-      for (let i = e.items.length - 1; i >= 0; i--) {
-        const it = e.items[i];
-        if (sameStyle(styleNow(el, it.p), it.after)) { putStyle(el, it.p, it.before); reverted++; } else skipped++;
+    for (const it of e.items) {
+      let next = null;
+      for (const n of newer) {
+        if (n.kind !== e.kind || n.el.deref() !== el) continue;
+        next = n.items.find((x) => x.key === it.key);
+        if (next) { next.before = it.before; if (e.kind === "style") n.hadStyle = e.hadStyle; else if (e.kind === "class") n.hadClass = e.hadClass; break; }
       }
-      dropEmptyStyle(el);
-    } else if (e.kind === "class") {
-      for (const c of e.added) if (el.classList.contains(c)) { el.classList.remove(c); reverted++; } else skipped++;
-      for (const c of e.removed) if (!el.classList.contains(c)) { el.classList.add(c); reverted++; } else skipped++;
-    } else if (e.kind === "attr") {
-      const name = e.name;                                  // уже перевірене `attrAllowed` у setAttr
-      if (stillOurs(el.getAttribute(name), e.after)) {
-        if (e.before === null) el.removeAttribute(name); else el.setAttribute(name, e.before);
-        reverted++;
-      } else skipped++;
-    } else if (stillOurs(el.textContent, e.after)) { el.textContent = e.before; reverted++; } else skipped++;
+      if (next) { reverted++; continue; }
+      if (K.same(K.now(el, it.key), it.after)) { K.put(el, it.key, it.before); reverted++; } else skipped++;
+    }
+    if (e.kind === "style" && !e.hadStyle) dropEmptyStyle(el);
+    if (e.kind === "class" && !e.hadClass && el.classList.length === 0) dropEmptyAttr(el, "class");
     return { reverted, skipped };
   }
-  function revertSafe(e) {
-    try { return revertEntry(e); } catch { return { reverted: 0, skipped: 1 }; }   // збій в одному записі не губить решту
+  function revertSafe(e, newer) {
+    try { return revertEntry(e, newer); } catch { return { reverted: 0, skipped: e.items.length || 1 }; }   // збій в одному записі не губить решту
   }
 
   // ---------- слухання дій користувача ----------
@@ -315,16 +345,19 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
   function emitHover() {
     hoverTimer = 0;
     const el = hoverLast;
-    if (!alive || !el || el === hoverSent || !el.isConnected) return;
+    if (!alive || pickState || !el || el === hoverSent || !el.isConnected) return;
     hoverSent = el; hoverAt = Date.now();
-    onEvent("page-hover", { node: describe(el) });
+    try { onEvent("page-hover", { node: describe(el) }); } catch { /* збій модуля чи опису не стає помилкою сторінки */ }
   }
   function setClick(on) {
     if (on && !onClick) {
       onClick = (ev) => {
-        const el = targetOf(ev);
-        if (el) onEvent("page-click", { node: describe(el), x: ev.clientX, y: ev.clientY, button: ev.button,
-          alt: ev.altKey, shift: ev.shiftKey, meta: ev.metaKey, ctrl: ev.ctrlKey });
+        if (!ev.isTrusted) return;                          // слухаємо дії користувача, а не `el.click()` скриптів сторінки
+        try {
+          const el = targetOf(ev);
+          if (el) onEvent("page-click", { node: describe(el), x: ev.clientX, y: ev.clientY, button: ev.button,
+            alt: ev.altKey, shift: ev.shiftKey, meta: ev.metaKey, ctrl: ev.ctrlKey });
+        } catch { /* див. emitHover */ }
       };
       doc.addEventListener("click", onClick, { capture: true, passive: true });
     } else if (!on && onClick) { doc.removeEventListener("click", onClick, { capture: true }); onClick = null; }
@@ -332,12 +365,15 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
   function setHover(on) {
     if (on && !onOver) {
       onOver = (ev) => {
-        const el = targetOf(ev);
-        if (!el) return;
-        hoverLast = el;
-        if (el === hoverSent || hoverTimer) return;
-        const wait = HOVER_MS - (Date.now() - hoverAt);
-        if (wait <= 0) emitHover(); else hoverTimer = win.setTimeout(emitHover, wait);   // остання подія не губиться
+        if (!ev.isTrusted) return;
+        try {
+          const el = targetOf(ev);
+          if (!el) return;
+          hoverLast = el;
+          if (el === hoverSent || hoverTimer) return;
+          const wait = HOVER_MS - (Date.now() - hoverAt);
+          if (wait <= 0) emitHover(); else hoverTimer = win.setTimeout(emitHover, wait);   // остання подія не губиться
+        } catch { /* див. emitHover */ }
       };
       doc.addEventListener("mouseover", onOver, { capture: true, passive: true });
     } else if (!on && onOver) {
@@ -432,22 +468,29 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     setStyle(ref, map) {
       const el = elOf(ref);
       const { ok, rejected } = checkStyleMap(map);
-      const items = [], applied = [];
+      const applied = [];
       const hadStyle = el.hasAttribute("style");
       if (ok.length) notFull();
+      const s0 = snapStyle(el);
       for (const [p, v] of ok) {
-        const before = styleNow(el, p);
-        if (v === null) el.style.removeProperty(p);
-        else { el.style.removeProperty(p); el.style.setProperty(p, v, "important"); }
-        const after = styleNow(el, p);
-        if (v !== null && after.v === "") { putStyle(el, p, before); rejected.push(p); continue; }   // браузер не прийняв
-        items.push({ p, before, after }); applied.push(p);
+        if (v === null) { el.style.removeProperty(p); applied.push(p); continue; }
+        if (!p.startsWith("--") && win.CSS?.supports && !win.CSS.supports(p, v)) { rejected.push(p); continue; }   // не чіпаємо документ даремно
+        const sp = snapStyle(el);
+        el.style.setProperty(p, v, "important");
+        if (el.style.getPropertyValue(p) === "") { restoreTo(el, sp); rejected.push(p); continue; }   // браузер не прийняв
+        applied.push(p);
+      }
+      const s1 = snapStyle(el);
+      const items = [];
+      for (const key of new Set([...s0.keys(), ...s1.keys()])) {
+        const before = s0.get(key) ?? NO_STYLE, after = s1.get(key) ?? NO_STYLE;
+        if (!sameStyle(before, after)) items.push({ key, before, after });
       }
       if (!items.length) {
         if (!hadStyle) dropEmptyStyle(el);
-        return { id: null, applied: [], rejected };
+        return { id: null, applied, rejected };
       }
-      return { id: journal.add({ kind: "style", el: new WeakRef(el), items }), applied, rejected };
+      return { id: journal.add({ kind: "style", el: new WeakRef(el), items, hadStyle }), applied, rejected };
     },
     setClass(ref, ch) {
       const el = elOf(ref);
@@ -456,9 +499,11 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       const removed = [...new Set(remove)].filter((c) => el.classList.contains(c) && !added.includes(c));
       if (!added.length && !removed.length) return { id: null };
       notFull();
+      const hadClass = el.hasAttribute("class");
       for (const c of removed) el.classList.remove(c);
       for (const c of added) el.classList.add(c);
-      return { id: journal.add({ kind: "class", el: new WeakRef(el), added, removed }) };
+      const items = [...added.map((key) => ({ key, before: false, after: true })), ...removed.map((key) => ({ key, before: true, after: false }))];
+      return { id: journal.add({ kind: "class", el: new WeakRef(el), items, hadClass }) };
     },
     setAttr(ref, name, value) {
       const el = elOf(ref);
@@ -468,7 +513,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       const before = el.getAttribute(name);
       if (v === null) el.removeAttribute(name); else el.setAttribute(name, v);
       const after = el.getAttribute(name);
-      return { id: journal.add({ kind: "attr", el: new WeakRef(el), name, before, after }) };
+      return { id: journal.add({ kind: "attr", el: new WeakRef(el), items: [{ key: name, before, after }] }) };
     },
     setText(ref, text) {
       const el = elOf(ref);
@@ -478,12 +523,14 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       const before = el.textContent;
       el.textContent = t;
       const after = el.textContent;
-      return { id: journal.add({ kind: "text", el: new WeakRef(el), before, after }) };
+      return { id: journal.add({ kind: "text", el: new WeakRef(el), items: [{ key: "#text", before, after }] }) };
     },
     revert(id) {
       live();
-      const e = typeof id === "string" ? journal.take(id) : null;
-      return e ? revertSafe(e) : { reverted: 0, skipped: 0 };
+      if (typeof id !== "string") return { reverted: 0, skipped: 0 };
+      const newer = journal.newer(id);                      // ДО take: після нього id невідомий
+      const e = journal.take(id);
+      return e ? revertSafe(e, newer) : { reverted: 0, skipped: 0 };
     },
     revertAll() {
       live();
@@ -507,7 +554,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       finishPick(null);
       for (const id of [...marks.keys()]) dropMark(id);
       detach();
-      host?.remove(); host = root = wrap = null;
+      dropHost();
       alive = false;
       byRef.clear();
     },
