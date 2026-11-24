@@ -2324,7 +2324,111 @@ Expected: `OK`.
 за `cwd` (`no-space`, `no-task`, `ai_tasks`; тіло ≤ 2 МіБ); хук канвас сам не ставить і не лагодить при старті.
 «Owner actions after update»: у кожному просторі відкрити «Налаштування → AGENTS.md» і натиснути «Підключити» в рядку «Claude Code» (рядок
 показує кнопку, поки хука нема); хук діє й у вже відкритих сесіях Claude Code.
-Знак: ручна правка дизайнера поза канвасом у ту саму хвилину теж стане «AI» (ризик прийнято).
+«Виправлено» (Task 8): крок відправки автосинку комітить решту теки задачі без `Deai-Actor: ai`. Чужі правки, файли поза ітераціями
+й перший коміт теки в історії більше не «правка AI», а `sync` від людини.
+«Known limits» (ризик прийнято): коли хук спрацьовує, УСЕ незакомічене у СВОЇХ ітераціях цієї машини комітиться як AI. Це стосується
+й ручної правки людини поза канвасом (у редакторі), ще не закоміченої. Правки через канвас уже закомічені під іменем людини.
+
+---
+
+### Task 8: Крок відправки автосинку без трейлера AI (поправка 24.11.2026, спека — розділ 5)
+
+Виконується ДО Task 7 Step 6 (реліз). Після неї — повторити Task 7 Steps 2–4: усі тести, охоронник, фінальне ревʼю.
+
+**Files:**
+- Modify: `app/serve.py` — у `autosync()` тема `git_autocommit` без `\n\n{iter_history.AI_TRAILER}`, плюс коментар «чому».
+- Modify: `tests/phase_i_subjects.py` — прибрати переклад `itN: автосинк (…)` → `+ трейлер` (`_SYNC`, `TRAILER`), докстрінг.
+- Modify: `tests/test_liga_migrate_b.py:205` — очікування `['it1: автосинк (design-canvas)']`.
+- Test: `tests/test_vcs_core.py` — клас `Legacy`, поруч із `test_the_local_autocommit_of_the_autosync_keeps_the_design_canvas_signature_in_liga`.
+- Modify: `docs/agents/hooks.md` (розділ «Autosync», кроки 1–2), `docs/agents/vcs.md` (абзац «Committing locally…»).
+
+- [ ] **Step 1: Падаючі тести** (`tests/test_vcs_core.py`, клас `Legacy`; `import iter_history` угорі файла, якщо його нема)
+
+```python
+    # ---------------------------------------------------------------- крок 2 без трейлера AI (спека Stop-хука, розділ 5)
+    def test_the_autosync_commit_is_a_person_commit_without_the_ai_trailer(self):
+        """Крок 2 комітить решту теки (і файл поза ітераціями) БЕЗ `Deai-Actor: ai`.
+        Мутація: поверни `\\n\\n{iter_history.AI_TRAILER}` у тему коміту в `autosync()` — тест червоніє."""
+        self.write_it1('<h1>v-plain</h1>')
+        write(os.path.join(self.task_dir, 'notes.md'), 'чиясь нотатка')
+        serve.autosync('t1', self.task, self.gl)
+        self.assertEqual(self.out(self.task_dir, 'log', '-1', '--format=%B'), 'it1: автосинк (design-canvas)')
+        self.assertIn('notes.md', self.out(self.task_dir, 'show', '--name-only', '--format=', 'HEAD').split())
+
+    def test_the_first_commit_of_a_folder_without_git_is_not_signed_ai(self):
+        """Тека без `.git`: крок 1 її не чіпає (`ai_commit` → `None`), крок 2 створює репо — і перший коміт теж не «AI»."""
+        self.assertFalse(os.path.exists(os.path.join(self.task_dir, '.git')))
+        self.assertIsNone(serve.ai_commit(self.task))
+        serve.autosync('t1', self.task, self.gl)
+        self.assertNotIn('Deai-Actor', self.out(self.task_dir, 'log', '--format=%B'))
+
+    def test_after_the_ai_step_a_colleague_edit_is_a_person_sync_and_mine_stays_ai(self):
+        """Порядок маршруту `/api/autosync`: `ai_commit` (крок 1), далі `autosync` (крок 2). В історії ітерації колеги — `sync` від
+        людини (до поправки — `ai`); у своїй — коміт кроку 1 `ai`, над ним `sync` кроку 2 (тема називає `it1`) від людини."""
+        serve.autosync('t1', self.task, self.gl)                      # `.git` і перша відправка
+        write(os.path.join(self.task_dir, 'iterations', 'it2', 'index.html'), '<h1>чуже</h1>')
+        self.save_meta({'iterations': [{'id': 'it1'},
+                                       {'id': 'it2', 'author': 'Ольга', 'author_key': 'designer2@example.com'}],
+                        'current': 'it1'})
+        self.write_it1('<h1>v-ai</h1>')
+        self.assertEqual(serve.ai_commit(self.task)['its'], ['it1'])
+        r = serve.autosync('t1', self.task, self.gl)
+        self.assertTrue(r.get('synced'), r)
+        theirs = iter_history.history(self.task_dir, {'id': 'it2'})['entries'][0]
+        self.assertEqual((theirs['kind'], theirs['actor']['kind']), ('sync', 'person'))
+        mine = iter_history.history(self.task_dir, {'id': 'it1'})['entries']
+        self.assertEqual([(e['kind'], e['actor']['kind']) for e in mine[:2]], [('sync', 'person'), ('ai', 'ai')])
+```
+
+Тест `test_the_local_autocommit_of_the_autosync_is_signed_deai_in_an_ordinary_space` (клас `Plain`) лишається як є: тема та сама.
+
+- [ ] **Step 2: Запустити — має впасти**
+
+Run: `python3 -B -m unittest tests.test_vcs_core -k without_the_ai_trailer -k not_signed_ai -k colleague_edit_is_a_person_sync`
+Expected: FAIL — у тілі коміту `Deai-Actor: ai`; історія `it2` — `('ai', 'ai')`.
+
+- [ ] **Step 3: `app/serve.py`, `autosync()`**
+
+```python
+    # Крок 2 — БЕЗ трейлера `Deai-Actor: ai` (спека Stop-хука, розділ 5, 24.11.2026): свої брудні ітерації вже закомітив як AI
+    # крок 1 (`ai_commit` у маршруті), тож тут лишається те, чиє авторство невідоме — ітерації колег, файли поза ітераціями,
+    # перший коміт теки без `.git`. Його підписуємо як будь-який коміт дії канваса: людина, git-ідентичність цієї машини.
+    local = git_autocommit(task['dir'], f'{it}: автосинк ({"deai" if v is not None and not v[2] else "design-canvas"})')
+```
+
+- [ ] **Step 4: Знімки фази «И»** — `tests/phase_i_subjects.py`: прибрати `_SYNC`, `TRAILER` і гілку `if _SYNC.match(text)`; у докстрінгу замість
+пункту про автосинк — «`itN: автосинк (<інструмент>)` — без перекладу: з 24.11.2026 крок 2 автосинку знову комітить без трейлера (спека
+Stop-хука, розділ 5), як у знімках». `tests/test_liga_migrate_b.py:205` → `['it1: автосинк (design-canvas)']`.
+
+- [ ] **Step 5: Документи**
+
+`docs/agents/hooks.md`, «Autosync»:
+- у кроці 1 замість «(colleagues' iterations and other files stay uncommitted)» — «(colleagues' iterations and other files are not part of it)»;
+- крок 2:
+
+```
+2. Then, with autosync on and your newest own iteration changed since the last send, it commits whatever is still
+   uncommitted in the task folder (colleagues' iterations, files outside iterations, the folder's first commit) as
+   `itN: автосинк (deai)` (`design-canvas` in a LIGA space) without the AI trailer, so the history shows it as a person's
+   `sync`, and sends that iteration to the repository. It never answers with a server error.
+```
+
+`docs/agents/vcs.md`, кінець абзацу «Committing locally…»: «A send first commits the rest of the task folder as `itN: автосинк (…)`
+without the AI trailer: the history shows it as a person's `sync`, not as your edit.»
+
+`docs/agents/iterations.md`: перевірити, що опис `sync` («a commit `itN: автосинк` without the AI trailer») і `ai` правдиві; якщо тема згадує
+`args.synced`, додати, що так позначено старі коміти автосинку з трейлером (0.36.0–0.37.x).
+
+- [ ] **Step 6: Запустити — має пройти**
+
+Run: `python3 -B -m unittest tests.test_vcs_core tests.test_liga_migrate_b tests.test_liga_migrate_c tests.test_liga_parity_4d4b tests.test_iter_history tests.test_iteration_api tests.test_autosync_path tests.test_claude_hook_e2e tests.test_gitlab_sync tests.test_serve tests.test_agent_guide tests.test_agent_guide_coverage`
+Expected: OK. Потім мутаційна перевірка (не комітити): повернути трейлер у `autosync()` — три нові тести й `test_liga_migrate_b` червоніють.
+
+- [ ] **Step 7: Коміт**
+
+```bash
+git -c user.name=neodisa -c user.email=neodisa@users.noreply.github.com commit -m "fix(autosync): крок відправки комітить решту теки без трейлера AI" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- app/serve.py tests/test_vcs_core.py tests/phase_i_subjects.py tests/test_liga_migrate_b.py docs/agents/hooks.md docs/agents/vcs.md docs/agents/iterations.md
+```
 
 ---
 
