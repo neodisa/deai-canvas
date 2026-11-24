@@ -81,8 +81,8 @@ When nothing is sent the answer is `{"ok": true, "changed": false, "reason": …
 repository for the task), `autosync-off` (the module's «Send after every agent reply» is off: nothing is sent, but the
 local AI commit of step 1 is still made), `no-iterations`, `foreign-only` (only colleagues' iterations), `clean` (nothing
 new). A failed send is `reason: "offline"` (usually the network; with a `code` when the module gave one), and
-`reason: "error"` is a local failure (unreadable task files, permissions): it is written to the server log, and the Stop
-hook reports it instead of staying silent. When a send happens the answer is the result of the send, as for
+`reason: "error"` is a local failure (unreadable task files, permissions): it is written to the server log, and a hook
+that reads the answer should report it instead of staying silent (the hook the canvas installs discards the answer). When a send happens the answer is the result of the send, as for
 `POST /api/vcs-push`, plus `it`, `local_sha` and `ai`. The task is named by `X-Canvas-Task`, as everywhere; without it and without `cwd` in
 the body, the current one; with `cwd`, see «Autosync by folder».
 
