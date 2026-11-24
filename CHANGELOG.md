@@ -3,6 +3,59 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.37.0] — 24.11.2026
+
+The agent always knows what the canvas can do. The `AGENTS.md` block in every space is now a short skeleton with an
+index of reference topics that ship with Deai. The canvas refreshes it after an update, and an agent checks it against
+the running canvas with one call that also returns the live state.
+
+### Додано
+- `GET /api/agent-guide` — the live guide, read-only.
+  - `path=<folder>` picks the space with the longest matching path (an agent passes `$PWD`); a path outside every space
+    gives no space. `space=<id>` names it (404 `unknown-space` for a wrong id); with neither, it is the current space.
+    `have=<guide>` says whether the agent's copy is current.
+  - The answer: Deai version, the space and the state of its `AGENTS.md`, the current task, enabled modules, the space's
+    own modules (only the path to their `agent.md`, marked as data written by the space's authors), the topics, and the
+    current block when the agent's copy is out of date or `have` is missing or malformed.
+  - `topic=<name>` returns one topic (404 `unknown-topic`). Markdown by default, `format=json` for an object. A request
+    from another site gets 403.
+- Reference topics in `docs/agents/`: `comments`, `flow`, `hooks`, `iterations`, `modules`, `pages`, `publish`,
+  `shots`, `spaces`, `tasks`, `tuner`, `vcs`. Together they cover every `/api/*` route an agent can use and the `bin/`
+  tools. A built-in module may add a topic `module-<id>` from `app/modules/<id>/agent.md`.
+- A space's own module may carry `agent.md` (`docs/modules/authoring.md`). The canvas never copies it into `AGENTS.md`;
+  the live guide gives only its path.
+- `SETUP.md` → «Agent status»: a Claude Code `SessionStart` hook that runs the same check at the start of every
+  session (added only when the person asks for it).
+- `GET|POST /api/agents-md` also return `paths.agents`, the topics folder of this installation.
+- A coverage test fails when a `/api/*` route, a `bin/` tool, an `inbox.py` subcommand or a module role is described
+  nowhere (topics, the skeleton, or `docs/agents/_internal.txt` with a reason), or when the docs name a route that no
+  longer exists.
+
+### Змінено
+- The `AGENTS.md` block is a skeleton plus a one-line index of the topics, at most 80 lines and 6 KB. The skeleton
+  covers checking the guide, the canvas address, tasks and iterations, `POST /api/autosync` after editing, comments
+  and «Never». The heading carries a visible `guide <hash>` label. The hash changes only with the text, so a version
+  bump alone does not rewrite colleagues' files.
+- On start the canvas refreshes, in the background, every registered space whose `AGENTS.md` has an outdated block.
+  - Left as they are: a space without a folder, a missing file, a file without the block, a block from a newer Deai,
+    a symlink, an unreadable file.
+  - Text outside the block is kept byte for byte; `CLAUDE.md` is not touched.
+  - stderr gets `agents-md: refreshed N space(s)` when something was written. To stop the refresh in a space, remove
+    the block.
+
+### Owner actions after update
+- Nothing required. After the update the canvas restarts itself (on Windows, restart it by hand) and on start refreshes
+  outdated `AGENTS.md` blocks. In a space shared through git, the file shows up as changed once: commit it with your
+  work.
+
+### Known limits
+- An agent reads `AGENTS.md` once, when its session starts. A guide that changes mid-session reaches it only through
+  the check call or the `SessionStart` hook.
+- A colleague on an older Deai keeps the newer block that git brings (`newer`), and their agent's check gets a 404:
+  they need to update Deai.
+- An agent that cannot reach `127.0.0.1` (a sandbox without network) cannot read the live guide; the skeleton in the
+  file still works.
+
 ## [0.36.1] — 23.11.2026
 
 Deleted iterations can be brought back from the list, not only from the 8-second toast.
