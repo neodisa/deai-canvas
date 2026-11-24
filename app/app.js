@@ -2616,7 +2616,7 @@ window.addEventListener('message', (ev) => {
   const msg = ev.data;
   const pending = bound.host.handle(msg);
   /* Панель — ізольована рамка: поки фокус у ній, Esc не бачить ні оболонка, ні макет. На час вибору віддаємо фокус макету. */
-  if (pageAgent?.picking) { try { frame.contentWindow.focus(); } catch (e) { /* чужий документ */ } }
+  if (msg && msg.method === 'page.pick' && pageAgent?.picking) { try { frame.contentWindow.focus(); } catch (e) { /* чужий документ */ } }
   pending.then((rep) => {
     if (modOpen !== bound) return;
     if (rep) modPost(rep);

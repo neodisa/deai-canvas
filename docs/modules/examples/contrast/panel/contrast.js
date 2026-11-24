@@ -268,14 +268,18 @@ var Contrast = (function () {
     try { await deai.page.revertAll(); } catch (e) { fail("revertAll", e); }
     run();
   });
-  deai.on("page", function () {                   // the core sends `page` after `init` and after every page load
+  function onPage() {
     loaded = true;
     deai.page.listen({ click: true }).catch(function () {});   // listeners end with the page: ask again after every `page`; the run reports page problems
     run();
-  });
+  }
+  deai.on("page", onPage);                        // the core sends `page` after `init` and after every page load
   deai.on("page-click", onClick);
   deai.ready.then(function (init) {
     C.setLang(init && init.context ? init.context.lang : "uk");
     render();
+    // The first `page` is sent right after `init` and can arrive before this script has subscribed (the script is fetched
+    // after the bridge says hello): `ready` is replayed to late callers, events are not. Start the first run from here too.
+    if (!loaded) onPage();
   });
 })();
