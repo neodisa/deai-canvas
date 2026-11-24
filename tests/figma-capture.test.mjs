@@ -49,6 +49,13 @@ test("markOverlays ставить data-h2d-ignore=\"true\" — не порожн
   for (const e of doc.els) assert.equal(e.attrs["data-h2d-ignore"], "true", e.sel);
 });
 
+test("мітки помічника макета (data-deai-marks) помічаються як оверлей", () => {
+  assert.ok(OVERLAY_SELECTORS.includes("[data-deai-marks]"));
+  const doc = fakeDoc(["[data-deai-marks]"]);
+  assert.equal(markOverlays(doc), 1);
+  assert.equal(doc.els[0].attrs["data-h2d-ignore"], "true");
+});
+
 /* Парний інваріант: хост, який канвас кладе в макет, мусить бути в переліку.
    Перейменуй атрибут хоста інспектора чи id банера — і оверлей поїде у Figma
    без жодної помилки; тут це червоне. */
@@ -58,6 +65,7 @@ test("кожен хост, який канвас кладе в макет, є в
     ["[data-canvas-inspector]", src("vendor/inspector.js").includes("data-canvas-inspector")],
     ["[data-comment-layer]", src("vendor/comment-layer.min.js").includes("data-comment-layer")],
     ["#cl-down", src("serve.py").includes("d.id = 'cl-down'")],
+    ["[data-deai-marks]", src("page-agent.js").includes("data-deai-marks")],
   ];
   for (const [sel, present] of pairs) {
     assert.ok(present, `джерело хоста ${sel} більше його не створює — перевір, як він тепер зветься`);

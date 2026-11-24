@@ -59,6 +59,7 @@ import {
   filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from './shell-palette.js';
 import { initPwa } from './pwa.js';
+import { createPageAgent } from './page-agent.js';
 import { CORE_KEYS, actionItems, createBridgeHost, islandModTools, modKeyMap, modToolKey, paletteModTools } from './module-host.js';
 import { KIT_VARS } from './module-kit/kit-vars.js';
 import { connMenuHTML, connPageHTML, drawerHTML, modName, roleTitle, toolMenuHTML } from './connections-view.js';
@@ -149,6 +150,7 @@ let modExt = { spaceId: null, tools: [], actions: [] };
 let modExtKey = '';
 let modExtSeq = 0;
 let modOpen = null, modFrame = null, modSel = null;
+let pageAgent = null;   // помічник макета (М2): живе лише поки відкритий інструмент із дозволами `page`
 let modCtxSent = '', modThemeSent = '';
 let lastFrameSrc = null;   // адреса рамки на момент попереднього `applyMode`: змінилась — вибір/редагування панелі коментарів старого документа скидаються
 let cmtTool = null;   // `CommentLayer.tool()` поточного виду для острівця (режими коментування, поправка 19)
@@ -2473,6 +2475,8 @@ function modHostFor(bound) {
     callTool: async (fn, args) => (await post('/api/module-tool', { module: bound.module, fn, args, space: bound.spaceId }))?.value,
     toast: (text) => toast(`${bound.label}: ${text}`),
     close: () => { if (modOpen === bound) closeModTool(); },
+    perms: bound.page,
+    getPage: () => (modOpen === bound ? pageAgent : null),
   });
 }
 
@@ -2487,6 +2491,7 @@ function openModTool(key) {
   const api = inspectorApi();
   if (api?.on) api.set(false);
   const bound = { key, module: x.module, label: String(x.label ?? ''), icon: x.icon, spaceId: spaceNow()?.id ?? null, url };
+  bound.page = Array.isArray(x.page) ? x.page.filter((p) => typeof p === 'string') : [];
   bound.host = modHostFor(bound);
   modOpen = bound;
   const label = esc(bound.label);
@@ -2508,9 +2513,29 @@ function openModTool(key) {
   paintBar();
 }
 
+/** Помічник макета (М2) — лише для відкритого інструмента з дозволами `page` і лише над живою сторінкою макета
+ *  того ж походження. Старий завжди знищуємо: його документ або пішов, або інструмент закрито. */
+function pageDetach() {
+  if (!pageAgent) return;
+  try { pageAgent.destroy(); } catch (e) { /* документ рамки вже вивантажено */ }
+  pageAgent = null;
+}
+function pageAttach() {
+  pageDetach();
+  const bound = modOpen;
+  if (!bound || !bound.page.length || mode === 'canvas' || cleanView) return;
+  let doc = null;
+  try { doc = frame.contentDocument; } catch (e) { doc = null; }
+  if (!doc || !doc.body || doc.readyState === 'loading') return;
+  pageAgent = createPageAgent({ doc, pageInfo: () => modContext().page,
+    onEvent: (name, data) => { if (modOpen === bound) modPost(bound.host.event(name, data)); } });
+  if (bound.inited) modPost(bound.host.event('page', { page: modContext().page }));
+}
+
 /** Закрити інструмент: подія `close` у панель, тоді `src="about:blank"` (скрипт панелі гине), сховати, перемалювати острівець. */
 function closeModTool() {
   if (!modOpen) return;
+  pageDetach();                                  // тимчасові зміни відкочуємо на ще живому документі, до події `close`
   const bound = modOpen;
   modPost(bound.host.event('close', null));
   const fr = modFrame;
@@ -2589,12 +2614,23 @@ window.addEventListener('message', (ev) => {
   const bound = modOpen;
   if (!bound || !modFrame || !ev.source || ev.source !== modFrame.contentWindow) return;
   const msg = ev.data;
-  bound.host.handle(msg).then((rep) => {
+  const pending = bound.host.handle(msg);
+  /* Панель — ізольована рамка: поки фокус у ній, Esc не бачить ні оболонка, ні макет. На час вибору віддаємо фокус макету. */
+  if (pageAgent?.picking) { try { frame.contentWindow.focus(); } catch (e) { /* чужий документ */ } }
+  pending.then((rep) => {
     if (modOpen !== bound) return;
     if (rep) modPost(rep);
-    else if (msg && msg.method === 'hello' && bound.host.check(msg) === null) modPost(bound.host.event('init', bound.host.initData()));
+    else if (msg && msg.method === 'hello' && bound.host.check(msg) === null) {
+      modPost(bound.host.event('init', bound.host.initData()));
+      bound.inited = true;
+      pageAttach();
+    }
   });
 });
+/* Esc під час вибору елемента скасовує лише його: capture на `document` спрацьовує раніше за решту обробників Esc. */
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && pageAgent?.picking) { ev.preventDefault(); ev.stopImmediatePropagation(); pageAgent.cancelPick(); }
+}, true);
 modEl.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-act]');
   if (!el || el.disabled) return;
@@ -2686,6 +2722,7 @@ function typingIn(ev, doc) {
 }
 const frameTyping = (ev) => typingIn(ev, frame.contentDocument);
 function frameCmtKey(ev) {
+  if (pageAgent?.picking) return;
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey || ev.repeat || ev.isComposing) return;
   if (frameTyping(ev) || shellModalOpen()) return;
   if (ev.key === 'F2' && !homeOpen) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.rentask(); return; }
@@ -2753,6 +2790,7 @@ function toggleClean(on = !cleanView) {
     onExit: () => toggleClean(false), onChord: () => toggleClean() });
 }
 frame.addEventListener('load', () => syncFrame(frame, cleanView, () => toggleClean()));
+frame.addEventListener('load', () => { if (modOpen) pageAttach(); else pageDetach(); });
 
 /**
  * Переключення поточної задачі: `POST /api/task-switch` і скидання пер-задачного

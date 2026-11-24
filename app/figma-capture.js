@@ -61,6 +61,7 @@ export const OVERLAY_SELECTORS = [
   '[data-comment-layer]',
   '#cl-down',
   '#__figma_capture_toolbar_host__',
+  '[data-deai-marks]',
 ];
 
 /** Помітити наші оверлеї, щоб скрипт їх пропустив. Повертає кількість. */
