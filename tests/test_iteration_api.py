@@ -1,4 +1,5 @@
 """Фаза И: видалення ітерації в кошик, повернення, номер без повторів, 409 на останню, історія й коміт AI (Task 2, 4)."""
+import datetime
 import json
 import os
 import shutil
@@ -351,6 +352,34 @@ class TrashList(_Base):
 
     def test_broken_trash_never_breaks_the_task_screen(self):
         with mock.patch('iter_trash.list_slots', side_effect=OSError('x')):
+            st, task = self.jget('/api/task')
+        self.assertEqual((st, task['iteration_trash']), (200, []))
+
+
+    def test_restore_of_an_expired_slot_is_410(self):
+        _, d = self.post('/api/iteration-delete', {'id': 'it2'})
+        later = serve.iter_trash.utcnow() + datetime.timedelta(days=serve.iter_trash.KEEP_DAYS, minutes=1)
+        with mock.patch.object(serve.iter_trash, 'utcnow', return_value=later):
+            st, body = self.post('/api/iteration-restore', {'trash': d['trash']})
+        self.assertEqual((st, body), (410, {'ok': False, 'error': 'expired'}))
+
+    def test_bad_entry_is_400_json_not_500(self):
+        _, d = self.post('/api/iteration-delete', {'id': 'it2'})
+        with open(os.path.join(self.x_dir, '.trash', 'iterations', d['trash'], 'entry.json'), 'w') as f:
+            f.write('{')
+        st, body = self.post('/api/iteration-restore', {'trash': d['trash']})
+        self.assertEqual((st, body['error']), (400, 'bad-entry'))
+
+    def test_task_read_purges_expired_slots(self):
+        _, d = self.post('/api/iteration-delete', {'id': 'it2'})
+        later = serve.iter_trash.utcnow() + datetime.timedelta(days=serve.iter_trash.KEEP_DAYS, minutes=1)
+        with mock.patch.object(serve.iter_trash, 'utcnow', return_value=later):
+            _, task = self.jget('/api/task')
+        self.assertEqual(task['iteration_trash'], [])
+        self.assertFalse(os.path.exists(os.path.join(self.x_dir, '.trash', 'iterations', d['trash'])))
+
+    def test_purge_failure_does_not_break_task(self):
+        with mock.patch.object(serve.iter_trash, 'purge', side_effect=OSError('boom')):
             st, task = self.jget('/api/task')
         self.assertEqual((st, task['iteration_trash']), (200, []))
 

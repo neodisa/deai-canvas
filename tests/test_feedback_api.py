@@ -80,7 +80,7 @@ class FeedbackApi(unittest.TestCase):
     def call(self, body, origin=None, path='/api/feedback', raw=None, headers=None, hashed=True):
         """`hashed`: перед відправкою з діагностикою людина «бачить» перегляд, тож `diag_hash` береться з нього (як робить інтерфейс)."""
         if (hashed and raw is None and path == '/api/feedback' and isinstance(body, dict) and body.get('include_diag', True) is True
-                and 'diag_hash' not in body and origin in (None, 'http://localhost:8765', 'http://127.0.0.1:8765')):
+                and 'diag_hash' not in body and origin in (None, self.base.replace('127.0.0.1', 'localhost'), self.base)):
             _, pv = self.call(body, path='/api/feedback-preview', hashed=False)
             body = dict(body, diag_hash=pv.get('diag_hash'), ring_seq=pv.get('ring_seq'))
         h = {'Content-Type': 'application/json', **(headers or {})}
@@ -141,7 +141,7 @@ class FeedbackApi(unittest.TestCase):
     def test_origin_gate_bad_body_task_prefix(self):
         self.assertEqual(self.call({'kind': 'bug', 'text': TEXT}, origin='https://evil.example')[0], 403)
         self.assertEqual(self.box(), [], 'відмова Origin нічого не пише')
-        for ok_origin in (None, 'http://localhost:8765', 'http://127.0.0.1:8765'):
+        for ok_origin in (None, self.base.replace('127.0.0.1', 'localhost'), self.base):
             self.assertEqual(self.call({'kind': 'bug', 'text': TEXT}, origin=ok_origin)[0], 200, ok_origin)
         st, body = self.call(None, raw=b'[]')
         self.assertEqual((st, body.get('code')), (400, 'bad-body'))

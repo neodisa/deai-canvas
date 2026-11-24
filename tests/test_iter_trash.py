@@ -239,5 +239,67 @@ class ListSlots(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(os.path.join(self.d, '.trash', 'iterations'))), before)  # не прибирає
 
 
+class RestoreAgeAndBadEntry(unittest.TestCase):
+    def setUp(self):
+        self.dir = _task(['it1', 'it2', 'it3'])
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.slot = tr.move_to_trash(self.dir, {'id': 'it2'}, T0)
+
+    def test_restore_refuses_an_expired_slot(self):
+        later = T0 + datetime.timedelta(days=tr.KEEP_DAYS, seconds=1)
+        with self.assertRaises(tr.IterTrashError) as cm:
+            tr.restore_prepare(self.dir, self.slot, [], now=later)
+        self.assertEqual(cm.exception.code, 'expired')
+        self.assertTrue(os.path.isdir(os.path.join(tr.trash_root(self.dir), self.slot, 'files')))  # нічого не рушили
+
+    def test_restore_at_exactly_keep_days_still_works(self):
+        edge = T0 + datetime.timedelta(days=tr.KEEP_DAYS)
+        entry, _ = tr.restore_prepare(self.dir, self.slot, [], now=edge)
+        self.assertEqual(entry['id'], 'it2')
+
+    def test_restore_without_now_keeps_old_behaviour(self):
+        far = tr.restore_prepare(self.dir, self.slot, [])   # без часу — як у 0.36
+        self.assertEqual(far[0]['id'], 'it2')
+
+    def test_bad_entry_json_is_a_coded_refusal(self):
+        for raw in ('{', '[]', '{"entry": 5}', '{"x": {}}'):
+            with self.subTest(raw=raw):
+                with open(os.path.join(tr.trash_root(self.dir), self.slot, 'entry.json'), 'w') as f:
+                    f.write(raw)
+                with self.assertRaises(tr.IterTrashError) as cm:
+                    tr.restore_prepare(self.dir, self.slot, [])
+                self.assertEqual(cm.exception.code, 'bad-entry')
+
+    def test_slot_time_parses_the_name(self):
+        self.assertEqual(tr.slot_time('it2--20261117-091500-2'),
+                         datetime.datetime(2026, 11, 17, 9, 15, tzinfo=datetime.timezone.utc))
+        self.assertIsNone(tr.slot_time('it2--20261399-000000'))
+        self.assertIsNone(tr.slot_time('nope'))
+
+
 if __name__ == '__main__':
     unittest.main()
+
+
+class PurgeGrace(unittest.TestCase):
+    """Прибирання лишає слот ще на 60 с після краю: повернення, що вже пройшло перевірку віку, не ганяється з `purge`."""
+
+    def setUp(self):
+        self.d = _task(['it1', 'it2'])
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.slot = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+
+    def test_inside_the_grace_purge_keeps_but_list_and_restore_refuse(self):
+        now = T0 + datetime.timedelta(days=tr.KEEP_DAYS, seconds=30)
+        self.assertEqual(tr.purge(self.d, now), [])
+        self.assertTrue(os.path.isdir(os.path.join(tr.trash_root(self.d), self.slot)))
+        self.assertEqual(tr.list_slots(self.d, now), [])
+        with self.assertRaises(tr.IterTrashError) as cm:
+            tr.restore_prepare(self.d, self.slot, [], now=now)
+        self.assertEqual(cm.exception.code, 'expired')
+
+    def test_past_the_grace_purge_deletes(self):
+        now = T0 + datetime.timedelta(days=tr.KEEP_DAYS, seconds=61)
+        self.assertEqual(tr.purge(self.d, now), [self.slot])
+        self.assertFalse(os.path.exists(os.path.join(tr.trash_root(self.d), self.slot)))
+

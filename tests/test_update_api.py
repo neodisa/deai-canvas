@@ -91,7 +91,7 @@ class UpdateApi(unittest.TestCase):
         st, raw = self.call('POST', '/api/update-check', origin='https://evil.example')
         self.assertEqual(st, 403)
         self.assertEqual(os.path.exists(os.path.join(self.deai_home, 'update.json')), before, 'відмова Origin не запускає перевірку')
-        for origin in (None, 'http://localhost:8765', 'http://127.0.0.1:8765'):
+        for origin in (None, self.base.replace('127.0.0.1', 'localhost'), self.base):
             st, raw = self.call('POST', '/api/update-check', origin=origin)
             body = json.loads(raw)
             self.assertEqual(st, 200, origin)
@@ -145,8 +145,8 @@ class UpdateApi(unittest.TestCase):
                 st, raw = self.call('GET', '/api/update-notes', headers=headers)
                 self.assertEqual((st, json.loads(raw)['ok']), (403, False), headers)
             fetch.assert_not_called()
-        for headers in ({}, {'Sec-Fetch-Site': 'same-origin'}, {'Sec-Fetch-Site': 'none'}, {'Origin': 'http://127.0.0.1:8765'},
-                        {'Origin': 'http://localhost:8765', 'Sec-Fetch-Site': 'same-origin'}):
+        for headers in ({}, {'Sec-Fetch-Site': 'same-origin'}, {'Sec-Fetch-Site': 'none'}, {'Origin': self.base},
+                        {'Origin': self.base.replace('127.0.0.1', 'localhost'), 'Sec-Fetch-Site': 'same-origin'}):
             st, raw = self.call('GET', '/api/update-notes', headers=headers)
             self.assertEqual((st, json.loads(raw)['sections'][0]['version']), (200, '0.2.0'), headers)
 

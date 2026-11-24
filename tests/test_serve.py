@@ -1808,7 +1808,7 @@ class ServeTest(unittest.TestCase):
             self.assertEqual(st, 400, repr(bad))
         task = json.load(urllib.request.urlopen(self.base + '/api/task'))
         self.assertEqual(task['preview_password'], 'keep-7', 'жоден відмовлений запит не писав')
-        st, _ = self._pw('ok-8', origin='http://localhost:8765')
+        st, _ = self._pw('ok-8', origin=self.base.replace('127.0.0.1', 'localhost'))
         self.assertEqual(st, 200)
 
     def test_e5_reseal_refuses_when_inner_pages_keep_old_password(self):
@@ -6584,7 +6584,7 @@ class TaskPerRequest(unittest.TestCase):
         self.assertEqual((self._meta('alpha'), self._meta('beta')), before)
         self.assertFalse(os.path.isdir(os.path.join(self.dirs['beta'], 'iterations', 'it2')))
         # свої — як було: без Origin (curl, мод Claude Code) і з локальним
-        for origin in (None, 'http://localhost:8765', 'http://127.0.0.1:8765', 'http://[::1]:8765'):
+        for origin in (None, 'http://localhost:%d' % self.port, 'http://127.0.0.1:%d' % self.port, 'http://[::1]:%d' % self.port):
             with self.subTest(origin=origin):
                 headers = {'Origin': origin} if origin else {}
                 st, body = self.send_post('/t/beta/api/iteration', {'from': 'it1'}, headers)

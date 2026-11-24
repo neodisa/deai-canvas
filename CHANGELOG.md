@@ -3,6 +3,29 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.37.1] — 24.11.2026
+
+Two safety fixes: only the canvas's own pages can write to it, and the iteration trash keeps its 7-day promise.
+
+### Виправлено
+- A page served on another local port (for example a dev server at `localhost:3000`) could make the browser send POST
+  requests to the canvas: the `Origin` check looked only at the host name. Now an `Origin` header, when present, must be
+  `http://` + `localhost`, `127.0.0.1` or `[::1]` + the canvas port; anything else gets 403 `foreign origin`. Requests
+  without `Origin` (curl, hooks, scripts) work as before.
+- The `Host` header is checked on every request (GET, HEAD, POST, OPTIONS): anything other than `localhost`, `127.0.0.1`
+  or `[::1]` with the canvas port gets 403 `bad-host`. This closes DNS rebinding — a foreign domain that resolves to
+  this computer can no longer read or change the canvas. Requests without `Host` work as before.
+- Iteration trash:
+  - an iteration past its 7 days can no longer be restored through the API (`POST /api/iteration-restore` → 410
+    `expired`); the «Видалені» list already hid it;
+  - expired iterations are removed when the task is read, not only on the next delete; removal waits one more minute
+    past the deadline, so a restore at the last second never meets it;
+  - a damaged trash entry answers 400 `bad-entry` instead of a server error.
+
+### Відомі обмеження
+- Opening the canvas by another name for this computer (`0.0.0.0`, `localhost.`, `127.0.0.2`) now gets 403; use
+  `127.0.0.1` or `localhost`.
+
 ## [0.37.0] — 24.11.2026
 
 The agent always knows what the canvas can do. The `AGENTS.md` block in every space is now a short skeleton with an

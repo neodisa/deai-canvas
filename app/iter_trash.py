@@ -14,13 +14,16 @@ import shutil
 
 TRASH_REL = os.path.join('.trash', 'iterations')
 KEEP_DAYS = 7
+#: `purge` стирає слот лише через цей запас ПІСЛЯ краю `KEEP_DAYS`: повернення, що саме пройшло перевірку віку, не
+#: ганяється з прибиранням того самого слота в ту саму секунду. Перелік і перевірка віку при поверненні — по точному краю.
+PURGE_GRACE = datetime.timedelta(seconds=60)
 ID_RE = re.compile(r'^[\w-]{1,64}$')
 NUM_RE = re.compile(r'^it(\d+)$')
 SLOT_RE = re.compile(r'^([\w-]{1,64})--(\d{8}-\d{6})(?:-\d+)?$')
 
 
 class IterTrashError(Exception):
-    """Відмова з кодом: `bad-id`, `bad-slot`, `not-in-trash`."""
+    """Відмова з кодом: `bad-id`, `bad-slot`, `not-in-trash`, `expired` (слот старший за `KEEP_DAYS`), `bad-entry` (зіпсований `entry.json`)."""
 
     def __init__(self, code, message=''):
         super().__init__(message or code)
@@ -29,6 +32,17 @@ class IterTrashError(Exception):
 
 def utcnow():
     return datetime.datetime.now(datetime.timezone.utc)
+
+
+def slot_time(slot):
+    """Час видалення з імені слота (aware UTC) або `None` — імʼя не слот чи дата в ньому непридатна."""
+    s = SLOT_RE.fullmatch(slot) if isinstance(slot, str) else None
+    if not s:
+        return None
+    try:
+        return datetime.datetime.strptime(s.group(2), '%Y%m%d-%H%M%S').replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
 
 
 def trash_root(task_dir):
@@ -74,8 +88,11 @@ def _slot_entry(task_dir, slot):
     meta_p = os.path.join(base, 'entry.json')
     if not os.path.isfile(meta_p):
         raise IterTrashError('not-in-trash', 'nothing to restore')
-    with open(meta_p, encoding='utf-8') as f:
-        entry = dict(json.load(f)['entry'])
+    try:
+        with open(meta_p, encoding='utf-8') as f:
+            entry = dict(json.load(f)['entry'])
+    except (ValueError, KeyError, TypeError) as e:       # OSError лишається OSError — маршрут відповідає `restore-failed`
+        raise IterTrashError('bad-entry', 'the trash entry is unreadable') from e
     if not _safe_id(entry.get('id')):
         raise IterTrashError('bad-id', 'the iteration id in the trash entry is not a safe folder name')
     return base, entry
@@ -107,11 +124,16 @@ def next_id(task_dir, ids):
     return f'it{max(nums, default=0) + 1}'
 
 
-def restore_prepare(task_dir, slot, taken_ids):
+def restore_prepare(task_dir, slot, taken_ids, now=None):
     """Крок 1 повернення: вибрати id, перенести `files` у `iterations/<id>`; слот (з `entry.json`) ЛИШАЄТЬСЯ.
     `(entry, renamed)`; id зайнятий → наступний вільний номер, `git` прибирається (історія нової теки починається
-    з повернення). Після запису `iterations.json` — `restore_finish`, при збої — `restore_rollback`."""
+    з повернення). Після запису `iterations.json` — `restore_finish`, при збої — `restore_rollback`.
+    `now` задано — прострочений слот (старший за `KEEP_DAYS`; межа як у `purge`) → `expired`, до будь-якого руху файлів."""
     base, entry = _slot_entry(task_dir, slot)
+    if now is not None:
+        at = slot_time(slot)
+        if at is None or at < now - datetime.timedelta(days=KEEP_DAYS):
+            raise IterTrashError('expired', 'the slot is past its keep time')
     iid, renamed = entry['id'], False
     if iid in taken_ids or os.path.exists(os.path.join(task_dir, 'iterations', iid)):
         iid = next_id(task_dir, list(taken_ids) + [entry['id']])
@@ -153,20 +175,16 @@ def restore(task_dir, slot, taken_ids):
 
 
 def purge(task_dir, now, keep_days=KEEP_DAYS):
-    """Стерти слоти, старші за `keep_days`. Повертає їхні імена (відсортовані)."""
+    """Стерти слоти, старші за `keep_days` + `PURGE_GRACE`. Повертає їхні імена (відсортовані)."""
     root = trash_root(task_dir)
     if not os.path.isdir(root):
         return []
-    edge = now - datetime.timedelta(days=keep_days)
+    edge = now - datetime.timedelta(days=keep_days) - PURGE_GRACE
     gone = []
     for name in sorted(os.listdir(root)):
-        s = SLOT_RE.fullmatch(name)
-        if not s:
-            continue
-        try:
-            at = datetime.datetime.strptime(s.group(2), '%Y%m%d-%H%M%S').replace(tzinfo=datetime.timezone.utc)
-        except ValueError:
-            continue                   # зіпсована дата в імені — слот не чіпаємо
+        at = slot_time(name)
+        if at is None:
+            continue                   # не слот чи зіпсована дата в імені — не чіпаємо
         if at < edge:
             shutil.rmtree(os.path.join(root, name), ignore_errors=True)
             gone.append(name)
@@ -175,8 +193,8 @@ def purge(task_dir, now, keep_days=KEEP_DAYS):
 
 def list_slots(task_dir, now, keep_days=KEEP_DAYS):
     """Перелік кошика для інтерфейсу («Видалені»): `[{trash, entry, deleted_at, expires_at}]`, найсвіжіше першим. НЕ пише й не
-    прибирає (це `purge` при видаленні). Вік — за датою в імені слота, тим самим правилом, що в `purge` (рівно `keep_days` —
-    ще в кошику), тож перелік і прибирання не розходяться. Пропускає чужі імена, слоти без читабельного `entry.json` (залишок
+    прибирає (це `purge` при видаленні). Вік — за датою в імені слота, тим самим краєм, що в `purge` (рівно `keep_days` —
+    ще в кошику); `purge` лише відстає на `PURGE_GRACE`, тож перелік ніколи не показує те, що вже стерте. Пропускає чужі імена, слоти без читабельного `entry.json` (залишок
     після `restore_finish`), запис не тієї форми, небезпечний `id` і прострочені слоти. Нема кошика — `[]`."""
     root = trash_root(task_dir)
     try:
@@ -186,14 +204,8 @@ def list_slots(task_dir, now, keep_days=KEEP_DAYS):
     edge = now - datetime.timedelta(days=keep_days)
     found = []
     for name in names:
-        s = SLOT_RE.fullmatch(name)
-        if not s:
-            continue
-        try:
-            at = datetime.datetime.strptime(s.group(2), '%Y%m%d-%H%M%S').replace(tzinfo=datetime.timezone.utc)
-        except ValueError:
-            continue
-        if at < edge:
+        at = slot_time(name)
+        if at is None or at < edge:
             continue
         try:
             with open(os.path.join(root, name, 'entry.json'), encoding='utf-8') as f:

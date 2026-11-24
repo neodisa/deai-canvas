@@ -2321,6 +2321,36 @@ class TaskNew(Fixture):
         self.assertIsNone(_read(self.p_file)['tasks']['n31']['profile'])
 
 
+class LocalOriginAndHost(unittest.TestCase):
+    """Чисті функції: Origin — лише з портом канваса (чужий dev-сервер на сусідньому порту не пише), Host — проти rebinding."""
+
+    def test_origin(self):
+        P = 48123
+        good = (None, '', f'http://127.0.0.1:{P}', f'http://localhost:{P}', f'http://LOCALHOST:{P}', f'http://[::1]:{P}')
+        bad = (f'http://127.0.0.1:{P + 1}', 'http://localhost:3000', 'http://127.0.0.1', 'http://localhost',
+               f'https://127.0.0.1:{P}', 'null', 'http://evil.example', f'http://localhost.evil.example:{P}',
+               f'http://127.0.0.1.evil.example:{P}', 'file://', f'ws://127.0.0.1:{P}', 'http://[::1', f'http://127.0.0.1:{P}x',
+               'http://127.0.0.1:99999')
+        for o in good:
+            with self.subTest(o=o):
+                self.assertTrue(serve._local_origin(o, P))
+        for o in bad:
+            with self.subTest(o=o):
+                self.assertFalse(serve._local_origin(o, P))
+
+    def test_host(self):
+        P = 48123
+        good = (None, f'127.0.0.1:{P}', f'localhost:{P}', f'LocalHost:{P}', f'[::1]:{P}')
+        bad = ('', f'127.0.0.1:{P + 1}', '127.0.0.1', 'localhost', f'evil.example:{P}', 'evil.example',
+               f'localhost.evil.example:{P}', f'127.0.0.1:{P}@evil', f'127.0.0.1:{P} ', f'::1:{P}', 'x' * 300)
+        for h in good:
+            with self.subTest(h=h):
+                self.assertTrue(serve._local_host(h, P))
+        for h in bad:
+            with self.subTest(h=h):
+                self.assertFalse(serve._local_host(h, P))
+
+
 class ForeignOrigin(Fixture):
     """Чужа вебсторінка шле POST «простим запитом» без preflight: `Origin` перевіряється ОДИН раз на
     всі POST, ще до розбору задачі й тіла, — тож жодна з нових записувальних точок реєстру не
@@ -2354,6 +2384,46 @@ class ForeignOrigin(Fixture):
             with self.subTest(origin=origin):
                 st, body = self.post('/api/space-switch', {'id': self.p_id}, {'Origin': origin})
                 self.assertEqual((st, body['ok']), (200, True))
+
+    def test_a_sibling_local_port_origin_is_refused(self):
+        """Сторінка з іншого локального порту (чужий dev-сервер) — теж чужа: хост локальний, а порт не канваса."""
+        before = _md5(os.path.join(self.deai, 'spaces.json'))
+        for origin in (f'http://localhost:{self.port + 1}', f'http://127.0.0.1:{self.port + 1}', 'http://127.0.0.1',
+                       f'https://127.0.0.1:{self.port}'):
+            with self.subTest(origin=origin):
+                st, body = self.post('/api/space-switch', {'id': self.p_id}, {'Origin': origin})
+                self.assertEqual((st, body), (403, {'ok': False, 'error': 'foreign origin'}))
+        self.assertEqual(_md5(os.path.join(self.deai, 'spaces.json')), before)
+
+    def _raw(self, method, path, host, body=None):
+        c = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
+        try:
+            c.putrequest(method, path, skip_host=True)
+            if host is not None:
+                c.putheader('Host', host)
+            if body is not None:
+                c.putheader('Content-Type', 'application/json')
+                c.putheader('Content-Length', str(len(body)))
+            c.endheaders(body)
+            r = c.getresponse()
+            return r.status, r.read().decode('utf-8')
+        finally:
+            c.close()
+
+    def test_a_foreign_host_is_refused_for_every_method(self):
+        for host in (f'evil.example:{self.port}', 'evil.example', '', f'127.0.0.1:{self.port + 1}'):
+            for method, body in (('GET', None), ('HEAD', None), ('OPTIONS', None), ('POST', b'{"id": "x"}')):
+                with self.subTest(host=host, method=method):
+                    st, text = self._raw(method, '/api/task', host, body)
+                    self.assertEqual(st, 403)
+                    if method != 'HEAD':
+                        self.assertEqual(json.loads(text), {'ok': False, 'error': 'bad-host'})
+
+    def test_a_local_host_still_works(self):
+        for host in (f'localhost:{self.port}', f'127.0.0.1:{self.port}', f'LOCALHOST:{self.port}'):
+            with self.subTest(host=host):
+                st, text = self._raw('GET', '/api/task', host)
+                self.assertEqual(st, 200)
 
     def restore_registry_current(self):
         spaces.switch_space(self.legacy_id)

@@ -545,7 +545,7 @@ class HardeningTests(Calls):
             s.close()
 
     def head(self, path, length):
-        return ('POST %s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %s\r\n\r\n' % (path, length))
+        return ('POST %s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nContent-Type: application/json\r\nContent-Length: %s\r\n\r\n' % (path, self.port, length))
 
     def test_negative_and_garbage_content_length(self):
         self.mod()
