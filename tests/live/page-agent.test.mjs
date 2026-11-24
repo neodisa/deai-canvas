@@ -427,7 +427,7 @@ test("mark: довгий ярлик обрізається; слухачі зн�
   } finally { await page.close(); }
 });
 
-test("reveal: елемент у видимій області; без мітки — тимчасова рамка на ~1,2 с; з міткою — клас fl", async () => {
+test("reveal: елемент у видимій області; без мітки — тимчасова рамка на ~1,8 с; з міткою — клас fl", async () => {
   const page = await open();
   try {
     const far = await refOf(page, "#far");
@@ -443,7 +443,7 @@ test("reveal: елемент у видимій області; без мітки
     const s = await inFrame(page, MARKS);
     assert.equal(s.marks.length, 1, "нової тимчасової нема");
     assert.ok(s.marks[0].cls.split(/\s+/).includes("fl"));
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 2200));
     assert.ok(!(await inFrame(page, MARKS)).marks[0].cls.split(/\s+/).includes("fl"));
     assert.equal((await call(page, "reveal", ["r-nope"])).code, "stale-ref");
   } finally { await page.close(); }
@@ -516,6 +516,158 @@ test("pick: Esc → null; другий pick() → перший null; destroy() �
     await page.evaluate(() => window.A.destroy());
     assert.equal(await pickResult(page), null);
     assert.equal((await inFrame(page, MARKS)).hosts, 0);
+  } finally { await page.close(); }
+});
+
+/* ---------- виправлення за ревʼю: посилання, межі показів, селектори, втрачений хост ---------- */
+test("ref: відчеплений, але живий елемент зберігає посилання після чистки; назавжди прибраний — stale-ref", async () => {
+  const page = await open();
+  try {
+    await page.evaluate(async () => {
+      const m = await import("/app/page-agent.js");
+      window.A?.destroy();
+      window.A = m.createPageAgent({ doc: document.getElementById("f").contentDocument, _refsSweep: 3 });
+    });
+    const ref = await refOf(page, "#cta");
+    const gone = await refOf(page, "#p");
+    const held = await inFrame(page, (d) => { const e = d.getElementById("cta"); window.__held = e; e.remove(); d.getElementById("p").remove(); return true; });
+    assert.equal(held, true);
+    // досить нових посилань, щоб спрацювала чистка (поріг 3 → 5003 після першої; створюємо понад 5)
+    await inFrame(page, (d) => { for (let i = 0; i < 12; i++) { const e = d.createElement("i"); e.className = "n" + i; d.body.appendChild(e); } });
+    await call(page, "query", ["i", { limit: 12 }]);
+    await inFrame(page, (d) => d.body.appendChild(window.__held));
+    assert.equal((await call(page, "get", [ref])).v?.id, "cta", "після повернення в документ посилання живе");
+    assert.equal((await call(page, "get", [gone])).code, "stale-ref");
+  } finally { await page.close(); }
+});
+
+test("reveal: сотня показів → не більше 20 коробок; повторний показ того ж елемента — одна коробка", async () => {
+  const page = await open();
+  try {
+    await inFrame(page, (d) => { for (let i = 0; i < 40; i++) { const e = d.createElement("i"); e.id = "q" + i; e.textContent = "x"; d.body.appendChild(e); } });
+    const refs = [];
+    for (let i = 0; i < 40; i++) refs.push(await refOf(page, "#q" + i));
+    for (let k = 0; k < 100; k++) await call(page, "reveal", [refs[k % 40]]);
+    assert.ok((await inFrame(page, MARKS)).marks.length <= 20, "межа тимчасових");
+    await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; return [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).shadowRoot.querySelectorAll(".mk").length === 0; }, null, { timeout: 5000 });
+    const far = await refOf(page, "#far");
+    for (let i = 0; i < 5; i++) await call(page, "reveal", [far]);
+    assert.equal((await inFrame(page, MARKS)).marks.length, 1, "та сама коробка");
+  } finally { await page.close(); }
+});
+
+test("query: екранування й надлишок дужок не обходять межу складності", async () => {
+  const page = await open();
+  try {
+    assert.equal((await call(page, "query", [":\\69s(a)"])).code, "bad-args");
+    const deep = ":-webkit-any(".repeat(9) + "a" + ")".repeat(9);
+    assert.equal((await call(page, "query", [deep])).code, "bad-args");
+    assert.ok((await call(page, "query", [":not(.a)"])).v.length > 0, "звичайне працює");
+  } finally { await page.close(); }
+});
+
+test("хост прибрала сторінка: ліміт рахує лише живі мітки; після заміни documentElement мітка їде за розкладкою", async () => {
+  const page = await open();
+  try {
+    const ref = await refOf(page, "#p");
+    const fill = await page.evaluate((r) => { let n = 0; for (let i = 0; i < 300; i++) { window.A.mark(r); n++; } return n; }, ref);
+    assert.equal(fill, 300);
+    assert.equal((await call(page, "mark", [ref])).code, "too-many");
+    // «одразу»: у тому ж синхронному відрізку, поки ні кадр, ні спостерігач не встигли прибрати мертві коробки
+    const id1 = await page.evaluate((r) => {
+      const d = document.getElementById("f").contentDocument;
+      [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).remove();
+      return window.A.mark(r);
+    }, ref);
+    assert.equal(id1, "m301", "300 мертвих міток не рахуються");
+    assert.equal((await inFrame(page, MARKS)).marks.length, 1);
+    // заміна самого documentElement: новий хост, спостерігач перевішується на новий елемент (знову синхронно)
+    const id2 = await page.evaluate(() => {
+      const d = document.getElementById("f").contentDocument;
+      const n = d.createElement("html"); n.innerHTML = '<head></head><body><p id="p" style="margin:40px 0 0">новий</p></body>';
+      d.replaceChild(n, d.documentElement);
+      return window.A.mark(window.A.query("#p")[0].ref);
+    });
+    assert.equal(id2, "m302");
+    await frameRaf(page); await frameRaf(page);              // відкладений кадр від заміни вже відпрацював
+    await inFrame(page, (d) => { d.getElementById("p").style.marginTop = "150px"; });
+    await page.waitForFunction(() => {
+      const d = document.getElementById("f").contentDocument; const h = [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks"));
+      const m = h.shadowRoot.querySelector(".mk"); return Math.abs(m.getBoundingClientRect().top + 3 - d.getElementById("p").getBoundingClientRect().top) < 1;
+    }, null, { timeout: 3000 });
+  } finally { await page.close(); }
+});
+
+test("pick: хост прибрали — обіцянка завершується null", async () => {
+  const page = await open();
+  try {
+    await startPick(page);
+    await page.waitForFunction(() => window.A.picking === true);
+    await inFrame(page, (d) => { [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).remove(); return true; });
+    assert.equal(await pickResult(page), null);
+    assert.equal(await page.evaluate(() => window.A.picking), false);
+    // і заміна самого documentElement теж
+    await startPick(page);
+    await page.waitForFunction(() => window.A.picking === true);
+    await inFrame(page, (d) => { const n = d.createElement("html"); n.appendChild(d.createElement("body")); d.replaceChild(n, d.documentElement); return true; });
+    assert.equal(await pickResult(page), null);
+  } finally { await page.close(); }
+});
+
+test("мітка display:none (нульовий прямокутник) — прихована", async () => {
+  const page = await open();
+  try {
+    await call(page, "mark", [await refOf(page, "#hid")]);
+    await frameRaf(page);
+    assert.equal((await inFrame(page, MARKS)).marks[0].hidden, true);
+  } finally { await page.close(); }
+});
+
+test("pick: рухи й наведення не доходять до слухачів сторінки на бульбашковій фазі; wheel не глушиться; рамка їде за прокруткою", async () => {
+  const page = await open();
+  try {
+    await inFrame(page, (d) => { d.defaultView.SEEN = 0; for (const t of ["mousemove", "pointermove", "mouseover", "mouseout", "pointerover", "pointerout"]) d.addEventListener(t, () => d.defaultView.SEEN++); });
+    await startPick(page);
+    await page.waitForFunction(() => window.A.picking === true);
+    const c = await centerOf(page, "#cta");
+    await page.mouse.move(c.x - 20, c.y); await page.mouse.move(c.x, c.y); await page.mouse.move(c.x + 3, c.y + 1);
+    assert.equal(await inFrame(page, (d) => d.defaultView.SEEN), 0);
+    const wheelStopped = await inFrame(page, (d) => {
+      let got = false; d.addEventListener("wheel", () => { got = true; });
+      const cv = [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).shadowRoot.querySelector(".cv");
+      cv.dispatchEvent(new d.defaultView.WheelEvent("wheel", { bubbles: true, composed: true })); return !got;
+    });
+    assert.equal(wheelStopped, false, "wheel доходить");
+    const top0 = await inFrame(page, (d) => [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).shadowRoot.querySelector(".pk").getBoundingClientRect().top);
+    await inFrame(page, (d) => d.defaultView.scrollTo(0, 40));
+    await page.waitForFunction((t0) => {
+      const d = document.getElementById("f").contentDocument;
+      return [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).shadowRoot.querySelector(".pk").getBoundingClientRect().top < t0 - 20;
+    }, top0, { timeout: 3000 });
+    await page.evaluate(() => window.A.cancelPick());
+  } finally { await page.close(); }
+});
+
+test("destroy() при відкладеному таймері reveal: без помилок, без хоста й коробок", async () => {
+  const page = await open();
+  try {
+    await inFrame(page, (d) => { d.defaultView.ERR = []; d.defaultView.addEventListener("error", (e) => d.defaultView.ERR.push(String(e.message))); });
+    await call(page, "reveal", [await refOf(page, "#cta")]);
+    assert.equal((await inFrame(page, MARKS)).marks.length, 1);
+    await page.evaluate(() => window.A.destroy());
+    assert.equal((await inFrame(page, MARKS)).hosts, 0);
+    await page.waitForTimeout(2200);
+    assert.equal((await inFrame(page, MARKS)).hosts, 0);
+    assert.deepEqual(await inFrame(page, (d) => d.defaultView.ERR), []);
+  } finally { await page.close(); }
+});
+
+test("mark: ворожі opts (null, 5, \"x\", []) — типові значення, без не-PageError", async () => {
+  const page = await open();
+  try {
+    const ref = await refOf(page, "#cta");
+    const out = await page.evaluate((r) => [null, 5, "x", []].map((o) => { try { return { v: window.A.mark(r, o) }; } catch (e) { return { code: e.code, pe: e.name }; } }), ref);
+    for (const x of out) assert.ok(x.v !== undefined ? /^m\d+$/.test(x.v) : x.code, JSON.stringify(x));
   } finally { await page.close(); }
 });
 

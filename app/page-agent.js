@@ -14,7 +14,7 @@ const clip = (s, n) => (s.length > n ? s.slice(0, n) : s);
 const round = (x) => Math.round(x * 10) / 10;
 const utf8 = new TextEncoder();
 const bytesOf = (v) => utf8.encode(JSON.stringify(v)).length;
-const SELECTOR_MAX = 300, PSEUDO_MAX = 4, REFS_SWEEP = 20000;
+const SELECTOR_MAX = 300, PSEUDO_MAX = 4, PARENS_MAX = 8, REFS_SWEEP = 20000, TEMP_MAX = 20;
 /** Випадкова «епоха» помічника: посилання `r<епоха>-<n>` з попереднього екземпляра не збігається з новими. */
 function newEpoch() {
   const u = new Uint32Array(2);
@@ -22,11 +22,11 @@ function newEpoch() {
   return (u[0].toString(36) + u[1].toString(36)).slice(0, 6);
 }
 
-export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null }) {
+export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null, _refsSweep = REFS_SWEEP }) {
   const win = doc.defaultView;
   let alive = true;
   let seq = 0;
-  let sweepAt = REFS_SWEEP;
+  let sweepAt = _refsSweep;
   const epoch = newEpoch();
   const byEl = new WeakMap();
   const byRef = new Map();
@@ -42,10 +42,12 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     }
     return r;
   }
-  /** Мапа посилань росте лише з новими вузлами: вичищаємо зниклі й відчеплені; якщо живих усе одно багато — не чистимо щоразу. */
+  /** Мапа посилань росте лише з новими вузлами: вичищаємо лише ЗІБРАНІ збирачем (відчеплений, але живий вузол лишає посилання:
+   *  `byEl` досі мапить його на старе, і після повернення в документ `refOf` має віддати те саме, що розуміє `elOf`).
+   *  Якщо живих усе одно багато — не чистимо щоразу. */
   function sweepRefs() {
-    for (const [k, w] of byRef) { const e = w.deref(); if (!e || !e.isConnected) byRef.delete(k); }
-    sweepAt = Math.max(REFS_SWEEP, byRef.size + 5000);
+    for (const [k, w] of byRef) if (!w.deref()) byRef.delete(k);
+    sweepAt = Math.max(_refsSweep, byRef.size + 5000);
   }
   function elOf(ref) {
     live();
@@ -91,7 +93,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
 .w[hidden]{display:none}
 .mk{position:fixed;box-sizing:border-box;border:2px solid var(--t);background:color-mix(in srgb,var(--t) 9%,transparent);border-radius:4px;pointer-events:none}
 .mk[hidden]{display:none}
-.mk.fl{animation:fl .6s 2}
+.mk.fl{animation:fl .9s 2}
 @keyframes fl{50%{box-shadow:0 0 0 7px color-mix(in srgb,var(--t) 45%,transparent)}}
 @media (prefers-reduced-motion:reduce){.mk.fl{animation:none;box-shadow:0 0 0 4px color-mix(in srgb,var(--t) 45%,transparent)}}
 .l{position:absolute;left:-2px;bottom:100%;margin-bottom:3px;max-width:240px;padding:2px 6px;border-radius:4px;background:var(--t);color:#151d19;font:600 11px/16px system-ui,-apple-system,"Segoe UI",sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -101,10 +103,17 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
 .pk{position:fixed;box-sizing:border-box;border:2px solid #3D8BFF;background:rgba(61,139,255,.1);border-radius:3px;pointer-events:none}
 .pk[hidden]{display:none}
 .pk span{position:absolute;left:-2px;top:100%;margin-top:3px;padding:2px 6px;border-radius:4px;background:#3D8BFF;color:#fff;font:600 11px/16px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}`;
-  const PAD = 3, FLASH_MS = 1200, FLIP_TOP = 22;
+  const PAD = 3, FLASH_MS = 1800, FLIP_TOP = 22;
   let host = null, root = null, wrap = null;
+  /** Сторінка прибрала хост (замінила `documentElement.innerHTML` чи сам `documentElement`): коробки в мертвому корені не рахуються. */
+  function resetHost() {
+    for (const m of marks.values()) if (m.timer) win.clearTimeout(m.timer);
+    marks.clear();
+    host = root = wrap = null;
+  }
   function ensureHost() {
     if (host && host.isConnected) return;
+    resetHost();
     host = doc.createElement("div");
     host.setAttribute("data-deai-marks", "");
     host.setAttribute("data-h2d-ignore", "true");         // «В Figma» пропускає лише зі значенням "true"
@@ -115,18 +124,32 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     root = host.attachShadow({ mode: "open" });             // open: так само, як у оверлея інспектора; тести читають корінь
     const st = doc.createElement("style"); st.textContent = STYLE; root.appendChild(st);
     wrap = doc.createElement("div"); wrap.className = "w"; root.appendChild(wrap);
-    marks.clear();                                          // хост пересотворено (сторінку перемалювали) — старі коробки зникли
+    if (listening) { detach(); attach(); }                  // спостерігач міг дивитися на старий `documentElement`
   }
 
   const marks = new Map();                                  // id → {el: WeakRef, box, lab, timer}
   let markSeq = 0, tempSeq = 0, raf = 0, observer = null, listening = false;
   const permanent = () => { let n = 0; for (const m of marks.values()) if (!m.temp) n++; return n; };
+  const tempCount = () => marks.size - permanent();
   function place() {
     raf = 0;
+    if (host && !host.isConnected) {                        // хост прибрала сторінка
+      finishPick(null);
+      resetHost();
+      if (!pickState && !marks.size) detach();
+      return;
+    }
+    if (pickState && !pickState.cv.isConnected) finishPick(null);
+    if (pickState) pickState.show();
+    const rects = [];                                       // спершу читаємо всі прямокутники, потім пишемо стилі — без перерахунків
     for (const m of marks.values()) {
       const el = m.el.deref();
-      if (!el || !el.isConnected) { m.box.hidden = true; continue; }
-      const r = el.getBoundingClientRect();
+      rects.push(el && el.isConnected ? el.getBoundingClientRect() : null);
+    }
+    let i = 0;
+    for (const m of marks.values()) {
+      const r = rects[i++];
+      if (!r || (r.width === 0 && r.height === 0)) { m.box.hidden = true; continue; }
       m.box.hidden = false;
       m.box.style.setProperty("left", `${r.left - PAD}px`);
       m.box.style.setProperty("top", `${r.top - PAD}px`);
@@ -143,6 +166,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     win.addEventListener("resize", schedule);
     observer = new win.MutationObserver(schedule);
     observer.observe(doc.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+    observer.observe(doc, { childList: true });             // замінили сам `documentElement` — старий спостерігач про це не знає
   }
   function detach() {
     if (!listening) return;
@@ -168,7 +192,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     if (!m) return;
     if (m.timer) win.clearTimeout(m.timer);
     m.box.remove(); marks.delete(id);
-    if (!marks.size) detach();
+    if (!marks.size && !pickState) detach();
   }
 
   // ---------- вибір елемента ----------
@@ -180,6 +204,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     doc.removeEventListener("keydown", st.onKey, true);
     st.cv.remove(); st.pk.remove();
     if (wrap) wrap.hidden = false;
+    if (!marks.size) detach();
     st.resolve(value);
   }
   function topAt(x, y) {
@@ -200,15 +225,19 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       const cap = doc.createElement("span"); pk.appendChild(cap);
       root.appendChild(cv); root.appendChild(pk);
       let cur = null;
-      cv.addEventListener("mousemove", (ev) => {
-        cur = topAt(ev.clientX, ev.clientY);
-        if (!cur) { pk.hidden = true; return; }
+      const show = () => {                                  // рамка й підпис поточної цілі; викликається і з прокрутки
+        if (!cur || !cur.isConnected) { cur = null; pk.hidden = true; return; }
         const r = cur.getBoundingClientRect();
         pk.hidden = false;
         pk.style.setProperty("left", `${r.left}px`); pk.style.setProperty("top", `${r.top}px`);
         pk.style.setProperty("width", `${r.width}px`); pk.style.setProperty("height", `${r.height}px`);
         const c = (cur.getAttribute("class") || "").split(/\s+/)[0];
         cap.textContent = `${cur.localName}${c ? "." + c : ""} ${Math.round(r.width)}×${Math.round(r.height)}`;
+      };
+      cv.addEventListener("mousemove", (ev) => {
+        cur = topAt(ev.clientX, ev.clientY);
+        show();
+        ev.stopPropagation();
       });
       cv.addEventListener("click", (ev) => {
         if (ev.button !== 0) return;
@@ -216,12 +245,16 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
         const el = topAt(ev.clientX, ev.clientY);
         finishPick(el ? describe(el) : null);
       });
-      // сторінка не бачить жестів, якими користувач цілиться (клік сюди — вибір, а не дія на сторінці)
+      // слухачі сторінки на бульбашковій фазі не бачать жестів, якими користувач цілиться (клік сюди — вибір, а не дія на
+      // сторінці). Слухачі у фазі захоплення на window/document побачать їх першими — це не захист від ворожої сторінки.
       for (const t of ["mousedown", "mouseup", "pointerdown", "pointerup", "dblclick", "auxclick", "contextmenu"])
         cv.addEventListener(t, (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+      for (const t of ["pointermove", "mouseover", "mouseout", "pointerover", "pointerout", "touchstart", "touchmove", "touchend"])
+        cv.addEventListener(t, (ev) => ev.stopPropagation(), { passive: true });   // `wheel` не чіпаємо: прокрутка має працювати
       const onKey = (ev) => { if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); finishPick(null); } };
       doc.addEventListener("keydown", onKey, true);
-      pickState = { resolve, cv, pk, onKey };
+      pickState = { resolve, cv, pk, onKey, show };
+      attach();                                             // спостерігач і прокрутка: рамка їде за ціллю, зниклий хост — вихід з null
     });
   }
 
@@ -331,6 +364,8 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     query(selector, o = {}) {
       live();
       if (typeof selector !== "string" || !selector || selector.length > SELECTOR_MAX) throw new PageError("bad-args", `selector: a non-empty string of at most ${SELECTOR_MAX} characters`);
+      if (selector.includes("\\")) throw new PageError("bad-args", "selector: escapes are not supported; use attribute selectors");
+      if ((selector.match(/\(/g) || []).length > PARENS_MAX) throw new PageError("bad-args", `selector: at most ${PARENS_MAX} parentheses`);
       if ((selector.match(/:(has|is|not|where)\(/gi) || []).length > PSEUDO_MAX) throw new PageError("bad-args", `selector: at most ${PSEUDO_MAX} functional pseudo-classes`);
       const limit = intIn(o?.limit, LIMITS.queryDefault, LIMITS.queryMax, "limit");
       const so = opts(o);
@@ -371,6 +406,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     mark(ref, o) {
       const el = elOf(ref);
       const tone = checkTone(o?.tone), label = checkLabel(o?.label);
+      ensureHost();                                         // мертві коробки (хост прибрала сторінка) не рахуються в ліміт
       if (permanent() >= LIMITS.marks) throw new PageError("too-many", `at most ${LIMITS.marks} marks`);
       return addMark(el, tone, label, false);
     },
@@ -381,11 +417,14 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
       let own = null;
       for (const [id, m] of marks) if (!m.temp && m.el.deref() === el) { own = id; break; }
+      ensureHost();
       let id = own;
-      if (!id) id = addMark(el, "info", "", true);          // без мітки — тимчасова рамка
+      if (!id) for (const [k, m] of marks) if (m.temp && m.el.deref() === el) { id = k; break; }   // та сама тимчасова — перезапуск
+      if (!id && tempCount() < TEMP_MAX) id = addMark(el, "info", "", true);                         // без мітки — тимчасова рамка
       el.scrollIntoView({ block: "center", inline: "nearest", behavior: reduced ? "auto" : "smooth" });
+      if (!id) return null;                                 // понад межу тимчасових: лише прокрутка
       const m = marks.get(id);
-      if (own) { m.box.classList.remove("fl"); void m.box.offsetWidth; m.box.classList.add("fl"); }
+      m.box.classList.remove("fl"); void m.box.offsetWidth; m.box.classList.add("fl");
       if (m.timer) win.clearTimeout(m.timer);
       m.timer = win.setTimeout(() => { m.timer = 0; if (own) m.box.classList.remove("fl"); else dropMark(id); }, FLASH_MS);
       return null;
