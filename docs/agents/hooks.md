@@ -69,11 +69,13 @@ The quiet step of a Stop hook, with the `vcs` role (topic `vcs`). It does two th
 
 1. Always, even with autosync off or without a `vcs` role: it commits each of this computer's own changed iterations of the
    task as its own local commit `itN: зміни AI` with the trailer `Deai-Actor: ai`, touching only `iterations/<itN>/`
-   (colleagues' iterations and other files stay uncommitted). It never pushes. A task folder without `.git` gets no AI
+   (colleagues' iterations and other files are not part of it). It never pushes. A task folder without `.git` gets no AI
    commit. The answer carries it as `ai`: `{"it", "sha", "its"}` (the newest commit and every iteration committed) or
    `null` when nothing was committed.
-2. Then it sends your newest own iteration to the repository when it changed since the last send. It never answers with a
-   server error.
+2. Then, with autosync on and your newest own iteration changed since the last send, it commits whatever is still
+   uncommitted in the task folder (colleagues' iterations, files outside iterations, the folder's first commit) as
+   `itN: автосинк (deai)` (`design-canvas` in a LIGA space) without the AI trailer, so the history shows it as a person's
+   `sync`, and sends that iteration to the repository. It never answers with a server error.
 
 When nothing is sent the answer is `{"ok": true, "changed": false, "reason": …, "ai": …}`: `no-gitlab` (no `vcs` role or no
 repository for the task), `autosync-off` (the module's «Send after every agent reply» is off: nothing is sent, but the

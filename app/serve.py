@@ -1532,7 +1532,10 @@ def autosync(tid, task, gl, vcs=None):
             v = vcs_provider()
         except OSError:
             v = None
-    local = git_autocommit(task['dir'], f'{it}: автосинк ({"deai" if v is not None and not v[2] else "design-canvas"})\n\n{iter_history.AI_TRAILER}')
+    # Крок 2 — БЕЗ трейлера `Deai-Actor: ai` (спека Stop-хука, розділ 5, 24.11.2026): свої брудні ітерації вже закомітив як AI
+    # крок 1 (`ai_commit` у маршруті), тож тут лишається те, чиє авторство невідоме — ітерації колег, файли поза ітераціями,
+    # перший коміт теки без `.git`. Його підписуємо як будь-який коміт дії канваса: людина, git-ідентичність цієї машини.
+    local = git_autocommit(task['dir'], f'{it}: автосинк ({"deai" if v is not None and not v[2] else "design-canvas"})')
     try:
         r = gitlab_sync(tid, task, gl, it, vcs=v)
     except OSError as e:

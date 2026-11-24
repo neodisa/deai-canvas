@@ -52,4 +52,5 @@ otherwise it happens on `POST /api/vcs-push`.
 Committing locally is a separate matter from sending. Every `POST /api/autosync {}` first commits each of this computer's own
 changed iterations of the task as `itN: зміни AI` with the trailer `Deai-Actor: ai` (only `iterations/<itN>/`; no push), even
 with `autosync` off or no repository configured; the answer's `ai` key tells what was committed (topic `hooks`). Nothing is
-pushed until a send happens as described above.
+pushed until a send happens as described above. A send first commits the rest of the task folder as `itN: автосинк (…)`
+without the AI trailer: the history shows it as a person's `sync`, not as your edit.

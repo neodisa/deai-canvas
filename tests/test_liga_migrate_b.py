@@ -202,7 +202,7 @@ class Before4d3bShape(unittest.TestCase):
         self.assertIsNone(t['status']['a-2']['result']['web'])
         self.assertEqual(t['status_self_lookup']['result']['label'], 'GitLab')
         # автокоміт, примітки ітерацій, рядок state.py
-        self.assertEqual(t['autosync']['commit_messages'], ['it1: автосинк (design-canvas)\n\nDeai-Actor: ai'])
+        self.assertEqual(t['autosync']['commit_messages'], ['it1: автосинк (design-canvas)'])
         self.assertEqual(t['autosync']['push_subjects'], ['design-canvas: sync mockup/a-1 (Alpha demo) · it1'])
         self.assertEqual(t['pull']['notes'][1], 'оновлення з GitLab')
         self.assertEqual(t['task_new_fork']['notes'], ['початкова', 'продовження макета з GitLab'])

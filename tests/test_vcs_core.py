@@ -36,6 +36,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), 'app'))
 sys.path.insert(0, _HERE)
 import deai_modules as dm  # noqa: E402
+import iter_history  # noqa: E402
 from liga_fixture import LigaFixture  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
@@ -719,6 +720,40 @@ class Legacy(Core):
         self.write_it1('<h1>v-local-2</h1>')
         serve.autosync('t1', self.task, self.gl, vcs=serve.vcs_provider())
         self.assertEqual(self.out(self.task_dir, 'log', '-1', '--format=%s'), 'it1: автосинк (design-canvas)')
+
+    # ---------------------------------------------------------------- крок 2 без трейлера AI (спека Stop-хука, розділ 5)
+    def test_the_autosync_commit_is_a_person_commit_without_the_ai_trailer(self):
+        """Крок 2 комітить решту теки (і файл поза ітераціями) БЕЗ `Deai-Actor: ai`.
+        Мутація: поверни `\\n\\n{iter_history.AI_TRAILER}` у тему коміту в `autosync()` — тест червоніє."""
+        self.write_it1('<h1>v-plain</h1>')
+        write(os.path.join(self.task_dir, 'notes.md'), 'чиясь нотатка')
+        serve.autosync('t1', self.task, self.gl)
+        self.assertEqual(self.out(self.task_dir, 'log', '-1', '--format=%B'), 'it1: автосинк (design-canvas)')
+        self.assertIn('notes.md', self.out(self.task_dir, 'show', '--name-only', '--format=', 'HEAD').split())
+
+    def test_the_first_commit_of_a_folder_without_git_is_not_signed_ai(self):
+        """Тека без `.git`: крок 1 її не чіпає (`ai_commit` → `None`), крок 2 створює репо — і перший коміт теж не «AI»."""
+        self.assertFalse(os.path.exists(os.path.join(self.task_dir, '.git')))
+        self.assertIsNone(serve.ai_commit(self.task))
+        serve.autosync('t1', self.task, self.gl)
+        self.assertNotIn('Deai-Actor', self.out(self.task_dir, 'log', '--format=%B'))
+
+    def test_after_the_ai_step_a_colleague_edit_is_a_person_sync_and_mine_stays_ai(self):
+        """Порядок маршруту `/api/autosync`: `ai_commit` (крок 1), далі `autosync` (крок 2). В історії ітерації колеги — `sync` від
+        людини (до поправки — `ai`); у своїй — коміт кроку 1 `ai`, над ним `sync` кроку 2 (тема називає `it1`) від людини."""
+        serve.autosync('t1', self.task, self.gl)                      # `.git` і перша відправка
+        write(os.path.join(self.task_dir, 'iterations', 'it2', 'index.html'), '<h1>чуже</h1>')
+        self.save_meta({'iterations': [{'id': 'it1'},
+                                       {'id': 'it2', 'author': 'Ольга', 'author_key': 'designer2@example.com'}],
+                        'current': 'it1'})
+        self.write_it1('<h1>v-ai</h1>')
+        self.assertEqual(serve.ai_commit(self.task)['its'], ['it1'])
+        r = serve.autosync('t1', self.task, self.gl)
+        self.assertTrue(r.get('synced'), r)
+        theirs = iter_history.history(self.task_dir, {'id': 'it2'})['entries'][0]
+        self.assertEqual((theirs['kind'], theirs['actor']['kind']), ('sync', 'person'))
+        mine = iter_history.history(self.task_dir, {'id': 'it1'})['entries']
+        self.assertEqual([(e['kind'], e['actor']['kind']) for e in mine[:2]], [('sync', 'person'), ('ai', 'ai')])
 
     def test_the_autosync_passes_the_given_provider_to_the_sync(self):
         self.write_it1('<h1>v6</h1>')
