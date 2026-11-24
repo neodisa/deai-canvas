@@ -2932,8 +2932,13 @@ def task_api_iterations(meta):
 def task_iteration_trash(task):
     """Кошик ітерацій для `/api/task` (`iteration_trash`, розділ «Видалені»): найсвіжіше першим, з тим самим `label_text`, що в
     переліку. Будь-який збій читання → `[]`: екран задачі не сміє впасти через кошик."""
+    now = iter_trash.utcnow()
     try:
-        slots = iter_trash.list_slots(task['dir'], iter_trash.utcnow())
+        iter_trash.purge(task['dir'], now)       # прострочене стираємо при читанні; збій не заважає переліку
+    except Exception:
+        pass
+    try:
+        slots = iter_trash.list_slots(task['dir'], now)
     except Exception:
         return []
     rows = []
@@ -8280,10 +8285,11 @@ class Handler(SimpleHTTPRequestHandler):
             return
         meta = load_meta(task)
         its = meta.setdefault('iterations', [])
+        now = iter_trash.utcnow()
         try:
-            entry, renamed = iter_trash.restore_prepare(task['dir'], slot, [i['id'] for i in its])
+            entry, renamed = iter_trash.restore_prepare(task['dir'], slot, [i['id'] for i in its], now=now)
         except iter_trash.IterTrashError as e:
-            self._send_json({'ok': False, 'error': e.code}, status=404 if e.code == 'not-in-trash' else 400)
+            self._send_json({'ok': False, 'error': e.code}, status={'not-in-trash': 404, 'expired': 410}.get(e.code, 400))
             return
         except OSError as e:
             self._send_json({'ok': False, 'error': 'restore-failed', 'message': str(e)}, status=500)
@@ -8305,6 +8311,10 @@ class Handler(SimpleHTTPRequestHandler):
             iter_trash.restore_finish(task['dir'], slot)
         except Exception:
             pass                       # слот-залишок без `files` нешкідливий, знищиться через 7 днів
+        try:
+            iter_trash.purge(task['dir'], now)
+        except Exception:
+            pass                       # прибирання — не умова повернення
         git_autocommit(task['dir'], f'restore iteration {entry["id"]}')
         self._send_json({'ok': True, 'id': entry['id'], 'renamed': renamed,
                          'iteration': {**entry, 'label_text': iteration_label(entry)}})
