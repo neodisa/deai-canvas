@@ -38,7 +38,7 @@
   `tools[i].page: "change" requires "read"`.
 - Невідоме значення — відмова `tools[i].page: unknown permission 'x'`.
 - `frame` — відмова `tools[i].frame: not supported — use "page"`.
-- Deai до 0.38 відмовляє маніфесту з `page` як «unknown key» — це прямо сказано в `authoring.md` (мінімальна версія).
+- Deai до 0.39 відмовляє маніфесту з `page` як «unknown key» — це прямо сказано в `authoring.md` (мінімальна версія).
 - Зміна `page` — зміна байтів теки, тобто повторна довіра (модель довіри М1 без змін).
 
 ## Діалог довіри
