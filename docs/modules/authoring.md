@@ -709,6 +709,8 @@ exactly as it was (including `var()` inside shorthands), and an empty `style=""`
 | `page-click` | `{node: Node, x, y, button, alt, shift, meta, ctrl}` | the person clicks (`listen({click: true})`); the click is not intercepted; not sent during `pick` |
 | `page-hover` | `{node: Node}` | the pointer moves onto another element (`listen({hover: true})`); at most 10 per second and only when the element changes |
 
+`page` is also delivered to a handler that subscribes after it arrived (the latest one), asynchronously and once; other events are not replayed.
+
 Only the person's real input is reported: events the page's scripts dispatch themselves (`el.click()` and the like) are not.
 `deai.page.listen({click, hover})` switches each subscription on or off; both are off by default. A subscription ends with
 the page: call `listen` again after every `page` event.

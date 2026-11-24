@@ -13,6 +13,10 @@
   var subs = new Map();
   var MAX_PENDING = 64;
   var PENDING_MS = 60000;
+  /* The latest `page` event: the panel script is fetched after the bridge says hello, so the shell's first `page` can arrive
+     before the script subscribes. `ready` is replayed to late callers; `page` (only it) is replayed the same way. */
+  var lastPage = null;
+  var pageSeq = 0;
   var readyResolve;
   var ready = new Promise(function (resolve) { readyResolve = resolve; });
 
@@ -61,6 +65,7 @@
   function emit(event, data) {
     if (event === "init" || event === "theme") applyTheme(data);
     if (event === "init") readyResolve(data);
+    if (event === "page") { lastPage = { data: data }; pageSeq++; }
     var list = subs.get(event);
     if (!list) return;
     list.slice().forEach(function (fn) {
@@ -133,6 +138,14 @@
       var cur = subs.get(event);
       if (!cur) { cur = []; subs.set(event, cur); }
       cur.push(fn);
+      if (event === "page" && lastPage) {
+        var seq = pageSeq, last = lastPage;
+        Promise.resolve().then(function () {
+          /* a newer `page` already reached this subscriber live; an unsubscribed one hears nothing */
+          if (seq !== pageSeq || (subs.get(event) || []).indexOf(fn) < 0) return;
+          try { fn(last.data); } catch (e) { /* a throwing subscriber must not break the others */ }
+        });
+      }
       return function () {
         var list = subs.get(event) || [];
         var i = list.indexOf(fn);

@@ -336,7 +336,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
    *  2) Якщо ту саму річ (елемент, вид, ключ) пізніше змінив НОВІШИЙ живий запис — шар знімається без зміни документа: «було»
    *     переходить до новішого, але лише коли шари СУМІЖНІ (його «було» == наше «стало»); інакше між ними щось змінила
    *     сторінка — наш пункт skipped, а «було» новішого лишається (виграє значення сторінки).
-   *  3) `hadStyle`/`hadClass` (і `raw0`, коли сторінка між шарами нічого не змінила) переходять до найближчого новішого запису
+   *  3) `hadStyle`/`hadClass` (і `raw0`, коли сторінка між шарами нічого не змінила; інакше `raw0` стає `undefined` — точний шлях вимкнено) переходять до найближчого новішого запису
    *     того ж елемента й виду незалежно від ключів — щоб після розмотування не лишився порожній `style=""`/`class=""`. */
   function revertEntry(e, newer = []) {
     const el = e.el.deref();
@@ -344,13 +344,18 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     const K = KIND[e.kind];
     const same = (n) => n.kind === e.kind && n.el.deref() === el;
     const nearest = newer.find(same) ?? null;
-    if (!nearest && e.kind === "style" && e.raw1 !== undefined && el.getAttribute("style") === e.raw1) {
+    if (!nearest && e.kind === "style" && e.raw0 !== undefined && e.raw1 !== undefined && el.getAttribute("style") === e.raw1) {
       if (e.raw0 === null) dropEmptyAttr(el, "style"); else el.setAttribute("style", e.raw0);   // рядок — сторінки власний, не наш
       if (styleWritten(el, e.raw0)) return { reverted: e.items.length, skipped: 0 };
       // CSP `style-src-attr` забороняє розбір атрибута: рядок записався, а CSSOM лишився як був — відкочуємо по декларації
     }
     if (nearest) {
-      if (e.kind === "style") { nearest.hadStyle = e.hadStyle; if (nearest.raw0 === e.raw1) nearest.raw0 = e.raw0; }
+      if (e.kind === "style") {
+        nearest.hints ??= [];                               // скорочення зі змінними, відомі нашому знімку: без них новіший шар не впізнає частини
+        for (const h of e.hints ?? []) if (!nearest.hints.some((x) => x.sh === h.sh && x.shv === h.shv)) nearest.hints.push(h);
+        nearest.hadStyle = e.hadStyle;
+        nearest.raw0 = nearest.raw0 === e.raw1 ? e.raw0 : undefined;   // сторінка між шарами щось змінила: рядок застарів — точний шлях вимкнено
+      }
       else if (e.kind === "class") nearest.hadClass = e.hadClass;
     }
     let reverted = 0, skipped = 0;
@@ -399,6 +404,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
    *  але CSSOM не оновлюється (довгі лишаються від нас) — це видно на чернетці: атрибут із декларацією не дає жодної. */
   function styleWritten(el, raw) {
     if (el.getAttribute("style") !== raw) return false;
+    if (raw === null) return el.style.length === 0;           // атрибута не було: нема що розбирати, достатньо порожнього CSSOM
     scratch ??= doc.createElement("div");
     scratch.removeAttribute("style");
     scratch.setAttribute("style", "color:red");

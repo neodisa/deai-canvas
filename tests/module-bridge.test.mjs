@@ -254,3 +254,61 @@ test("Esc у панелі під час page.pick шле page.cancelPick оди�
   key("Escape");
   assert.equal(sent.at(-1).msg.method, "page.cancelPick");        // новий вибір — знову можна
 });
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+test("page: подія до підписки → підписник отримує останню асинхронно й рівно раз", async () => {
+  const { win, dispatch } = load();
+  dispatch({ deai: 1, event: "page", data: { page: { id: "p1" } } });
+  const got = [];
+  win.deai.on("page", (d) => got.push(plain(d)));
+  assert.equal(got.length, 0, "не синхронно");
+  await flush();
+  assert.deepEqual(got, [{ page: { id: "p1" } }]);
+  await flush();
+  assert.equal(got.length, 1);
+});
+
+test("page: підписка до події → один виклик, без повтору", async () => {
+  const { win, dispatch } = load();
+  const got = [];
+  win.deai.on("page", (d) => got.push(plain(d)));
+  dispatch({ deai: 1, event: "page", data: { n: 1 } });
+  await flush();
+  assert.deepEqual(got, [{ n: 1 }]);
+});
+
+test("page: нова подія замінює запамʼятану; решта подій не відтворюються", async () => {
+  const { win, dispatch } = load();
+  dispatch({ deai: 1, event: "page", data: { n: 1 } });
+  dispatch({ deai: 1, event: "page", data: { n: 2 } });
+  dispatch({ deai: 1, event: "context", data: { c: 1 } });
+  const page = [], ctx = [];
+  win.deai.on("page", (d) => page.push(plain(d)));
+  win.deai.on("context", (d) => ctx.push(plain(d)));
+  await flush();
+  assert.deepEqual(page, [{ n: 2 }]);
+  assert.deepEqual(ctx, []);
+});
+
+test("page: подія між підпискою і відтворенням не дублюється; відписаний підписник не чує відтворення", async () => {
+  const { win, dispatch } = load();
+  dispatch({ deai: 1, event: "page", data: { n: 1 } });
+  const got = [], off = [];
+  win.deai.on("page", (d) => got.push(plain(d)));
+  dispatch({ deai: 1, event: "page", data: { n: 2 } });
+  win.deai.on("page", (d) => off.push(plain(d)))();
+  await flush();
+  assert.deepEqual(got, [{ n: 2 }]);
+  assert.deepEqual(off, []);
+});
+
+test("page: підписник, що кидає при відтворенні, не ламає інших", async () => {
+  const { win, dispatch } = load();
+  dispatch({ deai: 1, event: "page", data: { n: 1 } });
+  const got = [];
+  win.deai.on("page", () => { throw new Error("boom"); });
+  win.deai.on("page", (d) => got.push(plain(d)));
+  await flush();
+  assert.deepEqual(got, [{ n: 1 }]);
+});

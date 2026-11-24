@@ -1529,7 +1529,7 @@ test("CSP style-src-attr: запис атрибута не розбираєть�
   } finally { await page.close(); }
 });
 
-test("страховка: рядок style змінився, а пунктів нема → запис усе одно є, і revert повертає raw0", async () => {
+test("setStyle({color:null}) на елементі з color:red → запис є, revert повертає атрибут style як був", async () => {
   const page = await open();
   try {
     await mkEl(page, "sf", { style: "color:red" });
@@ -1537,6 +1537,51 @@ test("страховка: рядок style змінився, а пунктів �
     assert.ok(r.v.id);
     await call(page, "revert", [r.v.id]);
     assert.equal(await attrIn(page, "#sf", "style"), "color:red");
+  } finally { await page.close(); }
+});
+
+test("Fix1: без змінних; A color, сторінка transform, C color; revert(A), revert(C) → колір сторінки й transform", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "n1", { style: "color:green" });
+    const ref = await refOf(page, "#n1");
+    const a = await call(page, "setStyle", [ref, { color: "red" }]);
+    await PAGE_CHANGE(page, "#n1");
+    const c = await call(page, "setStyle", [ref, { color: "blue" }]);
+    assert.deepEqual((await call(page, "revert", [a.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.deepEqual((await call(page, "revert", [c.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await comp(page, "#n1", "color"), "rgb(0, 128, 0)");
+    assert.equal(await sty(page, "#n1", "transform"), "none");
+    assert.ok(!/red|blue/.test(await attrIn(page, "#n1", "style")), "значень модуля в атрибуті нема");
+  } finally { await page.close(); }
+});
+
+test("Fix1: margin:var(--g); A margin-top, сторінка transform, C margin-top; revert(A), revert(C) → var(--g) і transform", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "n2", { style: "margin:var(--g)" });
+    const ref = await refOf(page, "#n2");
+    const a = await call(page, "setStyle", [ref, { "margin-top": "1px" }]);
+    await PAGE_CHANGE(page, "#n2");
+    const c = await call(page, "setStyle", [ref, { "margin-top": "2px" }]);
+    await call(page, "revert", [a.v.id]);
+    const rc = await call(page, "revert", [c.v.id]);
+    assert.equal(rc.v.skipped, 0);
+    assert.deepEqual(await marginVar(page, "#n2"), { short: "var(--g)", top: "7px" });
+    assert.equal(await sty(page, "#n2", "transform"), "none");
+  } finally { await page.close(); }
+});
+
+test("Fix2: CSP і елемент без style → відкат повністю зарахований, атрибута нема", async () => {
+  const page = await open("/csp.html");
+  try {
+    await mkEl(page, "c2", {});
+    const r = await call(page, "setStyle", [await refOf(page, "#c2"), { color: "red" }]);
+    assert.ok(r.v.id);
+    assert.deepEqual((await call(page, "revert", [r.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.equal(await sty(page, "#c2", "color"), "");
+    assert.equal(await hasAttr(page, "#c2", "style"), false);
   } finally { await page.close(); }
 });
 
