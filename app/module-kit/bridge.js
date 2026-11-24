@@ -2,7 +2,7 @@
    The panel lives in a sandboxed iframe: no access to the shell or the network, only postMessage to the parent.
    Outgoing: {deai: 1, id, method, args}. Incoming, ONLY from window.parent with deai === 1:
    a reply {deai: 1, re, ok, value | error, detail} or an event {deai: 1, event, data}.
-   deai.page.* proxies the page helper (needs the "page" permissions); pick() has no timeout: the shell resolves it with null when the panel closes.
+   deai.page.* proxies the page helper (needs the "page" permissions); pick() has no timeout: it ends when the panel closes (the reply is dropped because the panel is gone).
    Esc inside the panel while a pick is pending cancels it (the key never reaches the canvas from the sandboxed panel). */
 (function () {
   "use strict";

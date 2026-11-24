@@ -635,13 +635,17 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     get picking() { return !!pickState; },
     destroy() {
       if (!alive) return;
-      if (doc.defaultView) revertAllNow();                  // поки документ живий
-      setClick(false); setHover(false);
-      finishPick(null);
-      for (const id of [...marks.keys()]) dropMark(id);
-      detach();
-      dropHost();
+      /* Документ рамки міг уже піти (`defaultView` нема), і будь-який крок прибирання може кинути. Тому спершу гасимо
+         `alive` і закінчуємо `pick` (без таймауту — інакше панель зависне), далі кожен крок у власному try. */
       alive = false;
+      const step = (fn) => { try { fn(); } catch { /* вікно мертве — нема чого прибирати */ } };
+      const pending = pickState;
+      if (pending) { pickState = null; step(() => { doc.removeEventListener("keydown", pending.onKey, true); pending.cv.remove(); pending.pk.remove(); }); pending.resolve(null); }
+      if (doc.defaultView) step(revertAllNow);              // поки документ живий; до події `close`
+      step(() => setClick(false)); step(() => setHover(false));
+      step(() => { for (const id of [...marks.keys()]) dropMark(id); });
+      step(detach);
+      step(dropHost);
       byRef.clear();
       scratch = null;
     },

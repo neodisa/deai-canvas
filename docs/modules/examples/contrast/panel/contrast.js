@@ -268,7 +268,12 @@ var Contrast = (function () {
     try { await deai.page.revertAll(); } catch (e) { fail("revertAll", e); }
     run();
   });
-  function onPage() {
+  function onPage(data) {
+    if (data && data.page === null) {              // no live page any more: drop the list and marks state, show the empty body
+      seq++; items = []; parents = {}; changes = []; pageTitle = ""; loaded = false;
+      render();
+      return;
+    }
     loaded = true;
     deai.page.listen({ click: true }).catch(function () {});   // listeners end with the page: ask again after every `page`; the run reports page problems
     run();

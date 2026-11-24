@@ -634,7 +634,7 @@ Nodes of the core's overlays and `script`, `style`, `template`, `noscript` never
 | `deai.page.query(selector, {limit, styles, attrs})` | `Node[]`; `limit` defaults to **100**, at most **500**; a selector the browser rejects is `bad-selector`. The answer is also held to **2 MiB**: when the nodes would not fit, the list simply ends early — there is no `truncated` flag in `query`, so ask for a smaller `limit` or fewer `styles`/`attrs` if you need to be sure |
 | `deai.page.get(ref, {styles, attrs})` | `Node` |
 | `deai.page.snapshot({styles, attrs, maxNodes})` | `{info, truncated, nodes}` — a flat list in document order; `maxNodes` defaults to **2000**, at most **4000**; the answer is at most **2 MiB**; `truncated: true` means the list stopped early, either at `maxNodes` or because the next node would not fit in the 2 MiB (the rest of the page is not in `nodes`) |
-| `deai.page.pick()` | the person clicks an element in the mockup → `Node`; `null` on Esc, on `cancelPick()`, on another `pick`, on a click that hits nothing, or when the panel closes. There is no bridge timeout; the click does not reach the page and marks are hidden while picking |
+| `deai.page.pick()` | the person clicks an element in the mockup → `Node`; `null` on Esc, on `cancelPick()`, on another `pick`, or on a click that hits nothing. It ends when the panel closes (the reply is dropped because the panel is gone). There is no bridge timeout; the click does not reach the page and marks are hidden while picking |
 | `deai.page.cancelPick()` | `null`; ends the current `pick` with `null` (nothing happens when no pick is running) |
 | `deai.page.reveal(ref)` | scroll to the element (centered) and a short flash of its mark, or of a temporary frame (at most 20 of those at once; past that only the scroll). `prefers-reduced-motion` turns the smooth scroll and the animation off. Resolves with `null` |
 
@@ -705,7 +705,7 @@ exactly as it was (including `var()` inside shorthands), and an empty `style=""`
 
 | event | data | when |
 |---|---|---|
-| `page` | `{page: {id, title}}` | the page is ready for requests: right after `init` when a page is already loaded, and after every later load (any `read` tool gets it, `listen` is not needed). Old refs, marks and changes are invalid after it |
+| `page` | `{page: {id, title}}` or `{page: null}` | the page is ready for requests: right after `init` when a page is already loaded, and after every later load (any `read` tool gets it, `listen` is not needed). Old refs, marks and changes are invalid after it. `{page: null}` means the mockup has no live page for the helper any more (another origin, still loading, clean view, canvas mode): `deai.page.*` calls answer `no-page` until the next `page` with a page |
 | `page-click` | `{node: Node, x, y, button, alt, shift, meta, ctrl}` | the person clicks (`listen({click: true})`); the click is not intercepted; not sent during `pick` |
 | `page-hover` | `{node: Node}` | the pointer moves onto another element (`listen({hover: true})`); at most 10 per second and only when the element changes |
 

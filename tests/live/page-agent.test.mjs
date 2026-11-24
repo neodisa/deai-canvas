@@ -618,6 +618,31 @@ test("pick: хост прибрали — обіцянка завершуєть�
   } finally { await page.close(); }
 });
 
+test("destroy: мертвий документ рамки — pick завершується null, без винятку, alive=false", async () => {
+  const page = await open();
+  try {
+    // таймер наведення, потім pick
+    await call(page, "listen", [{ hover: true }]);
+    const box = await page.locator("#f").boundingBox();
+    await page.mouse.move(box.x + 40, box.y + 40); await page.mouse.move(box.x + 60, box.y + 60);
+    await startPick(page);
+    await page.waitForFunction(() => window.A.picking === true);
+    // ламаємо прибирання: документ рамки відмовляє у зніманні слухачів і мітки більше не розбираються
+    const r = await page.evaluate(() => {
+      const f = document.getElementById("f"), d = f.contentDocument;
+      d.removeEventListener = () => { throw new Error("dead window"); };
+      f.remove();                                           // рамку вирвано з документа: `defaultView` null
+      let thrown = null;
+      try { window.A.destroy(); } catch (e) { thrown = String(e); }
+      return { thrown, alive: window.A.alive, view: d.defaultView };
+    });
+    assert.equal(r.thrown, null);
+    assert.equal(r.alive, false);
+    assert.equal(r.view, null);
+    assert.equal(await pickResult(page), null);
+  } finally { await page.close(); }
+});
+
 test("мітка display:none (нульовий прямокутник) — прихована", async () => {
   const page = await open();
   try {

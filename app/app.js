@@ -2521,12 +2521,15 @@ function pageDetach() {
   pageAgent = null;
 }
 function pageAttach() {
+  const had = !!pageAgent;
   pageDetach();
   const bound = modOpen;
-  if (!bound || !bound.page.length || mode === 'canvas' || cleanView) return;
+  /* Пропущений attach після попереднього помічника: панель має почути, що живої сторінки нема (а не лишитись із застарілою). */
+  const none = () => { if (had && bound && bound.inited && modOpen === bound) modPost(bound.host.event('page', { page: null })); };
+  if (!bound || !bound.page.length || mode === 'canvas' || cleanView) return none();
   let doc = null;
   try { doc = frame.contentDocument; } catch (e) { doc = null; }
-  if (!doc || !doc.body || doc.readyState === 'loading') return;
+  if (!doc || !doc.body || doc.readyState === 'loading') return none();
   pageAgent = createPageAgent({ doc, pageInfo: () => modContext().page,
     onEvent: (name, data) => { if (modOpen === bound) modPost(bound.host.event(name, data)); } });
   if (bound.inited) modPost(bound.host.event('page', { page: modContext().page }));
@@ -2622,8 +2625,7 @@ window.addEventListener('message', (ev) => {
     if (rep) modPost(rep);
     else if (msg && msg.method === 'hello' && bound.host.check(msg) === null) {
       modPost(bound.host.event('init', bound.host.initData()));
-      bound.inited = true;
-      pageAttach();
+      if (!bound.inited) { bound.inited = true; pageAttach(); }   // повторний hello — свіжий `init`, але не новий помічник
     }
   });
 });
