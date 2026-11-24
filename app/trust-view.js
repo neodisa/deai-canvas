@@ -20,6 +20,7 @@ import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { trustWhyKey } from "./connections-model.js";
 import { roleTitle } from "./connections-view.js";
+import { PAGE_PERMS } from "./page-rules.js";
 
 /** Найдовший рядок із диска в діалозі. */
 export const TR_MAX = 80;
@@ -70,6 +71,15 @@ function extHTML(items, key) {
   return names.length ? `<p class="tr-ext"><span class="tr-h3">${esc(t(key))}</span> ${esc(names.join(", "))}</p>` : "";
 }
 
+/* Права на сторінки макета, які заявили інструменти (`page`): об'єднання за всіма інструментами, порядок PAGE_PERMS, без дублів. */
+function pageHTML(tools) {
+  const used = new Set();
+  for (const x of list0(tools)) if (x && Array.isArray(x.page)) for (const p of x.page) used.add(p);
+  const perms = PAGE_PERMS.filter((p) => used.has(p));
+  return perms.length
+    ? `<p class="tr-h3">${esc(t("trustPage"))}</p><ul class="tr-page">${perms.map((p) => `<li>${esc(t("trustPage" + p[0].toUpperCase() + p.slice(1)))}</li>`).join("")}</ul>` : "";
+}
+
 /* Позначки «новий»/«змінено» — лише коли є запис довіри: без нього кожен файл «новий», і позначка нічого не каже. */
 function filesHTML(d) {
   const files = list0(d.files).filter((f) => f && typeof f.path === "string");
@@ -105,7 +115,7 @@ export function trustDialogHTML(d) {
       + `${d.refused?.detail ? `<span class="cn-why-detail">${esc(cut(d.refused.detail))}</span>` : ""}</span></p>`
     : `<div class="tr-warn">${ico("warn")}<div><p>${esc(t("trWarn"))}</p>`
       + `${list0(d?.roles).includes("comments") ? `<p>${esc(t("trWarnComments"))}</p>` : ""}`
-      + `<p>${esc(t("trWarnSystem"))}</p></div></div>${asksHTML(d.settings)}${extHTML(d.tools, "trustTools")}${extHTML(d.actions, "trustActions")}${filesHTML(d)}`;
+      + `<p>${esc(t("trWarnSystem"))}</p></div></div>${asksHTML(d.settings)}${extHTML(d.tools, "trustTools")}${pageHTML(d.tools)}${extHTML(d.actions, "trustActions")}${filesHTML(d)}`;
   const untrust = d?.record === true
     ? `<button type="button" class="tr-untrust" data-tr="untrust">${esc(t("cnUntrust"))}</button>` : "";
   return `<form class="cv-form tr" novalidate role="dialog" aria-modal="true" aria-labelledby="tr-h">

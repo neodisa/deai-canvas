@@ -285,3 +285,45 @@ test("словник: trustTools і trustActions є в uk та en", () => {
   assert.equal(DICT.en.trustTools, "Island tools");
   assert.equal(DICT.en.trustActions, "Actions");
 });
+
+test("блок «Робота з макетом»: без page — розмітка як раніше", () => {
+  const plain = trustDialogHTML(base({ tools: [{ label: "A", icon: "x" }] }));
+  const empty = trustDialogHTML(base({ tools: [{ label: "A", icon: "x", page: [] }] }));
+  const bad = trustDialogHTML(base({ tools: [{ label: "A", icon: "x", page: "read" }, { label: "B", page: ["bogus"] }] }));
+  assert.doesNotMatch(plain, /tr-page/);
+  assert.equal(empty, plain);
+  assert.doesNotMatch(bad, /tr-page/);
+});
+
+test("блок «Робота з макетом»: об'єднання прав усіх інструментів, порядок PAGE_PERMS, без дублів", () => {
+  const h = trustDialogHTML(base({ tools: [
+    { label: "A", icon: "x", page: ["listen", "read", "change"] },
+    { label: "B", icon: "x", page: ["read", "listen", "nope"] },
+  ] }));
+  assert.equal((h.match(/class="tr-page"/g) || []).length, 1);
+  assert.equal((h.match(/<li>/g) || []).length >= 3, true);
+  const block = h.slice(h.indexOf('<ul class="tr-page">'));
+  const ul = block.slice(0, block.indexOf("</ul>"));
+  const lis = [...ul.matchAll(/<li>([^<]*)<\/li>/g)].map((m) => m[1]);
+  assert.deepEqual(lis, [DICT.uk.trustPageRead, DICT.uk.trustPageChange, DICT.uk.trustPageListen]);
+  assert.match(h, new RegExp(`<p class="tr-h3">${DICT.uk.trustPage}</p><ul class="tr-page">`));
+  assert.ok(h.indexOf("tr-page") > h.indexOf("trustTools") || h.indexOf("tr-page") > h.indexOf("Інструменти в острівці"));
+});
+
+test("блок «Робота з макетом»: стоїть одразу після блоку інструментів і перед діями", () => {
+  const h = trustDialogHTML(base({ tools: [{ label: "A", page: ["read"] }], actions: [{ label: "Act" }] }));
+  assert.ok(h.indexOf("Інструменти в острівці") < h.indexOf('class="tr-page"'));
+  assert.ok(h.indexOf('class="tr-page"') < h.indexOf("Act"));
+});
+
+test("словник: рядки trustPage* є в uk та en", () => {
+  for (const k of ["trustPage", "trustPageRead", "trustPageMark", "trustPageChange", "trustPageListen"]) {
+    assert.ok(DICT.uk[k] && DICT.en[k], k);
+  }
+  assert.equal(DICT.uk.trustPage, "Робота з макетом, поки панель інструмента відкрита");
+  assert.equal(DICT.en.trustPageMark, "Marks elements on the page");
+});
+
+test("CSS: правило .tr-page", () => {
+  assert.match(read("styles.css"), /\.tr-page\{/);
+});

@@ -366,6 +366,7 @@ body.home-open .isl-tools::before{display:none}
 .tr .tr-none{color:var(--dim)}
 .tr .tr-ext{margin:0;font-size:13px;color:var(--hi);overflow-wrap:anywhere}
 .tr-asks{margin:-8px 0 0;padding-left:18px;font-size:13px;color:var(--hi)}
+.tr-page{margin:-8px 0 0;padding-left:18px;font-size:13px;color:var(--hi)}
 .tr-mark{margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:var(--mid);white-space:nowrap}
 .tr-files{max-height:180px;overflow:auto;margin:-8px 0 0;padding:6px 8px;list-style:none;border:1px solid var(--line);
   border-radius:6px;font-size:12px}
@@ -379,7 +380,7 @@ body.home-open .isl-tools::before{display:none}
 /* Деталь відмови: `.cn-why-detail` бере --dim (2,25:1 на білому діалозі), тут потрібен темний текст. */
 .tr-refused .cn-why-detail{color:var(--dim)}
 /* Довге слово без пробілів (назва модуля в заголовку, мітка налаштування, текст помилки) не розпирає діалог. */
-.tr .cv-form-h,.tr-asks,.tr .cv-form-err{overflow-wrap:anywhere}
+.tr .cv-form-h,.tr-asks,.tr-page,.tr .cv-form-err{overflow-wrap:anywhere}
 .tr .tr-wait{color:var(--mid)}
 .cv-ask button.tr-untrust{margin-right:auto;border-color:var(--bad);background:var(--s1);color:var(--bad)}
 /* Діалог оновлення інструмента (0.23.0, `update-view.js`): та сама темна картка `askForm`, що в діалогу довіри, і ті самі правила під
