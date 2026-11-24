@@ -14,6 +14,9 @@ import shutil
 
 TRASH_REL = os.path.join('.trash', 'iterations')
 KEEP_DAYS = 7
+#: `purge` стирає слот лише через цей запас ПІСЛЯ краю `KEEP_DAYS`: повернення, що саме пройшло перевірку віку, не
+#: ганяється з прибиранням того самого слота в ту саму секунду. Перелік і перевірка віку при поверненні — по точному краю.
+PURGE_GRACE = datetime.timedelta(seconds=60)
 ID_RE = re.compile(r'^[\w-]{1,64}$')
 NUM_RE = re.compile(r'^it(\d+)$')
 SLOT_RE = re.compile(r'^([\w-]{1,64})--(\d{8}-\d{6})(?:-\d+)?$')
@@ -172,11 +175,11 @@ def restore(task_dir, slot, taken_ids):
 
 
 def purge(task_dir, now, keep_days=KEEP_DAYS):
-    """Стерти слоти, старші за `keep_days`. Повертає їхні імена (відсортовані)."""
+    """Стерти слоти, старші за `keep_days` + `PURGE_GRACE`. Повертає їхні імена (відсортовані)."""
     root = trash_root(task_dir)
     if not os.path.isdir(root):
         return []
-    edge = now - datetime.timedelta(days=keep_days)
+    edge = now - datetime.timedelta(days=keep_days) - PURGE_GRACE
     gone = []
     for name in sorted(os.listdir(root)):
         at = slot_time(name)
@@ -190,8 +193,8 @@ def purge(task_dir, now, keep_days=KEEP_DAYS):
 
 def list_slots(task_dir, now, keep_days=KEEP_DAYS):
     """Перелік кошика для інтерфейсу («Видалені»): `[{trash, entry, deleted_at, expires_at}]`, найсвіжіше першим. НЕ пише й не
-    прибирає (це `purge` при видаленні). Вік — за датою в імені слота, тим самим правилом, що в `purge` (рівно `keep_days` —
-    ще в кошику), тож перелік і прибирання не розходяться. Пропускає чужі імена, слоти без читабельного `entry.json` (залишок
+    прибирає (це `purge` при видаленні). Вік — за датою в імені слота, тим самим краєм, що в `purge` (рівно `keep_days` —
+    ще в кошику); `purge` лише відстає на `PURGE_GRACE`, тож перелік ніколи не показує те, що вже стерте. Пропускає чужі імена, слоти без читабельного `entry.json` (залишок
     після `restore_finish`), запис не тієї форми, небезпечний `id` і прострочені слоти. Нема кошика — `[]`."""
     root = trash_root(task_dir)
     try:

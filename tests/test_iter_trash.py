@@ -279,3 +279,27 @@ class RestoreAgeAndBadEntry(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PurgeGrace(unittest.TestCase):
+    """Прибирання лишає слот ще на 60 с після краю: повернення, що вже пройшло перевірку віку, не ганяється з `purge`."""
+
+    def setUp(self):
+        self.d = _task(['it1', 'it2'])
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.slot = tr.move_to_trash(self.d, {'id': 'it2'}, T0)
+
+    def test_inside_the_grace_purge_keeps_but_list_and_restore_refuse(self):
+        now = T0 + datetime.timedelta(days=tr.KEEP_DAYS, seconds=30)
+        self.assertEqual(tr.purge(self.d, now), [])
+        self.assertTrue(os.path.isdir(os.path.join(tr.trash_root(self.d), self.slot)))
+        self.assertEqual(tr.list_slots(self.d, now), [])
+        with self.assertRaises(tr.IterTrashError) as cm:
+            tr.restore_prepare(self.d, self.slot, [], now=now)
+        self.assertEqual(cm.exception.code, 'expired')
+
+    def test_past_the_grace_purge_deletes(self):
+        now = T0 + datetime.timedelta(days=tr.KEEP_DAYS, seconds=61)
+        self.assertEqual(tr.purge(self.d, now), [self.slot])
+        self.assertFalse(os.path.exists(os.path.join(tr.trash_root(self.d), self.slot)))
+
