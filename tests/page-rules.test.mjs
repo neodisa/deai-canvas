@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { LIMITS, METHOD_PERM, PAGE_PERMS, PageError, TONES, TONE_COLORS, allowed, attrAllowed, checkClassList,
+import { LIMITS, METHOD_PERM, PAGE_PERMS, PageError, TONES, TONE_COLORS, allowed, attrAllowed, isCoreAttr, checkClassList,
   checkAttrValue, checkLabel, checkStyleMap, checkStyleNames, checkText, checkTone, createJournal, stillOurs } from "../app/page-rules.js";
 
 test("кожен метод має дозвіл; allowed() дивиться лише на нього", () => {
@@ -34,6 +34,12 @@ test("атрибути: список дозволених, зарезервов�
     "data-deai-x", "data-canvas-inspector", "data-comment-layer", "data-h2d-ignore", "aria-", "data-", "id", "", null, 5, "hidden\n", "data-a--b", "DATA-DEAI-X", "data-a_b", "data-Key",
     "data-dc-x", "ARIA-LABEL", "Role", "data-\u212Aey"])
     assert.equal(attrAllowed(n), false, n);
+});
+
+test("isCoreAttr: службові маркери ядра", () => {
+  for (const n of ["data-deai-x", "data-canvas-inspector", "data-comment-layer", "data-comment-id", "data-h2d-ignore", "data-dc-x", "DATA-DEAI-X"])
+    assert.equal(isCoreAttr(n), true, n);
+  for (const n of ["data-x", "data-test-id", "aria-label", "class", "", null, 5]) assert.equal(isCoreAttr(n), false, String(n));
 });
 
 test("класи: імена, ліміт, тип", () => {

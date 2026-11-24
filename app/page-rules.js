@@ -36,6 +36,13 @@ export const allowed = (method, perms) =>
 
 const ATTR_PLAIN = new Set(["role", "hidden", "title", "alt", "lang", "dir", "tabindex", "disabled", "placeholder", "open"]);
 const DATA_RESERVED = ["data-deai-", "data-canvas-", "data-comment-", "data-h2d-", "data-dc-"];
+/** Службовий маркер ядра (`data-deai-*`, `data-canvas-*`, `data-comment-*`, `data-h2d-*`, `data-dc-*`): модуль його ні ставить,
+ *  ні бачить в `attrs`. Єдине місце списку — тут. */
+export function isCoreAttr(name) {
+  if (typeof name !== "string") return false;
+  const n = name.toLowerCase();
+  return DATA_RESERVED.some((p) => n.startsWith(p));
+}
 /** Атрибут, який модуль може поставити чи зняти: лише безпечні для виконання й завантаження (без `on*`, `src`, `href`…). */
 export function attrAllowed(name) {
   // Спершу сама назва: лише ASCII-нижній регістр (інакше `toLowerCase` зводить «K» Кельвіна до `k` і обходить перевірку).
@@ -43,7 +50,7 @@ export function attrAllowed(name) {
   const n = name;
   if (ATTR_PLAIN.has(n)) return true;
   if (/^aria-[a-z]+(-[a-z]+)*$/.test(n)) return true;
-  return /^data-[a-z0-9]+(-[a-z0-9]+)*$/.test(n) && !DATA_RESERVED.some((p) => n.startsWith(p));
+  return /^data-[a-z0-9]+(-[a-z0-9]+)*$/.test(n) && !isCoreAttr(n);
 }
 
 const CLASS_RE = /^[A-Za-z_-][\w-]{0,99}$/;

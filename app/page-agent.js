@@ -5,17 +5,28 @@
  * лише `textContent`, `style.setProperty`, `classList`. Стереже статичний тест у `tests/page-rules.test.mjs`.
  * ⛔ Вузли — з ІНШОГО вікна: жодного `instanceof`, лише `nodeType`/`localName`.
  */
-import { LIMITS, PageError, checkStyleNames } from "./page-rules.js";
+import { LIMITS, PageError, checkStyleNames, isCoreAttr } from "./page-rules.js";
 
 const OURS = "[data-canvas-inspector],[data-comment-layer],#cl-down,[data-deai-marks]";
 const SKIP = new Set(["script", "style", "template", "noscript"]);
 const clip = (s, n) => (s.length > n ? s.slice(0, n) : s);
 const round = (x) => Math.round(x * 10) / 10;
+const utf8 = new TextEncoder();
+const bytesOf = (v) => utf8.encode(JSON.stringify(v)).length;
+const SELECTOR_MAX = 300, PSEUDO_MAX = 4, REFS_SWEEP = 20000;
+/** Випадкова «епоха» помічника: посилання `r<епоха>-<n>` з попереднього екземпляра не збігається з новими. */
+function newEpoch() {
+  const u = new Uint32Array(2);
+  (globalThis.crypto?.getRandomValues ? globalThis.crypto.getRandomValues(u) : u.forEach((_, i) => { u[i] = Math.random() * 2 ** 32; }));
+  return (u[0].toString(36) + u[1].toString(36)).slice(0, 6);
+}
 
 export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null }) {
   const win = doc.defaultView;
   let alive = true;
   let seq = 0;
+  let sweepAt = REFS_SWEEP;
+  const epoch = newEpoch();
   const byEl = new WeakMap();
   const byRef = new Map();
 
@@ -24,13 +35,21 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
   const inBody = (el) => !!doc.body && doc.body.contains(el) && !el.closest("script,style,template,noscript");
   function refOf(el) {
     let r = byEl.get(el);
-    if (!r) { r = `r${++seq}`; byEl.set(el, r); byRef.set(r, new WeakRef(el)); }
+    if (!r) {
+      r = `r${epoch}-${++seq}`; byEl.set(el, r); byRef.set(r, new WeakRef(el));
+      if (byRef.size > sweepAt) sweepRefs();
+    }
     return r;
+  }
+  /** Мапа посилань росте лише з новими вузлами: вичищаємо зниклі й відчеплені; якщо живих усе одно багато — не чистимо щоразу. */
+  function sweepRefs() {
+    for (const [k, w] of byRef) { const e = w.deref(); if (!e || !e.isConnected) byRef.delete(k); }
+    sweepAt = Math.max(REFS_SWEEP, byRef.size + 5000);
   }
   function elOf(ref) {
     live();
     const el = typeof ref === "string" ? byRef.get(ref)?.deref() : null;
-    if (!el || !el.isConnected || el.ownerDocument !== doc) throw new PageError("stale-ref", "the element is gone or the page reloaded");
+    if (!el || !el.isConnected || el.ownerDocument !== doc || !inBody(el) || isOurs(el)) throw new PageError("stale-ref", "the element is gone or the page reloaded");
     return el;
   }
   function ownText(el) {
@@ -39,8 +58,13 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     return clip(s.replace(/\s+/g, " ").trim(), LIMITS.nodeText);
   }
   function attrsOf(el) {
-    const out = {};
-    for (const a of [...el.attributes].slice(0, LIMITS.attrs)) out[a.name] = clip(a.value, LIMITS.attrVal);
+    const out = Object.create(null);
+    let k = 0;
+    for (const a of el.attributes) {
+      if (isCoreAttr(a.name)) continue;
+      if (k++ >= LIMITS.attrs) break;
+      out[a.name] = clip(a.value, LIMITS.attrVal);
+    }
     return out;
   }
   function describe(el, o = {}) {
@@ -51,7 +75,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       rect: { x: round(r.left + win.scrollX), y: round(r.top + win.scrollY), w: round(r.width), h: round(r.height) },
       visible: r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none" };
     if (o.attrs === true) n.attrs = attrsOf(el);
-    if (o.styles && o.styles.length) { n.styles = {}; for (const p of o.styles) n.styles[p] = cs.getPropertyValue(p); }
+    if (o.styles && o.styles.length) { n.styles = {}; for (const p of o.styles) n.styles[p] = clip(cs.getPropertyValue(p), LIMITS.styleVal); }
     return n;
   }
   const opts = (o) => ({ styles: checkStyleNames(o?.styles), attrs: o?.attrs === true });
@@ -71,15 +95,21 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     },
     query(selector, o = {}) {
       live();
-      if (typeof selector !== "string" || !selector || selector.length > 1000) throw new PageError("bad-args", "selector: a non-empty string");
+      if (typeof selector !== "string" || !selector || selector.length > SELECTOR_MAX) throw new PageError("bad-args", `selector: a non-empty string of at most ${SELECTOR_MAX} characters`);
+      if ((selector.match(/:(has|is|not|where)\(/gi) || []).length > PSEUDO_MAX) throw new PageError("bad-args", `selector: at most ${PSEUDO_MAX} functional pseudo-classes`);
       const limit = intIn(o?.limit, LIMITS.queryDefault, LIMITS.queryMax, "limit");
       const so = opts(o);
       let found;
       try { found = doc.querySelectorAll(selector); } catch (e) { throw new PageError("bad-selector", String(e?.message || e).slice(0, 200)); }
       const out = [];
+      let bytes = 0;
       for (const el of found) {
         if (out.length >= limit) break;
-        if (inBody(el) && !isOurs(el)) out.push(describe(el, so));
+        if (!inBody(el) || isOurs(el)) continue;
+        const n = describe(el, so);
+        bytes += bytesOf(n);
+        if (bytes > LIMITS.snapshotBytes) break;
+        out.push(n);
       }
       return out;
     },
@@ -93,10 +123,11 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       if (doc.body) {
         const walker = doc.createTreeWalker(doc.body, 1, { acceptNode: (n) => (SKIP.has(n.localName) || n.matches(OURS) ? 2 : 1) });
         for (let el = walker.currentNode; el; el = walker.nextNode()) {
+          if (nodes.length >= max) { truncated = true; break; }
           const n = describe(el, so);
           n.parent = el === doc.body ? null : refOf(el.parentElement);
-          bytes += JSON.stringify(n).length;
-          if (nodes.length >= max || bytes > LIMITS.snapshotBytes) { truncated = true; break; }
+          bytes += bytesOf(n);
+          if (bytes > LIMITS.snapshotBytes) { truncated = true; break; }
           nodes.push(n);
         }
       }
