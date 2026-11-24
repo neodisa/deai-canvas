@@ -9,6 +9,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { TONE_COLORS } from "../../app/page-rules.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -308,5 +309,212 @@ test("query: спільний бюджет байтів — вихід не бі
     assert.ok(r.length > 0 && r.length < 400, `вузлів ${r.length}`);
     const bytes = r.reduce((a, n) => a + new TextEncoder().encode(JSON.stringify(n)).length, 0);
     assert.ok(bytes <= 2 * 1024 * 1024, `байтів ${bytes}`);
+  } finally { await page.close(); }
+});
+
+/* ---------- Task 4: мітки, reveal, pick ---------- */
+/** Стан міток зсередини тіньового кореня хоста (прямий нащадок documentElement; у фікстурі є ще «двійник» у body). */
+const MARKS = (d) => {
+  const hosts = [...d.documentElement.children].filter((e) => e.hasAttribute("data-deai-marks"));
+  const root = hosts[0]?.shadowRoot;
+  const wrap = root?.querySelector(".w");
+  return { hosts: hosts.length, hostIgnore: hosts[0]?.getAttribute("data-h2d-ignore"), open: !!root,
+    wrapShown: !!wrap && d.defaultView.getComputedStyle(wrap).display !== "none",
+    marks: root ? [...root.querySelectorAll(".mk")].map((m) => {
+      const r = m.getBoundingClientRect(), l = m.querySelector(".l");
+      return { hidden: m.hidden, t: d.defaultView.getComputedStyle(m).getPropertyValue("--t").trim(), label: l.textContent,
+        hasB: !!l.querySelector("b"), cls: m.className, dn: l.classList.contains("dn"),
+        pe: d.defaultView.getComputedStyle(m).pointerEvents, r: { x: r.left, y: r.top, w: r.width, h: r.height } };
+    }) : [],
+    cover: !!root?.querySelector(".cv"), pickBox: !!root?.querySelector(".pk:not([hidden])") };
+};
+const BTN = (d) => { const r = d.getElementById("cta").getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+/** Рамка = елемент ±3 px з кожного боку: краї в межах tol, розміри — у межах 2·tol. */
+const near = (a, b, tol, msg) => { for (const k of ["x", "y", "w", "h"]) assert.ok(Math.abs(a[k] - b[k]) <= (k === "w" || k === "h" ? 2 * tol : tol), `${msg}: ${k} ${a[k]} vs ${b[k]}`); };
+const refOf = async (page, sel) => (await call(page, "query", [sel])).v[0].ref;
+const frameRaf = (page) => inFrame(page, (d) => new Promise((ok) => d.defaultView.requestAnimationFrame(() => d.defaultView.requestAnimationFrame(ok))));
+
+test("mark: хост, тіньовий корінь, колір тону, ярлик лише текстом, охоплення кнопки", async () => {
+  const page = await open();
+  try {
+    const ref = await refOf(page, "#cta");
+    const id = (await call(page, "mark", [ref, { tone: "error", label: "Контраст <b>1.9</b>:1" }])).v;
+    assert.equal(id, "m1");
+    const s = await inFrame(page, MARKS);
+    assert.equal(s.hosts, 1);
+    assert.equal(s.hostIgnore, "true");
+    assert.equal(s.open, true);
+    assert.equal(s.marks.length, 1);
+    assert.equal(s.marks[0].t.toLowerCase(), TONE_COLORS.error.toLowerCase());
+    assert.equal(s.marks[0].label, "Контраст <b>1.9</b>:1");
+    assert.equal(s.marks[0].hasB, false);
+    assert.equal(s.marks[0].pe, "none");
+    near(s.marks[0].r, await inFrame(page, BTN), 4, "рамка охоплює кнопку");
+    // без opts: тон info
+    const id2 = (await call(page, "mark", [ref])).v;
+    assert.equal(id2, "m2");
+    assert.equal((await inFrame(page, MARKS)).marks[1].t.toLowerCase(), TONE_COLORS.info.toLowerCase());
+  } finally { await page.close(); }
+});
+
+test("mark: хост не видно читальним методам", async () => {
+  const page = await open();
+  try {
+    const before = (await call(page, "snapshot", [])).v.nodes.length;
+    await call(page, "mark", [await refOf(page, "#cta"), { label: "x" }]);
+    assert.deepEqual((await call(page, "query", ["[data-deai-marks]"])).v, []);
+    assert.equal((await call(page, "snapshot", [])).v.nodes.length, before);
+    assert.ok(!(await call(page, "query", ["*", { limit: 500 }])).v.some((n) => n.tag === "div" && n.id === "" && n.cls === "" && n.rect.w === 0 && n.rect.h === 0));
+  } finally { await page.close(); }
+});
+
+test("mark: прокрутка — мітка їде з кнопкою, кліки її не бачать", async () => {
+  const page = await open();
+  try {
+    await call(page, "mark", [await refOf(page, "#cta"), { tone: "ok" }]);
+    await inFrame(page, (d) => d.defaultView.scrollTo(0, 300));
+    await page.waitForFunction(() => {
+      const d = document.getElementById("f").contentDocument;
+      const m = [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).shadowRoot.querySelector(".mk");
+      return Math.abs(m.getBoundingClientRect().top + 3 - d.getElementById("cta").getBoundingClientRect().top) < 1;
+    });
+    await inFrame(page, (d) => d.defaultView.scrollTo(0, 0));
+    await frameRaf(page);
+    assert.equal(await inFrame(page, (d) => { const r = d.getElementById("cta").getBoundingClientRect(); return d.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2).id; }), "cta");
+  } finally { await page.close(); }
+});
+
+test("mark: кнопку прибрали — мітка прихована; unmark, clearMarks, ліміт, bad-args", async () => {
+  const page = await open();
+  try {
+    const ref = await refOf(page, "#cta");
+    const id = (await call(page, "mark", [ref])).v;
+    await inFrame(page, (d) => d.getElementById("cta").remove());
+    await frameRaf(page);
+    assert.equal((await inFrame(page, MARKS)).marks[0].hidden, true);
+    assert.equal((await call(page, "unmark", [id])).v ?? null, null);
+    assert.equal((await inFrame(page, MARKS)).marks.length, 0);
+    assert.equal((await call(page, "unmark", ["m999"])).code, undefined, "невідомий id — тихо");
+    const ref2 = await refOf(page, "#p");
+    await call(page, "mark", [ref2]); await call(page, "mark", [ref2]);
+    await call(page, "clearMarks");
+    assert.equal((await inFrame(page, MARKS)).marks.length, 0);
+    assert.equal((await call(page, "mark", [ref2, { tone: "red" }])).code, "bad-args");
+    assert.equal((await call(page, "mark", ["r-nope"])).code, "stale-ref");
+    const codes = await page.evaluate(async (r) => {
+      const out = [];
+      for (let i = 0; i < 301; i++) { try { window.A.mark(r); out.push("ok"); } catch (e) { out.push(e.code); } }
+      return [out.filter((c) => c === "ok").length, out[300]];
+    }, ref2);
+    assert.deepEqual(codes, [300, "too-many"]);
+  } finally { await page.close(); }
+});
+
+test("mark: довгий ярлик обрізається; слухачі знімаються разом з останньою міткою", async () => {
+  const page = await open();
+  try {
+    const ref = await refOf(page, "#cta");
+    const id = (await call(page, "mark", [ref, { label: "ж".repeat(100) }])).v;
+    const lab = (await inFrame(page, MARKS)).marks[0].label;
+    assert.equal(Array.from(lab).length, 60);
+    assert.ok(lab.endsWith("…"));
+    await inFrame(page, (d) => { const w = d.defaultView, o = w.requestAnimationFrame.bind(w); w.RAFN = 0; w.requestAnimationFrame = (f) => { w.RAFN++; return o(f); }; });
+    await call(page, "unmark", [id]);
+    await inFrame(page, (d) => { d.defaultView.RAFN = 0; d.body.appendChild(d.createElement("i")); d.defaultView.scrollTo(0, 50); d.defaultView.dispatchEvent(new d.defaultView.Event("resize")); });
+    await frameRaf(page); await new Promise((r) => setTimeout(r, 100));
+    // два наші власні rAF у frameRaf не рахуються: лічильник стоїть на оригіналі, що обгорнутий — frameRaf їх викликає, тож віднімаємо 2
+    assert.equal(await inFrame(page, (d) => d.defaultView.RAFN), 2, "після останньої мітки помічник кадрів не просить");
+  } finally { await page.close(); }
+});
+
+test("reveal: елемент у видимій області; без мітки — тимчасова рамка на ~1,2 с; з міткою — клас fl", async () => {
+  const page = await open();
+  try {
+    const far = await refOf(page, "#far");
+    assert.equal((await call(page, "reveal", [far])).v ?? null, null);
+    assert.equal((await inFrame(page, MARKS)).marks.length, 1, "тимчасова мітка");
+    assert.equal((await inFrame(page, MARKS)).marks[0].label, "");
+    await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; const r = d.getElementById("far").getBoundingClientRect(); return r.top >= 0 && r.bottom <= 600; });
+    await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; const h = [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")); return h.shadowRoot.querySelectorAll(".mk").length === 0; }, null, { timeout: 4000 });
+    // з міткою
+    const cta = await refOf(page, "#cta");
+    await call(page, "mark", [cta, { tone: "warn" }]);
+    await call(page, "reveal", [cta]);
+    const s = await inFrame(page, MARKS);
+    assert.equal(s.marks.length, 1, "нової тимчасової нема");
+    assert.ok(s.marks[0].cls.split(/\s+/).includes("fl"));
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.ok(!(await inFrame(page, MARKS)).marks[0].cls.split(/\s+/).includes("fl"));
+    assert.equal((await call(page, "reveal", ["r-nope"])).code, "stale-ref");
+  } finally { await page.close(); }
+});
+
+test("mark: біля верху ярлик перевертається (dn)", async () => {
+  const page = await open();
+  try {
+    await call(page, "mark", [await refOf(page, "#h"), { label: "x" }]);
+    await frameRaf(page);
+    assert.equal((await inFrame(page, MARKS)).marks[0].dn, true, "заголовок біля верху");
+    await call(page, "mark", [await refOf(page, "#far"), { label: "y" }]);
+    await inFrame(page, (d) => d.defaultView.scrollTo(0, 2000)); await frameRaf(page);
+    const m = (await inFrame(page, MARKS)).marks;
+    assert.equal(m[1].dn, false);
+  } finally { await page.close(); }
+});
+
+/** Запустити pick() і не чекати: результат у `window.PKV`. */
+const startPick = (page) => page.evaluate(() => { window.PKV = undefined; window.PK = window.A.pick(); window.PK.then((v) => { window.PKV = { v }; }); return true; });
+const pickResult = async (page) => { await page.waitForFunction(() => window.PKV !== undefined, null, { timeout: 3000 }); return page.evaluate(() => window.PKV.v); };
+const centerOf = async (page, sel) => {
+  const fr = await page.evaluate(() => { const r = document.getElementById("f").getBoundingClientRect(); return { x: r.left, y: r.top }; });
+  const r = await inFrame(page, (d, s) => { const b = d.querySelector(s).getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; }, sel);
+  return { x: fr.x + r.x, y: fr.y + r.y };
+};
+
+test("pick: клік по #cta повертає вузол, сторінка кліка не бачить, мітки ховаються й повертаються", async () => {
+  const page = await open();
+  try {
+    await call(page, "mark", [await refOf(page, "#p"), { label: "p" }]);
+    await startPick(page);
+    await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; return [...d.documentElement.children].some((e) => e.shadowRoot?.querySelector(".cv")); });
+    const during = await inFrame(page, MARKS);
+    assert.equal(during.wrapShown, false, "мітки сховані");
+    assert.equal(during.cover, true);
+    const c = await centerOf(page, "#cta");
+    await page.mouse.move(c.x - 5, c.y); await page.mouse.move(c.x, c.y);
+    await page.waitForFunction(() => { const d = document.getElementById("f").contentDocument; return !!d.documentElement.querySelector("[data-deai-marks]") && [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).shadowRoot.querySelector(".pk span")?.textContent.startsWith("button.lo "); });
+    const label = await inFrame(page, (d) => [...d.documentElement.children].find((e) => e.hasAttribute("data-deai-marks")).shadowRoot.querySelector(".pk span").textContent);
+    assert.match(label, /^button\.lo \d+×\d+$/);
+    await page.mouse.click(c.x, c.y);
+    const n = await pickResult(page);
+    assert.equal(n.id, "cta");
+    assert.equal(await inFrame(page, (d) => d.defaultView.PAGE_CLICKS), 0);
+    const after = await inFrame(page, MARKS);
+    assert.equal(after.wrapShown, true);
+    assert.equal(after.cover, false);
+    assert.equal(await page.evaluate(() => window.A.picking), false);
+  } finally { await page.close(); }
+});
+
+test("pick: Esc → null; другий pick() → перший null; destroy() → null і хоста нема", async () => {
+  const page = await open();
+  try {
+    await startPick(page);
+    await page.waitForFunction(() => window.A.picking === true);
+    const prevented = await inFrame(page, (d) => { const e = new d.defaultView.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }); d.dispatchEvent(e); return e.defaultPrevented; });
+    assert.equal(prevented, true);
+    assert.equal(await pickResult(page), null);
+    assert.equal(await page.evaluate(() => window.A.picking), false);
+    // Esc без вибору сторінку не чіпає
+    assert.equal(await inFrame(page, (d) => { const e = new d.defaultView.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }); d.dispatchEvent(e); return e.defaultPrevented; }), false);
+    // другий pick
+    const r = await page.evaluate(async () => { const a = window.A.pick(); const b = window.A.pick(); const first = await a; window.A.cancelPick(); return [first, await b]; });
+    assert.deepEqual(r, [null, null]);
+    // destroy під час pick
+    await startPick(page);
+    await page.waitForFunction(() => window.A.picking === true);
+    await page.evaluate(() => window.A.destroy());
+    assert.equal(await pickResult(page), null);
+    assert.equal((await inFrame(page, MARKS)).hosts, 0);
   } finally { await page.close(); }
 });

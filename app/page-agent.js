@@ -5,7 +5,7 @@
  * лише `textContent`, `style.setProperty`, `classList`. Стереже статичний тест у `tests/page-rules.test.mjs`.
  * ⛔ Вузли — з ІНШОГО вікна: жодного `instanceof`, лише `nodeType`/`localName`.
  */
-import { LIMITS, PageError, checkStyleNames, isCoreAttr } from "./page-rules.js";
+import { LIMITS, PageError, TONE_COLORS, checkLabel, checkStyleNames, checkTone, isCoreAttr } from "./page-rules.js";
 
 const OURS = "[data-canvas-inspector],[data-comment-layer],#cl-down,[data-deai-marks]";
 const SKIP = new Set(["script", "style", "template", "noscript"]);
@@ -85,6 +85,145 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     return Math.min(v, max);
   }
 
+  // ---------- мітки, показ, вибір: усе в тіньовому корені одного хоста; без innerHTML ----------
+  const STYLE = `:host{all:initial}
+.w[hidden]{display:none}
+.mk{position:fixed;box-sizing:border-box;border:2px solid var(--t);background:color-mix(in srgb,var(--t) 9%,transparent);border-radius:4px;pointer-events:none}
+.mk[hidden]{display:none}
+.mk.fl{animation:fl .6s 2}
+@keyframes fl{50%{box-shadow:0 0 0 7px color-mix(in srgb,var(--t) 45%,transparent)}}
+@media (prefers-reduced-motion:reduce){.mk.fl{animation:none;box-shadow:0 0 0 4px color-mix(in srgb,var(--t) 45%,transparent)}}
+.l{position:absolute;left:-2px;bottom:100%;margin-bottom:3px;max-width:240px;padding:2px 6px;border-radius:4px;background:var(--t);color:#151d19;font:600 11px/16px system-ui,-apple-system,"Segoe UI",sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.l.dn{bottom:auto;top:100%;margin:3px 0 0}
+.l:empty{display:none}
+.cv{position:fixed;inset:0;cursor:crosshair;pointer-events:auto;background:transparent}
+.pk{position:fixed;box-sizing:border-box;border:2px solid #3D8BFF;background:rgba(61,139,255,.1);border-radius:3px;pointer-events:none}
+.pk[hidden]{display:none}
+.pk span{position:absolute;left:-2px;top:100%;margin-top:3px;padding:2px 6px;border-radius:4px;background:#3D8BFF;color:#fff;font:600 11px/16px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}`;
+  const PAD = 3, FLASH_MS = 1200, FLIP_TOP = 22;
+  let host = null, root = null, wrap = null;
+  function ensureHost() {
+    if (host && host.isConnected) return;
+    host = doc.createElement("div");
+    host.setAttribute("data-deai-marks", "");
+    host.setAttribute("data-h2d-ignore", "true");         // «В Figma» пропускає лише зі значенням "true"
+    host.style.setProperty("all", "initial", "important");
+    for (const [k, v] of [["position", "fixed"], ["top", "0"], ["left", "0"], ["width", "0"], ["height", "0"],
+      ["z-index", "2147482999"], ["pointer-events", "none"]]) host.style.setProperty(k, v, "important");
+    doc.documentElement.appendChild(host);                  // не в body: не стаємо учасником розкладки сторінки
+    root = host.attachShadow({ mode: "open" });             // open: так само, як у оверлея інспектора; тести читають корінь
+    const st = doc.createElement("style"); st.textContent = STYLE; root.appendChild(st);
+    wrap = doc.createElement("div"); wrap.className = "w"; root.appendChild(wrap);
+    marks.clear();                                          // хост пересотворено (сторінку перемалювали) — старі коробки зникли
+  }
+
+  const marks = new Map();                                  // id → {el: WeakRef, box, lab, timer}
+  let markSeq = 0, tempSeq = 0, raf = 0, observer = null, listening = false;
+  const permanent = () => { let n = 0; for (const m of marks.values()) if (!m.temp) n++; return n; };
+  function place() {
+    raf = 0;
+    for (const m of marks.values()) {
+      const el = m.el.deref();
+      if (!el || !el.isConnected) { m.box.hidden = true; continue; }
+      const r = el.getBoundingClientRect();
+      m.box.hidden = false;
+      m.box.style.setProperty("left", `${r.left - PAD}px`);
+      m.box.style.setProperty("top", `${r.top - PAD}px`);
+      m.box.style.setProperty("width", `${r.width + 2 * PAD}px`);
+      m.box.style.setProperty("height", `${r.height + 2 * PAD}px`);
+      m.lab.classList.toggle("dn", r.top < FLIP_TOP);
+    }
+  }
+  function schedule() { if (!raf && alive) raf = win.requestAnimationFrame(place); }
+  function attach() {
+    if (listening) return;
+    listening = true;
+    doc.addEventListener("scroll", schedule, { capture: true, passive: true });
+    win.addEventListener("resize", schedule);
+    observer = new win.MutationObserver(schedule);
+    observer.observe(doc.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+  }
+  function detach() {
+    if (!listening) return;
+    listening = false;
+    doc.removeEventListener("scroll", schedule, { capture: true });
+    win.removeEventListener("resize", schedule);
+    observer?.disconnect(); observer = null;
+    if (raf) { win.cancelAnimationFrame(raf); raf = 0; }
+  }
+  function addMark(el, tone, label, temp) {
+    ensureHost();
+    const box = doc.createElement("div"); box.className = "mk"; box.hidden = true;
+    box.style.setProperty("--t", TONE_COLORS[tone]);
+    const lab = doc.createElement("div"); lab.className = "l"; lab.textContent = label;
+    box.appendChild(lab); wrap.appendChild(box);
+    const id = temp ? `t${++tempSeq}` : `m${++markSeq}`;
+    marks.set(id, { el: new WeakRef(el), box, lab, timer: 0, temp });
+    attach(); place();
+    return id;
+  }
+  function dropMark(id) {
+    const m = marks.get(id);
+    if (!m) return;
+    if (m.timer) win.clearTimeout(m.timer);
+    m.box.remove(); marks.delete(id);
+    if (!marks.size) detach();
+  }
+
+  // ---------- вибір елемента ----------
+  let pickState = null;
+  function finishPick(value) {
+    const st = pickState;
+    if (!st) return;
+    pickState = null;
+    doc.removeEventListener("keydown", st.onKey, true);
+    st.cv.remove(); st.pk.remove();
+    if (wrap) wrap.hidden = false;
+    st.resolve(value);
+  }
+  function topAt(x, y) {
+    for (const el of doc.elementsFromPoint(x, y)) {
+      if (el === host || el === doc.documentElement || isOurs(el) || !inBody(el)) continue;
+      return el;
+    }
+    return null;
+  }
+  function startPick() {
+    live();
+    finishPick(null);
+    ensureHost();
+    return new Promise((resolve) => {
+      wrap.hidden = true;                                   // мітки не заважають вибору
+      const cv = doc.createElement("div"); cv.className = "cv";
+      const pk = doc.createElement("div"); pk.className = "pk"; pk.hidden = true;
+      const cap = doc.createElement("span"); pk.appendChild(cap);
+      root.appendChild(cv); root.appendChild(pk);
+      let cur = null;
+      cv.addEventListener("mousemove", (ev) => {
+        cur = topAt(ev.clientX, ev.clientY);
+        if (!cur) { pk.hidden = true; return; }
+        const r = cur.getBoundingClientRect();
+        pk.hidden = false;
+        pk.style.setProperty("left", `${r.left}px`); pk.style.setProperty("top", `${r.top}px`);
+        pk.style.setProperty("width", `${r.width}px`); pk.style.setProperty("height", `${r.height}px`);
+        const c = (cur.getAttribute("class") || "").split(/\s+/)[0];
+        cap.textContent = `${cur.localName}${c ? "." + c : ""} ${Math.round(r.width)}×${Math.round(r.height)}`;
+      });
+      cv.addEventListener("click", (ev) => {
+        if (ev.button !== 0) return;
+        ev.preventDefault(); ev.stopPropagation();
+        const el = topAt(ev.clientX, ev.clientY);
+        finishPick(el ? describe(el) : null);
+      });
+      // сторінка не бачить жестів, якими користувач цілиться (клік сюди — вибір, а не дія на сторінці)
+      for (const t of ["mousedown", "mouseup", "pointerdown", "pointerup", "dblclick", "auxclick", "contextmenu"])
+        cv.addEventListener(t, (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+      const onKey = (ev) => { if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); finishPick(null); } };
+      doc.addEventListener("keydown", onKey, true);
+      pickState = { resolve, cv, pk, onKey };
+    });
+  }
+
   const api = {
     get alive() { return alive; },
     info() {
@@ -133,8 +272,37 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       }
       return { info: api.info(), truncated, nodes };
     },
+    mark(ref, o) {
+      const el = elOf(ref);
+      const tone = checkTone(o?.tone), label = checkLabel(o?.label);
+      if (permanent() >= LIMITS.marks) throw new PageError("too-many", `at most ${LIMITS.marks} marks`);
+      return addMark(el, tone, label, false);
+    },
+    unmark(id) { live(); if (typeof id === "string") dropMark(id); return null; },
+    clearMarks() { live(); for (const id of [...marks.keys()]) dropMark(id); return null; },
+    reveal(ref) {
+      const el = elOf(ref);
+      const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let own = null;
+      for (const [id, m] of marks) if (!m.temp && m.el.deref() === el) { own = id; break; }
+      let id = own;
+      if (!id) id = addMark(el, "info", "", true);          // без мітки — тимчасова рамка
+      el.scrollIntoView({ block: "center", inline: "nearest", behavior: reduced ? "auto" : "smooth" });
+      const m = marks.get(id);
+      if (own) { m.box.classList.remove("fl"); void m.box.offsetWidth; m.box.classList.add("fl"); }
+      if (m.timer) win.clearTimeout(m.timer);
+      m.timer = win.setTimeout(() => { m.timer = 0; if (own) m.box.classList.remove("fl"); else dropMark(id); }, FLASH_MS);
+      return null;
+    },
+    pick() { return startPick(); },
+    cancelPick() { finishPick(null); },
+    get picking() { return !!pickState; },
     destroy() {
       if (!alive) return;
+      finishPick(null);
+      for (const id of [...marks.keys()]) dropMark(id);
+      detach();
+      host?.remove(); host = root = wrap = null;
       alive = false;
       byRef.clear();
     },
