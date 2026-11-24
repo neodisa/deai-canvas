@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { LIMITS, METHOD_PERM, PAGE_PERMS, PageError, TONES, TONE_COLORS, allowed, attrAllowed, checkClassList,
-  checkLabel, checkStyleMap, checkStyleNames, checkText, checkTone, createJournal, stillOurs } from "../app/page-rules.js";
+  checkAttrValue, checkLabel, checkStyleMap, checkStyleNames, checkText, checkTone, createJournal, stillOurs } from "../app/page-rules.js";
 
 test("кожен метод має дозвіл; allowed() дивиться лише на нього", () => {
   for (const [m, p] of Object.entries(METHOD_PERM)) {
@@ -12,13 +12,27 @@ test("кожен метод має дозвіл; allowed() дивиться ли
   }
   assert.equal(allowed("page.nope", PAGE_PERMS), false);
   assert.equal(allowed("page.info", null), false);
+  assert.equal(allowed("page.info", "read"), false);
+  for (const m of ["__proto__", "constructor", "toString", "hasOwnProperty"]) assert.equal(allowed(m, PAGE_PERMS), false, m);
+});
+
+test("таблиця METHOD_PERM точно збігається зі спекою (16 методів)", () => {
+  assert.deepEqual(METHOD_PERM, {
+    "page.info": "read", "page.query": "read", "page.get": "read", "page.snapshot": "read", "page.pick": "read",
+    "page.reveal": "read",
+    "page.mark": "mark", "page.unmark": "mark", "page.clearMarks": "mark",
+    "page.setStyle": "change", "page.setClass": "change", "page.setAttr": "change", "page.setText": "change",
+    "page.revert": "change", "page.revertAll": "change",
+    "page.listen": "listen",
+  });
 });
 
 test("атрибути: список дозволених, зарезервовані data-*, решта — ні", () => {
   for (const n of ["role", "hidden", "title", "alt", "lang", "dir", "tabindex", "disabled", "placeholder", "open",
-    "aria-label", "aria-describedby", "data-x", "data-test-id", "ARIA-LABEL"]) assert.equal(attrAllowed(n), true, n);
+    "aria-label", "aria-describedby", "data-x", "data-test-id"]) assert.equal(attrAllowed(n), true, n);
   for (const n of ["onclick", "src", "href", "srcdoc", "style", "class", "action", "formaction", "xlink:href",
-    "data-deai-x", "data-canvas-inspector", "data-comment-layer", "data-h2d-ignore", "aria-", "data-", "id", ""])
+    "data-deai-x", "data-canvas-inspector", "data-comment-layer", "data-h2d-ignore", "aria-", "data-", "id", "", null, 5, "hidden\n", "data-a--b", "DATA-DEAI-X", "data-a_b", "data-Key",
+    "data-dc-x", "ARIA-LABEL", "Role", "data-\u212Aey"])
     assert.equal(attrAllowed(n), false, n);
 });
 
@@ -26,11 +40,14 @@ test("класи: імена, ліміт, тип", () => {
   assert.deepEqual(checkClassList(["a", "b-c", "_d"]), ["a", "b-c", "_d"]);
   for (const bad of [["1a"], ["a b"], ["a:b"], [""], "a", [1], Array(LIMITS.classes + 1).fill("a")])
     assert.throws(() => checkClassList(bad), (e) => e instanceof PageError && e.code === "bad-args");
+  assert.throws(() => checkClassList(["a\n"]), (e) => e.code === "bad-args");
+  assert.deepEqual(checkClassList(["a".repeat(100)]), ["a".repeat(100)]);
+  assert.throws(() => checkClassList(["a".repeat(101)]), (e) => e.code === "bad-args");
 });
 
 test("стилі: назви й значення; url( і екранування — rejected, null — зняти", () => {
   assert.deepEqual(checkStyleNames(["color", "background-color", "--x"]), ["color", "background-color", "--x"]);
-  assert.throws(() => checkStyleNames(Array(LIMITS.styles + 1).fill("color")), /bad-args|styles/);
+  assert.throws(() => checkStyleNames(Array(LIMITS.styles + 1).fill("color")), (e) => e instanceof PageError && e.code === "bad-args");
   assert.throws(() => checkStyleNames(["col or"]), (e) => e.code === "bad-args");
   const r = checkStyleMap({ color: "red", "--k": "1px", margin: null, background: "url(x.png)",
     "background-image": "IMAGE-SET(a 1x)", width: "u\\72l(x)" });
@@ -38,13 +55,44 @@ test("стилі: назви й значення; url( і екранування
   assert.deepEqual(r.rejected.sort(), ["background", "background-image", "width"]);
   assert.throws(() => checkStyleMap({}), (e) => e.code === "bad-args");
   assert.throws(() => checkStyleMap({ color: 5 }), (e) => e.code === "bad-args");
+  const badArgs = (m) => assert.throws(() => checkStyleMap(m), (e) => e instanceof PageError && e.code === "bad-args");
+  const props41 = Object.fromEntries(Array.from({ length: 41 }, (_, i) => [`--p${i}`, "1"]));
+  badArgs(props41);
+  badArgs({ color: "x".repeat(501) });
+  badArgs([["color", "red"]]);
+  badArgs(JSON.parse('{"__proto__": "red"}'));
+  badArgs({ Color: "red" });
+  badArgs({ color: "" });
+  const rej = (v) => assert.deepEqual(checkStyleMap({ "--x": v }), { ok: [], rejected: ["--x"] }, v);
+  for (const v of ["URL(x)", '-webkit-image-set("a" 1x)', 'src("a")', "cross-fade(a,b)", 'image("a")', "a\nurl(x)",
+    "url\n(x)", "/**/url(x)", "url(a)", "attr(data-x type(<url>))", "attr(data-x url)", "-webkit-cross-fade(a,b)",
+    "-moz-element(#a)", "a\\b"]) rej(v);
+  for (const v of ["u/**/rl(x)", "calc(1px + 2px)", "var(--x)"])
+    assert.deepEqual(checkStyleMap({ "--x": v }), { ok: [["--x", v]], rejected: [] }, v);
+});
+
+test("значення атрибута: рядок до ліміту або null", () => {
+  assert.equal(checkAttrValue("x"), "x");
+  assert.equal(checkAttrValue(null), null);
+  assert.equal(checkAttrValue("a".repeat(LIMITS.attrVal)), "a".repeat(LIMITS.attrVal));
+  for (const v of ["a".repeat(LIMITS.attrVal + 1), 5, undefined, {}])
+    assert.throws(() => checkAttrValue(v), (e) => e instanceof PageError && e.code === "bad-args");
 });
 
 test("текст, ярлик, тон", () => {
   assert.equal(checkText("abc"), "abc");
   assert.throws(() => checkText("x".repeat(LIMITS.text + 1)), (e) => e.code === "bad-args");
   assert.equal(checkLabel(undefined), "");
-  assert.equal(checkLabel("a".repeat(100)).length, LIMITS.label);
+  assert.equal(checkLabel(null), "");
+  assert.equal(checkLabel("abc"), "abc");
+  assert.equal(checkLabel("a".repeat(LIMITS.label)), "a".repeat(LIMITS.label));
+  const cut = checkLabel("a".repeat(100));
+  assert.equal(Array.from(cut).length, LIMITS.label);
+  assert.equal(cut, "a".repeat(LIMITS.label - 1) + "…");
+  const emo = checkLabel("😀".repeat(100));
+  assert.equal(emo, "😀".repeat(LIMITS.label - 1) + "…");
+  assert.doesNotMatch(emo, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  for (const v of [5, {}, []]) assert.throws(() => checkLabel(v), (e) => e instanceof PageError && e.code === "bad-args");
   assert.equal(checkTone(undefined), "info");
   for (const tn of TONES) assert.equal(checkTone(tn), tn);
   assert.throws(() => checkTone("red"), (e) => e.code === "bad-args");
@@ -66,6 +114,26 @@ test("журнал: id, ліміт, take, takeAll — новіші першим�
   assert.equal(j.take("c2"), null);
   assert.deepEqual(j.takeAll().map((x) => x.id), ["c3", "c1"]);
   assert.equal(j.size, 0);
+});
+
+test("журнал: full, монотонні id, повторне add після take, дефолт 500, id запису не перекривається", () => {
+  const j = createJournal(2);
+  assert.equal(j.full, false);
+  j.add({}); j.add({});
+  assert.equal(j.full, true);
+  j.take("c1");
+  assert.equal(j.full, false);
+  assert.equal(j.add({}), "c3");
+  assert.equal(j.full, true);
+  j.takeAll();
+  assert.equal(j.add({}), "c4");
+  const d = createJournal();
+  for (let i = 0; i < 500; i++) d.add({});
+  assert.equal(d.full, true);
+  assert.throws(() => d.add({}), (e) => e.code === "too-many");
+  const k = createJournal(3);
+  const id = k.add({ id: "evil", n: 1 });
+  assert.deepEqual(k.take(id), { id: "c1", n: 1 });
 });
 
 test("stillOurs: відкат лише коли поточне досі «стало»", () => {

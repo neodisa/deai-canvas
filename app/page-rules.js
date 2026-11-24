@@ -35,11 +35,12 @@ export const allowed = (method, perms) =>
   Object.hasOwn(METHOD_PERM, method) && Array.isArray(perms) && perms.includes(METHOD_PERM[method]);
 
 const ATTR_PLAIN = new Set(["role", "hidden", "title", "alt", "lang", "dir", "tabindex", "disabled", "placeholder", "open"]);
-const DATA_RESERVED = ["data-deai-", "data-canvas-", "data-comment-", "data-h2d-"];
+const DATA_RESERVED = ["data-deai-", "data-canvas-", "data-comment-", "data-h2d-", "data-dc-"];
 /** Атрибут, який модуль може поставити чи зняти: лише безпечні для виконання й завантаження (без `on*`, `src`, `href`…). */
 export function attrAllowed(name) {
-  if (typeof name !== "string") return false;
-  const n = name.toLowerCase();
+  // Спершу сама назва: лише ASCII-нижній регістр (інакше `toLowerCase` зводить «K» Кельвіна до `k` і обходить перевірку).
+  if (typeof name !== "string" || !/^[a-z][a-z0-9-]*$/.test(name)) return false;
+  const n = name;
   if (ATTR_PLAIN.has(n)) return true;
   if (/^aria-[a-z]+(-[a-z]+)*$/.test(n)) return true;
   return /^data-[a-z0-9]+(-[a-z0-9]+)*$/.test(n) && !DATA_RESERVED.some((p) => n.startsWith(p));
@@ -60,8 +61,10 @@ export function checkStyleNames(list) {
   return list.slice();
 }
 
-/** Значення, що змусило б сторінку щось вантажити, або з CSS-екрануванням (обхід перевірки) — у `rejected`. */
-const LOADS_RE = /(^|[^\w-])(url|image-set|-webkit-image-set|image|cross-fade|element|src)\s*\(/i;
+/** Значення, що змусило б сторінку щось вантажити, або з CSS-екрануванням (обхід перевірки) — у `rejected`. Без лівої
+ *  межі навмисно: ловить і `-webkit-image-set(`, `-webkit-cross-fade(`, `-moz-element(`; `attr(` — бо разом із `data-*`
+ *  дає типізований `url`. */
+const LOADS_RE = /(url|src|image|image-set|cross-fade|element|attr)\s*\(/i;
 export function checkStyleMap(map) {
   if (!map || typeof map !== "object" || Array.isArray(map)) throw bad("styles: an object {prop: value|null}");
   const keys = Object.keys(map);
@@ -71,6 +74,7 @@ export function checkStyleMap(map) {
     if (!PROP_RE.test(p)) throw bad(`bad style name ${p.slice(0, 40)}`);
     const v = map[p];
     if (v === null) { ok.push([p, null]); continue; }
+    if (v === "") throw bad(`style ${p}: an empty string is not allowed, use null to remove`);
     if (typeof v !== "string" || v.length > LIMITS.styleVal) throw bad(`style ${p}: a string of at most ${LIMITS.styleVal} characters or null`);
     if (v.includes("\\") || LOADS_RE.test(v)) { rejected.push(p); continue; }
     ok.push([p, v]);
@@ -82,7 +86,18 @@ export function checkText(text) {
   if (typeof text !== "string" || text.length > LIMITS.text) throw bad(`text: a string of at most ${LIMITS.text} characters`);
   return text;
 }
-export const checkLabel = (label) => (typeof label === "string" ? label.slice(0, LIMITS.label) : "");
+export function checkAttrValue(v) {
+  if (v === null) return null;
+  if (typeof v !== "string" || v.length > LIMITS.attrVal) throw bad(`attribute value: a string of at most ${LIMITS.attrVal} characters or null`);
+  return v;
+}
+/** Ярлик мітки: до `LIMITS.label` символів Unicode; довший — обрізаний трикрапкою (без «самотніх» сурогатів). */
+export function checkLabel(label) {
+  if (label === undefined || label === null) return "";
+  if (typeof label !== "string") throw bad("label: a string");
+  const chars = Array.from(label);
+  return chars.length > LIMITS.label ? chars.slice(0, LIMITS.label - 1).join("") + "…" : label;
+}
 export function checkTone(tone) {
   if (tone === undefined || tone === null) return "info";
   if (!TONES.includes(tone)) throw bad(`tone: one of ${TONES.join(", ")}`);
@@ -98,10 +113,12 @@ export function createJournal(max = LIMITS.changes) {
   let seq = 0;
   return {
     get size() { return items.size; },
+    /** Повний — агент перевіряє ДО зміни документа; `add` кидає `too-many` лише як страховку. */
+    get full() { return items.size >= max; },
     add(entry) {
       if (items.size >= max) throw new PageError("too-many", `at most ${max} active changes`);
       const id = `c${++seq}`;
-      items.set(id, { id, ...entry });
+      items.set(id, { ...entry, id });
       return id;
     },
     take(id) { const x = items.get(id) ?? null; if (x) items.delete(id); return x; },
