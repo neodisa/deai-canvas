@@ -12,7 +12,9 @@ trust it.
 теки не діє до повторної довіри. Агент може написати модуль, але довіритись — ні; межа — код, що приходить крізь теку
 простору, git і сторінки макетів, а не локальний процес із вашими правами (він може сам правити `~/.deai/trust.json`).
 Модуль може ще й додати **свої інструменти в острівець** (панель у пісочниці) і **дії** (⌘K, меню задачі та ітерації) — див.
-розділ 7; приклад — `docs/modules/examples/page-notes/`.
+розділ 7; приклад — `docs/modules/examples/page-notes/`. Інструмент може отримати дозволи `page`: через помічника ядра він читає
+макет, помічає елементи, тимчасово змінює вигляд і стежить за кліками (код модуля в макет не потрапляє); приклад —
+`docs/modules/examples/contrast/`.
 
 ## 1. The folder
 
@@ -528,7 +530,8 @@ it. It is also the fixture of the live test of this contract.
 | `icon` | a name from the core's icon set (`app/icons.js`); an unknown name is refused. Your own SVG is not supported yet |
 | `panel` | a relative path to an `.html` file of **2 to 4 segments** (the panel always lives in a subfolder, not next to `server.py`); a regular file of at most **256 KiB**; each segment `[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}` (no hidden names, no `..`) |
 | `key` | optional: one ASCII letter, case-insensitive (it is upper-cased). A core letter (**C, I, H, M, P**) or a letter repeated by two tools of the **same** module **refuses the manifest** (`tools[i].key: 'C' is reserved by Deai` / `duplicate 'N'`). The same letter claimed by tools of **different** modules: neither gets a key (⌘K still works) |
-| `frame` | **not supported**: a manifest with this key is refused with `tools[i].frame: not supported yet` (a script inside the mockup — see section 8) |
+| `page` | optional: a non-empty list without repeats of `read`, `mark`, `change`, `listen` — what the tool may do with the mockup page through `deai.page` (see «Working with the mockup»). `mark`, `change` and `listen` require `read` (`tools[i].page: "change" requires "read"`); an unknown value is refused (`unknown permission 'x'`). **Needs Deai 0.39 or newer**: an older Deai refuses a manifest with `page` as an unknown key. Changing it changes the bytes of the folder, so trust is asked again |
+| `frame` | **not supported — use `page`**: a manifest with this key is refused with `tools[i].frame: not supported — use "page"` (code inside the mockup is not possible — see section 8) |
 
 Any other key is refused (`unknown key`). The island shows the built-in tools first, then up to **3** tools of modules (in
 the order of the space's modules); the rest are reachable through ⌘K and the key only.
@@ -589,6 +592,135 @@ runs**, but its result is dropped.
 the CSS variables (`--s1`, `--s2`, `--s3`, `--line`, `--line2`, `--hi`, `--mid`, `--dim`, `--sel`, `--sel-hover`,
 `--on-sel`, `--bad`, `--r`, `--r-sm`, `--h-ctl`) on `<html>`. Your own styles are fine, preferably built on these variables.
 
+### Working with the mockup (`deai.page`)
+
+A tool that declares `page` permissions can look at the mockup page, mark elements, change its look for a moment and watch
+what the person does. The module's code never enters the mockup: the panel stays in its sandbox and asks the **core helper**
+(`app/page-agent.js`), which works on the page of the frame from the shell's side. Every method returns a `Promise`; a
+failure is an `Error` with a `code`.
+
+**Permissions.** What is not declared is refused with `not-allowed`.
+
+| permission | methods |
+|---|---|
+| `read` | `info`, `query`, `get`, `snapshot`, `pick`, `reveal` |
+| `mark` | `mark`, `unmark`, `clearMarks` |
+| `change` | `setStyle`, `setClass`, `setAttr`, `setText`, `revert`, `revertAll` |
+| `listen` | `listen` (and the events `page-click`, `page-hover`) |
+
+`mark`, `change` and `listen` need `read`: without it the module never gets an element reference. The trust dialog lists
+the permissions in a block of their own.
+
+**`Node`.** `{ref, tag, id, cls, text, rect: {x, y, w, h}, visible, attrs?, styles?}`.
+
+* `ref` — an opaque string such as `"r…-17"`: valid until the page reloads, the same for the same element. A stale one is `stale-ref`.
+* `text` — the element's **own** text (not its children's), whitespace collapsed, at most **300** characters; `cls` — at most **200**.
+* `rect` — in document coordinates (scroll included).
+* `visible` — the element has a box (width and height above 0) and its computed `display` is not `none` and `visibility` is
+  not `hidden`. It says nothing about `opacity`, covering by other elements or being scrolled out of view.
+* `attrs` (only with `attrs: true`) — the attributes, at most **30**, each value at most **300** characters; the core's own
+  `data-deai-*`, `data-canvas-*`, `data-comment-*`, `data-h2d-*`, `data-dc-*` are never shown.
+* `styles` — only the computed properties you asked for in `styles: [...]` (at most **24** names, values at most 500
+  characters; a name is a standard property or a custom property `--x`).
+* `snapshot` nodes also carry `parent` — the `ref` of the parent element, `null` for `<body>`.
+
+Nodes of the core's overlays and `script`, `style`, `template`, `noscript` never appear in results.
+
+**Read (`read`)**
+
+| call | result |
+|---|---|
+| `deai.page.info()` | `{page: {id, title}, viewport: {w, h}, scroll: {x, y}, size: {w, h}}` |
+| `deai.page.query(selector, {limit, styles, attrs})` | `Node[]`; `limit` defaults to **100**, at most **500**; a selector the browser rejects is `bad-selector` |
+| `deai.page.get(ref, {styles, attrs})` | `Node` |
+| `deai.page.snapshot({styles, attrs, maxNodes})` | `{info, truncated, nodes}` — a flat list in document order; `maxNodes` defaults to **2000**, at most **4000**; the answer is at most **2 MiB** (more: fewer nodes and `truncated: true`) |
+| `deai.page.pick()` | the person clicks an element in the mockup → `Node`; `null` on Esc, on another `pick`, on a click that hits nothing, or when the panel closes. There is no bridge timeout; the click does not reach the page and marks are hidden while picking |
+| `deai.page.reveal(ref)` | scroll to the element (centered) and a short flash of its mark, or of a temporary frame (at most 20 of those at once; past that only the scroll). `prefers-reduced-motion` turns the smooth scroll and the animation off |
+
+`pick`: **Esc** cancels while the focus is in the canvas or the mockup. If the person clicks back into the panel during a pick,
+Esc there does not reach the canvas (the panel is sandboxed) — offer a button, or another `pick`, to cancel.
+
+Selector rules (`query`): a non-empty string of at most **300** characters, no backslash escapes, at most **8** parentheses
+and at most **4** functional pseudo-classes (`:has`, `:is`, `:not`, `:where`); a violation is `bad-args`.
+
+**Mark (`mark`)**
+
+| call | result |
+|---|---|
+| `deai.page.mark(ref, {tone, label})` | `markId` (a string); `tone` is `error`, `warn`, `ok` or `info` (default `info`); `label` at most **60** characters (longer is cut with «…») |
+| `deai.page.unmark(markId)` | — |
+| `deai.page.clearMarks()` | — |
+
+The core draws marks in one host over the page, outside the page's layout, with `pointer-events: none` — clicks reach the
+page. A mark follows its element on scroll, resize and changes of the document; an element that left the document hides its
+mark. At most **300** marks per panel (`too-many`). Marks never go into «To Figma».
+
+**Change (`change`)**
+
+| call | result |
+|---|---|
+| `deai.page.setStyle(ref, {prop: value \| null, …})` | `{id, applied: [prop], rejected: [prop]}`; 1 to **40** properties, values at most **500** characters; `null` removes that property |
+| `deai.page.setClass(ref, {add: [], remove: []})` | `{id}`; names `[A-Za-z_-][\w-]{0,99}`, at most **20** per list |
+| `deai.page.setAttr(ref, name, value \| null)` | `{id}`; `null` removes the attribute; a value is at most **300** characters |
+| `deai.page.setText(ref, text)` | `{id}`; only on an element without child elements (`not-leaf`); at most **2000** characters; set as plain text |
+| `deai.page.revert(id)` | `{reverted, skipped}` |
+| `deai.page.revertAll()` | `{reverted, skipped}` |
+
+* Styles are set inline with `!important`, like the tuner. A value the browser does not accept, or one that would make the
+  page load something (`url(`, `image(`, `image-set(`, `cross-fade(`, `element(`, `src(`, `attr(`) or that contains a
+  backslash, comes back in `rejected` and the old value stays. Custom properties (`--x`) are allowed.
+* Attributes allowed: `role`, `hidden`, `title`, `alt`, `lang`, `dir`, `tabindex`, `disabled`, `placeholder`, `open`,
+  `aria-*` and `data-*` (not `data-deai-*`, `data-canvas-*`, `data-comment-*`, `data-h2d-*`, `data-dc-*`). Any other name —
+  `on*` handlers, `src`, `href`, `srcdoc`, `style`, `class`, `id` — is `not-allowed` (`style` and `class` have their own
+  methods). No markup from a module ever reaches the document: not through text, not through a value.
+* At most **500** active changes (`too-many`). The count is per CSS declaration of an entry; a shorthand such as `margin`
+  counts through its longhands.
+* An identical `setAttr` or `setText` changes nothing and answers `id: null`; `setStyle` with a value the element already has
+  still returns an `id` (the entry holds that property until it is reverted).
+
+**What is temporary.** Marks and changes live while the panel is open and the page is not reloaded. They are reverted when:
+the panel closes (×, `deai.close()`, the tool's key, another right-hand panel, leaving «Layout», the clean mode, a change
+of space, trust taken back); the page reloads or another page opens (the document and the journal go together); you call
+`revert(id)` or `revertAll()`. Nothing is written to files, previews, snapshots or history. After a reload the helper does
+**not** reapply changes: a tool that wants them listens to `page` and applies them again.
+
+**«Still ours».** A revert puts the old value back only where the current value is still the one your change set. If the page's
+own script (or the tuner) changed it after you, the value is left alone and counted in `skipped`. Reverting an entry out of
+order (`revert(id)` of an older one while newer ones touch the same thing) hands your layer down to the newer entry when the
+layers were contiguous — the newer entry then reverts to what was before yours; if something else changed the value between
+the layers, the older entry is `skipped`. When nothing changed since your change, the page's own `style` string is restored
+exactly as it was (including `var()` inside shorthands), and an empty `style=""` or `class=""` that your change created is removed.
+
+**Events** (subscribe with `deai.on`):
+
+| event | data | when |
+|---|---|---|
+| `page` | `{page: {id, title}}` | the page is ready for requests: right after `init` when a page is already loaded, and after every later load (any `read` tool gets it, `listen` is not needed). Old refs, marks and changes are invalid after it |
+| `page-click` | `{node: Node, x, y, button, alt, shift, meta, ctrl}` | the person clicks (`listen({click: true})`); the click is not intercepted; not sent during `pick` |
+| `page-hover` | `{node: Node}` | the pointer moves onto another element (`listen({hover: true})`); at most 10 per second and only when the element changes |
+
+Only the person's real input is reported: events the page's scripts dispatch themselves (`el.click()` and the like) are not.
+`deai.page.listen({click, hover})` switches each subscription on or off; both are off by default.
+
+**Errors.** `not-allowed` (no permission, or a forbidden attribute), `no-page` (no live mockup page: «Overview», between
+loads, a link that left the mockup), `stale-ref`, `bad-selector`, `bad-args`, `not-leaf`, `too-many`, `busy` (more than 64
+pending requests in the panel), plus the bridge codes of the previous section. The texts are English, for the module's
+author.
+
+**Caveats.**
+
+* `data-*` attributes can change what the page's scripts do if they read them.
+* A custom property carries a string that the page's CSS may use anywhere (inside `calc()`, `content`…).
+* `visible` is a box test, not a visual one (see `Node`).
+* «To Figma» takes the page as it looks, with your temporary changes; marks are not included.
+* A panel request is at most 64 KiB (as before); keep arguments short.
+
+**Example.** `docs/modules/examples/contrast/` («Contrast») uses all four permissions: it takes a `snapshot` with
+`color`, `background-color`, `font-size` and `font-weight`, finds text under the WCAG ratio, fields without a label and
+images without a description, `mark`s them, `reveal`s one from the list, tries a fix with `setStyle` and undoes everything
+with `revertAll`, `pick`s one element to find its row, and checks the page again on every `page` event. The logic is plain
+JavaScript in the panel; its `server.py` has only `check`.
+
 ### The functions of `server.py` for tools and actions
 
 A module with `tools` or `actions` has `check(ctx)` like any other; the rest is below. `ctx` is the same as for roles
@@ -646,8 +778,9 @@ What a module can and cannot do — three layers.
    your own); replacing built-in tools (comments, the inspector — a module adds its own beside them). A wish that runs into
    a «no» is a request to the core, not a module.
 
-**A script inside the mockup — not yet.** The idea of a tool that works inside the mockup (`frame`) is postponed: the
-mockup document has the origin of the canvas itself, so such a script could do everything the canvas can (publish, GitLab,
-tasks), and it cannot be restricted on the same origin. Until a separate origin for mockups is decided, a panel works with
-the mockup only through the core — `deai.context()` and `deai.selection()` (the element selected in the inspector). A
-working illustration of these limits is `docs/modules/examples/page-notes/`.
+**Code inside the mockup — no; the core helper instead.** A module's code never runs in the mockup page: the mockup
+document has the origin of the canvas itself, so a script there could do everything the canvas can (publish, GitLab, tasks),
+and it cannot be restricted on the same origin. What a tool gets instead is the core helper behind `deai.page` (section 7,
+«Working with the mockup»): reading the page, marks drawn by the core outside the page's layout, temporary changes that are
+all reverted, and the person's clicks — each behind a permission the person sees in the trust dialog. Working illustrations of these limits are `docs/modules/examples/page-notes/` and
+`docs/modules/examples/contrast/`.

@@ -87,5 +87,34 @@ class PageNotesExampleTest(OwnEnv):
         self.assertEqual(v, {'ok': True})
 
 
+CONTRAST = os.path.join(REPO, 'docs', 'modules', 'examples', 'contrast')
+
+
+class ContrastExampleTest(OwnEnv):
+    """Приклад «Контраст» (M2): інструмент із дозволами `page`; уся логіка в панелі, `server.py` порожній."""
+
+    def setUp(self):
+        super().setUp()
+        self.dst = os.path.join(self.sp['path'], 'modules', 'contrast')
+        shutil.copytree(CONTRAST, self.dst, ignore=shutil.ignore_patterns('__pycache__'))
+        self.trust('contrast')
+        self.enable_raw('contrast', roles=())
+
+    def test_manifest_passes_and_module_loads(self):
+        m = dm.catalog(self.sp)['contrast']
+        self.assertEqual((m.status, m.trust, m.api), ('ok', 'trusted', 2), m.error)
+        self.assertEqual(m.roles, [])
+        self.assertEqual([(t['id'], t['icon'], t['key'], t['panel'], tuple(t['page'])) for t in m.tools],
+                         [('contrast', 'eye', 'K', 'panel/index.html', ('read', 'mark', 'change', 'listen'))])
+        self.assertEqual(m.actions, ())
+        self.assertTrue(callable(m.fn('check')))
+        self.assertFalse([n for n in ('tool_load', 'tool_save') if callable(m.fn(n))])
+
+    def test_folder_has_exactly_the_listed_files(self):
+        found = sorted(os.path.relpath(os.path.join(r, f), CONTRAST).replace(os.sep, '/')
+                       for r, ds, fs in os.walk(CONTRAST) for f in fs if '__pycache__' not in r)
+        self.assertEqual(found, ['module.json', 'panel/contrast.css', 'panel/contrast.js', 'panel/index.html', 'server.py'])
+
+
 if __name__ == '__main__':
     unittest.main()

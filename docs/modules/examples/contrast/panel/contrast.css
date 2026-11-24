@@ -1,0 +1,17 @@
+body { margin: 0; padding: 12px; }
+.sum { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.dk-btn--sm { height: 26px; padding: 0 8px; font-size: 12px; }
+.dk-row { flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 9px 0; }
+.dk-row.hot { background: color-mix(in srgb, var(--tone) 12%, transparent); }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; align-self: flex-start; margin-top: 5px; background: var(--tone); }
+.row-t { flex: 1; min-width: 0; }
+.row-t div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-t small { display: block; color: var(--dim, #a4aba7); font-size: 12px; }
+.row-acts { display: flex; gap: 6px; width: 100%; padding-left: 16px; }
+.tone-error { --tone: var(--bad, #F37373); }
+.tone-warn { --tone: #FBBC55; }
+.tone-ok { --tone: #6AD09D; }
+.tone-info { --tone: #3D8BFF; }
+.tmp { margin-top: 14px; padding: 10px; border: 1px solid var(--line2, #4a534d); border-radius: var(--r, 8px);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tmp[hidden] { display: none; }

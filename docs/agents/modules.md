@@ -44,6 +44,9 @@ A module with `"api": 2` can add tools (a panel in the island) and actions (⌘K
 `module-ext` lists them as `{"tools": [...], "actions": [...]}`. The canvas calls `module-tool` (answer `{"value"}`, body up to
 64 KiB) and `module-action` (answer `{"ok", "text"?, "url"?}`) when a person presses a tool or an action; you rarely need them.
 
+A tool may declare `"page": ["read", "mark", "change", "listen"]` in `module.json`; its panel then works with the mockup page
+through `deai.page.*` (nothing of the module runs inside the mockup). See `<deai>/docs/modules/authoring.md`, section 7.
+
 ## Design-system tokens
 
     GET http://127.0.0.1:8765/api/ds-tokens?space=<space-id>

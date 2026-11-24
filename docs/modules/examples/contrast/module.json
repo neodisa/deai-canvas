@@ -1,0 +1,10 @@
+{
+  "api": 2,
+  "id": "contrast",
+  "name": "Контраст",
+  "version": "1.0.0",
+  "roles": [],
+  "tools": [
+    {"id": "contrast", "label": "Контраст", "icon": "eye", "panel": "panel/index.html", "key": "K", "page": ["read", "mark", "change", "listen"]}
+  ]
+}
