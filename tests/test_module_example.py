@@ -115,6 +115,11 @@ class ContrastExampleTest(OwnEnv):
                        for r, ds, fs in os.walk(CONTRAST) for f in fs if '__pycache__' not in r)
         self.assertEqual(found, ['module.json', 'panel/contrast.css', 'panel/contrast.js', 'panel/index.html', 'server.py'])
 
+    def test_check_is_ok(self):
+        m = dm.catalog(self.sp)['contrast']
+        v = dm.call(m, m.fn('check'), dm.module_ctx(self.sp, 'contrast'))
+        self.assertEqual(v, {'ok': True})
+
 
 if __name__ == '__main__':
     unittest.main()

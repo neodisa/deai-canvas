@@ -1,6 +1,7 @@
 body { margin: 0; padding: 12px; }
 .sum { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .dk-btn--sm { height: 26px; padding: 0 8px; font-size: 12px; }
+.dk-btn[aria-pressed="true"] { background: var(--sel, #3D8BFF); color: var(--on-sel, #fff); }
 .dk-row { flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 9px 0; }
 .dk-row.hot { background: color-mix(in srgb, var(--tone) 12%, transparent); }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; align-self: flex-start; margin-top: 5px; background: var(--tone); }

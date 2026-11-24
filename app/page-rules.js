@@ -8,7 +8,7 @@ export const PAGE_PERMS = ["read", "mark", "change", "listen"];
 
 export const METHOD_PERM = {
   "page.info": "read", "page.query": "read", "page.get": "read", "page.snapshot": "read", "page.pick": "read",
-  "page.reveal": "read",
+  "page.reveal": "read", "page.cancelPick": "read",
   "page.mark": "mark", "page.unmark": "mark", "page.clearMarks": "mark",
   "page.setStyle": "change", "page.setClass": "change", "page.setAttr": "change", "page.setText": "change",
   "page.revert": "change", "page.revertAll": "change",

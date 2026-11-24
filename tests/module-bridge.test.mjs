@@ -16,6 +16,7 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
 function load() {
   const sent = [];
   const listeners = [];
+  const keydowns = [];
   const parent = { postMessage: (msg, target) => sent.push({ msg, target }) };
   const style = { props: {}, setProperty(k, v) { this.props[k] = v; } };
   const documentElement = { dataset: {}, style };
@@ -25,12 +26,12 @@ function load() {
     setTimeout: (fn, ms) => { timers.push({ fn, ms, cleared: false }); return timers.length - 1; },
     clearTimeout: (h) => { if (timers[h]) timers[h].cleared = true; },
     document: { documentElement },
-    addEventListener: (type, fn) => { if (type === "message") listeners.push(fn); },
+    addEventListener: (type, fn) => { if (type === "message") listeners.push(fn); else if (type === "keydown") keydowns.push(fn); },
   };
   win.window = win;
   vm.runInNewContext(SRC, win);
   const dispatch = (data, source = parent) => listeners.forEach((fn) => fn({ data, source }));
-  return { win, sent, dispatch, parent, documentElement, style, timers };
+  return { win, sent, dispatch, parent, documentElement, style, timers, keydowns };
 }
 
 test("hello is sent on load", () => {
@@ -205,10 +206,10 @@ test("deai.page.query шле page.query з аргументами", () => {
   assert.deepEqual(plain([sent[1].msg.method, sent[1].msg.args]), ["page.query", ["a", { limit: 2 }]]);
 });
 
-test("deai.page має рівно 16 методів METHOD_PERM, кожен шле своє імʼя", () => {
+test("deai.page має рівно 17 методів METHOD_PERM, кожен шле своє імʼя", () => {
   const { win, sent } = load();
   const names = Object.keys(METHOD_PERM).map((m) => m.slice(5));
-  assert.equal(names.length, 16);
+  assert.equal(names.length, 17);
   assert.deepEqual(Object.keys(win.deai.page).sort(), [...names].sort());
   for (const n of names) {
     const before = sent.length;
@@ -229,4 +230,27 @@ test("page.pick без таймера; інші page.* — 60 с; pick-у пол
   for (let i = 0; i < 63; i++) open.push(w2.deai.context());
   await assert.rejects(w2.deai.page.info(), (e) => e.code === "busy");
   open.forEach((p) => p.catch(() => {}));
+});
+
+test("Esc у панелі під час page.pick шле page.cancelPick один раз; без вибору — тиша; інші клавіші ігноруються", () => {
+  const { win, sent, dispatch, keydowns } = load();
+  assert.equal(keydowns.length, 1);
+  const key = (k) => keydowns.forEach((fn) => fn({ key: k }));
+  key("Escape");
+  assert.equal(sent.length, 1);                                   // лише hello
+  win.deai.page.pick().catch(() => {});
+  const pickId = sent.at(-1).msg.id;
+  key("Enter");
+  assert.equal(sent.length, 2);
+  key("Escape");
+  assert.equal(sent.length, 3);
+  assert.deepEqual(plain([sent[2].msg.method, sent[2].msg.args]), ["page.cancelPick", []]);
+  key("Escape");
+  assert.equal(sent.length, 3);                                   // вдруге для того ж вибору — ні
+  dispatch({ deai: 1, re: pickId, ok: true, value: null });
+  key("Escape");
+  assert.equal(sent.length, 3);                                   // вибору вже нема
+  win.deai.page.pick().catch(() => {});
+  key("Escape");
+  assert.equal(sent.at(-1).msg.method, "page.cancelPick");        // новий вибір — знову можна
 });

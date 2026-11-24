@@ -603,7 +603,7 @@ failure is an `Error` with a `code`.
 
 | permission | methods |
 |---|---|
-| `read` | `info`, `query`, `get`, `snapshot`, `pick`, `reveal` |
+| `read` | `info`, `query`, `get`, `snapshot`, `pick`, `cancelPick`, `reveal` |
 | `mark` | `mark`, `unmark`, `clearMarks` |
 | `change` | `setStyle`, `setClass`, `setAttr`, `setText`, `revert`, `revertAll` |
 | `listen` | `listen` (and the events `page-click`, `page-hover`) |
@@ -631,14 +631,15 @@ Nodes of the core's overlays and `script`, `style`, `template`, `noscript` never
 | call | result |
 |---|---|
 | `deai.page.info()` | `{page: {id, title}, viewport: {w, h}, scroll: {x, y}, size: {w, h}}` |
-| `deai.page.query(selector, {limit, styles, attrs})` | `Node[]`; `limit` defaults to **100**, at most **500**; a selector the browser rejects is `bad-selector` |
+| `deai.page.query(selector, {limit, styles, attrs})` | `Node[]`; `limit` defaults to **100**, at most **500**; a selector the browser rejects is `bad-selector`. The answer is also held to **2 MiB**: when the nodes would not fit, the list simply ends early — there is no `truncated` flag in `query`, so ask for a smaller `limit` or fewer `styles`/`attrs` if you need to be sure |
 | `deai.page.get(ref, {styles, attrs})` | `Node` |
-| `deai.page.snapshot({styles, attrs, maxNodes})` | `{info, truncated, nodes}` — a flat list in document order; `maxNodes` defaults to **2000**, at most **4000**; the answer is at most **2 MiB** (more: fewer nodes and `truncated: true`) |
-| `deai.page.pick()` | the person clicks an element in the mockup → `Node`; `null` on Esc, on another `pick`, on a click that hits nothing, or when the panel closes. There is no bridge timeout; the click does not reach the page and marks are hidden while picking |
-| `deai.page.reveal(ref)` | scroll to the element (centered) and a short flash of its mark, or of a temporary frame (at most 20 of those at once; past that only the scroll). `prefers-reduced-motion` turns the smooth scroll and the animation off |
+| `deai.page.snapshot({styles, attrs, maxNodes})` | `{info, truncated, nodes}` — a flat list in document order; `maxNodes` defaults to **2000**, at most **4000**; the answer is at most **2 MiB**; `truncated: true` means the list stopped early, either at `maxNodes` or because the next node would not fit in the 2 MiB (the rest of the page is not in `nodes`) |
+| `deai.page.pick()` | the person clicks an element in the mockup → `Node`; `null` on Esc, on `cancelPick()`, on another `pick`, on a click that hits nothing, or when the panel closes. There is no bridge timeout; the click does not reach the page and marks are hidden while picking |
+| `deai.page.cancelPick()` | `null`; ends the current `pick` with `null` (nothing happens when no pick is running) |
+| `deai.page.reveal(ref)` | scroll to the element (centered) and a short flash of its mark, or of a temporary frame (at most 20 of those at once; past that only the scroll). `prefers-reduced-motion` turns the smooth scroll and the animation off. Resolves with `null` |
 
-`pick`: **Esc** cancels while the focus is in the canvas or the mockup. If the person clicks back into the panel during a pick,
-Esc there does not reach the canvas (the panel is sandboxed) — offer a button, or another `pick`, to cancel.
+`pick`: **Esc** cancels it — in the canvas, in the mockup and in the panel (the bridge sends `cancelPick` itself when Esc
+is pressed in the panel while a pick is pending). `deai.page.cancelPick()` does the same from your own button.
 
 Selector rules (`query`): a non-empty string of at most **300** characters, no backslash escapes, at most **8** parentheses
 and at most **4** functional pseudo-classes (`:has`, `:is`, `:not`, `:where`); a violation is `bad-args`.
@@ -659,18 +660,20 @@ mark. At most **300** marks per panel (`too-many`). Marks never go into «To Fig
 
 | call | result |
 |---|---|
-| `deai.page.setStyle(ref, {prop: value \| null, …})` | `{id, applied: [prop], rejected: [prop]}`; 1 to **40** properties, values at most **500** characters; `null` removes that property |
-| `deai.page.setClass(ref, {add: [], remove: []})` | `{id}`; names `[A-Za-z_-][\w-]{0,99}`, at most **20** per list |
-| `deai.page.setAttr(ref, name, value \| null)` | `{id}`; `null` removes the attribute; a value is at most **300** characters |
-| `deai.page.setText(ref, text)` | `{id}`; only on an element without child elements (`not-leaf`); at most **2000** characters; set as plain text |
+| `deai.page.setStyle(ref, {prop: value \| null, …})` | `{id: string \| null, applied: [prop], rejected: [prop]}`; 1 to **40** properties, values at most **500** characters; `null` removes that property; an empty string is `bad-args` (use `null`) |
+| `deai.page.setClass(ref, {add: [], remove: []})` | `{id: string \| null}`; names `[A-Za-z_-][\w-]{0,99}`, at most **20** per list |
+| `deai.page.setAttr(ref, name, value \| null)` | `{id: string \| null}`; `null` removes the attribute; a value is at most **300** characters |
+| `deai.page.setText(ref, text)` | `{id: string \| null}`; only on an element without child elements (`not-leaf`); at most **2000** characters; set as plain text |
 | `deai.page.revert(id)` | `{reverted, skipped}` |
 | `deai.page.revertAll()` | `{reverted, skipped}` |
 
 * Styles are set inline with `!important`, like the tuner. A value the browser does not accept, or one that would make the
   page load something (`url(`, `image(`, `image-set(`, `cross-fade(`, `element(`, `src(`, `attr(`) or that contains a
-  backslash, comes back in `rejected` and the old value stays. Custom properties (`--x`) are allowed.
+  backslash, comes back in `rejected` and the old value stays; so does a value that carries `!important` (the helper sets the
+  priority itself). Custom properties (`--x`) are allowed.
 * Attributes allowed: `role`, `hidden`, `title`, `alt`, `lang`, `dir`, `tabindex`, `disabled`, `placeholder`, `open`,
-  `aria-*` and `data-*` (not `data-deai-*`, `data-canvas-*`, `data-comment-*`, `data-h2d-*`, `data-dc-*`). Any other name —
+  `aria-*` and `data-*` (not `data-deai-*`, `data-canvas-*`, `data-comment-*`, `data-h2d-*`, `data-dc-*`). A name is lowercase
+  ASCII letters, digits and hyphens only, starting with a letter; anything else is `not-allowed`, as is any other name —
   `on*` handlers, `src`, `href`, `srcdoc`, `style`, `class`, `id` — is `not-allowed` (`style` and `class` have their own
   methods). No markup from a module ever reaches the document: not through text, not through a value.
 * Restoring (`revert`, `revertAll`): the element's inline `style` is put back byte for byte only when the page did not change
@@ -678,10 +681,12 @@ mark. At most **300** marks per panel (`too-many`). Marks never go into «To Fig
   becomes `color: red;`). A shorthand written with CSS variables (`margin: var(--g)`) is restored as a whole only when the
   page left all its parts alone; anything the canvas cannot restore safely is left as it is and counted in `skipped`. Pass
   values without `!important`: the helper sets the priority itself.
-* At most **500** active changes (`too-many`). The count is per CSS declaration of an entry; a shorthand such as `margin`
-  counts through its longhands.
-* An identical `setAttr` or `setText` changes nothing and answers `id: null`; `setStyle` with a value the element already has
-  still returns an `id` (the entry holds that property until it is reverted).
+* At most **500** active changes (`too-many`). The count is per journal entry: every successful change call that returns a
+  non-null `id` is one entry, however many properties or declarations it touched.
+* `id` is `null` when nothing changed, so there is nothing to revert and no slot is used: `setStyle` when every value was
+  rejected; `setClass` when every name is already as asked; an
+  identical `setAttr` or `setText`. `setStyle` with a value the element already has still returns an `id` (the entry holds
+  that property until it is reverted).
 
 **What is temporary.** Marks and changes live while the panel is open and the page is not reloaded. They are reverted when:
 the panel closes (×, `deai.close()`, the tool's key, another right-hand panel, leaving «Layout», the clean mode, a change
@@ -705,7 +710,8 @@ exactly as it was (including `var()` inside shorthands), and an empty `style=""`
 | `page-hover` | `{node: Node}` | the pointer moves onto another element (`listen({hover: true})`); at most 10 per second and only when the element changes |
 
 Only the person's real input is reported: events the page's scripts dispatch themselves (`el.click()` and the like) are not.
-`deai.page.listen({click, hover})` switches each subscription on or off; both are off by default.
+`deai.page.listen({click, hover})` switches each subscription on or off; both are off by default. A subscription ends with
+the page: call `listen` again after every `page` event.
 
 **Errors.** `not-allowed` (no permission, or a forbidden attribute), `no-page` (no live mockup page: «Overview», between
 loads, a link that left the mockup), `stale-ref`, `bad-selector`, `bad-args`, `not-leaf`, `too-many`, `busy` (more than 64
@@ -720,11 +726,17 @@ author.
 * «To Figma» takes the page as it looks, with your temporary changes; marks are not included.
 * A panel request is at most 64 KiB (as before); keep arguments short.
 
-**Example.** `docs/modules/examples/contrast/` («Contrast») uses all four permissions: it takes a `snapshot` with
-`color`, `background-color`, `font-size` and `font-weight`, finds text under the WCAG ratio, fields without a label and
-images without a description, `mark`s them, `reveal`s one from the list, tries a fix with `setStyle` and undoes everything
-with `revertAll`, `pick`s one element to find its row, and checks the page again on every `page` event. The logic is plain
-JavaScript in the panel; its `server.py` has only `check`.
+**Example.** `docs/modules/examples/contrast/` («Contrast») uses all four permissions:
+
+* `read`: takes a `snapshot` with `color`, `background-color`, `font-size` and `font-weight` (and the attributes), finds text
+  under the WCAG ratio, fields without a label and images without a description; `reveal`s the element of a row; `pick`s an
+  element to find its row (the same button cancels a pick with `cancelPick`).
+* `mark`: puts a mark on every finding and swaps it for a green one after a fix; `clearMarks` before each check.
+* `change`: «Try a fix» sets a readable `color` with `setStyle`; the temporary changes are counted and `revertAll` undoes them.
+* `listen`: after every `page` event it calls `listen({click: true})`, and a click in the mockup highlights the row of the
+  clicked element (or of its nearest ancestor with a finding).
+
+It checks the page again on every `page` event. The logic is plain JavaScript in the panel; its `server.py` has only `check`.
 
 ### The functions of `server.py` for tools and actions
 

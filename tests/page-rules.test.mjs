@@ -16,10 +16,10 @@ test("кожен метод має дозвіл; allowed() дивиться ли
   for (const m of ["__proto__", "constructor", "toString", "hasOwnProperty"]) assert.equal(allowed(m, PAGE_PERMS), false, m);
 });
 
-test("таблиця METHOD_PERM точно збігається зі спекою (16 методів)", () => {
+test("таблиця METHOD_PERM точно збігається зі спекою (17 методів)", () => {
   assert.deepEqual(METHOD_PERM, {
     "page.info": "read", "page.query": "read", "page.get": "read", "page.snapshot": "read", "page.pick": "read",
-    "page.reveal": "read",
+    "page.reveal": "read", "page.cancelPick": "read",
     "page.mark": "mark", "page.unmark": "mark", "page.clearMarks": "mark",
     "page.setStyle": "change", "page.setClass": "change", "page.setAttr": "change", "page.setText": "change",
     "page.revert": "change", "page.revertAll": "change",

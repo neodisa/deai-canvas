@@ -188,6 +188,14 @@ test("page.*: дозвіл, відсутній помічник, проксі а
   assert.ok(calls.every(([k]) => k !== "setStyle"));
 });
 
+test("page.cancelPick: дозвіл read, іде в помічник", async () => {
+  const { p, calls } = pageStub();
+  const r = await mkHost(["read"], p).handle({ deai: 1, id: 1, method: "page.cancelPick", args: [] });
+  assert.equal(r.ok, true);
+  assert.deepEqual(calls.map(([k]) => k), ["cancelPick"]);
+  assert.equal((await mkHost(["mark"], p).handle({ deai: 1, id: 2, method: "page.cancelPick", args: [] })).error, "not-allowed");
+});
+
 test("М1-хост без perms/getPage — page.* → not-allowed, решта як була", async () => {
   const h = createBridgeHost({ getContext: () => ({ a: 1 }), getSelection: () => null, getVars: () => ({}), getTheme: () => "dark",
     callTool: async () => null, toast() {}, close() {} });
@@ -204,7 +212,7 @@ test("page.*: мертва сторінка (alive=false) → no-page, викл�
 test("page.*: службові імена помічника недосяжні → unknown-method", async () => {
   const { p, calls } = pageStub();
   const h = mkHost(["read", "mark", "change", "listen"], p);
-  for (const n of ["destroy", "cancelPick", "picking", "__proto__", "constructor", "toString"]) {
+  for (const n of ["destroy", "picking", "__proto__", "constructor", "toString"]) {
     assert.equal((await h.handle({ deai: 1, id: 1, method: `page.${n}`, args: [] })).error, "unknown-method", n);
   }
   assert.equal(calls.length, 0);

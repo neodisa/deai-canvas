@@ -2,7 +2,8 @@
    The panel lives in a sandboxed iframe: no access to the shell or the network, only postMessage to the parent.
    Outgoing: {deai: 1, id, method, args}. Incoming, ONLY from window.parent with deai === 1:
    a reply {deai: 1, re, ok, value | error, detail} or an event {deai: 1, event, data}.
-   deai.page.* proxies the page helper (needs the "page" permissions); pick() has no timeout: the shell resolves it with null when the panel closes. */
+   deai.page.* proxies the page helper (needs the "page" permissions); pick() has no timeout: the shell resolves it with null when the panel closes.
+   Esc inside the panel while a pick is pending cancels it (the key never reaches the canvas from the sandboxed panel). */
 (function () {
   "use strict";
   var win = window;
@@ -34,7 +35,7 @@
         err.code = "timeout";
         reject(err);
       }, ms || PENDING_MS);
-      pending.set(id, { resolve: resolve, reject: reject, timer: timer });
+      pending.set(id, { resolve: resolve, reject: reject, timer: timer, method: method, cancelled: false });
       post(id, method, args);
     });
   }
@@ -88,6 +89,18 @@
     if (typeof d.event === "string") emit(d.event, d.data);
   });
 
+  /* Esc in the panel during a pending pick: ask the shell to cancel it, once per pick. Other keys are left alone. */
+  win.addEventListener("keydown", function (e) {
+    if (!e || e.key !== "Escape") return;
+    var asked = false;
+    pending.forEach(function (p) {
+      if (p.method !== "page.pick" || p.cancelled) return;
+      p.cancelled = true;
+      asked = true;
+    });
+    if (asked) request("page.cancelPick", []).catch(function () {});
+  });
+
   win.deai = {
     ready: ready,
     hello: function () { return request("hello", []); },
@@ -101,6 +114,7 @@
       snapshot: function (opts) { return request("page.snapshot", [opts]); },
       pick: function () { return request("page.pick", [], 0); },
       reveal: function (ref) { return request("page.reveal", [ref]); },
+      cancelPick: function () { return request("page.cancelPick", []); },
       mark: function (ref, opts) { return request("page.mark", [ref, opts]); },
       unmark: function (id) { return request("page.unmark", [id]); },
       clearMarks: function () { return request("page.clearMarks", []); },
