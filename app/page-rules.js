@@ -114,6 +114,34 @@ export function checkTone(tone) {
 /** Відкат повертає «було» лише коли зараз досі «стало»: змінене після модуля (скрипт сторінки, тюнер) не чіпаємо. */
 export const stillOurs = (current, after) => current === after;
 
+/** Імена декларацій з тексту атрибута `style`: поділ по `;` лише на нульовій глибині `()[]{}` і поза рядками `'`/`"` та
+ *  коментарями; `\` екранує наступний символ. Імʼя — текст до першого `:`, без пробілів; звичайні — у нижньому регістрі,
+ *  кастомні (`--X`) — як є. Потрібне, щоб знайти скорочення зі змінними (`margin:var(--g)`), які довгі властивості не віддають. */
+export function styleDeclNames(text) {
+  if (typeof text !== "string") return [];
+  const out = [];
+  let depth = 0, quote = "", cur = "";
+  const flush = () => {
+    const i = cur.indexOf(":");
+    cur = cur.slice(0, i < 0 ? 0 : i).trim();
+    if (cur) out.push(cur.startsWith("--") ? cur : cur.toLowerCase());
+    cur = "";
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\\") { cur += c + (text[i + 1] ?? ""); i++; continue; }
+    if (quote) { cur += c; if (c === quote) quote = ""; continue; }
+    if (c === "/" && text[i + 1] === "*") { const e = text.indexOf("*/", i + 2); i = e < 0 ? text.length : e + 1; continue; }
+    if (c === '"' || c === "'") quote = c;
+    else if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth = Math.max(0, depth - 1);
+    else if (c === ";" && depth === 0) { flush(); continue; }
+    cur += c;
+  }
+  flush();
+  return out;
+}
+
 /** Журнал змін: `add` → id (`c1`…), `take(id)` → запис чи null, `takeAll()` → новіші першими (порядок відкату), `newer(id)` → новіші за `id` (найстаріші першими). */
 export function createJournal(max = LIMITS.changes) {
   const items = new Map();

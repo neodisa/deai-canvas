@@ -13,7 +13,7 @@ import { TONE_COLORS } from "../../app/page-rules.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const HOST = `<!doctype html><meta charset="utf-8"><iframe id="f" src="/fixture.html" style="width:900px;height:600px;border:0"></iframe>
+const HOST = `<!doctype html><meta charset="utf-8"><iframe id="f" src="FIXTURE_URL" style="width:900px;height:600px;border:0"></iframe>
 <script>document.getElementById("f").addEventListener("load", () => { window.READY = true; });</script>
 <script type="module">
   import { createPageAgent } from "/app/page-agent.js";
@@ -39,22 +39,26 @@ const FIXTURE = `<!doctype html><html><head><meta charset="utf-8"><title>F</titl
   <div data-deai-marks id="ov-marks"><i id="ours4">наше</i></div>
 </body></html>`;
 
+/** Документ під CSP, що забороняє розбір атрибута `style` (запис через CSSOM працює). */
+const CSP_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="style-src-attr 'none'"><title>C</title></head><body><div id="c">x</div></body></html>`;
+
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
-async function open() {
+async function open(fixture = "/fixture.html") {
   const page = await browser.newPage();
   await page.route("http://agent.test/**", async (route) => {
     const u = new URL(route.request().url());
     if (u.pathname.startsWith("/app/") && u.pathname.endsWith(".js") && !u.pathname.includes("..")) {
       return route.fulfill({ status: 200, contentType: "text/javascript", body: readFileSync(path.join(ROOT, u.pathname)) });
     }
-    if (u.pathname === "/host.html") return route.fulfill({ status: 200, contentType: "text/html", body: HOST });
+    if (u.pathname === "/host.html") return route.fulfill({ status: 200, contentType: "text/html", body: HOST.replace("FIXTURE_URL", u.searchParams.get("f") === "/csp.html" ? "/csp.html" : "/fixture.html") });
+    if (u.pathname === "/csp.html") return route.fulfill({ status: 200, contentType: "text/html", body: CSP_FIXTURE });
     if (u.pathname === "/fixture.html") return route.fulfill({ status: 200, contentType: "text/html", body: FIXTURE });
     return route.fulfill({ status: 404, body: "" });
   });
-  await page.goto("http://agent.test/host.html");
+  await page.goto(`http://agent.test/host.html?f=${fixture}`);
   await ready(page);
   await page.evaluate(() => window.mk());
   return page;
@@ -1370,5 +1374,198 @@ test("M-5: сторінка прибрала хост і reveal викликан
       try { d.documentElement.querySelector(":scope > [data-deai-marks]").remove(); window.A.reveal(r); return null; } catch (e) { return String(e); }
     }, ref);
     assert.equal(err, null);
+  } finally { await page.close(); }
+});
+
+
+// ---------- відкат: змінні в скороченнях на запасному шляху (фаза 3) ----------
+const PAGE_CHANGE = (page, sel) => inFrame(page, (d, q) => d.querySelector(q).style.setProperty("transform", "none"), sel);
+const marginVar = async (page, sel) => ({ short: await inFrame(page, (d, q) => d.querySelector(q).style.margin, sel), top: await comp(page, sel, "margin-top") });
+
+test("S1: margin:var(--g); A color, B margin; revert(A), revert(B) → margin:var(--g), 7px", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "s1", { style: "margin:var(--g)" });
+    const ref = await refOf(page, "#s1");
+    const a = await call(page, "setStyle", [ref, { color: "red" }]);
+    const b = await call(page, "setStyle", [ref, { margin: "4px" }]);
+    await call(page, "revert", [a.v.id]);
+    assert.deepEqual((await call(page, "revert", [b.v.id])).v, { reverted: 4, skipped: 0 });
+    assert.deepEqual(await marginVar(page, "#s1"), { short: "var(--g)", top: "7px" });
+    assert.equal(await sty(page, "#s1", "color"), "");
+  } finally { await page.close(); }
+});
+
+test("S2: B margin; сторінка ставить transform; revert(B) → margin:var(--g), transform лишається", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "s2", { style: "margin:var(--g)" });
+    const b = await call(page, "setStyle", [await refOf(page, "#s2"), { margin: "4px" }]);
+    await PAGE_CHANGE(page, "#s2");
+    assert.deepEqual((await call(page, "revert", [b.v.id])).v, { reverted: 4, skipped: 0 });
+    assert.deepEqual(await marginVar(page, "#s2"), { short: "var(--g)", top: "7px" });
+    assert.equal(await sty(page, "#s2", "transform"), "none");
+  } finally { await page.close(); }
+});
+
+test("S3: setStyle({margin:null}) на margin:var(--g) → є id, revert повертає скорочення", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "s3", { style: "margin:var(--g)" });
+    const r = await call(page, "setStyle", [await refOf(page, "#s3"), { margin: null }]);
+    assert.ok(r.v.id);
+    assert.deepEqual(r.v.applied, ["margin"]);
+    assert.equal(await comp(page, "#s3", "margin-top"), "0px");
+    await PAGE_CHANGE(page, "#s3");
+    await call(page, "revert", [r.v.id]);
+    assert.deepEqual(await marginVar(page, "#s3"), { short: "var(--g)", top: "7px" });
+  } finally { await page.close(); }
+  const p2 = await open();                                   // і точний шлях: без змін сторінки
+  try {
+    await setVar(p2);
+    await mkEl(p2, "s3", { style: "margin:var(--g)" });
+    const r = await call(p2, "setStyle", [await refOf(p2, "#s3"), { margin: null }]);
+    await call(p2, "revert", [r.v.id]);
+    assert.equal(await attrIn(p2, "#s3", "style"), "margin:var(--g)");
+  } finally { await p2.close(); }
+});
+
+test("частковий перепис: margin-top:0 на margin:var(--g), сторінка ставить transform → скорочення повернулося", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "pt", { style: "margin:var(--g)" });
+    const r = await call(page, "setStyle", [await refOf(page, "#pt"), { "margin-top": "0" }]);
+    assert.equal(await comp(page, "#pt", "margin-top"), "0px");
+    await PAGE_CHANGE(page, "#pt");
+    assert.deepEqual((await call(page, "revert", [r.v.id])).v, { reverted: 1, skipped: 0 });
+    assert.deepEqual(await marginVar(page, "#pt"), { short: "var(--g)", top: "7px" });
+    assert.equal(await sty(page, "#pt", "transform"), "none");
+  } finally { await page.close(); }
+});
+
+test("пріоритет: margin:var(--g) !important → круговий обіг і запасний шлях зберігають !important", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "im", { style: "margin: var(--g) !important" });
+    const ref = await refOf(page, "#im");
+    const r = await call(page, "setStyle", [ref, { margin: "4px" }]);
+    await PAGE_CHANGE(page, "#im");
+    await call(page, "revert", [r.v.id]);
+    assert.equal(await prio(page, "#im", "margin-top"), "important");
+    assert.equal(await prio(page, "#im", "margin"), "important");
+    assert.deepEqual(await marginVar(page, "#im"), { short: "var(--g)", top: "7px" });
+  } finally { await page.close(); }
+});
+
+test("border: var(--b, 1px solid red) — 17 довгих; border-top-color:blue + зміна сторінки + revert → border повернувся", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "bd", { style: "border: var(--b, 1px solid red)" });
+    const r = await call(page, "setStyle", [await refOf(page, "#bd"), { "border-top-color": "blue" }]);
+    assert.ok(r.v.id);
+    await PAGE_CHANGE(page, "#bd");
+    const rv = await call(page, "revert", [r.v.id]);
+    assert.equal(rv.v.skipped, 0);
+    assert.equal(await inFrame(page, (d) => d.getElementById("bd").style.border), "var(--b, 1px solid red)");
+    assert.equal(await comp(page, "#bd", "border-top-style"), "solid");
+    assert.equal(await sty(page, "#bd", "transform"), "none");
+  } finally { await page.close(); }
+});
+
+test("непрозорий стан: сторінка сама в частковому стані (margin:var + margin-top:0) → декларації сторінки не чіпаємо", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "op", { style: "margin:var(--g); margin-top:0" });
+    const ref = await refOf(page, "#op");
+    assert.equal(await sty(page, "#op", "margin"), "", "передумова: часткове скорочення");
+    const before = await cssOf(page, "#op");
+    const r = await call(page, "setStyle", [ref, { "margin-right": "5px" }]);
+    assert.ok(r.v.id);
+    await PAGE_CHANGE(page, "#op");
+    const rv = await call(page, "revert", [r.v.id]);
+    assert.equal(rv.v.reverted, 0);
+    assert.equal(rv.v.skipped, 1, "пункт модуля — пропущено");
+    // у сторінки лишилися її очікувальні довгі: margin-bottom/left не знято, margin-top:0 на місці
+    assert.equal(await sty(page, "#op", "margin-top"), "0px");
+    assert.equal(await comp(page, "#op", "margin-bottom"), "7px");
+    assert.equal(await comp(page, "#op", "margin-left"), "7px");
+    assert.ok(before.includes("margin-top:0px"));
+  } finally { await page.close(); }
+});
+
+test("непрозорий стан: модуль зняв margin-top, сторінка потім сама перейшла в частковий стан → її декларації не перезаписуються", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "op2", { style: "margin-top:3px" });
+    const ref = await refOf(page, "#op2");
+    const r = await call(page, "setStyle", [ref, { "margin-top": null }]);
+    assert.ok(r.v.id);
+    await inFrame(page, (d) => { const e = d.getElementById("op2"); e.style.setProperty("margin", "var(--g)"); e.style.setProperty("margin-right", "1px"); });
+    const rv = await call(page, "revert", [r.v.id]);
+    assert.equal(rv.v.reverted, 0);
+    assert.equal(await comp(page, "#op2", "margin-top"), "7px", "очікувальне margin-top сторінки не перезаписане модулем");
+    assert.equal(await sty(page, "#op2", "margin-right"), "1px");
+  } finally { await page.close(); }
+});
+
+test("CSP style-src-attr: запис атрибута не розбирається → відкат іде по декларації й значення модуля зникає", async () => {
+  const page = await open("/csp.html");
+  try {
+    await mkEl(page, "c", {});
+    await inFrame(page, (d) => d.getElementById("c").setAttribute("style", "color:green"));   // сторінка; під CSP CSSOM його не бачить
+    const r = await call(page, "setStyle", [await refOf(page, "#c"), { color: "red" }]);
+    assert.ok(r.v.id);
+    assert.equal(await sty(page, "#c", "color"), "red");
+    const rv = await call(page, "revert", [r.v.id]);
+    assert.equal(rv.v.skipped, 0);
+    assert.equal(await sty(page, "#c", "color"), "", "значення модуля не лишилося в CSSOM");
+  } finally { await page.close(); }
+});
+
+test("страховка: рядок style змінився, а пунктів нема → запис усе одно є, і revert повертає raw0", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "sf", { style: "color:red" });
+    const r = await call(page, "setStyle", [await refOf(page, "#sf"), { color: null }]);
+    assert.ok(r.v.id);
+    await call(page, "revert", [r.v.id]);
+    assert.equal(await attrIn(page, "#sf", "style"), "color:red");
+  } finally { await page.close(); }
+});
+
+test("страховка: пунктів нема, а рядок style змінився (сторінка підмінила removeProperty) → запис є, revert повертає raw0", async () => {
+  const page = await open();
+  try {
+    await mkEl(page, "sf2", { style: "color:red" });
+    await inFrame(page, (d) => {
+      const e = d.getElementById("sf2");
+      e.style.removeProperty = (n) => { e.setAttribute("style", e.getAttribute("style") + " "); return ""; };   // змінює рядок, не декларації
+    });
+    const r = await call(page, "setStyle", [await refOf(page, "#sf2"), { background: null }]);
+    assert.ok(r.v.id, "рядок змінився — запис потрібен");
+    assert.equal(await attrIn(page, "#sf2", "style"), "color:red ");
+    await call(page, "revert", [r.v.id]);
+    assert.equal(await attrIn(page, "#sf2", "style"), "color:red");
+  } finally { await page.close(); }
+});
+
+test("відновлення скорочення цілком лише коли сторінка не чіпала його частин: margin-left сторінки лишається", async () => {
+  const page = await open();
+  try {
+    await setVar(page);
+    await mkEl(page, "gp", { style: "margin:var(--g)" });
+    const b = await call(page, "setStyle", [await refOf(page, "#gp"), { margin: "4px" }]);
+    await inFrame(page, (d) => d.getElementById("gp").style.setProperty("margin-left", "9px"));
+    const rv = await call(page, "revert", [b.v.id]);
+    assert.equal(rv.v.reverted, 0);
+    assert.equal(await sty(page, "#gp", "margin-left"), "9px", "декларація сторінки не знята");
+    assert.equal(await sty(page, "#gp", "margin-top"), "4px", "частину, яку не відновити цілком, лишаємо як є");
   } finally { await page.close(); }
 });

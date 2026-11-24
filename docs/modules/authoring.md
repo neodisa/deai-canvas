@@ -673,6 +673,11 @@ mark. At most **300** marks per panel (`too-many`). Marks never go into «To Fig
   `aria-*` and `data-*` (not `data-deai-*`, `data-canvas-*`, `data-comment-*`, `data-h2d-*`, `data-dc-*`). Any other name —
   `on*` handlers, `src`, `href`, `srcdoc`, `style`, `class`, `id` — is `not-allowed` (`style` and `class` have their own
   methods). No markup from a module ever reaches the document: not through text, not through a value.
+* Restoring (`revert`, `revertAll`): the element's inline `style` is put back byte for byte only when the page did not change
+  it after your change. Otherwise each declaration is restored on its own, so the text may be re-serialized (`color:red`
+  becomes `color: red;`). A shorthand written with CSS variables (`margin: var(--g)`) is restored as a whole only when the
+  page left all its parts alone; anything the canvas cannot restore safely is left as it is and counted in `skipped`. Pass
+  values without `!important`: the helper sets the priority itself.
 * At most **500** active changes (`too-many`). The count is per CSS declaration of an entry; a shorthand such as `margin`
   counts through its longhands.
 * An identical `setAttr` or `setText` changes nothing and answers `id: null`; `setStyle` with a value the element already has

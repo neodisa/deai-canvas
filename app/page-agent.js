@@ -6,7 +6,7 @@
  * ⛔ Вузли — з ІНШОГО вікна: жодного `instanceof`, лише `nodeType`/`localName`.
  */
 import { LIMITS, PageError, TONE_COLORS, attrAllowed, checkAttrValue, checkClassList, checkLabel, checkStyleMap, checkStyleNames, checkText,
-  checkTone, createJournal, isCoreAttr, stillOurs } from "./page-rules.js";
+  checkTone, createJournal, isCoreAttr, stillOurs, styleDeclNames } from "./page-rules.js";
 
 const OURS = "[data-canvas-inspector],[data-comment-layer],#cl-down,[data-deai-marks]";
 const SKIP = new Set(["script", "style", "template", "noscript"]);
@@ -266,12 +266,32 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
   const journal = createJournal();
   const notFull = () => { if (journal.full) throw new PageError("too-many", `at most ${LIMITS.changes} active changes`); };
   /** Усі інлайнові декларації елемента: імʼя → {v, pr}. `el.style` перелічує ДОВГІ властивості й кастомні (`--x`), тож
-   *  скорочення (`margin`) розкладається само, і «було» не губить довгі, які сторінка мала до нас. */
-  function snapStyle(el) {
+   *  скорочення (`margin`) розкладається само, і «було» не губить довгі, які сторінка мала до нас.
+   *  ⛔ Довга з `var()` у скороченні «очікує підстановки» і віддає `""`: це не «нема», а частина скорочення. Знаходимо
+   *  скорочення за іменами в атрибуті (`{v:"", pr, sh, shv}`); якщо не знайшли (часткові стани) — `opaque`: ніколи не
+   *  дорівнює нічому, тож його не відкочують і не чіпають. `hints` — скорочення, відомі з попереднього знімка. */
+  function pendingOf(el, hints) {
+    const map = new Map(), listed = new Set();
+    for (let i = 0; i < el.style.length; i++) listed.add(el.style.item(i));
+    const cover = (sh, shv) => { for (const c of probe(sh, shv)) if (!map.has(c)) map.set(c, { sh, shv }); };
+    for (const n of new Set(styleDeclNames(el.getAttribute("style")))) {
+      if (listed.has(n) || n.startsWith("--")) continue;
+      const shv = el.style.getPropertyValue(n);
+      if (shv !== "") cover(n, shv);
+    }
+    for (const h of hints) cover(h.sh, h.shv);
+    return map;
+  }
+  function snapStyle(el, hints = []) {
     const m = new Map();
+    let pend = null;
     for (let i = 0; i < el.style.length; i++) {
       const name = el.style.item(i);
-      m.set(name, { v: el.style.getPropertyValue(name), pr: el.style.getPropertyPriority(name) });
+      const v = el.style.getPropertyValue(name), pr = el.style.getPropertyPriority(name);
+      if (v !== "" || name.startsWith("--")) { m.set(name, { v, pr }); continue; }
+      pend ??= pendingOf(el, hints);
+      const p = pend.get(name);
+      m.set(name, p ? { v: "", pr, sh: p.sh, shv: p.shv } : { v: "", pr, opaque: true });
     }
     return m;
   }
@@ -287,17 +307,10 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     return names;
   }
   const NO_STYLE = Object.freeze({ v: "", pr: "" });
-  const sameStyle = (a, b) => stillOurs(a.v, b.v) && stillOurs(a.pr, b.pr);
-  /** Повернути елемент до знімка: кожна декларація, що відрізняється (значенням чи пріоритетом), знімається й ставиться як було. */
-  function restoreTo(el, snap) {
-    const cur = snapStyle(el);
-    for (const name of new Set([...cur.keys(), ...snap.keys()])) {
-      const c = cur.get(name) ?? NO_STYLE, w = snap.get(name) ?? NO_STYLE;
-      if (sameStyle(c, w)) continue;
-      el.style.removeProperty(name);
-      if (w.v !== "") el.style.setProperty(name, w.v, w.pr);
-    }
-  }
+  /** Дорівнюють, лише якщо збігаються значення, пріоритет і скорочення, з якого довга «очікує». `opaque` — ніколи. */
+  const sameStyle = (a, b) => !a.opaque && !b.opaque && stillOurs(a.v, b.v) && stillOurs(a.pr, b.pr) && stillOurs(a.sh, b.sh) && stillOurs(a.shv, b.shv);
+  /** Те саме для порівняння «було/стало» у setStyle: два непрозорі — не зміна (модуль їх не чіпав). */
+  const unchangedStyle = (a, b) => sameStyle(a, b) || (!!a.opaque && !!b.opaque);
   /** Порожній `style=""` після відкату прибираємо (як тюнер). Спершу читаємо атрибут: Chrome серіалізує `style` ліниво, і
    *  `removeAttribute` до цього лишає «брудний» стан, з якого `style=""` зʼявляється знову. Те саме для `class`. */
   function dropEmptyAttr(el, name) {
@@ -307,8 +320,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
   const dropEmptyStyle = (el) => { if (el.style.length === 0) dropEmptyAttr(el, "style"); };
   /** Ключі записів: style — імʼя декларації ({v,pr}), class — імʼя класу (булеве), attr — імʼя атрибута (рядок|null), text — "#text". */
   const KIND = {
-    style: { now: (el, k) => ({ v: el.style.getPropertyValue(k), pr: el.style.getPropertyPriority(k) }), same: sameStyle,
-      put(el, k, val) { el.style.removeProperty(k); if (val.v !== "") el.style.setProperty(k, val.v, val.pr); } },
+    style: { same: sameStyle },                              // читання й запис style — у revertStyleItems (довгі «в очікуванні»)
     class: { now: (el, k) => el.classList.contains(k), same: stillOurs,
       put(el, k, val) { if (val) el.classList.add(k); else el.classList.remove(k); } },
     attr: { now: (el, k) => el.getAttribute(k), same: stillOurs,
@@ -334,13 +346,16 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
     const nearest = newer.find(same) ?? null;
     if (!nearest && e.kind === "style" && e.raw1 !== undefined && el.getAttribute("style") === e.raw1) {
       if (e.raw0 === null) dropEmptyAttr(el, "style"); else el.setAttribute("style", e.raw0);   // рядок — сторінки власний, не наш
-      return { reverted: e.items.length, skipped: 0 };
+      if (styleWritten(el, e.raw0)) return { reverted: e.items.length, skipped: 0 };
+      // CSP `style-src-attr` забороняє розбір атрибута: рядок записався, а CSSOM лишився як був — відкочуємо по декларації
     }
     if (nearest) {
       if (e.kind === "style") { nearest.hadStyle = e.hadStyle; if (nearest.raw0 === e.raw1) nearest.raw0 = e.raw0; }
       else if (e.kind === "class") nearest.hadClass = e.hadClass;
     }
     let reverted = 0, skipped = 0;
+    const cur = e.kind === "style" ? snapStyle(el, e.hints ?? []) : null;
+    const groups = new Map();                               // скорочення зі змінними: відновлюються цілком (sh, shv, pr)
     for (const it of e.items) {
       let next = null;
       for (const n of newer) {
@@ -352,11 +367,42 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
         if (K.same(next.before, it.after)) { next.before = it.before; reverted++; } else skipped++;
         continue;
       }
+      if (e.kind === "style") {
+        if (!sameStyle(cur.get(it.key) ?? NO_STYLE, it.after) || it.before.opaque) { skipped++; continue; }
+        if (it.before.sh) {
+          const gk = JSON.stringify([it.before.sh, it.before.shv, it.before.pr]);
+          if (!groups.has(gk)) groups.set(gk, { sh: it.before.sh, shv: it.before.shv, pr: it.before.pr, items: [] });
+          groups.get(gk).items.push(it);
+        } else {
+          el.style.removeProperty(it.key);
+          if (it.before.v !== "") el.style.setProperty(it.key, it.before.v, it.before.pr);
+          reverted++;
+        }
+        continue;
+      }
       if (K.same(K.now(el, it.key), it.after)) { K.put(el, it.key, it.before); reverted++; } else skipped++;
+    }
+    for (const g of groups.values()) {
+      const mine = new Set(g.items.map((x) => x.key));
+      const covered = probe(g.sh, g.shv);
+      const whole = covered.length > 0 && covered.every((c) => mine.has(c) || sameStyle(cur.get(c) ?? NO_STYLE, { v: "", pr: g.pr, sh: g.sh, shv: g.shv }));
+      if (!whole) { skipped += g.items.length; continue; }   // сторінка чіпала частини скорочення: лишаємо як є
+      for (const c of covered) el.style.removeProperty(c);
+      el.style.setProperty(g.sh, g.shv, g.pr);
+      reverted += g.items.length;
     }
     if (e.kind === "style" && !e.hadStyle) dropEmptyStyle(el);
     if (e.kind === "class" && !e.hadClass && el.classList.length === 0) dropEmptyAttr(el, "class");
     return { reverted, skipped };
+  }
+  /** Після запису `style` рядком: атрибут справді такий, а браузер його розбирає. Під CSP `style-src-attr` рядок записується,
+   *  але CSSOM не оновлюється (довгі лишаються від нас) — це видно на чернетці: атрибут із декларацією не дає жодної. */
+  function styleWritten(el, raw) {
+    if (el.getAttribute("style") !== raw) return false;
+    scratch ??= doc.createElement("div");
+    scratch.removeAttribute("style");
+    scratch.setAttribute("style", "color:red");
+    return scratch.style.length > 0;
   }
   function revertSafe(e, newer) {
     try { return revertEntry(e, newer); } catch { return { reverted: 0, skipped: e.items.length || 1 }; }   // збій в одному записі не губить решту
@@ -502,6 +548,8 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       if (ok.length) notFull();
       const raw0 = el.getAttribute("style");
       const s0 = snapStyle(el);
+      const hints = [];                                     // скорочення зі змінними, які були до нас: допомагають розпізнати часткові стани
+      for (const val of s0.values()) if (val.sh && !hints.some((h) => h.sh === val.sh && h.shv === val.shv)) hints.push({ sh: val.sh, shv: val.shv });
       for (const [p, v] of ok) {
         if (v === null) { el.style.removeProperty(p); applied.push(p); continue; }
         const names = probe(p, v);                          // перевірка на чернетці: сторінка не чіпається, скорочення розкладається
@@ -510,18 +558,17 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
         for (const n of names) assigned.add(n);
         applied.push(p);
       }
-      const s1 = snapStyle(el);
+      const s1 = snapStyle(el, hints);
       const items = [];
       for (const key of new Set([...s0.keys(), ...s1.keys(), ...assigned])) {   // призначені, але незмінні, теж шар: їх тримає цей запис
         const before = s0.get(key) ?? NO_STYLE, after = s1.get(key) ?? NO_STYLE;
-        if (assigned.has(key) || !sameStyle(before, after)) items.push({ key, before, after });
+        if (assigned.has(key) || !unchangedStyle(before, after)) items.push({ key, before, after });
       }
-      if (!items.length) {
-        if (!hadStyle) dropEmptyStyle(el);
-        return { id: null, applied, rejected };
-      }
+      if (!items.length && !hadStyle) dropEmptyStyle(el);
       const raw1 = el.getAttribute("style");
-      return { id: journal.add({ kind: "style", el: new WeakRef(el), items, hadStyle, raw0, raw1 }), applied, rejected };
+      if (!items.length && raw1 === raw0) return { id: null, applied, rejected };
+      // рядок змінився, а пунктів нема (страховка): запис усе одно потрібен — точний шлях зможе його відкотити
+      return { id: journal.add({ kind: "style", el: new WeakRef(el), items, hadStyle, raw0, raw1, hints }), applied, rejected };
     },
     setClass(ref, ch) {
       const el = elOf(ref);
@@ -590,6 +637,7 @@ export function createPageAgent({ doc, onEvent = () => {}, pageInfo = () => null
       dropHost();
       alive = false;
       byRef.clear();
+      scratch = null;
     },
   };
   return api;

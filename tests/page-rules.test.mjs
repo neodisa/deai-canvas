@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { LIMITS, METHOD_PERM, PAGE_PERMS, PageError, TONES, TONE_COLORS, allowed, attrAllowed, isCoreAttr, checkClassList,
-  checkAttrValue, checkLabel, checkStyleMap, checkStyleNames, checkText, checkTone, createJournal, stillOurs } from "../app/page-rules.js";
+  checkAttrValue, checkLabel, checkStyleMap, checkStyleNames, checkText, checkTone, createJournal, stillOurs, styleDeclNames } from "../app/page-rules.js";
 
 test("кожен метод має дозвіл; allowed() дивиться лише на нього", () => {
   for (const [m, p] of Object.entries(METHOD_PERM)) {
@@ -214,4 +214,17 @@ test("охоронець: кожен новий шаблон спрацьову�
   for (const [bad, re] of cases) assert.ok(guardViolations(`${src}\n${bad}\n`).includes(`forbidden: ${re}`), bad);
   assert.equal(guardViolations(src).filter((v) => NEW_FORBIDDEN.some((re) => v === `forbidden: ${re}`)).length, 0);
   assert.deepEqual(guardViolations("for (const [k, v] of [[\"a\", 1], [\"b\", 2]]) {}\nconst m = [\"x\", \"y\"];\n"), [], "масиви-літерали не хибні спрацювання");
+});
+
+test("styleDeclNames: імена декларацій з атрибута style", () => {
+  assert.deepEqual(styleDeclNames("color:red; Margin : var(--g)"), ["color", "margin"]);
+  assert.deepEqual(styleDeclNames(null), []);
+  assert.deepEqual(styleDeclNames('content:"a;b"; color:red'), ["content", "color"], "; у лапках");
+  assert.deepEqual(styleDeclNames("background:url(\"a;b\"); color:red"), ["background", "color"], "url з ; всередині");
+  assert.deepEqual(styleDeclNames("--x:{a;b}; color:red"), ["--x", "color"], "кастомна з {a;b}");
+  assert.deepEqual(styleDeclNames("--X:1; --Y:2"), ["--X", "--Y"], "регістр кастомних зберігається");
+  assert.deepEqual(styleDeclNames('content:"a\\"; b"; color:red'), ["content", "color"], "екранована лапка");
+  assert.deepEqual(styleDeclNames("margin:var(--g, calc(1px;2px)); color:red"), ["margin", "color"], "дужки");
+  assert.deepEqual(styleDeclNames("/* a:b; */ color:red;"), ["color"], "коментар");
+  assert.deepEqual(styleDeclNames("margin-right: ; margin-top: 0px !important;"), ["margin-right", "margin-top"]);
 });
