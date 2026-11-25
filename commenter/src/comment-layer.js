@@ -1525,24 +1525,37 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       }
     },
 
+    /* Піни ключовані за id коментаря, як і на полотні: скрол і ресайз не перебудовують DOM. Раніше кожна подія скролу
+       робила `innerHTML = ''`, і якщо перебудова потрапляла між mousedown і mouseup, клік по піну губився
+       (mouseup приходив на новий елемент). Тепер елемент живе, поки пін кваліфікується, а оновлюються лише позиція,
+       підпис, колір і адресат; обробники читають коментар за id, тож завжди ведуть до свого. */
     _placePins() {
       if (this.anchors) return this._placeCanvasPins();
-      this._pins.innerHTML = '';
-      this._hidePinPop();
+      const els = this._domPins || (this._domPins = new Map());
+      const seen = new Set();
       for (const c of this.comments) {
         if (c.status !== 'open' || !c._el) continue;
         const r = c._el.getBoundingClientRect();
         if (r.width === 0 && r.height === 0) continue;
-        const p = document.createElement('div');
-        p.className = 'pin'; p.textContent = this.appLocal ? '' : this._seqOf(c);
-        const col = this._audColor(c); if (col) p.style.background = col;
-        if (c._aud) p.dataset.aud = c._aud;
+        seen.add(c.id);
+        let p = els.get(c.id);
+        if (!p) {
+          p = document.createElement('div'); p.className = 'pin';
+          const id = c.id;
+          p.onclick = () => this._focusCard(id);
+          p.onmouseenter = () => { const x = this.comments.find((y) => y.id === id); if (x) this._showPinPop(p, x); };   // hover → preview the comment beside the pin
+          p.onmouseleave = () => this._hidePinPop();
+          els.set(c.id, p); this._pins.appendChild(p);
+        }
+        const label = this.appLocal ? '' : String(this._seqOf(c));
+        if (p.textContent !== label) p.textContent = label;
+        const col = this._audColor(c);
+        p.style.background = col || '';
+        if (c._aud) p.dataset.aud = c._aud; else delete p.dataset.aud;
         p.style.left = (r.left + 10) + 'px'; p.style.top = (r.top + 10) + 'px';
-        p.onclick = () => this._focusCard(c.id);
-        p.onmouseenter = () => this._showPinPop(p, c);   // hover → preview the comment beside the pin
-        p.onmouseleave = () => this._hidePinPop();
-        this._pins.appendChild(p);
       }
+      for (const [k, p] of els) if (!seen.has(k)) { p.remove(); els.delete(k); }
+      this._hidePinPop();
     },
 
     /* Піни полотна ключовані: на кожен кадр камери міняється лише transform, DOM
@@ -1647,23 +1660,20 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
 
     // Reverse of _focusCard: clicking a card scrolls the page to its element and
     // flashes that element (host DOM). Only works for a comment matched to a live element.
+    /** Повертає `true`, коли щось показано (елемент у кадрі, камера, знімок), і `false`, коли пін не якорений у цьому документі. */
     _focusElement(id) {
       if (this.anchors) {   // полотно: не скрол до елемента, а переліт камери до піна
         const c = this.comments.find((x) => x.id === id);
         if (c) this.anchors.reveal(c);
-        return;
+        return !!c;
       }
-      const c = this.comments.find((x) => x.id === id); if (!c) return;
+      const c = this.comments.find((x) => x.id === id); if (!c) return false;
       // Comment made on another page → navigate there (multi-page apps). The widget
       // re-inits on that page and its pin/element will be present.
       const route = location.pathname + location.hash;
       const hosted = !!this._hostOpts;   // у хості `meta.url` — адреса Deai: переходити нікуди, сторінку визначає тег версії
-      if (hosted && this._otherPage(c)) {
-        const src = c.meta && (c.meta.shotUrl || c.meta.shot);
-        if (src) this._openLightbox(src, c.meta.shot);
-        return;
-      }
-      if (!hosted && c.meta && c.meta.route && c.meta.route !== route && c.meta.url) { location.href = c.meta.url; return; }
+      if (hosted && this._otherPage(c)) return false;   // іншу сторінку відкриває оболонка (`focus` → false), а не знімок
+      if (!hosted && c.meta && c.meta.route && c.meta.route !== route && c.meta.url) { location.href = c.meta.url; return true; }
       let el = c._el;
       if (!el) { const m = findMatch(c.fp, this.target); el = (m.el && m.score >= MATCH_THRESHOLD) ? m.el : null; c._el = el; }
       /* Елемента немає або він схований (інший крок `@switch`, закритий оверлей):
@@ -1671,12 +1681,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
          сталось (fb-06102026-c38f46). Тепер — знімок елемента, якщо є. */
       if (!el || el.getClientRects().length === 0) {
         const src = c.meta && (c.meta.shotUrl || c.meta.shot);
-        if (src) this._openLightbox(src, c.meta.shot);
-        return;
+        if (src) { this._openLightbox(src, c.meta.shot); return true; }
+        return false;
       }
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
       el.classList.remove('cl-el-flash'); void el.offsetWidth; el.classList.add('cl-el-flash');
       setTimeout(() => el.classList.remove('cl-el-flash'), 1500);
+      return true;
     },
 
     // Full-screen preview of a comment's screenshot; click anywhere (or Esc) to close.
@@ -2173,7 +2184,9 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     /** Те саме, що клік по картці в панелі коментатора: скрол і спалах елемента (полотно — камера до піна). */
     focus(id) {
       const c = this._inited && this.comments.find((x) => x.id === id);
-      if (c && this._inScope(c)) this._focusElement(id);   // поза скоупом елемент не якорений: нечіткий збіг блимнув би чужим
+      /* Поза скоупом елемент не якорений: нечіткий збіг блимнув би чужим. `true` — показано, `false` — пін не тут
+         (невідомий, чужа ітерація чи сторінка): оболонка тоді веде туди, де він живе. */
+      return !!(c && this._inScope(c) && this._focusElement(id) !== false);
     },
     carry(id) { if (this._inited) this._carryToCurrent(id); },
     editComment(id, text) {

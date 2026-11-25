@@ -197,18 +197,19 @@ test("хост: where за тегом версії; піни інших стор
   await page.close();
 });
 
-test("хост: focus піна тієї ж сторінки не веде за meta.url, а блимає елементом; інша сторінка — лайтбокс без переходу", async () => {
+test("хост: focus піна тієї ж сторінки не веде за meta.url, а блимає елементом; інша сторінка — `false` (веде оболонка), без лайтбокса і переходу", async () => {
   const page = await boot({ withHost: true, version: "1/holovna", seed: HOST_SEED });
   const href = await page.evaluate(() => location.href);
-  await page.evaluate(() => window.CommentLayer.focus("b-same"));
+  assert.equal(await page.evaluate(() => window.CommentLayer.focus("b-same")), true, "елемент показано — true");
   await page.waitForTimeout(100);
   assert.equal(await page.evaluate(() => location.href), href, "навігації за meta.url бути не може");
   assert.equal(await page.evaluate(() => document.querySelector("#q").classList.contains("cl-el-flash")), true);
   assert.equal(await page.evaluate(`!!${SH}.querySelector('.cllb')`), false);
-  await page.evaluate(() => window.CommentLayer.focus("d-shot"));
+  assert.equal(await page.evaluate(() => window.CommentLayer.focus("d-shot")), false, "інша сторінка — пін не тут: false");
+  assert.equal(await page.evaluate(() => window.CommentLayer.focus("нема-такого")), false, "невідомий id — false");
   await page.waitForTimeout(100);
   assert.equal(await page.evaluate(() => location.href), href);
-  assert.equal(await page.evaluate(`!!${SH}.querySelector('.cllb img')`), true, "інша сторінка зі знімком — лайтбокс");
+  assert.equal(await page.evaluate(`!!${SH}.querySelector('.cllb')`), false, "лайтбокс — не замість переходу: сторінку відкриває оболонка");
   await page.close();
 });
 
