@@ -27,7 +27,7 @@ class InjectTest(unittest.TestCase):
         self.assertEqual(bs.inject_version(HTML, 'v0.40.0'), HTML.replace('v0.39.1', 'v0.40.0'))
 
     def test_needs_exactly_one_marker(self):
-        for html in ('<p>no marker</p>', HTML + HTML):
+        for html in ('<p>no marker</p>', HTML + HTML, '<a data-versions>v1.0.0</a>'):
             with self.subTest(html=html), self.assertRaises(ValueError):
                 bs.inject_version(html, 'v0.40.0')
 

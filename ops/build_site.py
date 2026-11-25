@@ -15,7 +15,7 @@ import sys
 #: Той самий тег, що приймає оновлення в застосунку (`app/updater.py`, `TAG_RE`).
 TAG_RE = re.compile(r'^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\Z')
 #: Елемент, куди пишеться версія: `<a … data-version …>v0.39.1</a>`.
-VERSION_RE = re.compile(r'(<([a-z]+)\b[^>]*\bdata-version\b[^>]*>)[^<]*(</\2>)')
+VERSION_RE = re.compile(r'(<([a-z]+)\b[^>]*(?<![\w-])data-version(?![\w-])[^>]*>)[^<]*(</\2>)')
 SKIP = {'README.md', '.DS_Store'}
 
 
@@ -66,10 +66,10 @@ def main(argv=None):
     if args.tag is not None and not TAG_RE.match(args.tag):
         print('build_site: --tag must be vX.Y.Z', file=sys.stderr)
         return 2
-    tag = args.tag or latest_tag(git_tags(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     try:
+        tag = args.tag or latest_tag(git_tags(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         build(args.src, args.out, tag)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, subprocess.CalledProcessError) as e:
         print('build_site: %s' % e, file=sys.stderr)
         return 1
     print('built %s (%s)' % (args.out, tag or 'no release tag'))
