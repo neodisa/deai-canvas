@@ -2,6 +2,7 @@
 (() => {
   const STEP = 16, DOT = 0.9, BIG = 1.6, RADIUS = 150, PULL = 0.28, EASE = 0.18;
   const BASE_ALPHA = 0.35, NEAR_ALPHA = 0.7, RGB = "84, 123, 77";
+  const TAU = Math.PI * 2;
   const still = matchMedia("(prefers-reduced-motion: reduce), (hover: none)").matches;
 
   function setup(host) {
@@ -48,10 +49,12 @@
               tx = dx * PULL * f * f; ty = dy * PULL * f * f; tn = f;
             }
           }
-          ox[i] += (tx - ox[i]) * EASE; oy[i] += (ty - oy[i]) * EASE; ot[i] += (tn - ot[i]) * EASE;
+          const sx = (tx - ox[i]) * EASE, sy = (ty - oy[i]) * EASE, sn = (tn - ot[i]) * EASE;
+          ox[i] += sx; oy[i] += sy; ot[i] += sn;
+          // Keep animating only while a dot still visibly travels; a resting pointer lets the loop stop.
+          if (Math.abs(sx) > 0.02 || Math.abs(sy) > 0.02 || Math.abs(sn) > 0.01) moving = true;
           const settled = Math.abs(ox[i]) < 0.02 && Math.abs(oy[i]) < 0.02 && ot[i] < 0.01;
-          if (!settled || tn > 0) moving = true;
-          if (settled) { ox[i] = oy[i] = ot[i] = 0; ctx.moveTo(x + DOT, y); ctx.arc(x, y, DOT, 0, 6.2832); }
+          if (settled) { ox[i] = oy[i] = ot[i] = 0; ctx.moveTo(x + DOT, y); ctx.arc(x, y, DOT, 0, TAU); }
           else lifted.push(i, x, y);
         }
       }
@@ -60,7 +63,7 @@
         const i = lifted[k], t = ot[i];
         ctx.fillStyle = `rgba(${RGB}, ${BASE_ALPHA + (NEAR_ALPHA - BASE_ALPHA) * t})`;
         ctx.beginPath();
-        ctx.arc(lifted[k + 1] + ox[i], lifted[k + 2] + oy[i], DOT + (BIG - DOT) * t, 0, 6.2832);
+        ctx.arc(lifted[k + 1] + ox[i], lifted[k + 2] + oy[i], DOT + (BIG - DOT) * t, 0, TAU);
         ctx.fill();
       }
       return moving;
@@ -83,6 +86,8 @@
       kick();
     });
     host.addEventListener("pointerleave", () => { pointer = null; kick(); });
+    // Scrolling moves the grid under a resting pointer: let the dots spring back instead of pointing at a stale spot.
+    addEventListener("scroll", () => { if (pointer) { pointer = null; kick(); } }, { passive: true });
     new IntersectionObserver(([entry]) => {
       visible = entry.isIntersecting;
       if (!visible) { cancelAnimationFrame(frame); frame = 0; } else kick();
