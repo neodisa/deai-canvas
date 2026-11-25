@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="styles.css">
   <script>document.documentElement.classList.add("js");</script>
   <script src="site.js" defer></script>
+  <script src="hero.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -50,9 +51,9 @@
 
   <main id="main" tabindex="-1">
     <section class="hero wrap" aria-labelledby="hero-title">
-      <p class="product-label"><span aria-hidden="true"></span> AI-first design workspace</p>
+      <p class="product-label"><span aria-hidden="true"></span> <span class="shimmer">AI-first design workspace</span></p>
       <div class="hero-heading">
-        <h1 id="hero-title">Design with AI.<br> Keep control.</h1>
+        <h1 id="hero-title" data-morph><span class="morph-line">Design with AI.</span><br> Keep control.</h1>
         <div class="hero-summary">
           <p>Your agent builds the HTML. In Deai Canvas, you work with live screens, refine the details, and choose which iteration your team sees.</p>
           <div class="hero-actions">
@@ -202,12 +203,6 @@
         <div class="setup-copy">
           <h2 id="setup-title">Start with<br> your agent.</h2>
           <p>Paste the setup prompt into Claude Code, Codex, or another coding agent that can work with local files. No agent? Run one command in Terminal.</p>
-          <h3 class="connect-title">Connect your agent</h3>
-          <ol class="connect-steps">
-            <li><span><strong>Install.</strong> The agent clones Deai Canvas, starts it and sets up your first space.</span></li>
-            <li><span><strong>It learns the space.</strong> Each space folder has an <code>AGENTS.md</code> with the routes and reference topics the agent reads. For Claude Code, connect it once in Settings → AGENTS.md, and its edits show as AI in the history.</span></li>
-            <li><span><strong>Work in a loop.</strong> Pin a comment on an element. The agent reads the pins, makes a new iteration and closes each pin with a note.</span></li>
-          </ol>
         </div>
         <div class="setup-action">
           <div class="setup-tabs" data-setup-tabs role="tablist" aria-label="Ways to install Deai Canvas" hidden>
