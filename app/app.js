@@ -86,7 +86,7 @@ import { feedbackDialogHTML } from './feedback-view.js';
 import { introCardHTML } from './first-run.js';
 import { mountTooltip } from './tooltip.js';
 import { mountPanelResize } from './panel-resize.js';
-import { bootFollowsServer, createNav, navKeyDir } from './nav.js';
+import { bootFollowsServer, createNav, isMacPlatform, navKeyDir } from './nav.js';
 import { EMPTY_LOC, classifyTask, hasPlace, parseLocation } from './location-model.js';
 import { claudeToastKey, runCommand, unhookToastKey } from './setup-model.js';
 import {
@@ -1842,8 +1842,10 @@ async function wizBack() {
 }
 
 /**
- * Задачу з кроку 4 створено (`task-new` уже зробив її простір і її поточними) — відкрити, як «Нова задача» на «Задачах»:
- * простір відповіді порівнюємо з відомим (`spaceChanged`), пер-задачний стан попередньої — чужий.
+ * Задачу створено (`task-new` / `demo-task` уже зробили її поточною) — відкрити, як «Нова задача» на «Задачах»: простір відповіді
+ * порівнюємо з відомим (`spaceChanged`), пер-задачний стан попередньої — чужий. Сам запис у стек тут НЕ робиться (replace-only):
+ * з майстра її кличе `wiz.openTask` (там усе — частина «Створити простір»), а демо-задачу в наявному просторі `openDemo` огортає
+ * в `navigating()` — це окремий перехід, і «Назад» має вернути на «Задачі».
  */
 async function wizOpenTask(made) {
   if (spaceChanged(spaceNow()?.id, made.space)) await resetSpaceState();
@@ -1851,7 +1853,7 @@ async function wizOpenTask(made) {
   homeData = null;
   currentTaskId = made.id; taskSwitchGen += 1;
   await refreshGitlab(made.id);
-  await leaveHome();   // Без `navigating` навмисно: майстер створив НОВИЙ простір — відкриття його задачі лише замінює запис (спека §2)
+  await leaveHome();
 }
 
 /** «Назва й колір…»: лише імʼя й колір поточного простору (`POST /api/space-update`); теку міняти не можна. */
@@ -2814,7 +2816,7 @@ function frameCmtKey(ev) {
 /** Клавіші навігації (0.40), спільні для оболонки й вікна рамки: ⌘[ / ⌘] (Ctrl на Windows) — Назад/Вперед у НАШОМУ стеку. `true` —
  *  перехоплено (`preventDefault`: інакше рамка пішла б по власній історії). `code`, а не лише `key`: на українській розкладці `[` —
  *  клавіша `х`. T7 додає сюди ⌘F і ⌘G. */
-const NAV_MAC = (() => { try { return /Mac|iPhone|iPad/.test(navigator.platform || ''); } catch (e) { return false; } })();
+const NAV_MAC = isMacPlatform();
 function navKeys(ev) {
   const d = navKeyDir(ev, NAV_MAC);
   if (!d) return false;
@@ -3882,7 +3884,7 @@ async function openDemo(spaceId) {
   let r;
   try { r = await post('/api/demo-task', { space: spaceId, title: t('frDemoTaskTitle'), reuse: true }); }
   catch (e) { tellError(t('frDemoFailed'), e.message); return; }
-  const ok = await (r.existed ? switchTask(r.id) : wizOpenTask(r));
+  const ok = await (r.existed ? switchTask(r.id) : navigating(() => wizOpenTask(r)));
   if (r.existed && ok) await navigating(() => (homeOpen ? leaveHome() : render()));
 }
 

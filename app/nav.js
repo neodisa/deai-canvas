@@ -30,6 +30,21 @@ export function bootFollowsServer(navType, loc, current) {
 }
 
 /**
+ * Mac-подібна платформа (чисто): `userAgentData.platform` → `platform` → `userAgent`. `navigator.platform` буває порожнім (застарілий,
+ * у частині збірок його вже не віддають), і тоді Mac мовчки впав би в гілку Ctrl: ⌘[ перестав би працювати. Перший непорожній
+ * відповідач вирішує; нічого не відповіло (або `navigator` кидає) — не Mac.
+ */
+export function isMacPlatform(nav) {
+  try {
+    const n = nav === undefined ? navigator : nav;
+    for (const v of [n?.userAgentData?.platform, n?.platform, n?.userAgent]) {
+      if (typeof v === "string" && v.trim()) return /Mac|iPhone|iPad|iPod/i.test(v);
+    }
+  } catch (e) { /* без navigator — не Mac */ }
+  return false;
+}
+
+/**
  * Клавіша навігації (чисто): `-1` для ⌘[ / `1` для ⌘], інакше `0`. Модифікатор — платформний: на Mac лише ⌘ (`metaKey`), інакше лише Ctrl
  * (Ctrl+[ на Mac і ⌘[ на Windows — чужі гарячі клавіші, їх не перехоплюємо). `code` поруч із `key`: на українській розкладці `[` — `х`.
  */
