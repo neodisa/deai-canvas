@@ -417,3 +417,20 @@ test("проводка 0.40 (T7): navKeys бере пошук із findKeyOf; �
   const fnk = src.slice(src.indexOf("function frameNavKey("), src.indexOf("function frameNavKey(") + 400);
   assert.match(fnk, /ev\.key === 'Escape'[^\n]*find\.isOpen\(\)/, "Esc у рамці закриває лише ВІДКРИТУ плашку");
 });
+
+test("збережений стек довший за стелю без глибокого посилання: обрізається при читанні, індекс на тому ж записі", () => {
+  const store = memStore();
+  store.mem = JSON.stringify({ entries: ["#t=1", "#t=2", "#t=3", "#t=4", "#t=5"], index: 3 });
+  const s = setup({ store, cap: 3 });
+  assert.deepEqual(s.nav.entries(), ["#t=3", "#t=4", "#t=5"]);
+  assert.equal(s.nav.index(), 1, "запис #t=4 лишився поточним");
+});
+
+test("replaceState кидає (SecurityError, ліміт частоти): sync() не кидає, стек і далі росте", () => {
+  const s = setup();
+  s.win.history.replaceState = () => { throw new Error("SecurityError"); };
+  assert.doesNotThrow(() => s.nav.sync());
+  assert.doesNotThrow(() => s.go(L({ t: "a", it: "it1", p: "y" })));
+  assert.equal(s.nav.entries().length, 2);
+  assert.equal(s.nav.canBack(), true);
+});

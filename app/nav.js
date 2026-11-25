@@ -100,13 +100,17 @@ export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}
   };
   const save = () => { try { store?.set?.(JSON.stringify({ entries, index })); } catch (e) { /* без сховища стек живе до перезавантаження */ } };
   const trim = () => { while (entries.length > cap) { entries.shift(); index -= 1; } if (index < 0) index = 0; };
-  const write = (hash) => { if (win.location.hash !== hash) win.history.replaceState(win.history.state, "", urlOf(hash)); };
+  /* `replaceState` може кинути (SecurityError, ліміт частоти браузера): адреса лише ОПИСУЄ місце, тож її відмова не мусить валити `sync()` у `render()`. */
+  const write = (hash) => {
+    try { if (win.location.hash !== hash) win.history.replaceState(win.history.state, "", urlOf(hash)); } catch (e) { /* адреса лишається старою */ }
+  };
 
   const startHash = norm(parseLocation(win.location.hash));
   const saved = load();
   if (saved) {
     entries = saved.entries.slice();
     index = saved.index;
+    trim();   // збережений стек довший за стелю (стелю зменшили чи сховище підмінили) — обрізаємо одразу
     if (startHash && entries[index] !== startHash) { entries.splice(index + 1); entries.push(startHash); index = entries.length - 1; trim(); }
   } else {
     entries = [startHash];

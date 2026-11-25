@@ -82,9 +82,9 @@ Keys (all optional; unknown keys are ignored; every value goes through `encodeUR
 - `m=o` — «Огляд» (the overview canvas); without `m` it is «Макет». `v=flow` — the flow view of the overview, only with `m=o`;
 - `h=tasks` or `h=settings` — the «Задачі» screen or the settings over the task.
 
-Opening a link switches the canvas to the task in it. A reload of the window keeps the place only while that task is still
-the current one; if the task was switched elsewhere meanwhile (an agent, the CLI, another window), the reload follows the
-current task and keeps only the view (`m`, `v`, `h`). A task in a space that cannot be read right now leaves the canvas at
-its usual place. A task that no longer exists makes the canvas open the current task at its usual place (the last
-iteration, the first page); an iteration or page that no longer exists falls back to the nearest one. Compose the link
-from ids you read through the API, never from names; the port is the one Deai runs on (default 8765).
+Opening a link switches the canvas to the task in it. A reload or a restored (back/forward) tab follows the server's current
+task instead if the task in the link is no longer the current one (it was switched by an agent, the CLI or another window):
+only the view (`m`, `v`, `h`) is kept. A link with only `sp=` (no `t=`) does not switch the space. A task in a space that
+cannot be read right now leaves the canvas at its usual place. An unknown task opens the current task at its usual place (the
+last iteration, the first page), and `m`, `v`, `h` of that link are dropped too; an unknown iteration or page falls back to the
+nearest one. Compose the link from ids you read through the API, never from names; the port is the one Deai runs on (default 8765).

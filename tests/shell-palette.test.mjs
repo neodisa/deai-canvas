@@ -7,6 +7,7 @@ import path from "node:path";
 import { DICT, setLang, t } from "../app/i18n.js";
 import { ico } from "../app/icons.js";
 import { CORE_KEYS, modKeyMap, paletteModTools } from "../app/module-host.js";
+import { findKeyOf, navKeyDir } from "../app/nav.js";
 import {
   KEYS, filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from "../app/shell-palette.js";
@@ -419,8 +420,35 @@ function allHints() {
   return out;
 }
 
+/** ⌘[ ⌘] ⌘F ⌘G ⇧⌘G обробляє `nav.js` (чисті `navKeyDir`/`findKeyOf`, їх кличе `navKeys` в `app.js`): прив'язки не літерали `.key ===`,
+ *  тож їх читаємо ВИКЛИКОМ реальних функцій на події Mac (⌘), а не розбором тексту. */
+function navBindings() {
+  const out = [];
+  const ev = (key, code, o = {}) => ({ key, code, metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false, ...o });
+  if (navKeyDir(ev("[", "BracketLeft"), true) === -1) out.push({ key: "[", mods: new Set(["meta"]), file: "nav.js" });
+  if (navKeyDir(ev("]", "BracketRight"), true) === 1) out.push({ key: "]", mods: new Set(["meta"]), file: "nav.js" });
+  if (findKeyOf(ev("f", "KeyF"), true) === "find") out.push({ key: "f", mods: new Set(["meta"]), file: "nav.js" });
+  if (findKeyOf(ev("g", "KeyG"), true) === "next") out.push({ key: "g", mods: new Set(["meta"]), file: "nav.js" });
+  if (findKeyOf(ev("G", "KeyG", { shiftKey: true }), true) === "prev") out.push({ key: "g", mods: new Set(["meta", "shift"]), file: "nav.js" });
+  return out;
+}
+
+test("довідка клавіш має рядки навігації й пошуку (⌘[ ⌘] ⌘F ⌘G ⇧⌘G) в обох мовах, пошук — без двозначності з ⌘G «згрупувати»", () => {
+  const want = { kNavBack: "⌘[", kNavFwd: "⌘]", kFind: "⌘F", kFindNext: "⌘G", kFindPrev: "⇧⌘G" };
+  for (const [key, kbd] of Object.entries(want)) assert.ok(KEYS.some((k) => k.labelKey === key && k.kbd === kbd), `у KEYS нема ${key} ${kbd}`);
+  for (const lang of ["uk", "en"]) {
+    setLang(lang);
+    try {
+      for (const key of Object.keys(want)) assert.notEqual(t(key), key, `${lang}: нема тексту ${key}`);
+      assert.match(t("kFindNext"), lang === "uk" ? /поки відкрито пошук/ : /while find is open/);
+      assert.match(t("kFindPrev"), lang === "uk" ? /поки відкрито пошук/ : /while find is open/);
+    } finally { setLang("uk"); }
+  }
+});
+
 test("кожна kbd-підказка (довідка + реєстр) має обробник у коді", () => {
   const bound = [
+    ...navBindings(),
     ...bindings(src("app.js"), "app.js"),
     ...bindings(src(path.join("vendor", "inspector.js")), "vendor/inspector.js"),
     ...bareKeys(src(path.join("vendor", "comment-layer.min.js"))),

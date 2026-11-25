@@ -40,7 +40,6 @@ for (const width of [1440, 1280]) {
     await page.click('#bar [data-act="mode"][data-val="overview"]');
     await page.waitForSelector('#bar [data-seg="view"]');
     const overview = await metrics(page);
-    console.log(JSON.stringify({ width, layout, overview }));   // вимір для звіту виконавця
     assert.ok(Math.abs(layout.cx - overview.cx) < 1, `сегмент зсунувся на ${Math.abs(layout.cx - overview.cx).toFixed(1)}px між режимами`);
     assert.ok(Math.abs(layout.cx - layout.barCx) < 1.5, `не в центрі смуги: ${layout.cx} проти ${layout.barCx}`);
     assert.ok(layout.overflow <= 0 && overview.overflow <= 0, "смуга не переповнюється");
@@ -73,3 +72,55 @@ for (const [withFlow, width] of [true, false].flatMap((f) => [1024, 1280, 1440].
     }
   });
 }
+
+/* Найширші стани зони 3 (смуга в «Макеті» й «Огляді» перемальовується моделлю в живій оболонці — як це робить `app.js`): «не опубліковано»
+   (найдовший підпис), опубліковано зі застарілою публікацією, GitLab відстає/попереду/вимкнений, нетипові репозиторії (`GitHub`/`Git`), обидві
+   мови, з графом і без. Пігулка оновлення живе у смузі вкладок (`#tabs`), не в зоні 3. */
+test("решта контролів зони 2 не налазить на зону 3 у найширших станах смуги (1024…1440, обидві мови, обидва режими)", async (t) => {
+  const { dir } = taskFixture({ html });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 400 });
+  t.after(() => child.kill());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 800 } });
+  t.after(() => page.close());
+  await page.goto(`${url}/app/`);
+  await page.waitForSelector('#bar [data-seg="mode"]');
+  const bad = [];
+  let checked = 0;
+  for (const width of [1024, 1100, 1180, 1240, 1280, 1301, 1360, 1440, 1441, 1500, 1560, 1600, 1601, 1700, 1800, 1801, 1920]) {
+    await page.setViewportSize({ width, height: 800 });
+    const rows = await page.evaluate(async () => {
+      const { barModel } = await import("/app/bar-model.js");
+      const { barHTML } = await import("/app/shell-bar.js");
+      const { setLang } = await import("/app/i18n.js");
+      const LIGA = { id: "liga", name: "ЛІГА", color: "space-1", capabilities: { publish: "vercel-publish", tokens: null }, compat: { publish: "design-canvas" } };
+      const base = { mode: "layout", view: "grid", vp: "desktop", vpw: "", taskId: "LIGA-7003", iterLabel: "Іт.3", iterNote: "Правки",
+        hasIteration: true, iterPub: true, iterOnGl: false, flowRaw: true, pagesError: "", flowError: "", gl: "sync", published: true,
+        pubStale: false, pagePub: true, right: null, tasksErr: false, space: LIGA };
+      const states = {
+        fresh: { published: false, iterPub: false }, published: {}, stale: { pubStale: true }, behind: { gl: "behind", iterOnGl: true },
+        ahead: { gl: "ahead" }, off: { gl: "off" }, "behind+stale": { gl: "behind", pubStale: true },
+        github: { glLabel: "GitHub", published: false, iterPub: false }, git: { glLabel: "Git", published: false, iterPub: false },
+      };
+      const bar = document.getElementById("bar");
+      const out = [];
+      for (const lang of ["uk", "en"]) {
+        setLang(lang);
+        for (const [name, o] of Object.entries(states)) for (const mode of ["layout", "overview"]) for (const flow of [true, false]) {
+          const st = { ...base, ...o, mode, flowRaw: flow ? true : null };
+          bar.innerHTML = barHTML(barModel(st), st);
+          const x = document.querySelector("#bar .zone-2x").getBoundingClientRect();
+          const z3 = [...document.querySelectorAll("#bar .zone-3 > *")].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
+          out.push({ lang, name, mode, flow, right: x.right, z3left: Math.min(...z3.map((r) => r.left)), bar: document.querySelector("#bar .bar").getBoundingClientRect().right });
+        }
+      }
+      setLang("uk");
+      return out;
+    });
+    for (const r of rows) {
+      checked += 1;
+      if (r.right > r.z3left + 0.5 || r.right > r.bar) bad.push(`${width} ${r.lang}/${r.name}/${r.mode}/flow=${r.flow}: ${r.right.toFixed(1)} проти ${r.z3left.toFixed(1)}`);
+    }
+  }
+  assert.ok(checked >= 17 * 2 * 9 * 2 * 2, `перевірено лише ${checked} комбінацій`);
+  assert.deepEqual(bad, [], "зона 2x налазить на зону 3");
+});

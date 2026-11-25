@@ -1218,9 +1218,10 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
 /* 0.40: підписи «Сітка/Флоу» (`TIERS.viewLabel`) зникають раніше за решту: `.zone-2x` стоїть праворуч від центрального сегмента й з ними
    налазила б на зону 3. */
 @container (max-width:1440px){ .lbl-view{display:none} }
-/* Видима причина вимкненого «Флоу» (`.dd-why`) в смузі не розпирає `.zone-2x` до зони 3: рядок обрізається, повний текст — у `title`. */
-.zone-2x .seg .dd-why{max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@container (max-width:1300px){ .zone-2x .seg .dd-why{display:none} }   /* вужче — лише `title` (виміряно: 25px на 1024, 11px на 1280) */
+/* Видима причина вимкненого «Флоу» (`.dd-why`) в смузі (`TIERS.viewWhy`) розпирала б `.zone-2x` до зони 3 (виміряно без `flow.json`: 25px на
+   1024, 16px на 1360, 22px на 1500; 1700 — 2.6px, 1800 вільно): вужче — лише `title` й `aria-label`. */
+.zone-2x .seg .dd-why{white-space:nowrap}
+@container (max-width:1800px){ .zone-2x .seg .dd-why{display:none} }
 /* Превʼю (0.32.1): інструменти — іконки в правому куті смуги перед «Копіювати посилання». Бейдж коментарів сидить на кнопці
    (`.isl-count` — абсолютний), на увімкненій кнопці (фон `--sel`) міняє колір, щоб не злитись із нею. */
 .ext-tools{display:flex;align-items:center;gap:2px}
