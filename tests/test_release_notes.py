@@ -51,6 +51,13 @@ class SectionTest(unittest.TestCase):
         with self.assertRaises(rn.NotesError):
             rn.section('## [1.0.0] — 01.01.2027\n\n## [0.9.0] — 01.12.2026\nx\n', '1.0.0')
 
+    def test_unreleased_before_the_version_section(self):
+        cl = CL.replace('## [0.40.0]', '## [Unreleased]\n\nWIP.\n\n## [0.40.0]', 1)
+        self.assertEqual(rn.section(cl, '0.40.0'), rn.section(CL, '0.40.0'))
+
+    def test_crlf_line_endings(self):
+        self.assertEqual(rn.section(CL.replace('\n', '\r\n'), '0.40.0'), rn.section(CL, '0.40.0'))
+
 
 class NotesTest(unittest.TestCase):
     def test_section_then_footer(self):
@@ -96,6 +103,16 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.write_repo(d)
             r = self.run_cli('v9.9.9', cwd=d)
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout, '')
+        self.assertIn('release_notes:', r.stderr)
+
+    def test_non_utf8_changelog_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.write_repo(d)
+            with open(os.path.join(d, 'CHANGELOG.md'), 'wb') as f:
+                f.write(b'\xff\xfe broken')
+            r = self.run_cli('v0.40.0', cwd=d)
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout, '')
         self.assertIn('release_notes:', r.stderr)

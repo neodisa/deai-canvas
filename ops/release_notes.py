@@ -71,7 +71,7 @@ def main(argv=None):
         with open(args.package, encoding='utf-8') as f:
             package_json = f.read()
         text = notes(args.tag, changelog, package_json)
-    except (NotesError, OSError) as e:
+    except (NotesError, OSError, ValueError) as e:
         print('release_notes: %s' % e, file=sys.stderr)
         return 1
     sys.stdout.write(text)
