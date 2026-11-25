@@ -198,14 +198,29 @@
 
     <section class="setup wrap" id="setup" aria-labelledby="setup-title">
       <div class="setup-board">
-        <div>
+        <div class="setup-copy">
           <h2 id="setup-title">Start with<br> your agent.</h2>
-          <p>Paste the setup prompt into Claude Code, Codex, or another coding agent that can work with local files.</p>
+          <p>Paste the setup prompt into Claude Code, Codex, or another coding agent that can work with local files. No agent? Run one command in Terminal.</p>
+          <h3 class="connect-title">Connect your agent</h3>
+          <ol class="connect-steps">
+            <li><span><strong>Install.</strong> The agent clones Deai Canvas, starts it and sets up your first space.</span></li>
+            <li><span><strong>It learns the space.</strong> Each space folder has an <code>AGENTS.md</code> with the routes and reference topics the agent reads. For Claude Code, connect it once in Settings → AGENTS.md, and its edits show as AI in the history.</span></li>
+            <li><span><strong>Work in a loop.</strong> Pin a comment on an element. The agent reads the pins, makes a new iteration and closes each pin with a note.</span></li>
+          </ol>
         </div>
         <div class="setup-action">
-          <div class="prompt-card">
-            <div class="prompt-toolbar"><span><span aria-hidden="true">&gt;_</span> Setup prompt</span><button class="button button-small copy-button" type="button" data-copy hidden>Copy prompt</button></div>
+          <div class="setup-tabs" data-setup-tabs role="tablist" aria-label="Ways to install Deai Canvas" hidden>
+            <button type="button" class="setup-tab" role="tab" id="setup-tab-agent" aria-controls="setup-agent" aria-selected="true">With your agent</button>
+            <button type="button" class="setup-tab" role="tab" id="setup-tab-terminal" aria-controls="setup-terminal" aria-selected="false" tabindex="-1">In Terminal <span class="setup-tab-note">macOS</span></button>
+          </div>
+          <div class="prompt-card" id="setup-agent">
+            <div class="prompt-toolbar"><span><span aria-hidden="true">&gt;_</span> Setup prompt</span><button class="button button-small copy-button" type="button" data-copy="setup-prompt" hidden>Copy prompt</button></div>
             <p><code id="setup-prompt">Install Deai Canvas: clone https://github.com/neodisa/deai-canvas.git into ~/deai-canvas and follow ~/deai-canvas/SETUP.md.</code></p>
+          </div>
+          <div class="prompt-card" id="setup-terminal">
+            <div class="prompt-toolbar"><span><span aria-hidden="true">$</span> Terminal · macOS</span><button class="button button-small copy-button" type="button" data-copy="setup-command" hidden>Copy command</button></div>
+            <p><code id="setup-command">git clone https://github.com/neodisa/deai-canvas.git ~/deai-canvas &amp;&amp; cd ~/deai-canvas &amp;&amp; bash ops/canvas-app/install.sh &amp;&amp; ./start.command</code></p>
+            <p class="prompt-note">For Overview snapshots, also run <code>npm ci &amp;&amp; npx playwright install chromium</code> in the same folder (Node.js 20+).</p>
           </div>
           <p class="copy-status visually-hidden" role="status" data-copy-status></p>
           <a class="text-link manual-link" href="https://github.com/neodisa/deai-canvas/blob/main/SETUP.md">Read the installation guide <span aria-hidden="true">↗</span></a>

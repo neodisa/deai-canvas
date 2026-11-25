@@ -184,6 +184,20 @@ section[id] { scroll-margin-top: 20px; }
 .prompt-card p { padding: 16px; }
 .prompt-card code { font: 13px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; color: #e3ecdd; overflow-wrap: anywhere; }
 .manual-link { margin-top: 6px; }
+.setup-tabs { display: flex; gap: 4px; width: fit-content; margin-bottom: 10px; padding: 4px; border-radius: 10px; background: #cfe3a4; }
+.setup-tab { min-height: 40px; padding: 0 14px; border: 0; border-radius: 7px; background: transparent; color: #314b37; font-size: 14px; font-weight: 640; transition: background-color 170ms var(--ease), color 170ms var(--ease); }
+.setup-tab:hover { color: var(--ink); }
+.setup-tab[aria-selected="true"] { background: var(--pine); color: var(--on-pine); }
+.setup-tab-note { margin-left: 3px; font-size: 12px; opacity: .72; }
+.setup-action .prompt-card + .prompt-card { margin-top: 10px; }
+.prompt-card .prompt-note { padding: 0 16px 16px; color: var(--pine-muted); font-size: 13px; }
+.prompt-note code { font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; color: #e3ecdd; overflow-wrap: anywhere; }
+.connect-title { margin-top: 26px; font-size: 17px; font-weight: 700; letter-spacing: -.014em; }
+.connect-steps { display: grid; gap: 9px; max-width: 46ch; margin: 8px 0 0; padding: 0; list-style: none; counter-reset: step; }
+.connect-steps li { counter-increment: step; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 6px; color: #314b37; font-size: 15px; }
+.connect-steps li::before { content: counter(step); color: #537559; font-weight: 700; font-variant-numeric: tabular-nums; }
+.connect-steps strong { color: var(--ink); }
+.connect-steps code { font: .9em ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 .faq { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); align-items: start; gap: clamp(24px, 5vw, 75px); padding-bottom: clamp(58px, 7.3vw, 105px); }
 .faq h2 { font-size: clamp(36px, 4.1vw, 57px); }

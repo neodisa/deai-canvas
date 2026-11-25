@@ -1,50 +1,53 @@
-const tabList = document.querySelector("[data-gallery-tabs]");
-const tabs = [...tabList.querySelectorAll('[role="tab"]')];
-const panels = tabs.map((tab) => document.getElementById(tab.getAttribute("aria-controls")));
-const horizontalTabs = matchMedia("(max-width: 760px)");
+function initTabs(tabList, horizontalQuery) {
+  const tabs = [...tabList.querySelectorAll('[role="tab"]')];
+  const panels = tabs.map((tab) => document.getElementById(tab.getAttribute("aria-controls")));
+  const horizontal = () => !horizontalQuery || horizontalQuery.matches;
 
-function showPanel(index) {
+  function show(index) {
+    tabs.forEach((tab, i) => {
+      const selected = i === index;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      panels[i].hidden = !selected;
+    });
+  }
+
+  function setOrientation() {
+    tabList.setAttribute("aria-orientation", horizontal() ? "horizontal" : "vertical");
+  }
+
   tabs.forEach((tab, i) => {
-    const selected = i === index;
-    tab.setAttribute("aria-selected", String(selected));
-    tab.tabIndex = selected ? 0 : -1;
-    panels[i].hidden = !selected;
+    panels[i].setAttribute("role", "tabpanel");
+    panels[i].setAttribute("aria-labelledby", tab.id);
+    tab.addEventListener("click", () => show(i));
+  });
+  setOrientation();
+  horizontalQuery?.addEventListener("change", setOrientation);
+  show(0);
+  tabList.hidden = false;
+
+  tabList.addEventListener("keydown", (event) => {
+    const current = tabs.indexOf(event.target);
+    if (current < 0 || event.altKey || event.ctrlKey || event.metaKey) return;
+    const previous = horizontal() ? "ArrowLeft" : "ArrowUp";
+    const next = horizontal() ? "ArrowRight" : "ArrowDown";
+    const last = tabs.length - 1;
+    let index;
+    switch (event.key) {
+      case previous: index = current === 0 ? last : current - 1; break;
+      case next: index = current === last ? 0 : current + 1; break;
+      case "Home": index = 0; break;
+      case "End": index = last; break;
+      default: return;
+    }
+    event.preventDefault();
+    show(index);
+    tabs[index].focus();
   });
 }
 
-function setTabOrientation() {
-  tabList.setAttribute("aria-orientation", horizontalTabs.matches ? "horizontal" : "vertical");
-}
-
-tabs.forEach((tab, i) => {
-  panels[i].setAttribute("role", "tabpanel");
-  panels[i].setAttribute("aria-labelledby", tab.id);
-  tab.addEventListener("click", () => showPanel(i));
-});
-setTabOrientation();
-horizontalTabs.addEventListener("change", setTabOrientation);
-showPanel(0);
-tabList.hidden = false;
-
-tabList.addEventListener("keydown", (event) => {
-  const current = tabs.indexOf(event.target);
-  if (current < 0 || event.altKey || event.ctrlKey || event.metaKey) return;
-
-  const previous = horizontalTabs.matches ? "ArrowLeft" : "ArrowUp";
-  const next = horizontalTabs.matches ? "ArrowRight" : "ArrowDown";
-  const last = tabs.length - 1;
-  let index;
-  switch (event.key) {
-    case previous: index = current === 0 ? last : current - 1; break;
-    case next: index = current === last ? 0 : current + 1; break;
-    case "Home": index = 0; break;
-    case "End": index = last; break;
-    default: return;
-  }
-  event.preventDefault();
-  showPanel(index);
-  tabs[index].focus();
-});
+initTabs(document.querySelector("[data-gallery-tabs]"), matchMedia("(max-width: 760px)"));
+initTabs(document.querySelector("[data-setup-tabs]"), null);
 
 const dialog = document.querySelector("[data-screenshot-dialog]");
 const enlarged = dialog.querySelector("[data-enlarged-image]");
@@ -77,45 +80,32 @@ if (typeof dialog.showModal === "function") {
   });
 }
 
-const copyButton = document.querySelector("[data-copy]");
 const copyStatus = document.querySelector("[data-copy-status]");
-const prompt = document.getElementById("setup-prompt");
-let copyTimer;
 
-async function copyPrompt() {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(prompt.textContent.trim());
-      return true;
-    } catch {
-      // Fall through to the select-and-copy path when the browser denies clipboard access.
+for (const button of document.querySelectorAll("[data-copy]")) {
+  const source = document.getElementById(button.dataset.copy);
+  const label = button.textContent;
+  let timer;
+  button.hidden = false;
+  button.addEventListener("click", async () => {
+    clearTimeout(timer);
+    if (await copyText(source.textContent.trim())) {
+      button.textContent = "Copied";
+      copyStatus.classList.add("visually-hidden");
+      copyStatus.textContent = "Copied to clipboard.";
+      timer = setTimeout(() => { button.textContent = label; }, 2400);
+    } else {
+      const selection = getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(source);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      button.textContent = label;
+      copyStatus.classList.remove("visually-hidden");
+      copyStatus.textContent = "Text selected. Press Ctrl+C or ⌘C to copy.";
     }
-  }
-
-  const selection = getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(prompt);
-  selection.removeAllRanges();
-  selection.addRange(range);
-  const copied = document.execCommand("copy");
-  if (copied) selection.removeAllRanges();
-  return copied;
+  });
 }
-
-copyButton.hidden = false;
-copyButton.addEventListener("click", async () => {
-  clearTimeout(copyTimer);
-  if (await copyPrompt()) {
-    copyButton.textContent = "Copied";
-    copyStatus.classList.add("visually-hidden");
-    copyStatus.textContent = "Setup prompt copied to clipboard.";
-    copyTimer = setTimeout(() => { copyButton.textContent = "Copy prompt"; }, 2400);
-  } else {
-    copyButton.textContent = "Copy prompt";
-    copyStatus.classList.remove("visually-hidden");
-    copyStatus.textContent = "Prompt selected. Press Ctrl+C or ⌘C to copy.";
-  }
-});
 
 async function copyText(text) {
   if (navigator.clipboard?.writeText) {
