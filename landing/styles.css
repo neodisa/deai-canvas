@@ -322,6 +322,7 @@ section[id] { scroll-margin-top: 20px; }
   animation: shimmer 2.6s linear infinite;
 }
 @keyframes shimmer { to { background-position: -150% 0; } }
+.shimmer.is-paused { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
   .shimmer { animation: none; background: none; color: var(--shimmer-base); }
 }

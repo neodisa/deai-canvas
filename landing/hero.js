@@ -16,7 +16,9 @@
   h1.setAttribute("aria-label", "Design with AI. Keep control.");
   line.setAttribute("aria-hidden", "true");
 
+  // Animations, observers and timers live as long as the page.
   let running = [];
+  let cycle = 0; // timers from a cancelled cycle check it and do nothing
   let visible = true;
   let waiting = null; // a cycle step deferred until the heading is visible again
 
@@ -50,9 +52,16 @@
     return w;
   }
 
-  function play() {
+  function stop() {
+    cycle += 1;
+    waiting = null;
     running.forEach((a) => a.cancel());
     running = [];
+  }
+
+  function play() {
+    stop();
+    const id = cycle;
     build();
     const cut = [...line.querySelectorAll(".m-cut")];
     const add = [...line.querySelectorAll(".m-add")];
@@ -91,14 +100,46 @@
       ], t2 + i * 38, 420);
     });
 
+    // `finished` rejects when a cycle is cancelled (resize, replay): the empty catches are intentional.
     last.finished.then(() => setTimeout(() => gate(() => {
+      if (id !== cycle) return;
       running.forEach((a) => a.reverse());
       Promise.all(running.map((a) => a.finished))
-        .then(() => setTimeout(() => gate(play), PAUSE))
+        .then(() => setTimeout(() => gate(() => { if (id === cycle) play(); }), PAUSE))
         .catch(() => {});
     }), HOLD)).catch(() => {});
   }
 
-  // Window resize changes the font size (clamp), so measured widths go stale: rebuild on the next cycle.
+  // The font size follows the viewport (clamp), so measured widths go stale on resize: drop the cycle
+  // at once (plain text, no overflow) and start a fresh one when the resizing settles.
+  let width = innerWidth;
+  let resizeTimer;
+  addEventListener("resize", () => {
+    if (innerWidth === width) return;
+    width = innerWidth;
+    stop();
+    line.classList.remove("is-ready");
+    line.textContent = "Design with AI.";
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => gate(play), 400);
+  });
+
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => gate(play));
+})();
+
+// Shimmer bands run only while their text is on screen and the tab is visible.
+(() => {
+  const items = [...document.querySelectorAll(".shimmer")];
+  if (!items.length) return;
+  const onScreen = new Set();
+  const sync = () => items.forEach((el) => el.classList.toggle("is-paused", document.hidden || !onScreen.has(el)));
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) onScreen.add(entry.target);
+      else onScreen.delete(entry.target);
+    }
+    sync();
+  });
+  items.forEach((el) => observer.observe(el));
+  document.addEventListener("visibilitychange", sync);
 })();
