@@ -45,7 +45,7 @@ test("тост новин: «Показати» з вкладки «Для AI» 
   const run = (filter) => {
     const calls = [];
     const notice = (id, text, actions) => { calls.push(["notice"]); notice.run = actions[0].run; };
-    const mk = new Function("notice", "t", "dropNotice", "setCommentsOpen", "paintComments", "cmtLayer", "setCmtFilter", "state",
+    const mk = new Function("notice", "t", "dropNotice", "setCommentsOpen", "paintComments", "showComment", "setCmtFilter", "state",
       `let cmtFilter = state.f; let cmtSel = null; function newsToast(came) ${body}\nnewsToast([{ id: "x", author: "a" }]); return () => { state.f = cmtFilter; };`);
     const state = { f: filter };
     mk(notice, (k) => k, () => {}, () => calls.push(["open"]), () => {}, () => null, (f) => calls.push(["filter", f]), state);

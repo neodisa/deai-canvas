@@ -78,6 +78,7 @@ import { islandToolsHTML } from './island.js';
 import { cmtLabels, cmtTheme } from './cmt-form.js';
 import { commentsPanelHTML } from './comments-view.js';
 import { FILTERS, audOf, openCount } from './comments-model.js';
+import { commentTarget } from './comment-target.js';
 import { arrived, baseline, countNew, isNew, markSeen, newsByPage, newsItems, readSeen, replySeenKey, seenKey, writeSeen } from './comment-news.js';
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
@@ -2318,7 +2319,7 @@ function replyNewsToast(r) {
       if (cmtFilter !== 'all' && cmtFilter !== want) setCmtFilter(want);
       cmtQuery = '';   // пошук міг сховати батька; поле очищає перемальовка
       if (par && par.scope === 'earlier') cmtExpanded.earlier = true;   // батько в згорнутому «З попередніх ітерацій»
-      setCommentsOpen(true); cmtSel = r.parent; cmtThreads.add(r.parent); paintComments(); cmtLayer()?.focus(r.parent);
+      setCommentsOpen(true); cmtSel = r.parent; cmtThreads.add(r.parent); paintComments(); showComment(r.parent);
     },
   }]);
 }
@@ -2329,8 +2330,49 @@ function newsToast(came) {
   notice('cmt-news', comments.length === 1 ? t('cmtNewToast', last.author || '—') : t('cmtNewToastN', comments.length), [{
     act: 'cmtshownew', label: t('cmtShowNew'),
     /* Новини — завжди командні: на «Для Claude» їх (недорученими) не видно, тож «Показати» веде на «Команду». */
-    run: () => { dropNotice('cmt-news'); if (cmtFilter === 'local') setCmtFilter('project'); setCommentsOpen(true); cmtSel = last.id; paintComments(); cmtLayer()?.focus(last.id); },
+    run: () => { dropNotice('cmt-news'); if (cmtFilter === 'local') setCmtFilter('project'); setCommentsOpen(true); cmtSel = last.id; showComment(last.id); },
   }]);
+}
+/** «Показати» (0.39.1): коментатор показує пін у ЦЬОМУ документі; `false` — пін живе в іншій ітерації чи на іншій сторінці
+ *  (`focus` лише скролить до елемента, якого тут нема). Тоді йдемо туди тими самими кроками, що й клік користувача
+ *  (дропдаун ітерації, рядок дерева сторінок), а показ доводить новий коментатор на своєму `ready`. */
+function showComment(id) {
+  cmtSel = id;
+  const L = cmtLayer();
+  const shown = L ? L.focus(id) : undefined;
+  paintComments();
+  if (shown !== false || mode === 'canvas') return;
+  const c = cmtSnap?.comments?.find((x) => x && x.id === id);
+  const tg = c ? commentTarget(c) : null;
+  if (tg && tg.it === picked && tg.page === pickedPage) return;   // та сама сторінка: пін не знайдено, більше нічого зробити
+  if (!tg || !(curTask?.iterations || []).some((x) => x.id === tg.it)) { toast(t('cmtGoGone')); return; }
+  goToComment(id, tg);
+}
+/** Відкладений показ `{ id, it, page, gen, timer }`: живе до `ready` потрібного кадру, ~6 с, перехід деінде чи зміну задачі. */
+let cmtPending = null;
+function cmtPendingDrop() { if (cmtPending) { clearTimeout(cmtPending.timer); cmtPending = null; } }
+async function goToComment(id, tg) {
+  const gen = taskSwitchGen;
+  cmtPendingDrop();
+  openDd = null;
+  pickedPage = tg.page; pickedState = null; followStamps = []; followLatchKey = null;
+  if (tg.it !== picked) { picked = tg.it; await loadPages(); }
+  if (gen !== taskSwitchGen || picked !== tg.it) return;   // за час завантаження користувач пішов деінде
+  if (!flattenPages(panelPages).some((f) => f.kind !== 'folder' && f.page.id === tg.page)) { toast(t('cmtGoGone')); }
+  else if (pickedPage === tg.page) {
+    cmtPending = { id, it: tg.it, page: tg.page, gen, timer: setTimeout(cmtPendingDrop, 6000) };
+  }
+  await render();
+}
+/** Кадр коментатора (знову) готовий чи змінив знімок: довести відкладений показ або відкинути, якщо кадр не той. */
+function cmtPendingApply() {
+  const p = cmtPending;
+  if (!p) return;
+  if (p.gen !== taskSwitchGen || picked !== p.it || pickedPage !== p.page) { cmtPendingDrop(); return; }
+  const L = cmtLayer();
+  if (!L || L.focus(p.id) === false) return;   // пін ще не приїхав (командний канал) — наступний `change` спробує знову
+  cmtPendingDrop();
+  cmtSel = p.id; paintComments();
 }
 function setCommentsOpen(on) {
   on = !!on;
@@ -2688,8 +2730,9 @@ function onCommentsEvent(src, m) {
     if (L) { cmtSnap = L.snapshot(); cmtTeamDown = readTeamDown(L); if (cmtOpen) L.setCommentMode(true); }
     cmtNewsUpdate();
     paintComments();
+    if (src === 'frame') cmtPendingApply();
   } else if (m.ev === 'change') {
-    if (m.snapshot && Array.isArray(m.snapshot.comments)) { cmtSnap = m.snapshot; cmtNewsUpdate(); paintComments(); }
+    if (m.snapshot && Array.isArray(m.snapshot.comments)) { cmtSnap = m.snapshot; cmtNewsUpdate(); paintComments(); if (src === 'frame') cmtPendingApply(); }
   } else if (m.ev === 'select') {
     cmtSel = typeof m.id === 'string' ? m.id : null;
     if (!cmtOpen) setCommentsOpen(true); else paintComments();
@@ -2975,7 +3018,7 @@ const BAR_ACTIONS = {
   // там макети вантажаться bare=1 з pointer-events:none, інспектора там нема.
   /* Панель «Коментарі» (0.26.0): дії над живим коментатором поточного виду (`cmtLayer()`); знімок вертає `change`. */
   comments: () => { if (!homeOpen && !cleanView) setCommentsOpen(!cmtOpen); },
-  cmtshow: (id) => { cmtSel = id; cmtLayer()?.focus(id); paintComments(); },
+  cmtshow: (id) => showComment(id),
   cmtres: (id) => { cmtLayer()?.resolveComment(id); },
   cmtreopen: (id) => { cmtLayer()?.reopenComment(id); },
   /* Кошик (етап В): спершу питання в картці, видаляє лише явне «Видалити». `{ confirmed: true }` — оболонка спитала сама,

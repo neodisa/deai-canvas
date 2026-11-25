@@ -224,7 +224,7 @@ test("«Огляд»: меню рядка без «Історії змін» (п
   await page.waitForSelector('[data-act="mode"][data-val="layout"]');
   await openList(page);
   await openRowMenu(page, "it2");
-  assert.equal(await page.locator('#bar .dd--itmenu [data-act="ithist"]').count(), 0, "в «Огляді» пункт «Історія змін» мертвий");
+  assert.equal(await page.locator('#bar .dd--itmenu [data-act="ithist"]').count(), 0, "в «Огляді» пункт «Історія» мертвий");
   assert.equal(await page.locator('#bar .dd--itmenu [data-act="itren"]').count(), 1);
 });
 
