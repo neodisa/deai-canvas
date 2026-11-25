@@ -41,7 +41,7 @@ export function createFindBar({ getFrame, onClose = () => {}, delay = 120 }) {
   document.body.appendChild(el);
   const input = el.querySelector("#find-q");
   const count = el.querySelector("#find-n");
-  let nodes = [], ranges = [], cur = -1, capped = false, timer = 0, sheet = null, sheetDoc = null;
+  let nodes = [], ranges = [], cur = -1, capped = false, timer = 0, sheet = null, sheetDoc = null, origin = null;
 
   const frameDoc = () => { try { return getFrame()?.contentDocument || null; } catch (e) { return null; } };
   const frameWin = () => frameDoc()?.defaultView || null;
@@ -73,8 +73,18 @@ export function createFindBar({ getFrame, onClose = () => {}, delay = 120 }) {
     count.classList.toggle("none", !!q && ranges.length === 0);
     count.textContent = !q ? "" : ranges.length ? `${cur + 1} / ${capped ? `${FIND_LIMIT}+` : ranges.length}` : "0 / 0";
   }
+  /** Збіги з ІНШОГО документа (рамка пішла на нову сторінку, `load` ще не було): не фарбуємо, не тримаємо мертвий документ живим. */
+  function dropStale(doc) {
+    if (!doc || !ranges.length) return;
+    let own = null;
+    try { own = ranges[0].startContainer.ownerDocument; } catch (e) { /* мертвий */ }
+    if (own === doc) return;
+    clearHighlight();
+    nodes = []; ranges = []; cur = -1; capped = false;
+  }
   function show() {
     const doc = frameDoc();
+    dropStale(doc);
     if (doc && ranges.length) {
       paint(doc);
       try { ranges[cur].startContainer.parentElement?.scrollIntoView({ block: "center" }); } catch (e) { /* вузол зник */ }
@@ -108,25 +118,39 @@ export function createFindBar({ getFrame, onClose = () => {}, delay = 120 }) {
     el.hidden = true;
     onClose();
   }
+  /** Куди повернути фокус після Esc/✕: у вікно рамки, якщо ⌘F прийшов звідти, інакше — на елемент оболонки, що його мав. */
+  function restoreFocus() {
+    const o = origin; origin = null;
+    const fr = getFrame();
+    const toFrame = () => { try { fr?.contentWindow?.focus(); } catch (e) { /* чужий документ */ } };
+    if (o && o !== fr && o !== document.body && o.isConnected && !o.closest?.("[hidden]") && typeof o.focus === "function") {
+      o.focus();
+      if (document.activeElement === o) return;
+    }
+    toFrame();
+  }
+  function dismiss() { close(); restoreFocus(); }
   function open() {
+    const was = el.hidden;
+    if (was) { const a = document.activeElement; origin = el.contains(a) ? null : a; }
     el.hidden = false;
     input.focus();
     input.select();
-    if (input.value) run();
+    if (was && input.value) run();   // повторний ⌘F лише фокусує й виділяє поле: збіг не скидаємо
   }
 
   input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(run, delay); });
   input.addEventListener("keydown", (ev) => {
     if (ev.isComposing) return;
     if (ev.key === "Enter") { ev.preventDefault(); if (timer) run(); else step(ev.shiftKey ? -1 : 1); }
-    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(); }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); dismiss(); }
   });
   el.addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-find]");
     if (!b) return;
     if (b.dataset.find === "prev") step(-1);
     else if (b.dataset.find === "next") step(1);
-    else close();
+    else dismiss();
   });
 
   return { open, close, next: () => step(1), prev: () => step(-1), rerun: () => { if (!el.hidden) run(); }, isOpen: () => !el.hidden, el };

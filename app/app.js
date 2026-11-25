@@ -2858,11 +2858,14 @@ function navKeys(ev) {
   return true;
 }
 /** Те саме у вікні рамки: `frameCmtKey` виходить на будь-якому модифікаторі, тож окремий захоплювач. */
-function frameNavKey(ev) { if (navKeys(ev)) { ev.preventDefault(); ev.stopPropagation(); } }
+function frameNavKey(ev) {
+  /* Esc із фокусом у макеті закриває відкриту плашку; без плашки Esc не чіпаємо (ним користуються коментатор та інспектор). */
+  if (ev.key === 'Escape' && !ev.isComposing && find.isOpen()) { ev.preventDefault(); ev.stopPropagation(); find.close(); return; }
+  if (navKeys(ev)) { ev.preventDefault(); ev.stopPropagation(); } }
 /* ЄДИНА точка, де захоплювач ставиться на документ рамки (новий документ — нове вікно, дублів не буває). Відкрита плашка шукає
    той самий запит у новому документі. */
 frame.addEventListener('load', () => {
-  try { frame.contentWindow.addEventListener('keydown', frameNavKey, true); } catch (e) { return; }   // чужий документ
+  try { frame.contentWindow.addEventListener('keydown', frameNavKey, true); } catch (e) { find.rerun(); return; }   // чужий документ: плашка скидає старий «3 / 5»
   if (find.isOpen()) find.rerun();
 });
 let frameHash = null;   // одноразовий `{it, page, hash}` для наступного `frame.src` (посилання всередині макета)

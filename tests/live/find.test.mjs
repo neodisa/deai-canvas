@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
@@ -19,7 +20,7 @@ const html = (id) => id === "holovna"
   ? `<!DOCTYPE html><html><head><meta charset="utf-8"><style>.hid{display:none}</style></head><body style="margin:40px">
 <h1>Головна сторінка</h1><p>Слово слово СЛОВО</p><p class="hid">слово приховане</p><script>var слово = 1</script>
 <div style="height:1600px"></div><p id="far">слово внизу</p></body></html>`
-  : `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><h1>Пошук</h1><p>інше слово тут</p></body></html>`;
+  : `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><h1>Пошук</h1><p>інше слово тут</p><img src="/slow.png" alt=""></body></html>`;
 
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
@@ -205,4 +206,94 @@ test("9: під модальним (палітра ⌘K) ⌘F плашку не 
   await page.waitForSelector(".pal-it", { timeout: 5000 });
   await page.keyboard.press(`${MOD}+KeyF`);
   assert.equal(await findHidden(page), true);
+});
+
+test("10: повторний ⌘F лише фокусує й виділяє поле — збіг не скидається на перший", async (t) => {
+  const { page, f } = await boot(t, 900);
+  await page.keyboard.press(`${MOD}+KeyF`);
+  await page.keyboard.type("слово");
+  await waitCount(page, "1 / 4");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  assert.equal(await counter(page), "3 / 4");
+  await page.keyboard.press(`${MOD}+KeyF`);
+  assert.equal(await counter(page), "3 / 4", "повторний ⌘F не перезапускає пошук");
+  assert.equal(await page.evaluate(() => { const i = document.getElementById("find-q"); return i.selectionStart === 0 && i.selectionEnd === i.value.length; }), true);
+  await f.click("h1");
+  await page.keyboard.press(`${MOD}+KeyF`);
+  assert.equal(await counter(page), "3 / 4", "те саме з фокусом у макеті");
+  /* Закрита й відкрита знову плашка шукає заново — з першого збігу. */
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#find", { state: "hidden" });
+  await page.keyboard.press(`${MOD}+KeyF`);
+  await waitCount(page, "1 / 4");
+});
+
+test("11: Esc: із фокусом у макеті закриває плашку; без плашки Esc до макета доходить; фокус вертається туди, звідки прийшов ⌘F", async (t) => {
+  const { page, f } = await boot(t, 1000);
+  await f.evaluate(() => { window.__esc = 0; document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.__esc += 1; }); });
+  await f.click("h1");
+  await page.keyboard.press("Escape");
+  assert.equal(await f.evaluate(() => window.__esc), 1, "плашки нема — Esc не гасимо (коментатор/інспектор ним користуються)");
+  await page.keyboard.press(`${MOD}+KeyF`);
+  await page.waitForSelector("#find:not([hidden])");
+  await page.keyboard.type("слово");
+  await waitCount(page, "1 / 4");
+  await f.click("h1");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#find", { state: "hidden" });
+  assert.equal(await f.evaluate(() => window.__esc), 1, "Esc, що закрив плашку, до макета не дійшов");
+  assert.equal(await f.evaluate(() => CSS.highlights.has("deai-find")), false);
+  /* ⌘F із макета → Esc у полі: фокус у вікні рамки, не на body. */
+  await f.click("h1");
+  await page.keyboard.press(`${MOD}+KeyF`);
+  await page.waitForSelector("#find:not([hidden])");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#find", { state: "hidden" });
+  assert.equal(await page.evaluate(() => document.activeElement.id), "frame", "фокус повернувся у рамку");
+  /* ⌘F з елемента оболонки → ✕: фокус на тому ж елементі. */
+  await page.focus("#bar button");
+  const was = await page.evaluate(() => document.activeElement.outerHTML);
+  await page.keyboard.press(`${MOD}+KeyF`);
+  await page.waitForSelector("#find:not([hidden])");
+  await page.click('#find [data-find="close"]');
+  await page.waitForSelector("#find", { state: "hidden" });
+  assert.equal(await page.evaluate(() => document.activeElement.outerHTML), was, "фокус повернувся на елемент оболонки");
+});
+
+test("12: рамка пішла на чужий документ при відкритій плашці — лічильник скидається, а не лишає старе «N / M»", async (t) => {
+  const other = createServer((q, r) => { r.setHeader("content-type", "text/html; charset=utf-8"); r.end("<!DOCTYPE html><title>x</title><p>слово</p>"); });
+  await new Promise((ok) => other.listen(0, "127.0.0.1", ok));
+  t.after(() => other.close());
+  const { page, f } = await boot(t, 1100);
+  void f;
+  await page.keyboard.press(`${MOD}+KeyF`);
+  await page.keyboard.type("слово");
+  await waitCount(page, "1 / 4");
+  await page.evaluate((u) => { document.getElementById("frame").src = u; }, `http://127.0.0.1:${other.address().port}/`);
+  await waitCount(page, "0 / 0", 15000);
+});
+
+test("13: між початком переходу рамки й її load ⌘G не фарбує нічого в новому документі зі старими збігами", async (t) => {
+  const { page, f } = await boot(t, 1200);
+  void f;
+  let release = () => {};
+  const held = new Promise((ok) => { release = ok; });
+  await page.route("**/slow.png", async (route) => { await held; await route.fulfill({ status: 404, body: "" }); });
+  await page.keyboard.press(`${MOD}+KeyF`);
+  await page.keyboard.type("слово");
+  await waitCount(page, "1 / 4");
+  await page.click('[data-act="page"][data-val="poshuk"]');
+  await page.waitForFunction(() => {
+    const d = document.getElementById("frame").contentDocument;
+    return d && d.readyState !== "complete" && !!d.body?.querySelector("img");
+  }, null, { timeout: 15000 });
+  await page.keyboard.press(`${MOD}+KeyG`);
+  const st = await page.evaluate(() => {
+    const d = document.getElementById("frame").contentDocument;
+    return { sheets: d.adoptedStyleSheets.length, hl: d.defaultView.CSS.highlights.has("deai-find") || d.defaultView.CSS.highlights.has("deai-find-cur") };
+  });
+  assert.deepEqual(st, { sheets: 0, hl: false }, "у новому документі нічого зі старими збігами");
+  release();
+  await waitCount(page, "1 / 1", 15000);
 });

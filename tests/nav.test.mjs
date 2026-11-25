@@ -337,6 +337,10 @@ test("navKeyDir: платформний модифікатор — на Mac ли
   assert.equal(navKeyDir(k({ metaKey: true, shiftKey: true }), true), 0);
   assert.equal(navKeyDir(k({ metaKey: true, isComposing: true }), true), 0);
   assert.equal(navKeyDir({ code: "BracketLeft", key: "х", metaKey: true }, true), -1, "укр. розкладка: за `code`");
+  assert.equal(navKeyDir({ code: "BracketRight", key: "ъ", metaKey: true }, true), 1, "нелатинська розкладка: за `code`");
+  assert.equal(navKeyDir({ code: "BracketLeft", key: "/", metaKey: true }, true), 0, "Dvorak: фізична `[` видає `/` — не крадемо ⌘/");
+  assert.equal(navKeyDir({ code: "Slash", key: "[", metaKey: true }, true), -1, "Dvorak: `[` стоїть деінде — за `key`");
+  assert.equal(navKeyDir({ code: "BracketRight", key: "=", ctrlKey: true }, false), 0, "Dvorak: фізична `]` видає `=`");
 });
 
 test("isMacPlatform: userAgentData → platform → userAgent; перший непорожній вирішує; без navigator — не Mac", () => {
@@ -389,6 +393,14 @@ test("findKeyOf: матриця платформ — ⌘F/⌘G/⇧⌘G на Mac,
   assert.equal(findKeyOf(e({ code: "KeyG", key: "п", metaKey: true }), true), "next");
   assert.equal(findKeyOf(e({ code: "KeyY", key: "f", metaKey: true }), true), "find", "розкладка, де `f` не на KeyF: за `key`");
   assert.equal(findKeyOf(e({ code: "KeyG", key: "G", ctrlKey: true, shiftKey: true }), false), "prev");
+  /* Dvorak/Colemak: фізична F видає `u`/`e` — це ⌘U/⌘E, а не пошук; фізична G там — `i`/`g`. */
+  assert.equal(findKeyOf(e({ code: "KeyF", key: "u", metaKey: true }), true), null, "Dvorak: фізична F = ⌘U");
+  assert.equal(findKeyOf(e({ code: "KeyF", key: "e", metaKey: true }), true), null, "Colemak: фізична F = ⌘E");
+  assert.equal(findKeyOf(e({ code: "KeyG", key: "i", ctrlKey: true }), false), null, "Dvorak: фізична G = Ctrl+I");
+  assert.equal(findKeyOf(e({ code: "KeyU", key: "f", metaKey: true }), true), "find", "Dvorak: ⌘F стоїть на KeyU");
+  assert.equal(findKeyOf(e({ code: "KeyI", key: "g", metaKey: true }), true), "next");
+  assert.equal(findKeyOf(e({ code: "KeyF", key: "Dead", metaKey: true }), true), "find", "мертва клавіша — не ASCII: за `code`");
+  assert.equal(findKeyOf(e({ code: "KeyF", key: "", metaKey: true }), true), "find", "порожній `key`: за `code`");
 });
 
 test("проводка 0.40 (T7): navKeys бере пошук із findKeyOf; ⌘G без плашки не перехоплюється; один захоплювач у рамці; findGuard після nav.sync", async () => {
@@ -401,6 +413,7 @@ test("проводка 0.40 (T7): navKeys бере пошук із findKeyOf; �
   assert.equal(src.split("addEventListener('keydown', frameNavKey, true)").length - 1, 1, "захоплювач рамки ставиться з одного місця");
   assert.match(src, /if \(find\.isOpen\(\)\) find\.rerun\(\);/);
   assert.equal(src.split("findGuard();").length - 1, 2, "render() і enterHome");
-  assert.match(src, /nav\.sync\(\);   \/\/ 0\.40: адреса — з одного місця[^\n]*\n  findGuard\(\);/);
-  assert.match(src, /nav\.sync\(\);   \/\/ 0\.40: «Задачі» \/ «Налаштування»[^\n]*\n  findGuard\(\);/);
+  assert.equal(src.split(/nav\.sync\(\);\s*(?:\/\/[^\n]*\n\s*)?findGuard\(\);/).length - 1, 2, "findGuard — одразу після nav.sync у render() і enterHome");
+  const fnk = src.slice(src.indexOf("function frameNavKey("), src.indexOf("function frameNavKey(") + 400);
+  assert.match(fnk, /ev\.key === 'Escape'[^\n]*find\.isOpen\(\)/, "Esc у рамці закриває лише ВІДКРИТУ плашку");
 });

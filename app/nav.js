@@ -45,14 +45,24 @@ export function isMacPlatform(nav) {
 }
 
 /**
+ * Ідентифікатор клавіші (чисто): якщо `key` — один друкований ASCII-символ, вирішує він (Dvorak/Colemak: фізична F там видає `u`/`e`
+ * і не мусить красти ⌘U/⌘E); інакше (нелатинська розкладка, мертві клавіші) — фізичний `code`. Латинь `key` — у нижньому регістрі.
+ */
+function keyId(ev) {
+  const key = String(ev.key || "");
+  return /^[\x20-\x7e]$/.test(key) ? key.toLowerCase() : String(ev.code || "");
+}
+
+/**
  * Клавіша навігації (чисто): `-1` для ⌘[ / `1` для ⌘], інакше `0`. Модифікатор — платформний: на Mac лише ⌘ (`metaKey`), інакше лише Ctrl
  * (Ctrl+[ на Mac і ⌘[ на Windows — чужі гарячі клавіші, їх не перехоплюємо). `code` поруч із `key`: на українській розкладці `[` — `х`.
  */
 export function navKeyDir(ev, mac) {
   if (ev.isComposing || ev.altKey || ev.shiftKey) return 0;
   if (!(mac ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && !ev.metaKey)) return 0;
-  if (ev.code === "BracketLeft" || ev.key === "[") return -1;
-  if (ev.code === "BracketRight" || ev.key === "]") return 1;
+  const k = keyId(ev);
+  if (k === "[" || k === "BracketLeft") return -1;
+  if (k === "]" || k === "BracketRight") return 1;
   return 0;
 }
 
@@ -65,9 +75,9 @@ export function navKeyDir(ev, mac) {
 export function findKeyOf(ev, mac) {
   if (ev.isComposing || ev.altKey) return null;
   if (!(mac ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && !ev.metaKey)) return null;
-  const key = String(ev.key || "").toLowerCase();
-  if (ev.code === "KeyF" || key === "f") return ev.shiftKey ? null : "find";
-  if (ev.code === "KeyG" || key === "g") return ev.shiftKey ? "prev" : "next";
+  const k = keyId(ev);
+  if (k === "f" || k === "KeyF") return ev.shiftKey ? null : "find";
+  if (k === "g" || k === "KeyG") return ev.shiftKey ? "prev" : "next";
   return null;
 }
 
