@@ -79,7 +79,7 @@ test("проводка ⌘K: картка через askForm без якоря, 
   assert.match(body, /e\.target === scrim/);
   const demo = src.slice(src.indexOf("async function openDemo("), src.indexOf("async function openDemo(") + 900);
   assert.match(demo, /post\('\/api\/demo-task', \{ space: spaceId, title: t\('frDemoTaskTitle'\), reuse: true \}\)/);
-  assert.match(demo, /r\.existed \? switchTask\(r\.id\) : wizOpenTask\(r\)/);
+  assert.match(demo, /r\.existed \? switchTask\(r\.id\) : navigating\(\(\) => wizOpenTask\(r\)\)/);
 });
 
 test("пароль: меню веде в Модулі з шухлядою на полі пароля; картка — `pw` відкриває ту саму шухляду", async () => {

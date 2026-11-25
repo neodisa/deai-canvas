@@ -1302,6 +1302,18 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
 #panel-resize:focus-visible{outline:none}
 body.panel-dragging{user-select:none}
 body.panel-dragging .panel{transition:none}
+/* Плашка пошуку в макеті (0.40, `app/find-bar.js`): справа вгорі над сценою; зсувається лівіше правих панелей. */
+#find{position:fixed;top:calc(var(--h-top) + 8px);right:12px;z-index:var(--z-widget);display:flex;align-items:center;gap:2px;
+  padding:4px 4px 4px 10px;background:var(--s2);border:1px solid var(--line2);border-radius:var(--r-lg);
+  box-shadow:0 8px 24px rgba(0,0,0,.35)}
+#find[hidden]{display:none}
+body.with-insp #find,body.with-cmt #find,body.with-mod #find,body.with-hist #find{right:calc(var(--insp-w) + 12px)}
+#find input{width:220px;height:var(--h-sm);background:none;border:0;outline:0;color:var(--hi);font:inherit}
+#find input::placeholder{color:var(--dim)}
+.find-n{min-width:46px;padding-right:4px;text-align:right;color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+.find-n.none{color:var(--bad)}
+#find .ctl--icon{width:var(--h-sm);height:var(--h-sm)}
+.find-prev .ico{transform:rotate(180deg)}
 body:not(.with-panel) #panel-resize,body.panel-collapsed #panel-resize,body.home-open #panel-resize,
 html.cv-clean #panel-resize{display:none}
 /* дерево сторінок */

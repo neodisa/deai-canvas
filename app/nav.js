@@ -56,6 +56,21 @@ export function navKeyDir(ev, mac) {
   return 0;
 }
 
+/**
+ * Клавіша пошуку (чисто): `'find'` для ⌘F, `'next'` для ⌘G, `'prev'` для ⇧⌘G, інакше `null`. Платформний модифікатор — той самий, що в
+ * `navKeyDir`: на Mac лише ⌘, інакше лише Ctrl. На Mac Ctrl+F — «курсор уперед» у текстових полях, Ctrl+G — «перервати»: їх
+ * перехоплювати не можна; так само ⌘F на Windows. `code` поруч із `key`: на українській розкладці `F` — `а`, `G` — `п`.
+ * Shift має сенс лише для G; Alt/композиція — не наше.
+ */
+export function findKeyOf(ev, mac) {
+  if (ev.isComposing || ev.altKey) return null;
+  if (!(mac ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && !ev.metaKey)) return null;
+  const key = String(ev.key || "").toLowerCase();
+  if (ev.code === "KeyF" || key === "f") return ev.shiftKey ? null : "find";
+  if (ev.code === "KeyG" || key === "g") return ev.shiftKey ? "prev" : "next";
+  return null;
+}
+
 export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}, cap = NAV_CAP }) {
   const norm = (loc) => formatLocation(loc);
   const urlOf = (hash) => `${win.location.pathname}${win.location.search}${hash}`;

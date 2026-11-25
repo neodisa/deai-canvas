@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EMPTY_LOC, formatLocation, parseLocation } from "../app/location-model.js";
-import { bootFollowsServer, createNav, isMacPlatform, navKeyDir } from "../app/nav.js";
+import { bootFollowsServer, createNav, findKeyOf, isMacPlatform, navKeyDir } from "../app/nav.js";
 
 const L = (o) => ({ ...EMPTY_LOC, ...o });
 const H = (o) => formatLocation(L(o));
@@ -366,4 +366,41 @@ test("проводка 0.40 (мінори T5): створення задачі �
   assert.match(src, /await enterConnections\(\); return homeOpen && homePage === 'conn';/, "settings: відмова, якщо не відкрилось");
   assert.match(src, /\(d < 0 \? nav\.back\(\) : nav\.forward\(\)\)\.catch\(\(\) => \{\}\)/);
   assert.match(src, /const live = \(\) => gen === goGen && tgen === taskSwitchGen && stillWanted\(\);/);
+});
+
+test("findKeyOf: матриця платформ — ⌘F/⌘G/⇧⌘G на Mac, Ctrl деінде; чужий модифікатор, Alt, композиція, ⇧F — null", () => {
+  const e = (o) => ({ code: "", key: "", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false, ...o });
+  const F = { code: "KeyF", key: "f" };
+  const G = { code: "KeyG", key: "g" };
+  for (const [mac, own, other] of [[true, "metaKey", "ctrlKey"], [false, "ctrlKey", "metaKey"]]) {
+    assert.equal(findKeyOf(e({ ...F, [own]: true }), mac), "find");
+    assert.equal(findKeyOf(e({ ...G, [own]: true }), mac), "next");
+    assert.equal(findKeyOf(e({ ...G, key: "G", [own]: true, shiftKey: true }), mac), "prev");
+    assert.equal(findKeyOf(e({ ...F, [other]: true }), mac), null, `чужий модифікатор (mac=${mac})`);
+    assert.equal(findKeyOf(e({ ...G, [other]: true }), mac), null);
+    assert.equal(findKeyOf(e({ ...F, [own]: true, [other]: true }), mac), null, "обидва модифікатори — не наше");
+    assert.equal(findKeyOf(e({ ...F, [own]: true, altKey: true }), mac), null);
+    assert.equal(findKeyOf(e({ ...F, [own]: true, isComposing: true }), mac), null);
+    assert.equal(findKeyOf(e({ ...F, [own]: true, shiftKey: true }), mac), null, "⇧⌘F — не наше");
+    assert.equal(findKeyOf(e({ code: "KeyH", key: "h", [own]: true }), mac), null);
+    assert.equal(findKeyOf(e({ ...F }), mac), null, "без модифікатора");
+  }
+  assert.equal(findKeyOf(e({ code: "KeyF", key: "а", metaKey: true }), true), "find", "укр. розкладка: за `code`");
+  assert.equal(findKeyOf(e({ code: "KeyG", key: "п", metaKey: true }), true), "next");
+  assert.equal(findKeyOf(e({ code: "KeyY", key: "f", metaKey: true }), true), "find", "розкладка, де `f` не на KeyF: за `key`");
+  assert.equal(findKeyOf(e({ code: "KeyG", key: "G", ctrlKey: true, shiftKey: true }), false), "prev");
+});
+
+test("проводка 0.40 (T7): navKeys бере пошук із findKeyOf; ⌘G без плашки не перехоплюється; один захоплювач у рамці; findGuard після nav.sync", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("function navKeys(ev) {"), src.indexOf("function frameNavKey("));
+  assert.match(body, /const fk = findKeyOf\(ev, NAV_MAC\);/);
+  assert.match(body, /if \(!find\.isOpen\(\)\) return false;/, "⌘G без плашки лишається «згрупувати»");
+  assert.doesNotMatch(body, /metaKey|ctrlKey/, "платформне правило — лише в nav.js");
+  assert.equal(src.split("addEventListener('keydown', frameNavKey, true)").length - 1, 1, "захоплювач рамки ставиться з одного місця");
+  assert.match(src, /if \(find\.isOpen\(\)\) find\.rerun\(\);/);
+  assert.equal(src.split("findGuard();").length - 1, 2, "render() і enterHome");
+  assert.match(src, /nav\.sync\(\);   \/\/ 0\.40: адреса — з одного місця[^\n]*\n  findGuard\(\);/);
+  assert.match(src, /nav\.sync\(\);   \/\/ 0\.40: «Задачі» \/ «Налаштування»[^\n]*\n  findGuard\(\);/);
 });

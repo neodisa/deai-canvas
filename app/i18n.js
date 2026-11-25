@@ -1634,6 +1634,11 @@ const UK = {
   navBack: 'Назад ⌘[',
   navFwd: 'Вперед ⌘]',
   navReload: 'Оновити макет',
+  /* 0.40: пошук у макеті (⌘F). */
+  findPlaceholder: 'Знайти в макеті',
+  findPrev: 'Попередній збіг',
+  findNext: 'Наступний збіг',
+  findClose: 'Закрити пошук',
 };
 
 const EN = {
@@ -3026,6 +3031,11 @@ const EN = {
   navBack: 'Back ⌘[',
   navFwd: 'Forward ⌘]',
   navReload: 'Reload mockup',
+  /* 0.40: find in mockup (⌘F). */
+  findPlaceholder: 'Find in mockup',
+  findPrev: 'Previous match',
+  findNext: 'Next match',
+  findClose: 'Close find',
 };
 
 /** Підтримувані мови інтерфейсу, у порядку типовості: українська — типова. */

@@ -86,7 +86,8 @@ import { feedbackDialogHTML } from './feedback-view.js';
 import { introCardHTML } from './first-run.js';
 import { mountTooltip } from './tooltip.js';
 import { mountPanelResize } from './panel-resize.js';
-import { bootFollowsServer, createNav, isMacPlatform, navKeyDir } from './nav.js';
+import { bootFollowsServer, createNav, findKeyOf, isMacPlatform, navKeyDir } from './nav.js';
+import { createFindBar } from './find-bar.js';
 import { EMPTY_LOC, classifyTask, hasPlace, parseLocation } from './location-model.js';
 import { claudeToastKey, runCommand, unhookToastKey } from './setup-model.js';
 import {
@@ -1439,6 +1440,7 @@ async function render({ keepFrame = false } = {}) {
   applyMode(task, { keepFrame });
   renderPanel();
   nav.sync();   // 0.40: адреса — з одного місця, після того як стан усталився
+  findGuard();
   /* Інструменти модулів — на вході в простір чи задачу (після змін модулів — `afterModulesChange`). Не чекаємо: збій тут нічого не ламає. */
   if ((spaceNow()?.id ?? '') !== modExtKey) loadModExt();
 }
@@ -2813,21 +2815,55 @@ function frameCmtKey(ev) {
     if (mk) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.modtool(mk); }
   }
 }
-/** Клавіші навігації (0.40), спільні для оболонки й вікна рамки: ⌘[ / ⌘] (Ctrl на Windows) — Назад/Вперед у НАШОМУ стеку. `true` —
- *  перехоплено (`preventDefault`: інакше рамка пішла б по власній історії). `code`, а не лише `key`: на українській розкладці `[` —
- *  клавіша `х`. T7 додає сюди ⌘F і ⌘G. */
 const NAV_MAC = isMacPlatform();
+const find = createFindBar({ getFrame: () => frame });
+/** ⌘F: де саме шукати. «Макет» — плашка; «Огляд» — фільтр сторінок (розгорнувши панель); «Задачі» — пошук задач; інакше не наше
+ *  (`false` → рідний пошук браузера лишається). */
+function findHere() {
+  if (homeOpen) {
+    if (homePage !== 'tasks') return false;
+    const q = document.getElementById('th-q');
+    if (!q) return false;
+    q.focus(); q.select();
+    return true;
+  }
+  if (mode === 'canvas') {
+    if (panelCollapsed) setPanelCollapsed(false);
+    const f = document.getElementById('pp-filter');
+    if (!f) return false;
+    f.focus(); f.select();
+    return true;
+  }
+  if (!curTask) return false;
+  find.open();
+  return true;
+}
+/** Плашка живе лише над «Макетом»: «Огляд» і «Задачі» її документа не мають. Кличуть `render()` і `enterHome` (після `nav.sync()`). */
+function findGuard() { if (find.isOpen() && (mode === 'canvas' || homeOpen)) find.close(); }
+/** Клавіші навігації (⌘[ ⌘]) і пошуку (⌘F ⌘G ⇧⌘G), спільні для оболонки й вікна рамки; модифікатор платформний (`navKeyDir`,
+ *  `findKeyOf`). `true` — перехоплено (`preventDefault`: інакше рамка пішла б по власній історії, а браузер відкрив би свій пошук).
+ *  ⌘G працює лише коли плашка відкрита — інакше лишається «згрупувати» у глобальному keydown нижче. Під модальним ⌘[ ⌘] перехоплюємо,
+ *  але не веземо (рідна «Назад» не мусить спрацювати); ⌘F/⌘G не чіпаємо взагалі — рідний пошук у діалозі нікому не шкодить. */
 function navKeys(ev) {
   const d = navKeyDir(ev, NAV_MAC);
-  if (!d) return false;
-  /* Під модальним (палітра, діалог) ⌘[ ⌘] перехоплюємо (`true` → `preventDefault`, щоб рідна «Назад» браузера не спрацювала), але не веземо. */
-  if (!shellModalOpen() && !ev.repeat) (d < 0 ? nav.back() : nav.forward()).catch(() => {});
+  if (d) {
+    if (!shellModalOpen() && !ev.repeat) (d < 0 ? nav.back() : nav.forward()).catch(() => {});
+    return true;
+  }
+  const fk = findKeyOf(ev, NAV_MAC);
+  if (!fk || shellModalOpen()) return false;
+  if (fk === 'find') return findHere();
+  if (!find.isOpen()) return false;
+  if (!ev.repeat) (fk === 'prev' ? find.prev() : find.next());
   return true;
 }
 /** Те саме у вікні рамки: `frameCmtKey` виходить на будь-якому модифікаторі, тож окремий захоплювач. */
 function frameNavKey(ev) { if (navKeys(ev)) { ev.preventDefault(); ev.stopPropagation(); } }
+/* ЄДИНА точка, де захоплювач ставиться на документ рамки (новий документ — нове вікно, дублів не буває). Відкрита плашка шукає
+   той самий запит у новому документі. */
 frame.addEventListener('load', () => {
-  try { frame.contentWindow.addEventListener('keydown', frameNavKey, true); } catch (e) { /* чужий документ */ }
+  try { frame.contentWindow.addEventListener('keydown', frameNavKey, true); } catch (e) { return; }   // чужий документ
+  if (find.isOpen()) find.rerun();
 });
 let frameHash = null;   // одноразовий `{it, page, hash}` для наступного `frame.src` (посилання всередині макета)
 /* Запобіжник спрацював — ключ «задача|ітерація», де саме: інша задача чи ітерація ходить за посиланнями як звичайно. */
@@ -4889,6 +4925,7 @@ function enterHome({ spaces = true, page } = {}) {
   el.hidden = false;
   paintBar();
   nav.sync();   // 0.40: «Задачі» / «Налаштування» (h=…) — теж місце в адресі (майстер дає h=tasks, свого запису не має)
+  findGuard();
   if (homePage === 'wiz') {
     /* Майстер малює себе сам (`wiz.paint` через `paintHome`); фокус ставить `openWizard`/крок. Запізніле `loadHome` не
        сміє перемалювати сторінку. */
