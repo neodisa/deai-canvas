@@ -506,10 +506,14 @@ test("7: ЛІГА без змін — підпис «GitLab», «Налашту�
 
   /* Задача з маппінгом: той самий зашитий шлях 0.7.0 (дзеркало — плоска тека `.mirrors`, не `<DEAI_HOME>/cache`). */
   assert.equal((await postJson(s.url, "/api/task-switch", { id: "mapped" })).status, 200);
-  /* Свіже відкриття БЕЗ адреси (0.40): адреса несе стару задачу, і `reload` перемкнув би сервер назад. */
-  await page.goto(`${s.url}/app/`);
+  /* Перезавантаження НЕ скасовує перемикання, зроблене ззовні (0.40): адреса несе стару задачу, але reload іде за сервером. */
+  const switches = [];
+  page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/task-switch") switches.push(r.method()); });
+  await page.reload();
   await page.waitForSelector(`${GL} .dot--warn`, { timeout: 15000 });
   assert.equal((await glLabel(page)).trim(), "GitLab");
+  assert.equal((await (await fetch(`${s.url}/api/tasks`)).json()).current, "mapped", "сервер лишився на «mapped»");
+  assert.deepEqual(switches, [], "сторінка не слала task-switch після перезавантаження");
   const menu = await glMenu(page);
   assert.equal(menu.find((m) => m.act === "glpush").text, "Надіслати Іт.1 на GitLab");
   await page.click('#bar [data-act="glpush"]');

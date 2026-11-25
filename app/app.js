@@ -86,8 +86,8 @@ import { feedbackDialogHTML } from './feedback-view.js';
 import { introCardHTML } from './first-run.js';
 import { mountTooltip } from './tooltip.js';
 import { mountPanelResize } from './panel-resize.js';
-import { createNav } from './nav.js';
-import { classifyTask, hasPlace, parseLocation } from './location-model.js';
+import { bootFollowsServer, createNav } from './nav.js';
+import { EMPTY_LOC, classifyTask, hasPlace, parseLocation } from './location-model.js';
 import { claudeToastKey, runCommand, unhookToastKey } from './setup-model.js';
 import {
   formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
@@ -10299,11 +10299,21 @@ async function freshenForCanvas() {
    `loadTune()` (пакет тюнера береться для поточної задачі); решту (ітерація, сторінка, стан, режим, вид) ставимо змінними до
    першого `render()`. ⛔ Лише коли задача знайдена (чи її в адресі нема): невідому/видалену тихо замінюємо на звичне місце
    її ПОТОЧНОЇ задачі — ітерація з адреси іншої задачі в цій не мала б сенсу. */
+/** Тип входу в документ: `navigate` (посилання, нова вкладка) | `reload` | `back_forward`… Збій читання — `navigate` (поведінка за посиланням). */
+function bootNavType() {
+  try { return performance.getEntriesByType('navigation')[0]?.type || 'navigate'; } catch (e) { return 'navigate'; }
+}
 async function bootPlace() {
   const loc = parseLocation(location.hash);
   if (!hasPlace(loc)) return null;
   try {
     const cur = loc.t ? (await api('/api/tasks')).current : null;
+    /* Посилання — явний намір (перемикаємо сервер); перезавантаження — ні: перемикання від агента/CLI/іншого вікна мусить його
+       пережити, тож іншу задачу з адреси відкидаємо й ідемо за сервером (без тосту); перший `render()` перепише адресу. */
+    if (bootFollowsServer(bootNavType(), loc, cur)) {
+      const keep = { ...EMPTY_LOC, m: loc.m, v: loc.v, h: loc.h };
+      return hasPlace(keep) ? keep : null;
+    }
     const st = await resolveTaskLoc(loc, cur, (id) => post('/api/task-switch', { id }));
     return st === 'unknown' || st === 'error' ? null : loc;   // невідома чи збій — звичне місце поточної задачі
   } catch (e) { return null; }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EMPTY_LOC, formatLocation, parseLocation } from "../app/location-model.js";
-import { createNav } from "../app/nav.js";
+import { bootFollowsServer, createNav } from "../app/nav.js";
 
 const L = (o) => ({ ...EMPTY_LOC, ...o });
 const H = (o) => formatLocation(L(o));
@@ -315,4 +315,12 @@ test("усі записи «вперед» мертві: false, мертві в�
   assert.deepEqual(nav.entries(), [H({ t: "a", p: "x" })]);
   assert.equal(nav.index(), 0);
   assert.equal(nav.canFwd(), false);
+});
+
+test("bootFollowsServer: посилання перемикає, reload/back_forward з іншою задачею йдуть за сервером, та сама задача — повне місце", () => {
+  assert.equal(bootFollowsServer("navigate", L({ t: "b" }), "a"), false, "посилання: явний намір");
+  assert.equal(bootFollowsServer("reload", L({ t: "b" }), "a"), true);
+  assert.equal(bootFollowsServer("back_forward", L({ t: "b" }), "a"), true);
+  assert.equal(bootFollowsServer("reload", L({ t: "a" }), "a"), false, "та сама задача — повне місце");
+  assert.equal(bootFollowsServer("reload", L({ it: "it1" }), "a"), false, "без t нічого перемикати");
 });

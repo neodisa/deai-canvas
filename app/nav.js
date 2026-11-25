@@ -19,6 +19,16 @@ import { formatLocation, parseLocation } from "./location-model.js";
 
 export const NAV_CAP = 100;
 
+/**
+ * Старт: чи йти ЗА СЕРВЕРОМ, а не за задачею з адреси (чисто, щоб тестувати). Посилання (`navigate`) — явний намір: задачу
+ * перемикаємо. Перезавантаження й «назад/вперед» браузера (`reload`, `back_forward`) серверну задачу НЕ перемикають: її міг змінити
+ * агент, CLI чи інше вікно, і ⌘R мовчки скасував би це. Тоді задача, ітерація, сторінка й стан з адреси відкидаються (їхній
+ * сенс — у ТІЙ задачі), лишається вигляд оболонки (`m`/`v`/`h`).
+ */
+export function bootFollowsServer(navType, loc, current) {
+  return navType !== "navigate" && Boolean(loc.t) && loc.t !== current;
+}
+
 export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}, cap = NAV_CAP }) {
   const norm = (loc) => formatLocation(loc);
   const urlOf = (hash) => `${win.location.pathname}${win.location.search}${hash}`;

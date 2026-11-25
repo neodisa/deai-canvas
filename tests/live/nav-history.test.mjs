@@ -209,3 +209,26 @@ test("T4-9: старт із h=settings відкриває «Налаштуван
   assert.equal(await page.evaluate(() => document.body.classList.contains("home-open")), true);
   assert.match(await hash(page), /h=settings/);
 });
+
+test("T4-10: перемикання задачі ззовні переживає перезавантаження: reload іде за сервером, task-switch сторінкою не шлеться", async (t) => {
+  const A = twoIterations();
+  const B = taskFixture({ html: PAGE });
+  const { child, url } = await startServer(null, { portBase: PORT_BASE + 900, spaces: [
+    { name: "Alpha", id: "alpha", color: "space-1", tasks: { ta: { dir: A, title: "Задача A" }, tb: { dir: B.dir, title: "Задача B" } } },
+  ] });
+  t.after(() => child.kill());
+  const page = await browser.newPage({ viewport: VIEW });
+  t.after(() => page.close());
+  await page.goto(`${url}/app/#sp=alpha&t=ta&it=it1&p=poshuk`);
+  await page.waitForFunction(() => /t=ta/.test(location.hash) && /it=it1/.test(location.hash));
+  await frameReady(page, /it=it1.*page=poshuk/);
+  const sw = await page.request.post(`${url}/api/task-switch`, { data: { id: "tb" } });
+  assert.equal(sw.status(), 200);
+  const switches = [];
+  page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/task-switch") switches.push(r.method()); });
+  await page.reload();
+  await page.waitForFunction(() => /t=tb/.test(location.hash), null, { timeout: 20000 });
+  assert.doesNotMatch(await hash(page), /it=it1&p=poshuk/, "ітерація/сторінка задачі A не перенесені в B");
+  assert.equal((await (await page.request.get(`${url}/api/tasks`)).json()).current, "tb");
+  assert.deepEqual(switches, []);
+});
