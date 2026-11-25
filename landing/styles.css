@@ -437,7 +437,6 @@ section[id] { scroll-margin-top: 20px; }
 .tp-tabs { display: inline-flex; align-self: flex-start; gap: .25em; padding: .3em; border-radius: .9em; background: var(--pine); box-shadow: inset 0 0 0 1px var(--pine-line); }
 .tp-tabs span { padding: .45em 1.2em; border-radius: .65em; color: var(--pine-muted); font-weight: 640; }
 .tp-tabs .on { background: var(--lime); color: var(--ink); }
-.tp-foot { color: var(--pine-muted); font-size: .9em; }
 .tp-list { display: grid; gap: 1.1cqw; margin: 0; padding: 0; list-style: none; }
 .tp-list li { display: grid; grid-template-columns: 2.6em 2.4em minmax(0, 1fr) auto; align-items: center; gap: 1em; padding: .95em 1.3em; border-radius: 1em; background: var(--pine); box-shadow: inset 0 0 0 1px var(--pine-line); }
 .tp-it { font-weight: 720; font-variant-numeric: tabular-nums; }
