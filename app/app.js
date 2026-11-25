@@ -84,6 +84,7 @@ import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
 import { introCardHTML } from './first-run.js';
+import { mountTooltip } from './tooltip.js';
 import { claudeToastKey, runCommand, unhookToastKey } from './setup-model.js';
 import {
   formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
@@ -10197,6 +10198,9 @@ document.addEventListener('keydown', (ev) => {
   ev.stopPropagation();
   closeOverlay();
 }, true);
+
+/* Підказки (0.40): одна плашка на весь застосунок; ховається, коли ручка панелі починає перетягування (подія `dc-tip-hide`). */
+mountTooltip(document);
 
 // Ширина зі сховища мусить лягти у стиль ДО першого рендера: інакше макет
 // встигне вималюватись на повну ширину й перекластись, тобто вибраний мобайл

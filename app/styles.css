@@ -1310,6 +1310,12 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
 .row:hover .row-ic{color:var(--mid)}
 .row-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;font-size:13px}
+/* Підказка (0.40, `app/tooltip.js`): темна плашка, лише `opacity` — без руху. Не ловить вказівник. */
+#dc-tip{position:fixed;top:0;left:0;z-index:var(--z-toast);max-width:420px;padding:5px 8px;
+  background:var(--s0);color:var(--hi);border:1px solid var(--s4);border-radius:var(--r-sm);
+  font-size:12px;line-height:1.35;box-shadow:0 6px 20px rgba(0,0,0,.35);
+  opacity:0;pointer-events:none;transition:opacity 120ms var(--ease);overflow-wrap:anywhere}
+#dc-tip.on{opacity:1}
 /* Куди ляже сторінка, яку тягнуть (`wirePageDrag`, app.js): лінія по краю
    рядка, а не підсвітка всього рядка — підсвічений рядок читався б як «покладу
    ВСЕРЕДИНУ», тобто як зміна вкладеності, а перетягування її свідомо не робить
