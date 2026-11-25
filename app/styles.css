@@ -1187,6 +1187,11 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
 .zone{display:flex;align-items:center;gap:6px;min-width:0}
 .zone-2{justify-content:center}
 .zone-3{justify-content:flex-end}
+/* 0.40: центр смуги — лише сегмент режиму (`.zone-2` у центральній колонці `auto` несе тільки його). `.zone-2x` (Сітка/Флоу, ширини,
+   «⋯») виходить із потоку й стоїть упритул праворуч від сегмента, у просторі правої колонки, — тому різна ширина решти в «Макеті»
+   й «Огляді» сегмент не зсуває. `:has` — щоб зовнішня оболонка превʼю (власна розмітка зони 2, без `.zone-2x`) лишилась як була. */
+.zone-2:has(>.zone-2x){position:relative}
+.zone-2x{position:absolute;left:calc(100% + 10px);top:0;bottom:0;width:max-content;display:flex;align-items:center;gap:6px;white-space:nowrap}
 /* Назад / Вперед / Оновити (0.40): кнопки 28 px, роздільник праворуч. */
 .nav{display:flex;align-items:center;gap:2px;flex:none;padding-right:6px;margin-right:4px;border-right:1px solid var(--line)}
 .nav .ctl--icon{width:var(--h-sm);height:var(--h-sm)}
@@ -1210,6 +1215,12 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
    ЗОВСІМ»), лише для нового контролу. */
 @container (max-width:1300px){ .lbl-gl{display:none} }
 @container (max-width:1180px){ .lbl-mode,.lbl-upd{display:none} }
+/* 0.40: підписи «Сітка/Флоу» (`TIERS.viewLabel`) зникають раніше за решту: `.zone-2x` стоїть праворуч від центрального сегмента й з ними
+   налазила б на зону 3. */
+@container (max-width:1440px){ .lbl-view{display:none} }
+/* Видима причина вимкненого «Флоу» (`.dd-why`) в смузі не розпирає `.zone-2x` до зони 3: рядок обрізається, повний текст — у `title`. */
+.zone-2x .seg .dd-why{max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@container (max-width:1300px){ .zone-2x .seg .dd-why{display:none} }   /* вужче — лише `title` (виміряно: 25px на 1024, 11px на 1280) */
 /* Превʼю (0.32.1): інструменти — іконки в правому куті смуги перед «Копіювати посилання». Бейдж коментарів сидить на кнопці
    (`.isl-count` — абсолютний), на увімкненій кнопці (фон `--sel`) міняє колір, щоб не злитись із нею. */
 .ext-tools{display:flex;align-items:center;gap:2px}

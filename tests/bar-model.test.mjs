@@ -120,7 +120,7 @@ test("у публікації завжди є іконка, у кожному с
 });
 
 test("яруси — три, і саме ті, що в спеці", () => {
-  assert.deepEqual(TIERS, { gl: 1300, mode: 1180, view: 1060 });
+  assert.deepEqual(TIERS, { gl: 1300, mode: 1180, view: 1060, viewLabel: 1440 });
 });
 
 /* Чисті функції причин перевіряємо і напряму: DOM-шар кличе саме їх, і
@@ -185,12 +185,13 @@ test("рівно на порозі labelTier підпис уже сховани�
   const mode = m.zone2.find((x) => x.id === "mode");
   const view = m.zone2.find((x) => x.id === "view");
   assert.equal(mode.labelTier, TIERS.mode, "mode: labelTier не той ярус");
-  assert.equal(view.labelTier, TIERS.mode, "view: labelTier не той ярус");
+  assert.equal(view.labelTier, TIERS.viewLabel, "view: labelTier не той ярус");
   for (const item of [mode, view]) {
-    assert.equal(labelVisibleAt(item, TIERS.mode), false,
-      `${item.id}: на ширині рівно ${TIERS.mode} підпис мусить бути схований`);
-    assert.equal(labelVisibleAt(item, TIERS.mode + 1), true,
-      `${item.id}: на ${TIERS.mode + 1} підпис мусить вернутись`);
+    const edge = item.labelTier;
+    assert.equal(labelVisibleAt(item, edge), false,
+      `${item.id}: на ширині рівно ${edge} підпис мусить бути схований`);
+    assert.equal(labelVisibleAt(item, edge + 1), true,
+      `${item.id}: на ${edge + 1} підпис мусить вернутись`);
   }
 });
 

@@ -522,9 +522,13 @@ test("2. жодна зона (#bar .zone) не переповнює свою к�
   await forEachCombo(browser, url, async ({ page, lang, mode, width }) => {
     /* ОДИН `evaluate`, а не `$$eval`: вузли, відчеплені перемальовкою смуги між вибіркою і викликом, дають `0/0` — «не переповнює»,
        тобто хибно ЗЕЛЕНЕ. */
-    const zones = await page.evaluate(() => [...document.querySelectorAll("#bar .zone")].map((e) => ({
-      cls: e.className, scrollWidth: e.scrollWidth, clientWidth: e.clientWidth,
-    })));
+    /* 0.40: `.zone-2x` (решта зони 2) свідомо виходить за центральну колонку — у простір правої; її межі стережуть `bar-centre`
+       (не налазить на зону 3, не виходить за смугу). Тут зону 2 міряємо без неї: по правому краю її власних дітей. */
+    const zones = await page.evaluate(() => [...document.querySelectorAll("#bar .zone")].map((e) => {
+      if (!e.querySelector(":scope > .zone-2x")) return { cls: e.className, scrollWidth: e.scrollWidth, clientWidth: e.clientWidth };
+      const own = [...e.children].filter((c) => !c.classList.contains("zone-2x")).map((c) => c.getBoundingClientRect().right);
+      return { cls: e.className, scrollWidth: Math.round(Math.max(...own) - e.getBoundingClientRect().left), clientWidth: e.clientWidth };
+    }));
     // Незалежний свідок: без нього перевірка була б зеленою й на розмітці
     // без жодної зони.
     assert.equal(zones.length, 3, `очікував 3 зони .zone, отримав ${zones.length}`);

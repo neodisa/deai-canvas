@@ -40,6 +40,7 @@ import { spaceColorToken, spaceRows } from "./spaces-model.js";
 const lblCls = (labelTier) => {
   if (labelTier === TIERS.gl) return "lbl-gl";
   if (labelTier === TIERS.mode) return "lbl-mode";
+  if (labelTier === TIERS.viewLabel) return "lbl-view";
   return "";
 };
 
@@ -295,6 +296,8 @@ function crumbIter(model, openDd, ui = null, modActs = [], overview = false, gon
    в title. Причина видима навіть тут, усередині сегмента, а не тільки в
    дропдаунах: спека вимагає видиму причину скрізь, де контрол вимкнений, а
    не там, де це зручніше розмітити. */
+/* `aria-label` у «Сітка/Флоу»: підпис ховається контейнерним запитом (`lbl-view`), а видима причина (`.dd-why`) була б єдиним
+   вмістом кнопки — ім'я без назви контролу. */
 function seg(model, id, extraCls = "") {
   const c = model.zone2.find((x) => x.id === id);
   if (!c) return "";
@@ -302,7 +305,7 @@ function seg(model, id, extraCls = "") {
     const why = sub.disabled ? t(sub.whyKey) : "";
     return `<button data-act="${id}" data-val="${sub.id}"
       aria-pressed="${sub.id === c.value}"${sub.disabled ? " disabled" : ""}
-      title="${esc(t(sub.labelKey))}">${ico(sub.id)}
+      title="${esc(why ? `${t(sub.labelKey)} — ${why}` : t(sub.labelKey))}"${id === "view" ? ` aria-label="${esc(why ? `${t(sub.labelKey)} — ${why}` : t(sub.labelKey))}"` : ""}>${ico(sub.id)}
       <span class="${lblCls(c.labelTier)}">${esc(t(sub.labelKey))}</span>
       ${why ? `<span class="dd-why">${esc(why)}</span>` : ""}</button>`;
   }).join("");
@@ -346,7 +349,9 @@ function zone2HTML(model, state, openDd) {
       title="${esc(t("view"))}">${ico("dots")}</button>
     ${openDd === "more" ? ddMore(model, state) : ""}
   </div>`;
-  return `${seg(model, "mode")}${seg(model, "view")}${vpSeg(model)}${more}`;
+  /* 0.40: сегмент режиму — єдиний у центрі смуги (ширина решти зони різна в «Макеті» й «Огляді» — через неї він «стрибав»);
+     решта контролів — поруч, у лівому краї правої колонки (`.zone-2x`). Зовнішня оболонка превʼю (`ext-bar.js`) має власну розмітку. */
+  return `${seg(model, "mode")}<div class="zone-2x">${seg(model, "view")}${vpSeg(model)}${more}</div>`;
 }
 
 /* ── зона 3: GitLab і публікація ──────────────────────────────────────────── */
