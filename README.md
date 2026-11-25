@@ -4,7 +4,7 @@
 other) makes the pages. Deai Canvas keeps every iteration, shows all screens at once, lets you point at an
 element and tell the agent what to change, and publishes a protected preview for your team.
 
-[Website](https://neodisa.github.io/deai-canvas/) · [What's new](CHANGELOG.md) · [Setup guide for agents](SETUP.md)
+[Website](https://deai-canvas.vercel.app/) · [What's new](CHANGELOG.md) · [Setup guide for agents](SETUP.md)
 
 ![Deai Canvas: the workplace with the page tree, a mockup, pinned comments and the agent status](docs/screenshots/hero.png)
 

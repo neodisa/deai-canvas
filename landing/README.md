@@ -1,16 +1,17 @@
 # Deai Canvas landing page
 
-The public site at https://neodisa.github.io/deai-canvas/. It is static and uses relative paths.
-`.github/workflows/pages.yml` publishes it on every push to `main` that touches `landing/` and after every release.
+The public site is https://deai-canvas.vercel.app/. It is static and uses relative paths. A Vercel project serves this folder
+as it is, with no build step. Every push to `main` that changes `landing/` deploys it. Other pushes are skipped. Vercel does not
+serve this README.
+
+The footer version is the `[data-version]` element in `index.html`. Nothing writes it during a deploy, so change it in each
+release commit.
 
 Local preview from the repository root:
 
 ```sh
 python3 -m http.server 8080 --bind 127.0.0.1 --directory landing
 ```
-
-`python3 -B ops/build_site.py --src landing --out <new folder>` builds exactly what Pages serves: these files without this
-README, with the newest release tag `vX.Y.Z` written into the footer.
 
 ## Editing
 

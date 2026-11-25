@@ -153,7 +153,7 @@ async function copyText(text) {
 const SHARE = {
   title: "Deai Canvas",
   text: "Deai Canvas — a local workspace for reviewing what your AI agent designs. Check it out:",
-  url: "https://neodisa.github.io/deai-canvas/",
+  url: "https://deai-canvas.vercel.app/",
 };
 const shareButton = document.querySelector("[data-share]");
 const shareStatus = document.querySelector("[data-share-status]");
