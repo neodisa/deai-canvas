@@ -64,3 +64,27 @@ current task, `current` moves to another one. `task-restore` brings it back (`40
 Run it when you enter a task: it prints the iterations (which is the latest, which is published), the publication, the git
 sync state and the open comments, so that you continue the work instead of starting a mockup from scratch. `--task` names
 the task instead of the current one (use it when several sessions work in parallel).
+
+## Links
+
+Give the owner a link to a place in the canvas: space, task, iteration, page, mode — «here is where I worked».
+
+The canvas window keeps its current place in the address, so a place can be shared as a link and the canvas opens right
+there. The address is `/app/` of the running Deai plus a hash:
+
+    http://127.0.0.1:8765/app/#sp=<space-id>&t=<task-id>&it=<iteration-id>&p=<page-id>
+
+Keys (all optional; unknown keys are ignored; every value goes through `encodeURIComponent`):
+
+- `sp=` the space id (`GET /api/spaces`); `t=` the task id (`GET /api/tasks?all=1`); `it=` the iteration id, e.g. `it2`;
+- `p=` the page id from the iteration's `pages.json` (the same key as in a published preview link `#p=<page-id>`);
+- `st=` a state of the page, only together with `p=`;
+- `m=o` — «Огляд» (the overview canvas); without `m` it is «Макет». `v=flow` — the flow view of the overview, only with `m=o`;
+- `h=tasks` or `h=settings` — the «Задачі» screen or the settings over the task.
+
+Opening a link switches the canvas to the task in it. A reload of the window keeps the place only while that task is still
+the current one; if the task was switched elsewhere meanwhile (an agent, the CLI, another window), the reload follows the
+current task and keeps only the view (`m`, `v`, `h`). A task in a space that cannot be read right now leaves the canvas at
+its usual place. A task that no longer exists makes the canvas open the current task at its usual place (the last
+iteration, the first page); an iteration or page that no longer exists falls back to the nearest one. Compose the link
+from ids you read through the API, never from names; the port is the one Deai runs on (default 8765).
