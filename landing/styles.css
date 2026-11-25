@@ -297,13 +297,8 @@ section[id] { scroll-margin-top: 20px; }
 
 /* Hero heading morph */
 .morph-line { display: inline-block; white-space: pre; }
-.morph-line.is-ready > span {
-  display: inline-block;
-  overflow: hidden;
-  vertical-align: bottom;
-  padding-block: .06em .2em;   /* room for descenders while width is clipped */
-  margin-block: -.06em -.2em;
-}
+/* No clipping: a letter is fully transparent before its width collapses, and gets its width before it shows. */
+.morph-line.is-ready > span { display: inline-block; }
 .morph-line.is-ready > .m-ai { display: inline-grid; justify-items: start; }
 .morph-line .m-ai > span { grid-area: 1 / 1; }
 .morph-line .m-low { opacity: 0; }

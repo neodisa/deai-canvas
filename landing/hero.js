@@ -74,30 +74,37 @@
     const lowW = low.getBoundingClientRect().width;
     ai.style.width = `${upW}px`;
 
+    // Easing goes on each keyframe (it shapes the segment after it); the effect itself runs linearly.
     const anim = (el, frames, delay, duration) => {
-      const a = el.animate(frames, { delay, duration, easing: EASE, fill: "both" });
+      const a = el.animate(frames.map((f) => ({ easing: EASE, ...f })), { delay, duration, fill: "both" });
       running.push(a);
       return a;
     };
     const t0 = 1100;
+    // 1. "sign with " and "." fade out right to left; each gap closes only once its letter is gone.
     cut.slice().reverse().forEach((el, i) => {
-      const w = cutW[cut.length - 1 - i];
+      const w = `${cutW[cut.length - 1 - i]}px`;
       anim(el, [
-        { width: `${w}px`, opacity: 1, transform: "translateY(0)" },
-        { width: "0px", opacity: 0, transform: "translateY(.12em)" },
-      ], t0 + i * 34, 460);
+        { width: w, opacity: 1, transform: "translateY(0)" },
+        { width: w, opacity: 0, transform: "translateY(.1em)", offset: .42 },
+        { width: "0px", opacity: 0, transform: "translateY(.1em)" },
+      ], t0 + i * 34, 540);
     });
-    const t1 = t0 + 470;
+    // 2. "AI" lands next to "De" and turns into "ai".
+    const t1 = t0 + 560;
     anim(ai, [{ width: `${upW}px` }, { width: `${lowW}px` }], t1, 420);
-    anim(up, [{ opacity: 1, transform: "translateY(0)" }, { opacity: 0, transform: "translateY(-.35em)" }], t1, 320);
-    anim(low, [{ opacity: 0, transform: "translateY(.35em)" }, { opacity: 1, transform: "translateY(0)" }], t1 + 80, 340);
-    const t2 = t1 + 420;
+    anim(up, [{ opacity: 1, transform: "translateY(0)" }, { opacity: 0, transform: "translateY(-.12em)" }], t1, 260);
+    anim(low, [{ opacity: 0, transform: "translateY(.12em)" }, { opacity: 1, transform: "translateY(0)" }], t1 + 140, 300);
+    // 3. " Canvas" takes its room letter by letter, then each letter fades in.
+    const t2 = t1 + 380;
     let last;
     add.forEach((el, i) => {
+      const w = `${addW[i]}px`;
       last = anim(el, [
-        { width: "0px", opacity: 0, transform: "translateY(.25em)" },
-        { width: `${addW[i]}px`, opacity: 1, transform: "translateY(0)" },
-      ], t2 + i * 38, 420);
+        { width: "0px", opacity: 0, transform: "translateY(.1em)" },
+        { width: w, opacity: 0, transform: "translateY(.1em)", offset: .5 },
+        { width: w, opacity: 1, transform: "translateY(0)" },
+      ], t2 + i * 38, 480);
     });
 
     // `finished` rejects when a cycle is cancelled (resize, replay): the empty catches are intentional.
