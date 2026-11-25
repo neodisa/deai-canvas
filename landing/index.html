@@ -35,7 +35,6 @@
         <span class="beta-badge">Beta</span>
       </a>
       <nav class="nav" id="site-nav" aria-label="Main">
-        <a href="#comments">Comments</a>
         <a href="#workflow">Workflow</a>
         <a href="#modules">Modules</a>
         <a href="#faq">FAQ</a>
@@ -95,69 +94,14 @@
       </ol>
     </section>
 
-    <section class="comments wrap" id="comments" aria-labelledby="comments-title">
-      <div class="section-intro">
-        <h2 id="comments-title">Every comment<br> gets an answer.</h2>
-        <p>Pin feedback to any element on any screen. You see at once what your agent fixed, what it is still working on, and where it needs your call.</p>
-      </div>
-      <div class="comments-layout">
-        <div class="comments-main">
-          <ul class="status-list" role="list" aria-label="Example pins on the Northline booking page">
-            <li class="status-row">
-              <span class="pin-no" aria-hidden="true">1</span>
-              <div class="status-body">
-                <span class="chip chip-done"><span class="chip-dot" aria-hidden="true"></span>Done · It.3</span>
-                <p class="pin-text">Show the full departure date.</p>
-                <p class="pin-answer"><span class="who">AI</span> Widened the field so the full date fits on one line.</p>
-              </div>
-            </li>
-            <li class="status-row">
-              <span class="pin-no" aria-hidden="true">2</span>
-              <div class="status-body">
-                <span class="chip chip-wait"><span class="chip-dot" aria-hidden="true"></span>AI is waiting for your reply</span>
-                <p class="pin-text">Keep Find trains visible on mobile.</p>
-                <p class="pin-answer"><span class="who">AI</span> Sticky bar at the bottom or a button under the form? I can do either.</p>
-              </div>
-            </li>
-            <li class="status-row">
-              <span class="pin-no" aria-hidden="true">3</span>
-              <div class="status-body">
-                <span class="chip chip-work"><span class="chip-dot" aria-hidden="true"></span><span class="shimmer">AI is working</span></span>
-                <p class="pin-text">Use the route as the heading.</p>
-              </div>
-            </li>
-            <li class="status-row">
-              <span class="pin-no" aria-hidden="true">4</span>
-              <div class="status-body">
-                <span class="chip chip-team"><span class="chip-dot" aria-hidden="true"></span>Team · Assigned to AI</span>
-                <p class="pin-text">Can we show the price per person?</p>
-                <p class="pin-answer pin-from">Maya Chen · in the preview</p>
-              </div>
-            </li>
-          </ul>
-          <dl class="comments-cols">
-            <div><dt>With your agent</dt><dd>Pins go to a local inbox your agent reads. It replies in the thread when it needs you and closes each pin with a note in the iteration that fixed it.</dd></div>
-            <div><dt>With your team</dt><dd>Colleagues comment right in the published preview. New comments show up in Deai Canvas with a badge — reply in the thread or assign one to AI.</dd></div>
-          </dl>
-        </div>
-        <figure class="comments-shot">
-          <a class="screenshot-link" data-screenshot="Northline · Comments" href="assets/northline-comments.webp" aria-label="Enlarge the Northline Comments screenshot">
-            <img src="assets/northline-comments.webp" width="2880" height="2120" alt="Northline in Deai Canvas with open pins on the booking page, an agent reply in a thread, and the group of resolved comments." loading="lazy" decoding="async">
-            <span class="expand-mark" aria-hidden="true">↗</span>
-          </a>
-          <figcaption>Northline <span class="caption-divider" aria-hidden="true">/</span> Rail booking demo</figcaption>
-        </figure>
-      </div>
-    </section>
-
     <section class="workflow" id="workflow" aria-labelledby="workflow-title">
       <div class="wrap">
-        <div class="section-intro">
-          <h2 id="workflow-title">Every part of the workspace.</h2>
-          <p>Scroll through the views you use every day — from the task list to the preview your team opens.</p>
-        </div>
-
         <div class="gallery" data-tour>
+          <div class="tour-stage">
+          <div class="section-intro">
+            <h2 id="workflow-title">Every part of the workspace.</h2>
+            <p>Scroll through the views you use every day — from the task list to the preview your team opens.</p>
+          </div>
           <div class="gallery-frame">
           <div class="gallery-tabs" data-gallery-tabs role="tablist" aria-label="Deai Canvas views" aria-orientation="vertical" hidden>
             <span class="tour-progress" aria-hidden="true"><i></i></span>
@@ -181,6 +125,12 @@
             </button>
             <button type="button" class="gallery-tab" role="tab" id="tab-preview" aria-controls="view-preview" aria-selected="false" tabindex="-1">
               <span class="tab-icon tab-icon-preview" aria-hidden="true">↗</span><span class="tab-name"><b>Share</b><span class="visually-hidden">, </span><small>Team preview</small></span><span class="tab-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-team" aria-controls="view-team" aria-selected="false" tabindex="-1">
+              <span class="tab-icon tab-icon-team" aria-hidden="true"></span><span class="tab-name"><b>Collaborate</b><span class="visually-hidden">, </span><small>Team &amp; git</small></span><span class="tab-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-modules" aria-controls="view-modules" aria-selected="false" tabindex="-1">
+              <span class="tab-icon tab-icon-module" aria-hidden="true"></span><span class="tab-name"><b>Connect</b><span class="visually-hidden">, </span><small>Modules</small></span><span class="tab-arrow" aria-hidden="true">→</span>
             </button>
           </div>
 
@@ -252,7 +202,12 @@
                   <span class="expand-mark" aria-hidden="true">↗</span>
                 </a>
                 <figcaption>
-                  <div><h3>Pin feedback to the element.</h3><p>Comments stick to the element, not to screen coordinates, and carry over between iterations. Resolved pins keep the agent’s note and the iteration that fixed them.</p></div>
+                  <div><h3>Every comment gets an answer.</h3><p>Pin feedback to any element. Your agent closes each pin with a note in the iteration that fixed it, or replies in the thread when it needs your call. Teammates comment in the published preview — assign any of their comments to AI.</p>
+                  <ul class="chip-row" role="list" aria-label="Example comment statuses">
+                    <li class="chip chip-done"><span class="chip-dot" aria-hidden="true"></span>Done · It.3</li>
+                    <li class="chip chip-wait"><span class="chip-dot" aria-hidden="true"></span>AI is waiting for your reply</li>
+                    <li class="chip chip-team"><span class="chip-dot" aria-hidden="true"></span>Team · Assigned to AI</li>
+                  </ul></div>
                   <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
                 </figcaption>
               </figure>
@@ -269,6 +224,40 @@
                 </figcaption>
               </figure>
             </div>
+            <div class="gallery-view" id="view-team">
+              <figure>
+                <div class="screenshot-link team-shot" role="img" aria-label="The Northline task in Deai Canvas with git sync on: iteration 4 pulled from a colleague, iteration 3 sent to git, and a Team tab next to Mine on the Tasks screen.">
+                  <div class="tp" aria-hidden="true">
+                    <div class="tp-head"><span class="tp-title"><b>Northline</b> · Rail booking</span><span class="tp-sync"><i></i>Git sync · up to date</span></div>
+                    <div class="tp-tabs"><span>Mine · 5</span><span class="on">Team · 12</span></div>
+                    <ul class="tp-list">
+                      <li><span class="tp-it">It.4</span><span class="tp-av a">AR</span><span class="tp-who"><b>Alex Rivera</b> · pulled from git</span><span class="tp-tag in">↓ git</span></li>
+                      <li><span class="tp-it">It.3</span><span class="tp-av b">MC</span><span class="tp-who"><b>Maya Chen</b> · sent to git</span><span class="tp-tag out">↑ git</span></li>
+                      <li><span class="tp-it">It.2</span><span class="tp-av a">AR</span><span class="tp-who"><b>Alex Rivera</b> · sent to git</span><span class="tp-tag out">↑ git</span></li>
+                      <li><span class="tp-it">It.1</span><span class="tp-av b">MC</span><span class="tp-who"><b>Maya Chen</b> · first pass</span><span class="tp-tag">local</span></li>
+                    </ul>
+                    <p class="tp-foot">Shared repository · 4 iterations in sync · last pull 2 min ago</p>
+                  </div>
+                </div>
+                <figcaption>
+                  <div><h3>Pick up where a colleague left off.</h3><p>Work alone or as a team. Git sync sends an iteration to a shared repository and pulls a colleague’s changes back as a new iteration, so anyone can continue a task. With the team dashboard, the Tasks screen gets a Team tab with everyone’s tasks.</p></div>
+                  <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-modules">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Studio · Workspace modules" href="assets/studio-modules.webp" aria-label="Enlarge the Deai Canvas modules settings screenshot">
+                  <img src="assets/studio-modules.webp" width="2880" height="1360" alt="Deai Canvas module settings with folder publishing and CSS tokens connected in the Studio space." loading="lazy" decoding="async">
+                  <span class="expand-mark" aria-hidden="true">↗</span>
+                </a>
+                <figcaption>
+                  <div><h3>Connect the tools you already use.</h3><p>A module connects one part of the workflow to a tool you choose: publish to a folder or Vercel, check values against your CSS tokens, keep team comments in Supabase, post a Microsoft Teams card for every new comment, sync iterations with git, show Jira statuses. Turn modules on per space in Settings — or let your agent write your own.</p></div>
+                  <span class="project-label">Studio <span aria-hidden="true">/</span> Settings → Modules</span>
+                </figcaption>
+              </figure>
+            </div>
+          </div>
           </div>
           </div>
         </div>
@@ -280,21 +269,12 @@
         <h2 id="modules-title">Make Deai Canvas fit<br> your workflow.</h2>
         <p>Set up a space once, then open it to pick up your work. Screens, iterations, the Inspector and local pins are built in. A module connects one part of the workflow to a tool you choose.</p>
       </div>
-      <div class="module-layout">
-        <figure class="module-capture">
-          <a class="screenshot-link" data-screenshot="Studio · Workspace modules" href="assets/studio-modules.webp" aria-label="Enlarge the Deai Canvas modules settings screenshot">
-            <img src="assets/studio-modules.webp" width="2880" height="1360" alt="Deai Canvas module settings with folder publishing and CSS tokens connected in the Studio space." decoding="async">
-            <span class="expand-mark" aria-hidden="true">↗</span>
-          </a>
-          <figcaption>Studio demo <span class="caption-divider" aria-hidden="true">/</span> Settings → Modules</figcaption>
-        </figure>
-        <dl class="module-list">
-          <div><dt>Publishing</dt><dd>Export a static preview to a folder from day one. Connect Vercel to publish a shareable preview on your own account.</dd></div>
-          <div><dt>Design system</dt><dd>Connect a CSS tokens file so the Inspector can flag values that fall outside your design system.</dd></div>
-          <div><dt>Team review</dt><dd>Use Supabase for shared comments and a team dashboard. Turn on Microsoft Teams notifications for new comments.</dd></div>
-          <div><dt>Project tools</dt><dd>Sync editable iterations to your own git repo and show Jira issue status alongside tasks in Deai Canvas.</dd></div>
-        </dl>
-      </div>
+      <dl class="module-list">
+        <div><dt>Publishing</dt><dd>Export a static preview to a folder from day one. Connect Vercel to publish a shareable preview on your own account.</dd></div>
+        <div><dt>Design system</dt><dd>Connect a CSS tokens file so the Inspector can flag values that fall outside your design system.</dd></div>
+        <div><dt>Team review</dt><dd>Use Supabase for shared comments and a team dashboard. Turn on Microsoft Teams notifications for new comments.</dd></div>
+        <div><dt>Project tools</dt><dd>Sync editable iterations to your own git repo and show Jira issue status alongside tasks in Deai Canvas.</dd></div>
+      </dl>
       <div class="module-foot">
         <p>Choose or swap providers in each space’s Settings. Use the built-in modules or add one for your team’s own service.</p>
       </div>
@@ -316,12 +296,13 @@
       <div class="setup-board">
         <div class="setup-copy">
           <h2 id="setup-title">Start with<br> your agent.</h2>
-          <p>Paste the setup prompt into Claude Code, Codex, or another coding agent that can work with local files. No agent? Run one command in Terminal.</p>
+          <p>Paste the setup prompt into Claude Code, Codex, or another coding agent that can work with local files. No agent? Run one command in Terminal on macOS or in PowerShell on Windows.</p>
         </div>
         <div class="setup-action" data-copy-scope>
           <div class="setup-tabs" data-setup-tabs role="tablist" aria-label="Ways to install Deai Canvas" hidden>
             <button type="button" class="setup-tab" role="tab" id="setup-tab-agent" aria-controls="setup-agent" aria-selected="true">With your agent</button>
-            <button type="button" class="setup-tab" role="tab" id="setup-tab-terminal" aria-controls="setup-terminal" aria-selected="false" tabindex="-1">In Terminal <span class="setup-tab-note">macOS</span></button>
+            <button type="button" class="setup-tab" role="tab" id="setup-tab-terminal" aria-controls="setup-terminal" aria-selected="false" tabindex="-1">macOS<span class="visually-hidden"> (Terminal)</span></button>
+            <button type="button" class="setup-tab" role="tab" id="setup-tab-windows" aria-controls="setup-windows" aria-selected="false" tabindex="-1">Windows<span class="visually-hidden"> (PowerShell)</span></button>
           </div>
           <div class="prompt-card" id="setup-agent">
             <div class="prompt-toolbar"><span><span aria-hidden="true">&gt;_</span> Setup prompt</span><button class="button button-small copy-button" type="button" data-copy="setup-prompt" hidden>Copy prompt</button></div>
@@ -331,6 +312,11 @@
             <div class="prompt-toolbar"><span><span aria-hidden="true">$</span> Terminal · macOS</span><button class="button button-small copy-button" type="button" data-copy="setup-command" hidden>Copy command</button></div>
             <p><code id="setup-command">git clone https://github.com/neodisa/deai-canvas.git <span class="nowrap">~/deai-canvas</span> &amp;&amp; cd <span class="nowrap">~/deai-canvas</span> &amp;&amp; bash ops/canvas-app/install.sh &amp;&amp; ./start.command</code></p>
             <p class="prompt-note">For Overview snapshots, also run <code>npm ci &amp;&amp; npx playwright install chromium</code> in the same folder (Node.js 20+).</p>
+          </div>
+          <div class="prompt-card" id="setup-windows">
+            <div class="prompt-toolbar"><span><span aria-hidden="true">&gt;</span> PowerShell · Windows</span><button class="button button-small copy-button" type="button" data-copy="setup-command-windows" hidden>Copy command</button></div>
+            <p><code id="setup-command-windows">git clone https://github.com/neodisa/deai-canvas.git $HOME\deai-canvas; cd $HOME\deai-canvas; py app\serve.py</code></p>
+            <p class="prompt-note">Then open http://localhost:8765/app/ in Chrome or Edge. Needs Git and Python 3.9+. Windows support is experimental — not yet tested on a real Windows machine; the app icon and autostart are macOS-only for now. On Linux, run the same with <code>python3</code>.</p>
           </div>
           <p class="copy-status visually-hidden" role="status" data-copy-status></p>
           <a class="text-link manual-link" href="https://github.com/neodisa/deai-canvas/blob/main/SETUP.md">Read the installation guide <span aria-hidden="true">↗</span></a>
@@ -370,7 +356,6 @@
       <a class="brand" href="#top"><img src="assets/deai-icon.png" alt="" width="32" height="32"><span>Deai Canvas</span></a>
       <p class="footer-version"><a href="https://github.com/neodisa/deai-canvas/blob/main/CHANGELOG.md" data-version>v0.39.1</a> · Beta</p>
       <nav aria-label="Footer">
-        <a href="#comments">Comments</a>
         <a href="https://github.com/neodisa/deai-canvas/blob/main/SETUP.md">Setup</a>
         <a href="https://github.com/neodisa/deai-canvas">GitHub <span aria-hidden="true">↗</span></a>
         <a href="#top">Back to top <span aria-hidden="true">↑</span></a>

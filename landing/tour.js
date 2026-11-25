@@ -1,16 +1,16 @@
-// Scroll-driven tour: on large screens the gallery pins while the page scrolls and each scroll step selects the next
+// Scroll-driven tour: on large screens the stage (section heading, tabs and frame) pins while the page scrolls and each scroll step selects the next
 // view. Selection itself belongs to initTabs in site.js; this file only turns scroll position into a "tabs:show" event
 // and turns tab choices ("tabs:select") into a scroll, so scroll and tabs never disagree.
 (() => {
   const gallery = document.querySelector("[data-tour]");
   if (!gallery) return;
   const tabList = gallery.querySelector("[data-gallery-tabs]");
-  const frame = gallery.querySelector(".gallery-frame");
+  const stage = gallery.querySelector(".tour-stage"); // heading + tabs + frame: the part that stays pinned
   const progress = gallery.querySelector(".tour-progress");
   const tabs = [...tabList.querySelectorAll('[role="tab"]')];
   const count = tabs.length;
   const STEP = 0.7; // viewport heights of scrolling per view
-  const PIN_GAP = 24; // space between the top of the window (or a sticky header) and the pinned frame
+  const PIN_GAP = 24; // space between the top of the window (or a sticky header) and the pinned stage
   const ARRIVE_PX = 2; // a smooth scroll we started counts as arrived within this distance
   const LOCK_MS = 1500; // fallback: stop waiting for that scroll to arrive
   const query = matchMedia("(min-width: 1024px) and (min-height: 640px) and (prefers-reduced-motion: no-preference)");
@@ -34,7 +34,7 @@
   function measure() {
     top = pinTop();
     gallery.style.setProperty("--tour-top", `${top}px`);
-    gallery.style.height = `${frame.offsetHeight + count * stepPx()}px`;
+    gallery.style.height = `${stage.offsetHeight + count * stepPx()}px`;
   }
 
   function update() {
@@ -94,7 +94,7 @@
     addEventListener("keydown", onKey);
     addEventListener("resize", onResize); // window height changes the step size even when the frame keeps its size
     observer = new ResizeObserver(onResize);
-    observer.observe(frame);
+    observer.observe(stage);
   }
 
   function disable() {
