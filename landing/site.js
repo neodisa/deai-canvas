@@ -116,3 +116,73 @@ copyButton.addEventListener("click", async () => {
     copyStatus.textContent = "Prompt selected. Press Ctrl+C or ⌘C to copy.";
   }
 });
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall back to a hidden textarea when the browser denies clipboard access.
+    }
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.append(area);
+  area.select();
+  const copied = document.execCommand("copy");
+  area.remove();
+  return copied;
+}
+
+const SHARE = {
+  title: "Deai Canvas",
+  text: "Deai Canvas — a local workspace for reviewing what your AI agent designs. Check it out:",
+  url: "https://neodisa.github.io/deai-canvas/",
+};
+const shareButton = document.querySelector("[data-share]");
+const shareStatus = document.querySelector("[data-share-status]");
+let shareTimer;
+
+shareButton.hidden = false;
+shareButton.addEventListener("click", async () => {
+  if (navigator.share && matchMedia("(pointer: coarse)").matches) {
+    try {
+      await navigator.share(SHARE);
+    } catch {
+      // The share sheet was closed.
+    }
+    return;
+  }
+  clearTimeout(shareTimer);
+  const copied = await copyText(`${SHARE.text} ${SHARE.url}`);
+  shareButton.textContent = copied ? "Link copied" : "Copy failed";
+  shareStatus.textContent = copied ? "A link to Deai Canvas was copied to the clipboard." : "The link could not be copied.";
+  shareTimer = setTimeout(() => { shareButton.textContent = "Share"; }, 2400);
+});
+
+const menuButton = document.querySelector("[data-menu]");
+const siteNav = document.getElementById("site-nav");
+const compactHeader = matchMedia("(max-width: 760px)");
+
+function setMenu(open, focusButton = false) {
+  menuButton.setAttribute("aria-expanded", String(open));
+  siteNav.classList.toggle("is-open", open);
+  if (!open && focusButton) menuButton.focus();
+}
+
+menuButton.hidden = false;
+menuButton.addEventListener("click", () => setMenu(menuButton.getAttribute("aria-expanded") !== "true"));
+siteNav.addEventListener("click", (event) => {
+  if (event.target.closest("a")) setMenu(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && siteNav.classList.contains("is-open")) setMenu(false, true);
+});
+document.addEventListener("click", (event) => {
+  if (siteNav.classList.contains("is-open") && !siteNav.contains(event.target) && !menuButton.contains(event.target)) setMenu(false);
+});
+compactHeader.addEventListener("change", () => setMenu(false));
