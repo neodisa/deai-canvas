@@ -196,6 +196,10 @@ section[id] { scroll-margin-top: 20px; }
 
 .site-footer { border-top: 1px solid var(--line); }
 .footer-inner { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 20px; padding-block: 20px; }
+.footer-version { color: var(--muted); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.footer-version a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.footer-version a:hover { text-decoration-color: currentColor; }
+.faq details code { font: .9em ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 .screenshot-dialog { width: min(96vw, 1500px); max-height: 96dvh; overflow: auto; margin: auto; background: var(--paper); color: var(--ink); padding: 0; border: 0; border-radius: var(--radius); box-shadow: 0 16px 56px #0006; }
 .screenshot-dialog::backdrop { background: #101c15db; }
