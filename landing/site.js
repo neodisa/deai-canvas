@@ -116,6 +116,7 @@ async function copyText(text) {
       // Fall back to a hidden textarea when the browser denies clipboard access.
     }
   }
+  const previous = document.activeElement;
   const area = document.createElement("textarea");
   area.value = text;
   area.setAttribute("readonly", "");
@@ -125,6 +126,7 @@ async function copyText(text) {
   area.select();
   const copied = document.execCommand("copy");
   area.remove();
+  previous?.focus({ preventScroll: true });
   return copied;
 }
 
@@ -148,10 +150,11 @@ shareButton.addEventListener("click", async () => {
     return;
   }
   clearTimeout(shareTimer);
+  shareStatus.textContent = "";
   const copied = await copyText(`${SHARE.text} ${SHARE.url}`);
   shareButton.textContent = copied ? "Link copied" : "Copy failed";
   shareStatus.textContent = copied ? "A link to Deai Canvas was copied to the clipboard." : "The link could not be copied.";
-  shareTimer = setTimeout(() => { shareButton.textContent = "Share"; }, 2400);
+  shareTimer = setTimeout(() => { shareButton.textContent = "Share"; shareStatus.textContent = ""; }, 2400);
 });
 
 const menuButton = document.querySelector("[data-menu]");
