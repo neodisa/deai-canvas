@@ -48,3 +48,4 @@ prototypes inside real Deai Canvas captures. The prompts:
 > Use case: product-mockup. Asset type: product catalogue photo inside a fictional premium furniture checkout prototype, Forma. A beautiful single caramel brown gently curved upholstered lounge chair on a slender brushed chrome tubular base, in the language of independently designed European modern furniture. Three-quarter angle showing the inviting front and side, centered cleanly on a plain warm grey plaster cyclorama with generous breathing room. Natural sidelight, crisp honest texture, subtle shadow, boutique furniture catalogue editorial, square framing, photographed with great restraint. Chair only, no person, no lettering, no logo, no website UI.
 
 Rethink Sans is distributed under the [SIL Open Font License](assets/rethink-sans-OFL.txt).
+Icons are [Lucide](https://lucide.dev) (ISC licence, see [lucide-LICENSE.txt](assets/lucide-LICENSE.txt)), inlined as an SVG sprite at the top of `index.html`.

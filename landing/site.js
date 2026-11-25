@@ -93,7 +93,7 @@ const setupStatus = document.querySelector(".setup-action [data-copy-status]");
 for (const button of document.querySelectorAll("[data-copy]")) {
   const source = document.getElementById(button.dataset.copy);
   const label = button.textContent;
-  // Each copy button reports into the live region of its own [data-copy-scope] block (setup board or module CTA).
+  // Each copy button reports into the live region of its own [data-copy-scope] block (the setup board).
   const copyStatus = button.closest("[data-copy-scope]").querySelector("[data-copy-status]");
   let timer;
   button.hidden = false;

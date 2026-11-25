@@ -166,7 +166,7 @@
     <img class="sc-after" src="assets/northline-scene-after.webp" width="2880" height="1720" alt="" decoding="async">
     <svg class="sc-cursor" viewBox="0 0 20 22" fill="none"><path d="M2 1.5v16l4.2-4 3 6.6 3-1.4-3-6.4 5.8-.2L2 1.5z" fill="#182820" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>
     <span class="sc-ripple"></span>
-    <span class="sc-pin"><span class="sc-num">1</span><span class="sc-check">✓</span></span>
+    <span class="sc-pin"><span class="sc-num">1</span><span class="sc-check"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span></span>
     <div class="sc-card">
       <div class="sc-head"><span>You</span><span class="sc-status"></span></div>
       <p class="sc-ask"></p>
