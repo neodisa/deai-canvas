@@ -254,7 +254,7 @@ section[id] { scroll-margin-top: 20px; }
   .hero h1 { text-wrap: balance; }
   .product-label { margin-bottom: 13px; }
   .gallery-frame { display: block; }
-  .gallery-tabs { display: flex; width: auto; gap: 4px; margin: 0 calc(var(--gutter) * -1) 12px; padding-inline: var(--gutter); overflow-x: auto; scroll-padding-inline: var(--gutter); scrollbar-width: none; }
+  .gallery-tabs { display: flex; width: auto; gap: 4px; margin: 0 calc(var(--gutter) * -1) 12px; padding-inline: var(--gutter); overflow-x: auto; padding-block: 3px; scroll-padding-inline: var(--gutter); scrollbar-width: none; }
   .gallery-tabs::-webkit-scrollbar { display: none; }
   .gallery-tab { flex: none; grid-template-columns: 14px auto; gap: 7px; padding-inline: 11px; min-height: 44px; white-space: nowrap; }
   .tab-arrow { display: none; }
