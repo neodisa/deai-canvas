@@ -3,6 +3,51 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.40.0] — 25.11.2026
+
+Names and navigation: full page names in the left panel, the canvas keeps its place in the address, Back / Forward /
+Reload in the bar, ⌘F searches the mockup, and the «Макет / Огляд» switch no longer jumps.
+
+### Додано
+- The left panel's right edge can be dragged (200 px up to what leaves the mockup at least 420 px, at most 520 px). A
+  double click fits the longest visible name or returns to the default width; ← / → move the edge by 16 px when it has
+  focus. The width is remembered on this computer.
+- A truncated page name shows its full text in a small tooltip after half a second. Short names show nothing.
+- The address of the canvas window now describes the place: `/app/#sp=…&t=…&it=…&p=…` (+ `st=` for a page state,
+  `m=o` for «Огляд», `v=flow` for the flow view, `h=tasks` / `h=settings`). Opening such a link opens that task,
+  iteration and page; `#p=` means the same page as in a published preview link.
+- ⌘R keeps the place: the same iteration, page and mode. If the current task was switched elsewhere meanwhile (by an
+  agent, the CLI or another window), a reload follows that task instead of switching it back.
+- ← → ⟳ at the start of the bar, and ⌘[ / ⌘] (Ctrl on Windows), also with focus inside the mockup. Back / Forward go
+  through the places of this window: task, iteration, page, mode, grid / flow, «Задачі», settings. Panels, width,
+  viewport and the camera are not steps. ⟳ reloads the mockup in «Макет» and rebuilds the canvas in «Огляд».
+- «Показати» on a comment from another page or iteration is now a step too: Back returns to where you were.
+- ⌘F in «Макет» (also with focus inside the mockup): a search bar over the mockup with a counter, ↑ ↓, Enter / ⇧Enter,
+  ⌘G / ⇧⌘G and Esc. Matches are highlighted without touching the mockup's page, so the commenter, the inspector and
+  «В Figma» see nothing. The search runs again after a page change or a reload. In «Огляд» ⌘F goes to the page filter,
+  on «Задачі» to the task search.
+- The new shortcuts (⌘[ ⌘] ⌘F ⌘G ⇧⌘G) are listed in the shortcut sheet (`?`) and in Settings → «Гарячі клавіші».
+- Agent guide, topic `tasks`: a «Links» section with the address format, so an agent can give a link to the place it
+  worked on.
+- `GET /api/tasks?all=1` also returns `skipped_spaces` — the ids of spaces that could not be read.
+
+### Змінено
+- The «Макет / Огляд» switch stays in the centre of the bar in both modes. Measured cause: the controls next to it have a
+  different width in each mode, and the whole group was centred. Now the other controls sit to the right of the switch.
+  In «Огляд», «Сітка» and «Флоу» show icons only when the bar is 1440 px wide or narrower (names in the tooltip), and
+  the reason why «Флоу» is unavailable stays in its tooltip unless the bar is wider than 1800 px. Checked against the
+  widest states of the right side of the bar (not published, GitLab behind/ahead, GitHub/Git) from 1024 to 1920 px.
+
+### Known limits
+- Back / Forward live in this window only (up to 100 steps); a new window starts with its own history. The browser's own
+  Back is not used.
+- A link with only `sp=` (no `t=`) does not switch the space when the canvas opens.
+- Esc closes the search bar from its field or from the mockup; with focus elsewhere in the canvas use ✕.
+- Panel width, tooltips and ⌘F are in the canvas only, not in published previews.
+- A word split by markup (`Hel<b>lo</b>`) is not found by ⌘F; text inside shadow DOM is not searched; text hidden with
+  `visibility:hidden` may be counted.
+- ⌘K, ⌘G and other older shortcuts still accept both ⌘ and Ctrl; only the new ones follow the platform.
+
 ## [0.39.1] — 25.11.2026
 
 «Показати» on a comment now leads to it wherever it lives, and a click on a pin is no longer lost while the mockup
