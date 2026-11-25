@@ -304,11 +304,26 @@ test("T5-2: ⌘[ працює й з фокусом у макеті (окреми
   await waitHash(page, /p=poshuk/);
   await frameReady(page, /page=poshuk/);
   const f = await (await page.$("#frame")).contentFrame();
-  await f.waitForSelector("h1");
+  /* Документ «poshuk» ЗАВАНТАЖЕНИЙ і коментатор у ньому готовий (захоплювач клавіш чіпляється на `load`): без цього клік іде в старий документ. */
+  await f.waitForFunction(() => document.querySelector("h1")?.textContent === "poshuk" && window.CommentLayer && window.CommentLayer._inited, null, { timeout: 20000 });
   await f.click("h1");
   await page.keyboard.press("Meta+BracketLeft");
   await waitHash(page, /p=holovna/);
   await frameReady(page, /page=holovna/);
+});
+
+test("T5-2b: ⌘[ у вікні рамки перехоплено (`defaultPrevented`): рідна «Назад» браузера не піде по історії рамки", async (t) => {
+  const { page } = await boot(t, 2100);
+  await frameReady(page, /page=holovna/);
+  const f = await (await page.$("#frame")).contentFrame();
+  await f.waitForSelector("h1");
+  await f.waitForFunction(() => window.CommentLayer && window.CommentLayer._inited, null, { timeout: 20000 });
+  const prevented = await f.evaluate(() => {
+    const ev = new KeyboardEvent("keydown", { key: "[", code: "BracketLeft", metaKey: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  assert.equal(prevented, true, "захоплювач рамки не скасував ⌘[");
 });
 
 test("T5-3: перехід за посиланням у макеті — запис стека; Назад — рівно одне завантаження рамки", async (t) => {
