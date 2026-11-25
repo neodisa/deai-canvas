@@ -10,13 +10,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { freePort } from "../tests/live/_port.mjs";
-import { forma, northline, northlinePins } from "./landing-shots/demos.mjs";
+import { extraTasks, forma, northline, northlinePins } from "./landing-shots/demos.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const anchor = readFileSync(path.join(root, "app/vendor/anchor.min.js"), "utf8");
 const viewport = { width: 1440, height: 860 };
 const image = (name) => `data:image/webp;base64,${readFileSync(new URL(`./landing-shots/${name}.webp`, import.meta.url)).toString("base64")}`;
-const projects = [northline(image("northline-rail")), forma(image("forma-chair"))];
+const projects = [northline(image("northline-rail")), forma(image("forma-chair")), ...extraTasks()];
 const spaceId = "studio";
 
 function json(file, data) {
@@ -97,6 +97,7 @@ async function seedPins(context, base) {
         id: `northline-pin-${i + 1}`, author: "Maya Chen", text: pin.text,
         status: pin.resolution ? "resolved" : "open", fp, htmlSnapshot: null, bornV: 1, ts: "16.09.2026 16:10",
         ...(pin.resolution && { resolvedV: 2, resolveReason: pin.resolution }),
+        ...(pin.replies && { replies: pin.replies }),
         meta: { url: `${pinPage}&ch=local`, route: "/commented", version: "2/search", iteration: "2", viewport: { w: viewport.width, h: viewport.height }, seq: i + 1, sel: pin.selector },
       });
     }
@@ -116,13 +117,13 @@ async function waitForFrame(page, selector) {
   return frame;
 }
 
-async function capture(page, demoRoot, name) {
+async function capture(page, demoRoot, name, quality = 90) {
   await page.mouse.move(5, 5);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const png = path.join(demoRoot, `${name}.png`);
   const webp = path.join(demoRoot, `${name}.webp`);
   await page.screenshot({ path: png, animations: "disabled" });
-  execFileSync("cwebp", ["-quiet", "-q", "90", "-sharp_yuv", png, "-o", webp]);
+  execFileSync("cwebp", ["-quiet", "-q", String(quality), "-sharp_yuv", png, "-o", webp]);
   copyFileSync(webp, path.join(root, "landing/assets", `${name}.webp`));
   console.log(`${name}.webp`);
 }
@@ -158,6 +159,98 @@ async function studioShots(context, base, demoRoot) {
   } finally {
     await page.close();
   }
+}
+
+/** Tasks home of the Studio space: every task needs a frame for its thumbnail first. */
+async function tasksShot(openContext, base, demoRoot) {
+  for (const { id, iterations } of projects) {
+    await post(base, "/api/task-switch", { id });
+    await post(base, "/api/shoot", { it: `it${iterations.length}`, all: true, vp: 1280 });
+  }
+  await post(base, "/api/task-switch", { id: "northline" });
+  const context = await openContext({ width: viewport.width, height: 940 });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${base}/app/`);
+    await waitForFrame(page, "#journey-form");
+    await page.locator('#tabs [data-act="home"]').click();
+    await page.waitForFunction((count) => [...document.querySelectorAll("#tasks-home img")].filter((image) => image.complete && image.naturalWidth > 0).length >= count, projects.length);
+    await page.addStyleTag({ content: "#hud, .fb-fab, [data-act=feedback]{display:none!important}" });
+    await capture(page, demoRoot, "studio-tasks");
+  } finally {
+    await context.close();
+  }
+}
+
+/** Comments panel on the search page: open pins with the agent thread, Resolved group expanded. Taller window so it all fits. */
+async function commentsShot(openContext, base, demoRoot) {
+  const context = await openContext({ width: viewport.width, height: 1060 });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${base}/app/`);
+    await waitForFrame(page, "#journey-form");
+    await page.locator('[data-act="mode"][data-val="overview"]').click(); // checks frame freshness, so the panel footer is tidy
+    await page.waitForFunction(() => [...document.querySelectorAll("#world .cv-card img")].some((image) => image.naturalWidth > 0));
+    await page.locator('[data-act="mode"][data-val="layout"]').click();
+    await waitForFrame(page, "#journey-form");
+    await page.locator('#hud [data-act="comments"]').click();
+    await page.locator("#cmt-panel .cmt-card").first().waitFor();
+    await page.locator('#cmt-panel .cmt-fold[data-val="closed"]').click();
+    await page.locator("#cmt-panel").getByText(/Changed the heading/).waitFor();
+    await page.locator('#cmt-panel [data-act="cmtthread"]').first().click();
+    await page.locator("#cmt-panel").getByText(/Sticky bar at the bottom/).waitFor();
+    await capture(page, demoRoot, "northline-comments");
+  } finally {
+    await context.close();
+  }
+}
+
+/** Iterations list, then the before/after scene frames (no side panels, no pins, no toolbar island). */
+async function northlineShots(openContext, base, demoRoot) {
+  const context = await openContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(`${base}/app/`);
+    await waitForFrame(page, "#journey-form");
+    await page.locator('[data-act="mode"][data-val="overview"]').click();
+    await page.waitForFunction(() => [...document.querySelectorAll("#world .cv-card img")].some((image) => image.naturalWidth > 0));
+    await page.locator('[data-act="mode"][data-val="layout"]').click();
+    await waitForFrame(page, "#journey-form");
+
+    await page.locator('#bar [data-dd="iter"]').click();
+    await page.locator('.dd-item[data-act="iter"]').first().waitFor();
+    await capture(page, demoRoot, "northline-iterations");
+    await page.keyboard.press("Escape");
+    await page.mouse.click(700, 500);
+
+    await page.locator('#hud [data-act="comments"]').click();
+    await page.locator('#cmt-panel [data-act="cmtpins"]').click();
+    await page.locator('#cmt-panel [data-act="comments"]').click();
+    await page.locator('#pages-panel [data-act="panel"]').first().click();
+    await page.addStyleTag({ content: "#hud { display: none !important; }" });
+    await sceneShots(page, demoRoot);
+  } finally {
+    await context.close();
+  }
+}
+
+async function sceneShots(page, demoRoot) {
+  const frame = await waitForFrame(page, "#date-field");
+  const centre = async (name) => {
+    const box = await frame.locator("#date-field").boundingBox();
+    const x = ((box.x + box.width / 2) / viewport.width) * 100;
+    const y = ((box.y + box.height / 2) / viewport.height) * 100;
+    console.log(`scene pin (${name}): ${x.toFixed(1)}% ${y.toFixed(1)}%`);
+  };
+  await centre("before");
+  await capture(page, demoRoot, "northline-scene-before");
+  await frame.locator("#date-field").evaluate((field) => {
+    field.querySelector("strong").textContent = "Friday, 18 September 2026";
+    field.parentElement.style.gridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.7fr) auto";
+  });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await centre("after");
+  await capture(page, demoRoot, "northline-scene-after");
 }
 
 async function publishedShot(context, base, demoRoot) {
@@ -234,15 +327,22 @@ try {
   child.on("error", (error) => log.push(error.message));
   await waitForServer(`${base}/api/spaces`, child);
   browser = await chromium.launch();
-  const context = await browser.newContext({ viewport, deviceScaleFactor: 2, reducedMotion: "reduce", serviceWorkers: "block" });
-  context.setDefaultTimeout(15000);
-  await context.route((url) => !["data:", "blob:", "about:"].includes(url.protocol) && url.origin !== base, (route) => route.abort());
-  await context.addInitScript(() => localStorage.setItem("dc-lang", "en"));
+  const openContext = async (size = viewport) => {
+    const created = await browser.newContext({ viewport: size, deviceScaleFactor: 2, reducedMotion: "reduce", serviceWorkers: "block" });
+    created.setDefaultTimeout(15000);
+    await created.route((url) => !["data:", "blob:", "about:"].includes(url.protocol) && url.origin !== base, (route) => route.abort());
+    await created.addInitScript(() => localStorage.setItem("dc-lang", "en"));
+    return created;
+  };
+  const context = await openContext();
   mkdirSync(path.join(root, "landing/assets"), { recursive: true });
   await seedPins(context, base);
   await post(base, "/api/shoot", { it: "it2", all: true, vp: 1280 });
   for (const id of ["css-tokens", "static-publish"]) await post(base, "/api/module-check", { space: spaceId, id });
   await post(base, "/api/claude-status", { task: "northline", phase: "design", status: "in_progress", note: "Refining the booking form", session: "demo" });
+  await tasksShot(openContext, base, demoRoot);
+  await commentsShot(openContext, base, demoRoot);
+  await northlineShots(openContext, base, demoRoot);
   await studioShots(context, base, demoRoot);
   await publishedShot(context, base, demoRoot);
   await checkoutShots(context, base, demoRoot);

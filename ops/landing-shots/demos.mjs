@@ -167,6 +167,29 @@ export function forma(chairPhoto) {
 
 export const northlinePins = [
   { selector: "#date-field", text: "Show the full date so the departure day is easy to scan." },
-  { selector: "#trip-search", text: "Keep Find trains visible when the form wraps on mobile." },
+  { selector: "#trip-search", text: "Keep Find trains visible when the form wraps on mobile.",
+    replies: [{ id: "northline-reply-1", author: "AI", agent: true, ts: "16.09.2026 16:42",
+      text: "Sticky bar at the bottom or a button under the form? I can do either — which one?" }] },
   { selector: "#route-heading", text: "Use the route as the heading above the departures.", resolution: "Changed the heading to Vienna → Zürich and kept the date beneath it." },
 ];
+
+/** Small extra tasks so the task list of the Studio space is not sparse. */
+const mini = (id, title, tags, iterations, pageName, make) => ({
+  id, title, tags, iterations,
+  tree: { pages: [page("home", pageName), page("details", `${pageName} · details`)] },
+  pages: (version) => ({ home: make(version), details: make(version) }),
+});
+
+export function extraTasks() {
+  return [
+    mini("northline-mobile", "Northline · Mobile tickets", ["mobile", "tickets"],
+      ["First ticket wallet", "Ticket list with offline state", "Boarding pass view"], "Ticket wallet",
+      (v) => railPage("Tickets", `<div class="passenger"><p class="meta">Vienna → Zürich · ${railDate}</p><h1 class="page-title">Your tickets</h1><p>${v} saved for offline use.</p><a class="primary" href="../home/">Open boarding pass</a></div>`)),
+    mini("forma-product", "Forma · Product page", ["product", "web"],
+      ["Gallery and details", "Swatches and delivery note"], "Arc Lounge Chair",
+      () => checkoutPage("", "Living room", "Arc Lounge Chair", "Caramel upholstery on a brushed chrome frame.", orderSummary("Add to bag", "home"))),
+    mini("atlas-onboarding", "Atlas · Onboarding", ["onboarding", "app"],
+      ["Welcome and workspace setup", "Invite teammates step"], "Welcome",
+      () => checkoutPage("", "Step 1 of 3", "Welcome to Atlas", "Name your workspace to get started.", `<div class="grid"><section class="panel"><h2>Workspace</h2><div class="fields">${field("ws", "Workspace name", "Studio North", true)}</div></section>${orderSummary("Continue", "home")}</div>`)),
+  ];
+}
