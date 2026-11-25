@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EMPTY_LOC, formatLocation, parseLocation } from "../app/location-model.js";
-import { bootFollowsServer, createNav, navKeyDir } from "../app/nav.js";
+import { bootFollowsServer, createNav, isMacPlatform, navKeyDir } from "../app/nav.js";
 
 const L = (o) => ({ ...EMPTY_LOC, ...o });
 const H = (o) => formatLocation(L(o));
@@ -339,12 +339,30 @@ test("navKeyDir: платформний модифікатор — на Mac ли
   assert.equal(navKeyDir({ code: "BracketLeft", key: "х", metaKey: true }, true), -1, "укр. розкладка: за `code`");
 });
 
+test("isMacPlatform: userAgentData → platform → userAgent; перший непорожній вирішує; без navigator — не Mac", () => {
+  assert.equal(isMacPlatform({ platform: "MacIntel" }), true);
+  assert.equal(isMacPlatform({ platform: "Win32" }), false);
+  assert.equal(isMacPlatform({ platform: "", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" }), true, "порожня platform → userAgent");
+  assert.equal(isMacPlatform({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)" }), true);
+  assert.equal(isMacPlatform({ userAgentData: { platform: "macOS" }, platform: "Win32" }), true, "userAgentData першим");
+  assert.equal(isMacPlatform({ userAgentData: { platform: "Windows" }, platform: "MacIntel" }), false);
+  assert.equal(isMacPlatform({ userAgentData: { platform: "" }, platform: "", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64)" }), false);
+  assert.equal(isMacPlatform({}), false);
+  assert.equal(isMacPlatform(null), false);
+  assert.equal(isMacPlatform({ get platform() { throw new Error("x"); } }), false);
+});
+
 test("проводка 0.40 (мінори T5): створення задачі й демо йдуть під `navigating`; майстер — ні; goTo → settings віддає факт відкриття; ⌘[ ⌘] з `.catch`", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
-  assert.match(src, /await navigating\(\(\) => leaveHome\(\)\);   \/\/ «задачу відкрито»/, "створення задачі з форми");
-  assert.match(src, /await navigating\(\(\) => \(homeOpen \? leaveHome\(\) : render\(\)\)\)/, "демо-задача");
-  assert.match(src, /Без `navigating` навмисно: майстер/, "майстер лишається replace-only");
+  assert.match(src, /await navigating\(\(\) => leaveHome\(\)\);/, "створення задачі з форми");
+  assert.match(src, /await navigating\(\(\) => \(homeOpen \? leaveHome\(\) : render\(\)\)\)/, "демо-задача (існуюча)");
+  assert.match(src, /r\.existed \? switchTask\(r\.id\) : navigating\(\(\) => wizOpenTask\(r\)\)/, "демо-задача (щойно створена) — свій запис");
+  assert.match(src, /openTask: \(made\) => wizOpenTask\(made\),/, "майстер кличе wizOpenTask напряму (replace-only)");
+  const body = src.slice(src.indexOf("async function wizOpenTask("), src.indexOf("async function openSpaceEdit("));
+  assert.ok(body.includes("await leaveHome();"), "wizOpenTask виходить із «Задач»");
+  assert.ok(!/navigating\(/.test(body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")), "wizOpenTask сам не відкриває жетон");
+  assert.match(src, /const NAV_MAC = isMacPlatform\(\);/, "платформа — з одного хелпера");
   assert.match(src, /await enterConnections\(\); return homeOpen && homePage === 'conn';/, "settings: відмова, якщо не відкрилось");
   assert.match(src, /\(d < 0 \? nav\.back\(\) : nav\.forward\(\)\)\.catch\(\(\) => \{\}\)/);
   assert.match(src, /const live = \(\) => gen === goGen && tgen === taskSwitchGen && stillWanted\(\);/);
