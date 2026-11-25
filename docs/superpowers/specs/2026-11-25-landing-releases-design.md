@@ -44,7 +44,7 @@
   - «With your agent»: наявний промпт і кнопка копіювання;
   - «In Terminal (macOS)»: `git clone https://github.com/neodisa/deai-canvas.git ~/deai-canvas && cd ~/deai-canvas && bash ops/canvas-app/install.sh && ./start.command`;
     рядком нижче — Overview: `npm ci && npx playwright install chromium` (Node 20+).
-  Під вкладками — «Connect your agent» у три пункти (той самий текст, що в README, A2).
+  Блок «Connect your agent» на лендингу прибрано (L#10, 25.11.2026); він лишається в README (A2).
 - **FAQ про платформи:** «Made for macOS: the launcher, app icon and autostart. On Windows and Linux, run `app/serve.py`
   with Python 3.9+ and open it in Chrome or Edge as an app window. A one-command start on every OS is on the roadmap.»
 - **Версія і Beta (L#3):** плашка `Beta` біля логотипа в шапці; у футері «v0.39.1 · Beta» з посиланням на `CHANGELOG.md`
@@ -101,6 +101,9 @@
 - **B4. Точкова сітка «магніт» (L#5):** власна реалізація на `<canvas>` (код textures.dev не беремо: ліцензія Pro-текстур
   забороняє публікацію в репо, а безкоштовні — MIT з обовʼязковою приміткою). Точки біля курсора злипаються, поле тягнеться до
   нього. Де: фон «сцени» першого екрана і блоку «Get started». Приглушено, у кольорах лендинга.
+- **B6. Розділ «Comments» (L#9, L#11):** одразу після «From brief to review». Головне в продукті — на кожен пін видно відповідь:
+  що агент зробив («Done · It.N» з приміткою), над чим працює («AI is working»), де чекає рішення («AI is waiting for your
+  reply» і питання в гілці), і коментарі команди з превʼю («Assign to AI»). Макет панелі текстом + знімок панелі коментарів.
 - **B5. Тур можливостей зі скролом (L#2, L#8, L#9):** галерея прилипає, кожен крок скролу перемикає вкладку; прогрес збоку;
   вкладки клікабельні; на телефоні й при reduced motion — звичайні вкладки. Кроки:
   1. Spaces & tasks — простори, екран задач, теги;
