@@ -93,7 +93,7 @@ for (const button of document.querySelectorAll("[data-copy]")) {
       button.textContent = "Copied";
       copyStatus.classList.add("visually-hidden");
       copyStatus.textContent = "";
-      copyStatus.textContent = "Copied to clipboard.";
+      requestAnimationFrame(() => { copyStatus.textContent = "Copied to clipboard."; });
       timer = setTimeout(() => { button.textContent = label; copyStatus.textContent = ""; }, 2400);
     } else {
       const selection = getSelection();
@@ -108,10 +108,14 @@ for (const button of document.querySelectorAll("[data-copy]")) {
   });
 }
 
-document.querySelector("[data-setup-tabs]").addEventListener("click", () => {
+// Switching install tabs drops a stale copy message. Arrow keys move focus; Safari does not focus a clicked button.
+function clearCopyStatus() {
   copyStatus.textContent = "";
   copyStatus.classList.add("visually-hidden");
-});
+}
+const setupTabs = document.querySelector("[data-setup-tabs]");
+setupTabs.addEventListener("click", clearCopyStatus);
+setupTabs.addEventListener("focusin", clearCopyStatus);
 
 async function copyText(text) {
   if (navigator.clipboard?.writeText) {
