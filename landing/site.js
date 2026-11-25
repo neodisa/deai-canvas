@@ -88,11 +88,13 @@ if (typeof dialog.showModal === "function") {
   });
 }
 
-const copyStatus = document.querySelector("[data-copy-status]");
+const setupStatus = document.querySelector("[data-copy-status]");
 
 for (const button of document.querySelectorAll("[data-copy]")) {
   const source = document.getElementById(button.dataset.copy);
   const label = button.textContent;
+  // A copy button reports into the live region of its own block; the setup board uses the first one on the page.
+  const copyStatus = button.closest(".cta-band")?.querySelector("[data-copy-status]") ?? setupStatus;
   let timer;
   button.hidden = false;
   button.addEventListener("click", async () => {
@@ -118,8 +120,8 @@ for (const button of document.querySelectorAll("[data-copy]")) {
 
 // Switching install tabs drops a stale copy message. Arrow keys move focus; Safari does not focus a clicked button.
 function clearCopyStatus() {
-  copyStatus.textContent = "";
-  copyStatus.classList.add("visually-hidden");
+  setupStatus.textContent = "";
+  setupStatus.classList.add("visually-hidden");
 }
 const setupTabs = document.querySelector("[data-setup-tabs]");
 setupTabs.addEventListener("click", clearCopyStatus);
