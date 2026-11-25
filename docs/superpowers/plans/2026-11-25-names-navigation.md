@@ -405,7 +405,7 @@ export function parseStoredW(raw) {
 }
 ```
 
-- [ ] **Step 4: Юніт зелений** — `node --test tests/panel-width.test.mjs` → PASS (7 tests).
+- [ ] **Step 4: Юніт зелений** — `node --test tests/panel-width.test.mjs` → PASS (8 tests).
 
 - [ ] **Step 5: i18n** — у `app/i18n.js` додати в кінець `UK` (перед закривальним `};` блока `const UK`) і в кінець `EN` (перед `};` блока `const EN`):
 
@@ -833,7 +833,7 @@ export const sameLocation = (a, b) => formatLocation(a) === formatLocation(b);
 export const hasPlace = (loc) => formatLocation(loc) !== "";
 ```
 
-- [ ] **Step 4: Зелене** — `node --test tests/location-model.test.mjs` → PASS (7).
+- [ ] **Step 4: Зелене** — `node --test tests/location-model.test.mjs` → PASS (8).
 
 - [ ] **Step 5: Commit**
 
