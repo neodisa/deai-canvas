@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EMPTY_LOC, formatLocation, parseLocation } from "../app/location-model.js";
-import { bootFollowsServer, createNav } from "../app/nav.js";
+import { bootFollowsServer, createNav, navKeyDir } from "../app/nav.js";
 
 const L = (o) => ({ ...EMPTY_LOC, ...o });
 const H = (o) => formatLocation(L(o));
@@ -324,4 +324,28 @@ test("bootFollowsServer: посилання перемикає, reload/back_forw
   assert.equal(bootFollowsServer("reload", L({ t: "a" }), "a"), false, "та сама задача — повне місце");
   assert.equal(bootFollowsServer("reload", L({ it: "it1" }), "a"), false, "без t нічого перемикати");
   assert.equal(bootFollowsServer("reload", L({ t: "x" }), null), true);   // сервер без поточної задачі: reload відкидає `t` — безпечно й навмисно
+});
+
+test("navKeyDir: платформний модифікатор — на Mac лише ⌘, інакше лише Ctrl; Shift/Alt/композиція й інші клавіші — 0", async () => {
+  const k = (o) => ({ code: "BracketLeft", key: "[", ...o });
+  assert.equal(navKeyDir(k({ metaKey: true }), true), -1);
+  assert.equal(navKeyDir(k({ ctrlKey: true }), true), 0, "Ctrl+[ на Mac — не наше");
+  assert.equal(navKeyDir(k({ ctrlKey: true }), false), -1);
+  assert.equal(navKeyDir(k({ metaKey: true }), false), 0, "⌘[ на Windows — не наше");
+  assert.equal(navKeyDir({ code: "BracketRight", key: "]", metaKey: true }, true), 1);
+  assert.equal(navKeyDir({ code: "KeyХ", key: "х", metaKey: true }, true), 0);
+  assert.equal(navKeyDir(k({ metaKey: true, shiftKey: true }), true), 0);
+  assert.equal(navKeyDir(k({ metaKey: true, isComposing: true }), true), 0);
+  assert.equal(navKeyDir({ code: "BracketLeft", key: "х", metaKey: true }, true), -1, "укр. розкладка: за `code`");
+});
+
+test("проводка 0.40 (мінори T5): створення задачі й демо йдуть під `navigating`; майстер — ні; goTo → settings віддає факт відкриття; ⌘[ ⌘] з `.catch`", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
+  assert.match(src, /await navigating\(\(\) => leaveHome\(\)\);   \/\/ «задачу відкрито»/, "створення задачі з форми");
+  assert.match(src, /await navigating\(\(\) => \(homeOpen \? leaveHome\(\) : render\(\)\)\)/, "демо-задача");
+  assert.match(src, /Без `navigating` навмисно: майстер/, "майстер лишається replace-only");
+  assert.match(src, /await enterConnections\(\); return homeOpen && homePage === 'conn';/, "settings: відмова, якщо не відкрилось");
+  assert.match(src, /\(d < 0 \? nav\.back\(\) : nav\.forward\(\)\)\.catch\(\(\) => \{\}\)/);
+  assert.match(src, /const live = \(\) => gen === goGen && tgen === taskSwitchGen && stillWanted\(\);/);
 });

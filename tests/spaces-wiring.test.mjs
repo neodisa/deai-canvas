@@ -128,9 +128,9 @@ test("«Нова задача» (етап Д: картка в сітці): пр�
   assert.match(body, /postForm\('\/api\/task-new'/);
   assert.match(body, /taskFormError\(vals, await taken, trashIds\)/, "перевірка id (з урахуванням кошика) ДО запиту");
   assert.match(body, /if \(spaceChanged\(sp\.id, made\.space\)\) await resetSpaceState\(\);\s*else await resetPerTaskState\(\);/);
-  assert.match(body, /await leaveHome\(\);/);
+  assert.match(body, /await navigating\(\(\) => leaveHome\(\)\);/);
   /* Перехід — УСЕРЕДИНІ відправки, після відповіді сервера: картку могли закрити, а задачу вже створено. */
-  assert.ok(body.indexOf("postForm('/api/task-new'") < body.indexOf("await leaveHome();"), "перехід ПІСЛЯ відповіді сервера");
+  assert.ok(body.indexOf("postForm('/api/task-new'") < body.indexOf("await navigating(() => leaveHome());"), "перехід ПІСЛЯ відповіді сервера");
   assert.match(body, /\} catch \(e\) \{ toast\(t\('errFailed', e\.message\)\); \}\s*return undefined;/,
     "збій переходу — тост, а не «не вдалося створити» для задачі, що вже є");
   assert.match(fn("closeNewTaskCard"), /homeNode\(\)\?\.querySelector\('\[data-th="newtask"\]'\)\?\.focus/, "після закриття фокус — на картку «+»");
@@ -663,7 +663,7 @@ test("етап Д, виправлення ревʼю: гейт живості, �
   const task = fn("createTask");
   const gate = task.indexOf("if (!isLive())");
   assert.ok(gate > 0, "гейт є");
-  assert.ok(gate < task.indexOf("await leaveHome()") && gate < task.indexOf("currentTaskId = made.id"), "гейт — ДО навігації й зміни поточної задачі");
+  assert.ok(gate < task.indexOf("await navigating(() => leaveHome())") && gate < task.indexOf("currentTaskId = made.id"), "гейт — ДО навігації й зміни поточної задачі");
   assert.match(fn("resetSpaceState"), /resetHomeEdit\(\);/, "зміна простору скидає стан екрана задач");
   assert.match(fn("closeNewTaskCard"), /homeEdit = \{ \.\.\.homeEdit, newForm: false \};/, "закриття не стирає решту homeEdit");
   assert.match(src, /const homeCards = \(\) => \[\.\.\.\(homeNode\(\)\?\.querySelectorAll\('\.th-card:not\(#th-new-slot\)'\)/, "слот без tabindex не зупиняє стрілки");

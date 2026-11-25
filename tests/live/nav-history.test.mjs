@@ -288,7 +288,7 @@ test("T5-1: три переходи (сторінка, ітерація, реж�
   await page.keyboard.press("Meta+BracketLeft");               // → it2/poshuk (стан до вибору it1)
   await waitHash(page, /it=it2.*p=poshuk/);
   await frameReady(page, /it=it2.*page=poshuk/);
-  await page.keyboard.press("Control+BracketLeft");            // → it2/holovna
+  await page.keyboard.press("Meta+BracketLeft");            // → it2/holovna (платформний модифікатор: на Mac лише ⌘)
   await waitHash(page, /it=it2.*p=holovna/);
   await frameReady(page, /it=it2.*page=holovna/);
   assert.equal(await page.isDisabled(NB), true);
@@ -500,4 +500,63 @@ test("T5-9: вихід із «Задач» — адреса не тримає h=
   assert.doesNotMatch(await hash(page), /h=tasks/);
   await page.click(NB);                                          // запис «Задачі» лишився одним записом: Назад веде до нього
   await waitHash(page, /h=tasks/);
+});
+
+test("T5-10: задачу створено з форми «Задач» — один запис ПІСЛЯ «Задач»: ← веде на «Задачі», ще раз ← — на попередню задачу", async (t) => {
+  const page = await bootWizard(t, 2200);
+  await waitHash(page, /t=t1/);
+  await page.click('#tabs [data-act="home"]');
+  await waitHash(page, /h=tasks/);
+  await page.click('#th-grid [data-th="newtask"]');
+  await page.waitForSelector('#th-new-slot form[data-form="task"]');
+  await page.keyboard.type("Task B");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await waitHash(page, /t=task-b/);
+  await page.keyboard.press("Meta+BracketLeft");
+  await waitHash(page, /h=tasks/);
+  await page.waitForFunction(() => !document.getElementById("tasks-home").hidden);
+  await page.keyboard.press("Meta+BracketLeft");
+  await waitHash(page, /t=t1/);
+  assert.doesNotMatch(await hash(page), /h=tasks/);
+});
+
+test("T5-11: Назад в «Огляд» тієї ж задачі, а під час очікування людина клікнула вкладку іншої — оболонка лишається в тій, що вибрала (без застарілих m=o / it / p)", async (t) => {
+  const A = twoIterations();
+  const B = taskFixture({ html: PAGE });
+  const server = await startServer(null, { portBase: PORT_BASE + 2300, spaces: [
+    { name: "Studio", id: "studio", color: "space-2", tasks: { t1: { dir: A, title: "Задача A" }, t2: { dir: B.dir, title: "Задача B" } } },
+  ] });
+  t.after(() => stop(server.child));
+  const page = await browser.newPage({ viewport: VIEW });
+  t.after(() => page.close());
+  await page.goto(`${server.url}/app/`);
+  await waitBarReady(page);
+  await waitHash(page, /t=t1/);
+  await page.click('#tabs [data-act="home"]');
+  await page.click('#th-grid .th-card[data-id="t2"]');
+  await waitHash(page, /t=t2/);
+  await page.waitForSelector('#tabs [data-act="tab"][data-val="t1"]');
+  await page.click('#tabs [data-act="tab"][data-val="t1"]');
+  await waitHash(page, /t=t1/);
+  await page.click('#bar [data-act="mode"][data-val="overview"]');
+  await waitHash(page, /m=o/);
+  await page.click('#bar [data-act="mode"][data-val="layout"]');
+  await page.waitForFunction(() => !/m=o/.test(location.hash));
+  await page.waitForSelector("#stage:not([hidden])");
+  let slow = true;
+  await page.route("**/api/task", async (route) => {
+    if (slow) { slow = false; await new Promise((r) => setTimeout(r, 2500)); }
+    await route.continue();
+  });
+  await page.click(NB);                                         // ← у «Огляд» t1: goTo чекає /api/task (повільний)
+  await page.waitForTimeout(300);
+  await page.click('#tabs [data-act="tab"][data-val="t2"]');   // людина передумала: вкладка задачі B
+  await waitHash(page, /t=t2/);
+  await page.waitForTimeout(3500);                              // програна `goTo` дочекалась би й застосувала б застаріле
+  const h = await hash(page);
+  assert.match(h, /t=t2/);
+  assert.doesNotMatch(h, /m=o/, "застарілий режим «Огляд» з програного Назад");
+  assert.equal(await page.evaluate(() => document.getElementById("stage").hidden), false);
+  assert.match(await page.getAttribute("#frame", "src"), /it=it1.*page=holovna/, "задача B на звичному місці");
 });

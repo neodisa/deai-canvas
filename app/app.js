@@ -86,7 +86,7 @@ import { feedbackDialogHTML } from './feedback-view.js';
 import { introCardHTML } from './first-run.js';
 import { mountTooltip } from './tooltip.js';
 import { mountPanelResize } from './panel-resize.js';
-import { bootFollowsServer, createNav } from './nav.js';
+import { bootFollowsServer, createNav, navKeyDir } from './nav.js';
 import { EMPTY_LOC, classifyTask, hasPlace, parseLocation } from './location-model.js';
 import { claudeToastKey, runCommand, unhookToastKey } from './setup-model.js';
 import {
@@ -741,11 +741,10 @@ const effView = () => (canvasView === 'flow' && flowRaw && !pagesError ? 'flow' 
  * висіла тільки на кнопці, перемикання ітерації на холсті обходило її цілком —
  * застарілий кадр без бейджа й лічильник у нулі.
  */
-async function freshen() {
-  if (!picked) return;   // без ітерації serve.py дає NAME_RE.match(None) → 500 у лог
+async function freshen(it = picked) {   // 0.40: `goTo` передає ЦІЛЬОВУ ітерацію, не чіпаючи `picked` до останнього await
+  if (!it) return;   // без ітерації serve.py дає NAME_RE.match(None) → 500 у лог
   // Ітерацію фіксуємо ДО await: дизайнер може перемкнутись, поки триває перевірка,
   // і тоді відповідь стосувалася б не тієї ітерації, під якою ми її запишемо.
-  const it = picked;
   /* `vp` — ширина, СВІЖІСТЬ якої рахуємо, і фіксуємо її тут, поруч з ітерацією й
      з тієї ж причини: перемикання ширини під час перевірки інакше дало б перелік
      застарілого про один набір кадрів під ключем іншого. На штампи в манифесті
@@ -1852,7 +1851,7 @@ async function wizOpenTask(made) {
   homeData = null;
   currentTaskId = made.id; taskSwitchGen += 1;
   await refreshGitlab(made.id);
-  await leaveHome();
+  await leaveHome();   // Без `navigating` навмисно: майстер створив НОВИЙ простір — відкриття його задачі лише замінює запис (спека §2)
 }
 
 /** «Назва й колір…»: лише імʼя й колір поточного простору (`POST /api/space-update`); теку міняти не можна. */
@@ -1977,7 +1976,7 @@ async function createTask(vals, ctl, { sp, withRepo, taken, trashIds }, isLive =
     homeData = null;
     currentTaskId = made.id; taskSwitchGen += 1;
     await refreshGitlab(made.id);
-    await leaveHome();
+    await navigating(() => leaveHome());   // «задачу відкрито» — один запис ПІСЛЯ запису «Задачі» (інакше `sync()` у `leaveHome` переписав би його)
   } catch (e) { toast(t('errFailed', e.message)); }
   return undefined;
 }
@@ -2815,13 +2814,13 @@ function frameCmtKey(ev) {
 /** Клавіші навігації (0.40), спільні для оболонки й вікна рамки: ⌘[ / ⌘] (Ctrl на Windows) — Назад/Вперед у НАШОМУ стеку. `true` —
  *  перехоплено (`preventDefault`: інакше рамка пішла б по власній історії). `code`, а не лише `key`: на українській розкладці `[` —
  *  клавіша `х`. T7 додає сюди ⌘F і ⌘G. */
+const NAV_MAC = (() => { try { return /Mac|iPhone|iPad/.test(navigator.platform || ''); } catch (e) { return false; } })();
 function navKeys(ev) {
-  if (ev.isComposing || ev.altKey || ev.shiftKey || !(ev.metaKey || ev.ctrlKey)) return false;
+  const d = navKeyDir(ev, NAV_MAC);
+  if (!d) return false;
   /* Під модальним (палітра, діалог) ⌘[ ⌘] перехоплюємо (`true` → `preventDefault`, щоб рідна «Назад» браузера не спрацювала), але не веземо. */
-  const go = shellModalOpen() ? () => {} : (d) => { if (!ev.repeat) (d < 0 ? nav.back() : nav.forward()); };
-  if (ev.code === 'BracketLeft' || ev.key === '[') { go(-1); return true; }
-  if (ev.code === 'BracketRight' || ev.key === ']') { go(1); return true; }
-  return false;
+  if (!shellModalOpen() && !ev.repeat) (d < 0 ? nav.back() : nav.forward()).catch(() => {});
+  return true;
 }
 /** Те саме у вікні рамки: `frameCmtKey` виходить на будь-якому модифікаторі, тож окремий захоплювач. */
 function frameNavKey(ev) { if (navKeys(ev)) { ev.preventDefault(); ev.stopPropagation(); } }
@@ -2934,9 +2933,12 @@ async function goTo(loc, { stillWanted = () => true } = {}) {
   }
   if (cnDrawer && !(await dismissCnDrawer())) return false;
   const gen = ++goGen;
-  const live = () => gen === goGen && stillWanted();
+  /* Новіша дія людини перемагає: чужа зміна задачі/простору (`taskSwitchGen`) після НАШОГО перемикання скасовує перехід. `goTo` сам
+     `tabSwitch` не ставить. */
+  let tgen = taskSwitchGen;
+  const live = () => gen === goGen && tgen === taskSwitchGen && stillWanted();
   if (loc.h === 'tasks') { enterHome({ page: 'tasks' }); return true; }
-  if (loc.h === 'settings') { await enterConnections(); return true; }
+  if (loc.h === 'settings') { await enterConnections(); return homeOpen && homePage === 'conn'; }   // ранній вихід (простір не прочитано, людина пішла) — відмова
   /* Задача (а з нею й простір — `task-switch` перемикає й простір). Невідома — 'gone': запис стека мертвий. */
   const st = await resolveTaskLoc(loc, currentTaskId, async (id) => { if (!(await switchTask(id))) throw new Error('refused'); });
   if (st === 'unknown') return 'gone';   // запит удався, а задачі нема (чи id двозначний): запис стека мертвий
@@ -2945,16 +2947,30 @@ async function goTo(loc, { stillWanted = () => true } = {}) {
     try { await post('/api/space-switch', { id: loc.sp }); } catch (e) { return false; }
     await resetSpaceState();
   }
+  tgen = taskSwitchGen;   // наше власне перемикання вже відбулось; далі будь-яка інша зміна задачі — чужа й новіша
   if (!live()) return false;
-  followStamps = []; followLatchKey = null;   // свідомий перехід скидає запобіжник від циклу редиректів
+  /* Єдиний await після перемикання — перевірка свіжості «Огляду». Вона йде ДО змін стану (цільова ітерація передається явно), тож
+     програна гонка не лишає напівзастосованого місця. */
   const wantCanvas = loc.m === 'o';
+  let canvasIt = null;
+  if (wantCanvas) {
+    try {
+      const its = (await api('/api/task')).iterations || [];
+      const want = loc.it || picked;
+      canvasIt = its.some((x) => x.id === want) ? want : (its.length ? its[its.length - 1].id : null);
+    } catch (e) { canvasIt = null; }
+    if (live() && canvasIt) await freshen(canvasIt);
+  }
+  if (!live()) return false;
+  /* Далі — лише синхронно: стан, потім єдиний `render()`. */
+  followStamps = []; followLatchKey = null;   // свідомий перехід скидає запобіжник від циклу редиректів
   if (wantCanvas !== (mode === 'canvas')) setModeState(wantCanvas);
   if (wantCanvas) canvasView = loc.v === 'flow' ? 'flow' : 'grid';
   if (loc.it && loc.it !== picked) { picked = loc.it; pickedPage = null; pickedState = null; }   // видалена ітерація: `render()` нормалізує до останньої
+  if (wantCanvas && canvasIt && canvasIt !== picked) { picked = canvasIt; pickedPage = null; pickedState = null; }
   if (loc.p) { pickedPage = loc.p; pickedState = loc.st || null; }
   openDd = null;
-  if (mode === 'canvas' && live()) await freshenForCanvas();   // як кнопка режиму: `freshen`, ПОТІМ один `render`
-  if (!live()) return false;
+  if (wantCanvas) maybeAutoShoot();   // як кнопка режиму: `freshen` → автозйомка → ОДИН `render`
   if (homeOpen) await leaveHome(); else await render();
   return true;
 }
@@ -3867,7 +3883,7 @@ async function openDemo(spaceId) {
   try { r = await post('/api/demo-task', { space: spaceId, title: t('frDemoTaskTitle'), reuse: true }); }
   catch (e) { tellError(t('frDemoFailed'), e.message); return; }
   const ok = await (r.existed ? switchTask(r.id) : wizOpenTask(r));
-  if (r.existed && ok) { if (homeOpen) await leaveHome(); else await render(); }
+  if (r.existed && ok) await navigating(() => (homeOpen ? leaveHome() : render()));
 }
 
 let feedbackDialogOpen = false;

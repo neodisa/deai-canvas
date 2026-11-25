@@ -29,6 +29,18 @@ export function bootFollowsServer(navType, loc, current) {
   return navType !== "navigate" && Boolean(loc.t) && loc.t !== current;
 }
 
+/**
+ * Клавіша навігації (чисто): `-1` для ⌘[ / `1` для ⌘], інакше `0`. Модифікатор — платформний: на Mac лише ⌘ (`metaKey`), інакше лише Ctrl
+ * (Ctrl+[ на Mac і ⌘[ на Windows — чужі гарячі клавіші, їх не перехоплюємо). `code` поруч із `key`: на українській розкладці `[` — `х`.
+ */
+export function navKeyDir(ev, mac) {
+  if (ev.isComposing || ev.altKey || ev.shiftKey) return 0;
+  if (!(mac ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && !ev.metaKey)) return 0;
+  if (ev.code === "BracketLeft" || ev.key === "[") return -1;
+  if (ev.code === "BracketRight" || ev.key === "]") return 1;
+  return 0;
+}
+
 export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}, cap = NAV_CAP }) {
   const norm = (loc) => formatLocation(loc);
   const urlOf = (hash) => `${win.location.pathname}${win.location.search}${hash}`;

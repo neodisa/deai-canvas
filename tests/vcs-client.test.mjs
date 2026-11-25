@@ -1134,7 +1134,7 @@ test("потік wizOpenTask (refresh до leaveHome): ключ — нова з�
 });
 
 test("створення задачі: refreshGitlab питає про made.id (всі три потоки передають цільову задачу)", () => {
-  assert.match(fn("createTask"), /currentTaskId = made\.id; taskSwitchGen \+= 1;\s*await refreshGitlab\(made\.id\);\s*await leaveHome\(\);/);
+  assert.match(fn("createTask"), /currentTaskId = made\.id; taskSwitchGen \+= 1;\s*await refreshGitlab\(made\.id\);\s*await navigating\(\(\) => leaveHome\(\)\);/);
   assert.match(fn("wizOpenTask"), /currentTaskId = made\.id; taskSwitchGen \+= 1;\s*await refreshGitlab\(made\.id\);\s*await leaveHome\(\);/);
   assert.match(fn("switchTask"), /await refreshGitlab\(val\);\s*currentTaskId = val;/);
 });
@@ -1268,7 +1268,7 @@ function mkTaskEnv(over = {}) {
     resetPerTaskState: async () => { log.reset.push("task"); },
     homeData: { old: 1 }, currentTaskId: "A", taskSwitchGen: 0, newFormEl: null,
     refreshGitlab: async (id) => { log.refresh.push(id); },
-    leaveHome: async () => { log.leave += 1; },
+    leaveHome: async () => { log.leave += 1; }, navigating: (fn) => fn(),
     toast: (m) => log.toast.push(m),
     ...over,
   };
