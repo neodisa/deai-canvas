@@ -1728,6 +1728,14 @@ class TaskResponses(Fixture):
         rows = [(t['id'], t['space']) for t in self.jget('/api/tasks?all=1')[1]['tasks'] if t['id'] == 'a']
         self.assertEqual(sorted(rows), sorted([('a', self.legacy_id), ('a', self.p_id)]))
 
+    def test_tasks_all_reports_skipped_spaces_additively(self):
+        """0.40: `skipped_spaces` — лише для `?all=1`, наявні поля незмінні; звичайний `/api/tasks` його не має."""
+        body = self.jget('/api/tasks?all=1')[1]
+        self.assertEqual(body['skipped_spaces'], [])
+        for k in ('current', 'tasks', 'space'):
+            self.assertIn(k, body)
+        self.assertNotIn('skipped_spaces', self.jget('/api/tasks')[1])
+
     def test_tasks_all_helper_gives_the_request_space_back(self):
         """Те саме без HTTP: хто кличе обхід усередині `request_space`, лишається в своєму."""
         with spaces.request_space(self.p_id):
@@ -2487,7 +2495,10 @@ class NoSpaces(Bare):
     def test_task_lists_are_empty_200s_not_no_task_404s(self):
         for path in ('/api/tasks', '/api/tasks?all=1'):
             with self.subTest(path=path):
-                self.assertEqual(self.jget(path), (200, {'current': None, 'tasks': [], 'space': None}))
+                want = {'current': None, 'tasks': [], 'space': None}
+                if 'all=1' in path:
+                    want['skipped_spaces'] = []   # 0.40: додатково, лише для `?all=1`
+                self.assertEqual(self.jget(path), (200, want))
         st, body = self.jget('/api/tasks-overview')
         self.assertEqual((st, body), (200, {'current': None, 'mine': [], 'team': None, 'tracker': None, 'trash': [], 'space': None}))
 
@@ -2587,7 +2598,7 @@ class BrokenLegacyFirstStart(Bare):
 
     def test_all_spaces_listing_skips_it_like_any_unreadable_space(self):
         self.break_it('{')
-        self.assertEqual(self.jget('/api/tasks?all=1'), (200, {'current': None, 'tasks': [], 'space': None}))
+        self.assertEqual(self.jget('/api/tasks?all=1'), (200, {'current': None, 'tasks': [], 'skipped_spaces': [], 'space': None}))
 
     def test_a_named_task_is_503_not_an_unknown_task_404(self):
         self.break_it('{')

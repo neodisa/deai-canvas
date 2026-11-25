@@ -7,8 +7,8 @@
  * `pushState`), а Назад/Вперед — `entries[]` + `index` тут.
  *
  *  · `sync()` — ЄДИНЕ місце запису адреси. Запис у стек — лише під ЖЕТОНОМ (`open()`/`close()`): дія-перехід відкриває його на
- *    мутації стану, перший `sync()` під ним записує рівно один запис і спалює жетон, `close()` у `finally` знімає. Ні ранній
- *    вихід, ні сторонній `render()` жетона не споживають і не лишають.
+ *    мутації стану, перший `sync()` під ним, що ЗМІНИВ місце, записує рівно один запис і спалює жетон; `sync()` із тим самим місцем (сторонній
+ *    `render()` до мутації стану) жетона не споживає; `close()` у `finally` знімає. Ні ранній вихід, ні сторонній `render()` жетона не лишають.
  *  · Поки працює `goTo` із цього модуля, `sync()` стримано (`held`): проміжні записи з `enterHome`/`wiz.requestExit` не
  *    затирають місця призначення; наприкінці стек осідає ОДИН раз із фінальним нормалізованим місцем (`settle`).
  *  · `goTo` → `true` | `false` (відмова, індекс лишається) | `'gone'` (задачі нема: запис викидаємо й ідемо до сусіднього).
@@ -76,9 +76,11 @@ export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}
   function sync() {
     if (held) return;
     const h = norm(getLoc());
-    if (token && !token.used) {
+    /* Жетон спалюється ЛИШЕ записом: сторонній `render()` до мутації стану (те саме місце) його не споживає. */
+    if (token && !token.used && h !== entries[index]) {
       token.used = true;
-      if (h !== entries[index]) { append(h); write(h); save(); notify(); return; }
+      append(h); write(h); save(); notify();
+      return;
     }
     if (h !== entries[index]) { entries[index] = h; save(); }
     write(h);
@@ -95,7 +97,9 @@ export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}
 
   function step(dir) {
     return run(async () => {
-      token = null;   // жетон дії, що не встигла закритись, не вмикає запис під час Назад/Вперед
+      /* Жетон дії, що не встигла закритись, не вмикає запис під час Назад/Вперед. Ціна: повільна дія, що відкрила жетон ДО Назад,
+       свого запису не отримає (її місце осяде як оновлення) — вибрано замість хибного запису місця призначення. */
+      token = null;
       for (;;) {
         const to = index + dir;
         if (to < 0 || to >= entries.length) return false;
@@ -118,7 +122,7 @@ export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}
   win.addEventListener("hashchange", () => {
     const typed = win.location.hash;
     run(async () => {
-      token = null;
+      token = null;   // та сама ціна, що в `step()`: відкритий жетон не перетворює вписане місце на сторонній запис
       const h = norm(parseLocation(typed));
       if (!h) { write(entries[index]); return; }   // порожня адреса (стерли hash): повертаємо поточне місце
       if (h === entries[index]) return;

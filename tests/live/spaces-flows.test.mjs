@@ -255,7 +255,7 @@ test("T1 висячий current на старті: екран лікується
   writeFileSync(regFile, JSON.stringify(reg));
 
   const tr = trackTuner(page);
-  /* Свіже відкриття БЕЗ адреси: з hash (0.40) старт сам перемикає задачу на сервері до `loadTune()` — це інший шлях (один GET). */
+  /* Свіже відкриття БЕЗ адреси: це шлях «два GET» (до першого рендера й після лікування). Старт З адресою лікує інакше — див. T1b. */
   await page.goto(`${url}/app/`);
   await markLoaded(page, "X");
   await waitBarReady(page);
@@ -274,6 +274,39 @@ test("T1 висячий current на старті: екран лікується
   assert.ok(tr.posts.length >= 1, "правка не записалась");
   assert.ok("base_rev" in tr.posts[0], "перший запис після лікування без base_rev: затер би пакет, якого вкладка не читала");
   assert.deepEqual(props(p).sort(), ["padding-bottom", "padding-left", "padding-right", "padding-top"], "стара правка зникла з пакета: його не підхоплено з диска");
+});
+
+test("T1b висячий current + перезавантаження З адресою: екран лікується без помилки задач, пакет читається для задачі з адреси, запис іде з base_rev", async (t) => {
+  const { X, server, page } = await twoSpaces(t);
+  await markLoaded(page, "X");
+  await turnInspectorOn(page);
+  await pin(page, "#target");
+  await bump(page, "padding-top");
+  await waitPkg(page, X.dir, 2);
+  assert.match(await page.evaluate(() => location.hash), /t=x/, "адреса несе задачу");
+
+  const regFile = path.join(server.deaiHome, "spaces.json");
+  const reg = JSON.parse(readFileSync(regFile, "utf8"));
+  reg.current = "ghost";
+  writeFileSync(regFile, JSON.stringify(reg));
+
+  const tr = trackTuner(page);
+  await page.reload();
+  await markLoaded(page, "X");
+  await waitBarReady(page);
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator(".errbar").count(), 0, "екран не показує помилку задач");
+  assert.ok(tr.gets.length >= 1, "пакет вилікуваної задачі не читався");
+  await spaceNameOnTasks(page, "P");
+  await markLoaded(page, "X");
+
+  await turnInspectorOn(page);
+  await pin(page, "#target");
+  await bump(page, "padding-left");
+  const p = await waitPkg(page, X.dir, 4);
+  assert.ok(tr.posts.length >= 1, "правка не записалась");
+  assert.ok("base_rev" in tr.posts[0], "перший запис без base_rev: затер би пакет, якого вкладка не читала");
+  assert.deepEqual(props(p).sort(), ["padding-bottom", "padding-left", "padding-right", "padding-top"], "стара правка зникла з пакета");
 });
 
 test("T2 агент (або інша вкладка) перемкнув ПРОСТІР, поки вкладка відкрита: render() скидає пер-просторовий стан і читає пакет нової задачі", async (t) => {

@@ -257,3 +257,62 @@ test("hashchange, що goTo відмовив: адреса вертається 
   assert.equal(s.win.location.hash, before);
   assert.equal(s.nav.entries().length, 1);
 });
+
+test("сторонній sync із тим самим місцем не спалює жетон: потім зміна місця під тим самим жетоном — РІВНО ОДИН запис", () => {
+  const s = setup();
+  s.nav.sync();
+  const tk = s.nav.open();
+  s.nav.sync();                                   // сторонній render() до мутації стану: місце те саме
+  s.cur.loc = L({ t: "a", p: "real" });           // справжня дія змінила стан
+  s.nav.sync();
+  s.nav.close(tk);
+  assert.deepEqual(s.nav.entries(), [H({ t: "a", it: "it1", p: "x" }), H({ t: "a", p: "real" })]);
+  assert.equal(s.nav.canBack(), true);
+});
+
+test("збережений стек довший за стелю: глибоке посилання обрізає найстаріші, індекс на новому записі", () => {
+  const store = memStore();
+  store.mem = JSON.stringify({ entries: ["#t=1", "#t=2", "#t=3", "#t=4", "#t=5"], index: 4 });
+  const s = setup({ store, cap: 3, hash: "#t=deep" });
+  assert.equal(s.nav.entries().length, 3);
+  assert.equal(s.nav.index(), 2);
+  assert.equal(s.nav.entries().at(-1), "#t=deep");
+  assert.deepEqual(s.nav.entries().slice(0, 2), ["#t=4", "#t=5"]);
+});
+
+test("усі записи в напрямку мертві: Назад викидає їх, повертає false, індекс 0, стек лише з поточного", async () => {
+  const w = fakeWin();
+  const cur = { loc: L({ t: "dead", p: "0" }) };
+  let alive = true;
+  const nav = createNav({
+    win: w.win, getLoc: () => cur.loc,
+    goTo: async (loc) => { if (!alive && loc.t === "dead") return "gone"; cur.loc = loc; return true; },
+  });
+  nav.sync();
+  for (const p of ["1", "2"]) { const tk = nav.open(); cur.loc = L({ t: "dead", p }); nav.sync(); nav.close(tk); }
+  const tk = nav.open(); cur.loc = L({ t: "a", p: "z" }); nav.sync(); nav.close(tk);
+  alive = false;
+  assert.equal(await nav.back(), false);
+  assert.deepEqual(nav.entries(), [H({ t: "a", p: "z" })]);
+  assert.equal(nav.index(), 0);
+  assert.equal(nav.canBack(), false);
+});
+
+test("усі записи «вперед» мертві: false, мертві викинуто, індекс не зсунуто, canFwd вимкнено", async () => {
+  const w = fakeWin();
+  const cur = { loc: L({ t: "a", p: "x" }) };
+  let alive = true;
+  const nav = createNav({
+    win: w.win, getLoc: () => cur.loc,
+    goTo: async (loc) => { if (!alive && loc.t === "dead") return "gone"; cur.loc = loc; return true; },
+  });
+  nav.sync();
+  for (const p of ["1", "2"]) { const tk = nav.open(); cur.loc = L({ t: "dead", p }); nav.sync(); nav.close(tk); }
+  await nav.back(); await nav.back();
+  assert.equal(nav.index(), 0);
+  alive = false;
+  assert.equal(await nav.forward(), false);
+  assert.deepEqual(nav.entries(), [H({ t: "a", p: "x" })]);
+  assert.equal(nav.index(), 0);
+  assert.equal(nav.canFwd(), false);
+});

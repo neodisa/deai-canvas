@@ -1410,6 +1410,7 @@ async function render({ keepFrame = false } = {}) {
     /* У поточному просторі нема жодної задачі (щойно створений, порожній) або просторів
        нема зовсім — це не поломка, а місце для «Нової задачі» чи привітання. Тому не
        `tasksErr`: червона смуга «не читається» там брехала б. */
+    /* Ранні виходи (`no-task`, збій першого завантаження): адреса НАВМИСНО лишається як є — місця, яке можна було б записати, нема. */
     if (e?.code === 'no-task') { await showNoTask(); return; }
     tasksErr = true;
     /* Причина: чужий процес на порту (`e.key`), файл задач простору не читається чи
@@ -2879,7 +2880,7 @@ const curLoc = () => ({
   p: pickedPage,
   st: pickedState,
   m: mode === 'canvas' ? 'o' : null,
-  v: mode === 'canvas' && canvasView === 'flow' ? 'flow' : null,
+  v: mode === 'canvas' && effView() === 'flow' ? 'flow' : null,   // ефективний вид: адреса не каже `flow`, коли показано сітку
   h: homeOpen ? (homePage === 'conn' ? 'settings' : 'tasks') : null,
 });
 const nav = createNav({
@@ -10275,8 +10276,9 @@ applyViewport();
 async function resolveTaskLoc(loc, current, doSwitch) {
   if (!loc.t || loc.t === current) return 'current';
   let rows = null;
-  try { rows = (await api('/api/tasks?all=1')).tasks || []; } catch (e) { rows = null; }
-  const st = classifyTask(loc, current, rows);
+  let skipped = [];
+  try { const r = await api('/api/tasks?all=1'); rows = r.tasks || []; skipped = r.skipped_spaces || []; } catch (e) { rows = null; }
+  const st = classifyTask(loc, current, rows, skipped);
   if (st !== 'switch') return st;
   try { await doSwitch(loc.t); return 'switched'; } catch (e) { return 'error'; }
 }

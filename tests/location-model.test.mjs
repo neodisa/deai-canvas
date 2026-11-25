@@ -66,3 +66,12 @@ test("`p=` сумісний із превʼю: той самий ключ і т�
   const h = formatLocation(L({ t: "a", p: "holovna" }));
   assert.match(h, /(?:^#|&)p=holovna(?:&|$)/);
 });
+
+test("classifyTask: простір пропущено сервером (skipped) → error, а не unknown: за sp, або без sp коли задачі в прочитаних нема", () => {
+  const rows = [{ id: "a", space: "s1" }];
+  assert.equal(classifyTask(L({ t: "x", sp: "s2" }), "cur", rows, ["s2"]), "error", "sp у пропущених");
+  assert.equal(classifyTask(L({ t: "x" }), "cur", rows, ["s2"]), "error", "sp нема, якийсь простір пропущено, задачі не знайдено");
+  assert.equal(classifyTask(L({ t: "x", sp: "s1" }), "cur", rows, ["s2"]), "unknown", "sp прочитаний: справді нема");
+  assert.equal(classifyTask(L({ t: "x" }), "cur", rows, []), "unknown", "нічого не пропущено: справді нема");
+  assert.equal(classifyTask(L({ t: "a" }), "cur", rows, ["s2"]), "switch", "знайдену в прочитаному не гальмуємо");
+});

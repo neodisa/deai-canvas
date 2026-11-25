@@ -506,7 +506,8 @@ test("7: ЛІГА без змін — підпис «GitLab», «Налашту�
 
   /* Задача з маппінгом: той самий зашитий шлях 0.7.0 (дзеркало — плоска тека `.mirrors`, не `<DEAI_HOME>/cache`). */
   assert.equal((await postJson(s.url, "/api/task-switch", { id: "mapped" })).status, 200);
-  await page.reload();
+  /* Свіже відкриття БЕЗ адреси (0.40): адреса несе стару задачу, і `reload` перемкнув би сервер назад. */
+  await page.goto(`${s.url}/app/`);
   await page.waitForSelector(`${GL} .dot--warn`, { timeout: 15000 });
   assert.equal((await glLabel(page)).trim(), "GitLab");
   const menu = await glMenu(page);

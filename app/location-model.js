@@ -49,12 +49,16 @@ export const hasPlace = (loc) => formatLocation(loc) !== "";
  * Що робити із задачею з адреси (чиста частина `resolveTaskLoc` з `app.js`). `rows` — рядки `/api/tasks?all=1` або `null`, коли запит
  * НЕ вдався. `'current'` — діємо в поточній; `'switch'` — перемкнути; `'unknown'` — запит удався, а задачі нема, вона `missing` чи її
  * id двозначний (`/api/task-switch` приймає лише `id`, тож однаковий id у двох просторах він не розрізнить — 409; `sp` в адресі —
- * лише інформація, а не ключ вибору); `'error'` — запит не вдався: НЕ «нема» (запис стека не можна викидати через збій мережі).
+ * лише інформація, а не ключ вибору); `'error'` — запит не вдався або простір, де могла бути задача, не прочитано (`skipped`): НЕ «нема» (запис стека не можна викидати через збій).
  */
-export function classifyTask(loc, current, rows) {
+export function classifyTask(loc, current, rows, skipped = []) {
   if (!loc.t || loc.t === current) return "current";
   if (rows === null) return "error";
   const m = rows.filter((x) => x.id === loc.t);
+  /* Простір, якого сервер не зміг прочитати (`skipped_spaces`), не доводить, що задачі там нема: адреса з таким `sp` — «невідомо»,
+     а без `sp` «нема» дозволено лише коли ВСІ простори прочитано. Це `error` (запис стека лишається), а не `unknown`. */
+  if (loc.sp && skipped.includes(loc.sp)) return "error";
+  if (!loc.sp && m.length === 0 && skipped.length) return "error";
   if (m.length !== 1 || m[0].missing) return "unknown";
   return "switch";
 }

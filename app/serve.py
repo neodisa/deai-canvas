@@ -2061,7 +2061,12 @@ def _task_rows(cfg, sp=None, items=None):
 
 
 def _all_space_task_rows():
-    """Рядки `GET /api/tasks?all=1`: задачі ВСІХ просторів реєстру, кожна з `space` (id
+    """Лише рядки `_all_space_task_rows_ex()` (список; пропущені простори — див. там)."""
+    return _all_space_task_rows_ex()[0]
+
+
+def _all_space_task_rows_ex():
+    """`(рядки, пропущені_простори)`. Рядки `GET /api/tasks?all=1`: задачі ВСІХ просторів реєстру, кожна з `space` (id
     простору; `None`, коли шар вимкнено). Порядок — реєстру, всередині простору — як у
     перемикачі. Простір, файл задач якого не прочитати чи не зібрати в порядок, пропускається:
     список решти просторів важливіший за один битий. Id, що є у двох просторах, видно двічі —
@@ -2075,15 +2080,17 @@ def _all_space_task_rows():
     впорядкувати не вийшло (ручна правка), — такий самий битий простір. Складання рядків (мітки, напрямки) — ПОЗА ним: справжня
     вада в обчисленні мітки не мусить мовчки викинути ЦІЛИЙ простір зі списку (так вона лишилась би невидимою)."""
     rows = []
+    skipped = []   # id просторів, яких не прочитали: задача в такому НЕ «відсутня», а «невідомо» (клієнт відрізняє це від справді нема)
     for sp in spaces.read_registry()['spaces']:
         try:
             with spaces.request_space(sp['id']):
                 cfg = load_tasks()
             items = tasks_by_recent(cfg)
         except (SpaceUnavailable, AttributeError, TypeError):
+            skipped.append(sp['id'])
             continue
         rows += [{**r, 'space': _space_id(sp)} for r in _task_rows(cfg, sp, items)]
-    return rows
+    return rows, skipped
 
 
 # ---------- Екран «Задачі»: мої + команда (батч 1.52) ----------
@@ -6895,9 +6902,16 @@ class Handler(SimpleHTTPRequestHandler):
             # нема чи файл битий — рядки решти просторів усе одно віддаються, а `current` —
             # `null`. `space` — простір ЗАПИТУ, і береться ПІСЛЯ обходу (словник рахується
             # зліва направо): обхід мусить його повернути.
-            self._send_json({'current': cfg.get('current') if cfg is not None else None,
-                             'tasks': _all_space_task_rows() if every else _task_rows(cfg),
-                             'space': space_view(spaces.active_space())})
+            skipped = []
+            if every:
+                rows, skipped = _all_space_task_rows_ex()
+            else:
+                rows = _task_rows(cfg)
+            out = {'current': cfg.get('current') if cfg is not None else None, 'tasks': rows}
+            if every:
+                out['skipped_spaces'] = skipped   # додатково: id просторів, пропущених як нечитабельні
+            out['space'] = space_view(spaces.active_space())   # ПІСЛЯ обходу: він повертає простір запиту
+            self._send_json(out)
             return
         if self.path.split('?')[0] == '/api/tasks-overview':
             q = parse_qs(urlparse(self.path).query)

@@ -126,3 +126,86 @@ test("T4-5: задача з ІНШОГО простору в адресі: ст�
   await frameReady(page, /it=it1.*page=poshuk/);
   /* Друга половина (hashchange → інший простір) чекає на справжній `goTo` із T5: у T4 він заглушка. */
 });
+
+/** id поточної задачі сервера (для адрес-посилань у нових вкладках). */
+const currentTask = async (page, url) => (await (await page.request.get(`${url}/api/tasks`)).json()).current;
+
+test("T4-6: порядок старту — task-switch на сервері ПЕРЕД першим читанням тюнера (пакет тюнера береться для задачі з адреси)", async (t) => {
+  const A = taskFixture({ html: PAGE });
+  const B = taskFixture({ html: PAGE });
+  const server = await startServer(null, { portBase: PORT_BASE + 500, spaces: [
+    { name: "Alpha", id: "alpha", color: "space-1", tasks: { ta: { dir: A.dir, title: "Задача A" } } },
+    { name: "Beta", id: "beta", color: "space-2", tasks: { tb: { dir: B.dir, title: "Задача B" } } },
+  ] });
+  t.after(() => server.child.kill());
+  const page = await browser.newPage({ viewport: VIEW });
+  t.after(() => page.close());
+  const seen = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === "/api/task-switch" || u.pathname === "/api/tuner") seen.push(`${r.method()} ${u.pathname}`);
+  });
+  await page.goto(`${server.url}/app/#sp=beta&t=tb&it=it1&p=poshuk`);
+  await page.waitForFunction(() => /t=tb/.test(location.hash), null, { timeout: 20000 });
+  await page.waitForTimeout(800);
+  const sw = seen.indexOf("POST /api/task-switch");
+  const tune = seen.indexOf("GET /api/tuner");
+  assert.ok(sw >= 0, `task-switch не було: ${seen}`);
+  assert.ok(tune >= 0, `тюнер не читався: ${seen}`);
+  assert.ok(sw < tune, `тюнер прочитано ДО перемикання задачі: ${seen}`);
+});
+
+test("T4-7: старт із #…&it=…&m=o — ПЕРШИЙ рендер уже з ітерацією й режимом з адреси (рамка не вантажить останню ітерацію)", async (t) => {
+  const dir = twoIterations();
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 600 });
+  t.after(() => child.kill());
+  const page = await browser.newPage({ viewport: VIEW });
+  t.after(() => page.close());
+  await page.addInitScript(() => {
+    window.__srcs = [];
+    new MutationObserver((ms) => {
+      for (const m of ms) {
+        const f = document.getElementById("frame");
+        if (f && (m.target === f || [...(m.addedNodes || [])].includes(f))) window.__srcs.push(f.getAttribute("src") || "");
+      }
+    }).observe(document, { subtree: true, attributes: true, attributeFilter: ["src"], childList: true });
+  });
+  const t0 = await currentTask(page, url);
+  await page.goto(`${url}/app/#t=${t0}&it=it1&m=o`);
+  await page.waitForSelector("#canvas:not([hidden])");
+  await page.waitForSelector(".cv-card");
+  await page.waitForTimeout(800);
+  const srcs = await page.evaluate(() => window.__srcs);
+  assert.ok(!srcs.some((s) => /it=it2/.test(s)), `рамка вантажила останню ітерацію до адресної: ${JSON.stringify(srcs)}`);
+  assert.match(await hash(page), /it=it1/);
+  assert.match(await hash(page), /m=o/);
+});
+
+test("T4-8: старт із h=tasks відкриває «Задачі» й адреса зберігає h= після render", async (t) => {
+  const dir = twoIterations();
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 700 });
+  t.after(() => child.kill());
+  const page = await browser.newPage({ viewport: VIEW });
+  t.after(() => page.close());
+  const t0 = await currentTask(page, url);
+  await page.goto(`${url}/app/#t=${t0}&it=it1&p=holovna&h=tasks`);
+  await page.waitForFunction(() => document.body.classList.contains("home-open"), null, { timeout: 20000 });
+  await page.waitForTimeout(800);
+  assert.equal(await page.evaluate(() => document.body.classList.contains("home-open")), true);
+  assert.match(await hash(page), /h=tasks/);
+});
+
+test("T4-9: старт із h=settings відкриває «Налаштування» й адреса зберігає h=settings", async (t) => {
+  const A = taskFixture({ html: PAGE });
+  const server = await startServer(null, { portBase: PORT_BASE + 800, spaces: [
+    { name: "Alpha", id: "alpha", color: "space-1", tasks: { ta: { dir: A.dir, title: "Задача A" } } },
+  ] });
+  t.after(() => server.child.kill());
+  const page = await browser.newPage({ viewport: VIEW });
+  t.after(() => page.close());
+  await page.goto(`${server.url}/app/#sp=alpha&t=ta&it=it1&p=holovna&h=settings`);
+  await page.waitForSelector(".set-nav", { timeout: 20000 });
+  await page.waitForTimeout(800);
+  assert.equal(await page.evaluate(() => document.body.classList.contains("home-open")), true);
+  assert.match(await hash(page), /h=settings/);
+});

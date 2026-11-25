@@ -976,6 +976,20 @@ class ServerTrackView(_Plain):
             f.write('{broken')
         self.assertEqual([r['id'] for r in serve._all_space_task_rows()], ['l1'])           # нечитабельний файл — теж
 
+    def test_skipped_spaces_are_reported_next_to_the_rows(self):
+        """0.40: клієнт мусить відрізнити «задачі нема» від «простір не прочитали» — пропущені id віддаються окремо."""
+        self.two_spaces()
+        self.use(self.sp)
+        rows, skipped = serve._all_space_task_rows_ex()
+        self.assertEqual(skipped, [])
+        self.assertEqual(sorted(r['id'] for r in rows), ['a1', 'l1'])
+        with open(os.path.join(self.sp['path'], 'tasks.json'), 'w', encoding='utf-8') as f:
+            f.write('{broken')
+        rows, skipped = serve._all_space_task_rows_ex()
+        self.assertEqual([r['id'] for r in rows], ['l1'])
+        self.assertEqual(skipped, [self.sp['id']])
+        self.assertEqual([r['id'] for r in serve._all_space_task_rows()], ['l1'])   # старий вигляд — лише рядки
+
     def test_a_liga_space_with_an_empty_or_all_bad_own_list_no_longer_uses_the_adapter(self):
         """4d-4a: було `…still_uses_the_adapter` (ревʼю 4d-1: `tracks: []` у ЛІГИ вмикав адаптер, щоб не спорожнити все). Адаптера
         нема, тож порожній чи зіпсований власний список ЛІГИ — як у будь-якому просторі: напрямків нема, мітка — значення `track`
