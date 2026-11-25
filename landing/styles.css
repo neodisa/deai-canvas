@@ -390,6 +390,9 @@ section[id] { scroll-margin-top: 20px; }
 .chip-done { background: var(--lime); color: #2c4a31; }
 .chip-wait { background: #f2e8c9; color: #664f12; }
 .chip-team { box-shadow: inset 0 0 0 1px var(--pine-line); color: var(--pine-muted); }
+/* Third-party services behind a tour step (owner, L#28): Deai Canvas connects them, it does not host them. */
+.tour-services { max-width: 62ch; margin-top: 12px; color: var(--pine-muted); font-size: 13px; line-height: 1.45; }
+.tour-services-label { display: inline-block; margin-right: 6px; padding: 1px 8px; border: 1px solid var(--pine-line); border-radius: 999px; color: var(--on-pine); font-weight: 650; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
 
 /* Tour: on large screens with motion allowed the stage (section heading + tabs + frame) pins while you scroll through the views (see tour.js). */
