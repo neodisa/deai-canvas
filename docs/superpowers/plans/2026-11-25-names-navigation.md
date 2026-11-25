@@ -724,7 +724,7 @@ git -c user.name=neodisa -c user.email=neodisa@users.noreply.github.com commit -
 ```js
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EMPTY_LOC, formatLocation, hasPlace, parseLocation, sameLocation } from "../app/location-model.js";
+import { EMPTY_LOC, classifyTask, formatLocation, hasPlace, parseLocation, sameLocation } from "../app/location-model.js";
 
 const L = (o) => ({ ...EMPTY_LOC, ...o });
 
@@ -773,6 +773,17 @@ test("sameLocation: порівнює канонічно, а не за поряд
   assert.equal(sameLocation(parseLocation("#p=a&t=b"), parseLocation("#t=b&p=a")), true);
   assert.equal(sameLocation(L({ t: "a" }), L({ t: "b" })), false);
   assert.equal(sameLocation(L({ t: "a", v: "flow" }), L({ t: "a" })), true, "v без m=o не значущий");
+});
+
+test("classifyTask: поточна/без задачі → current; одна жива → switch; нема, missing чи двозначна → unknown; збій запиту → error, не unknown", () => {
+  const rows = [{ id: "a" }, { id: "gone", missing: true }, { id: "dup", space: "s1" }, { id: "dup", space: "s2" }];
+  assert.equal(classifyTask(L({}), "cur", rows), "current");
+  assert.equal(classifyTask(L({ t: "cur" }), "cur", null), "current", "поточна не потребує запиту");
+  assert.equal(classifyTask(L({ t: "a" }), "cur", rows), "switch");
+  assert.equal(classifyTask(L({ t: "nope" }), "cur", rows), "unknown");
+  assert.equal(classifyTask(L({ t: "gone" }), "cur", rows), "unknown");
+  assert.equal(classifyTask(L({ t: "dup", sp: "s1" }), "cur", rows), "unknown", "двозначний id: sp його не розвʼязує");
+  assert.equal(classifyTask(L({ t: "a" }), "cur", null), "error", "збій запиту — не «нема»");
 });
 
 test("`p=` сумісний із превʼю: той самий ключ і той самий регексп читають однаково", () => {
@@ -832,9 +843,23 @@ export function formatLocation(loc) {
 
 export const sameLocation = (a, b) => formatLocation(a) === formatLocation(b);
 export const hasPlace = (loc) => formatLocation(loc) !== "";
+
+/**
+ * Що робити із задачею з адреси (чиста частина `resolveTaskLoc` з `app.js`). `rows` — рядки `/api/tasks?all=1` або `null`, коли запит
+ * НЕ вдався. `'current'` — діємо в поточній; `'switch'` — перемкнути; `'unknown'` — запит удався, а задачі нема, вона `missing` чи її
+ * id двозначний (`/api/task-switch` приймає лише `id`, тож однаковий id у двох просторах він не розрізнить — 409; `sp` в адресі —
+ * лише інформація, а не ключ вибору); `'error'` — запит не вдався: НЕ «нема» (запис стека не можна викидати через збій мережі).
+ */
+export function classifyTask(loc, current, rows) {
+  if (!loc.t || loc.t === current) return "current";
+  if (rows === null) return "error";
+  const m = rows.filter((x) => x.id === loc.t);
+  if (m.length !== 1 || m[0].missing) return "unknown";
+  return "switch";
+}
 ```
 
-- [ ] **Step 4: Зелене** — `node --test tests/location-model.test.mjs` → PASS (8).
+- [ ] **Step 4: Зелене** — `node --test tests/location-model.test.mjs` → PASS (9).
 
 - [ ] **Step 5: Commit**
 
@@ -1062,6 +1087,57 @@ test("hashchange: goTo із розібраним місцем і запис у �
   assert.equal(s.nav.canBack(), true);
 });
 
+test("hashchange під час goTo ставиться в чергу й виконується після осідання (не губиться)", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const calls = [];
+  const w = fakeWin();
+  const cur = { loc: L({ t: "a", p: "x" }) };
+  const nav = createNav({
+    win: w.win, getLoc: () => cur.loc,
+    goTo: async (loc) => { calls.push(loc.p); if (loc.p === "x") await gate; cur.loc = loc; return true; },
+  });
+  nav.sync();
+  const tk = nav.open(); cur.loc = L({ t: "a", p: "y" }); nav.sync(); nav.close(tk);
+  const back = nav.back();                                  // goTo(x) висить на `gate`
+  await tick();
+  w.win.location.hash = H({ t: "a", p: "typed" });          // людина вписала адресу під час переходу
+  release();
+  await back; await tick();
+  assert.deepEqual(calls, ["x", "typed"], "вписана адреса виконана ПІСЛЯ переходу, а не загублена");
+});
+
+test("hashchange на порожній hash: адреса повертається до поточного запису, goTo не кличеться", async () => {
+  const s = setup();
+  s.nav.sync();
+  const before = s.win.location.hash;
+  s.win.location.hash = "";
+  await tick();
+  assert.equal(s.win.location.hash, before);
+  assert.equal(s.calls.length, 0);
+});
+
+test("жетон, не закритий до Назад, не записує нічого під час Назад/Вперед", async () => {
+  const s = setup();
+  s.nav.sync();
+  s.go(L({ t: "a", p: "y" }));
+  s.nav.open();                                             // «забутий» жетон
+  await s.nav.back();
+  s.cur.loc = L({ t: "a", p: "after" });
+  s.nav.sync();
+  assert.equal(s.nav.canFwd(), true, "жетон скинуто на початку step(): запису не додано, «Вперед» не обрізано");
+  assert.equal(s.nav.entries().length, 2);
+});
+
+test("goTo, що відмовив (збій мережі), не викидає запис стека", async () => {
+  const s = setup({ goTo: async () => false });
+  s.nav.sync();
+  s.go(L({ t: "a", p: "y" }));
+  await s.nav.back();
+  assert.equal(s.nav.entries().length, 2);
+  assert.equal(s.nav.canBack(), true);
+});
+
 test("hashchange, що goTo відмовив: адреса вертається до поточного запису", async () => {
   const s = setup({ goTo: async () => false });
   s.nav.sync();
@@ -1175,6 +1251,7 @@ export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}
 
   function step(dir) {
     return run(async () => {
+      token = null;   // жетон дії, що не встигла закритись, не вмикає запис під час Назад/Вперед
       for (;;) {
         const to = index + dir;
         if (to < 0 || to >= entries.length) return false;
@@ -1192,10 +1269,15 @@ export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}
     });
   }
 
+  /* `hashchange`, що прийшов під час `goTo`, не губиться: `run` ставить його в чергу. Вписане місце знімаємо СИНХРОННО в мить події
+   * (осідання попереднього переходу перепише адресу), а виконуємо вже після нього. */
   win.addEventListener("hashchange", () => {
-    const h = norm(parseLocation(win.location.hash));
-    if (held || h === entries[index]) return;
+    const typed = win.location.hash;
     run(async () => {
+      token = null;
+      const h = norm(parseLocation(typed));
+      if (!h) { write(entries[index]); return; }   // порожня адреса (стерли hash): повертаємо поточне місце
+      if (h === entries[index]) return;
       const r = await lead(parseLocation(h));
       if (r === true) {
         const now = norm(getLoc());
@@ -1225,7 +1307,7 @@ export function createNav({ win, store = null, getLoc, goTo, onChange = () => {}
 
 ```js
 import { createNav } from './nav.js';
-import { hasPlace, parseLocation } from './location-model.js';
+import { classifyTask, hasPlace, parseLocation } from './location-model.js';
 ```
 
 Безпосередньо перед докстрінгом `switchTask` («Переключення поточної задачі…») додати:
@@ -1311,20 +1393,24 @@ loadTune().then(render).then(async () => { await refreshGitlab(); paintBar(); })
 
 ```js
 /**
- * Задача з адреси: `'current'` | `'switched'` | `'unknown'` (0.40). Шукаємо в УСІХ просторах (`/api/tasks?all=1`: без `?all=1`
- * бачимо лише поточний простір); однакові id в двох просторах розвʼязує `sp`; `doSwitch` кидає, коли перемкнути не вдалось.
- * Задачі в адресі нема — діємо в поточній (`'current'`). Невідома, `missing` чи двозначна — `'unknown'`: тихо, без тостів.
+ * Задача з адреси (0.40): `'current'` | `'switched'` | `'unknown'` | `'error'`. Рядки — `/api/tasks?all=1` (без `?all=1` бачимо лише
+ * поточний простір); рішення — чиста `classifyTask` (`location-model.js`). `'unknown'` ЛИШЕ коли запит удався, а задачі нема, вона
+ * `missing` чи її id двозначний (`/api/task-switch` приймає тільки `id` — однаковий id у двох просторах дає 409, `sp` його не
+ * розвʼязує: `sp` в адресі — лише інформація). Збій запиту чи відмова перемикання — `'error'`, НЕ «нема»: запис стека через
+ * збій мережі не викидається. Без тостів.
  */
 async function resolveTaskLoc(loc, current, doSwitch) {
   if (!loc.t || loc.t === current) return 'current';
-  let rows;
-  try { rows = ((await api('/api/tasks?all=1')).tasks || []).filter((x) => x.id === loc.t); } catch (e) { return 'unknown'; }
-  if (rows.length > 1 && loc.sp) { const by = rows.filter((x) => x.space === loc.sp); if (by.length) rows = by; }
-  if (rows.length !== 1 || rows[0].missing) return 'unknown';
-  try { await doSwitch(loc.t); return 'switched'; } catch (e) { return 'unknown'; }
+  let rows = null;
+  try { rows = (await api('/api/tasks?all=1')).tasks || []; } catch (e) { rows = null; }
+  const st = classifyTask(loc, current, rows);
+  if (st !== 'switch') return st;
+  try { await doSwitch(loc.t); return 'switched'; } catch (e) { return 'error'; }
 }
-/** «Огляд» перед першим `render()` (старт і `goTo`): ітерація з адреси мусить існувати в ЦІЙ задачі, інакше — остання; далі те саме,
- *  що робить кнопка режиму (`freshen` + автозйомка), — і ОДИН `render()` після. */
+/** «Огляд» (старт і `goTo`): ітерація з адреси мусить існувати в ЦІЙ задачі, інакше — остання; далі те саме, що робить кнопка режиму
+ *  (`freshen` + автозйомка). У `goTo` — перед єдиним `render()` (там `curTask` уже є). На СТАРТІ — лише ПІСЛЯ першого `render()`:
+ *  `maybeAutoShoot` → `shootWithProgress` → `renderPanel`/`panelState` читають `curTask`/`panelPages`, а до першого `render()` їх нема
+ *  (`curTask === null`) — безпечність цього не перевірено, тож не покладаємось. */
 async function freshenForCanvas() {
   try {
     const task = await api('/api/task');
@@ -1344,7 +1430,7 @@ async function bootPlace() {
   try {
     const cur = loc.t ? (await api('/api/tasks')).current : null;
     const st = await resolveTaskLoc(loc, cur, (id) => post('/api/task-switch', { id }));
-    return st === 'unknown' ? null : loc;
+    return st === 'unknown' || st === 'error' ? null : loc;   // невідома чи збій — звичне місце поточної задачі
   } catch (e) { return null; }
 }
 function applyBootPlace(loc) {
@@ -1357,8 +1443,8 @@ bootPlace()
   .then(async (loc) => {
     await loadTune();
     applyBootPlace(loc);
-    if (mode === 'canvas') await freshenForCanvas();   // як вхід у «Огляд» кнопкою; ОДИН render нижче
     await render();
+    if (mode === 'canvas') { await freshenForCanvas(); await render(); }   // як вхід у «Огляд» кнопкою, але ПІСЛЯ першого render (див. `freshenForCanvas`)
     return loc;
   })
   .then(async (loc) => {
@@ -1504,7 +1590,7 @@ test("T4-5: задача з ІНШОГО простору в адресі: ст�
 ```
 
 Run: `until mkdir /private/tmp/deai-live.lock 2>/dev/null; do sleep 10; done; HOME="$(mktemp -d)" node --test --import ./tests/live/_env.mjs tests/live/nav-history.test.mjs; rc=$?; rmdir /private/tmp/deai-live.lock; echo "rc=$rc"`
-Expected: `rc=0`. Подвійне завантаження рамки на старті — гонка: перевірити, що `applyBootPlace` стоїть ДО єдиного `render()`.
+Expected: `rc=0`. Подвійне завантаження рамки на старті поза режимом «Огляд» — гонка: перевірити, що `applyBootPlace` стоїть ДО першого `render()`, а другий `render()` є лише для `m=o`.
 
 - [ ] **Step 10: Мутаційна перевірка (кожен новий тест мусить падати без своєї реалізації).** По одній мутації за раз; після кожної — `git checkout -- app/nav.js app/app.js` і повторний зелений прогін:
   - `nav.js`: прибрати `token.used = true` → «жетон записує рівно один запис» червоний; `if (token && !token.used)` → `if (true)` → «без жетона sync міняє запис» і «жетон, закритий без sync» червоні; прибрати `if (held) return;` → «під час goTo sync стримано» червоний; прибрати блок `startHash … entries.push(startHash)` → «sessionStorage: … глибоке посилання» червоний; у `write` викликати `win.history.pushState` → `pushes()` у юніті й `__push` у живому T4-1 червоні; прибрати `save()` → «sessionStorage» червоний.
@@ -1701,7 +1787,8 @@ async function goTo(loc, { stillWanted = () => true } = {}) {
   if (loc.h === 'settings') { await enterConnections(); return true; }
   /* Задача (а з нею й простір — `task-switch` перемикає й простір). Невідома — 'gone': запис стека мертвий. */
   const st = await resolveTaskLoc(loc, currentTaskId, async (id) => { if (!(await switchTask(id))) throw new Error('refused'); });
-  if (st === 'unknown') return 'gone';
+  if (st === 'unknown') return 'gone';   // запит удався, а задачі нема (чи id двозначний): запис стека мертвий
+  if (st === 'error') return false;      // збій мережі чи відмова перемикання — відмова, запис ЛИШАЄТЬСЯ
   if (!loc.t && loc.sp && loc.sp !== spaceNow()?.id) {
     try { await post('/api/space-switch', { id: loc.sp }); } catch (e) { return false; }
     await resetSpaceState();
@@ -1784,9 +1871,10 @@ async function goTo(loc, { stillWanted = () => true } = {}) {
  *  клавіша `х`. T7 додає сюди ⌘F і ⌘G. */
 function navKeys(ev) {
   if (ev.isComposing || ev.altKey || ev.shiftKey || !(ev.metaKey || ev.ctrlKey)) return false;
-  if (shellModalOpen()) return false;
-  if (ev.code === 'BracketLeft' || ev.key === '[') { if (!ev.repeat) nav.back(); return true; }
-  if (ev.code === 'BracketRight' || ev.key === ']') { if (!ev.repeat) nav.forward(); return true; }
+  /* Під модальним (палітра, діалог) ⌘[ ⌘] перехоплюємо (`true` → `preventDefault`, щоб рідна «Назад» браузера не спрацювала), але не веземо. */
+  const go = shellModalOpen() ? () => {} : (d) => { if (!ev.repeat) (d < 0 ? nav.back() : nav.forward()); };
+  if (ev.code === 'BracketLeft' || ev.key === '[') { go(-1); return true; }
+  if (ev.code === 'BracketRight' || ev.key === ']') { go(1); return true; }
   return false;
 }
 /** Те саме у вікні рамки: `frameCmtKey` виходить на будь-якому модифікаторі, тож окремий захоплювач. */
@@ -1822,10 +1910,10 @@ test("T5-1: три переходи (сторінка, ітерація, реж�
   await waitHash(page, /m=o/);
   assert.equal(await page.isDisabled(NB), false);
 
-  await page.click(NB);                                        // з «Огляду» — у «Макет» it1/poshuk
+  await page.click(NB);                                        // з «Огляду» — у «Макет» it1/holovna (вибір ітерації скинув сторінку на першу)
   await page.waitForFunction(() => !/m=o/.test(location.hash) && /it=it1/.test(location.hash));
   await page.waitForSelector("#stage:not([hidden])");
-  await page.keyboard.press("Meta+BracketLeft");               // → it2/poshuk
+  await page.keyboard.press("Meta+BracketLeft");               // → it2/poshuk (стан до вибору it1)
   await waitHash(page, /it=it2.*p=poshuk/);
   await frameReady(page, /it=it2.*page=poshuk/);
   await page.keyboard.press("Control+BracketLeft");            // → it2/holovna
@@ -1916,19 +2004,26 @@ test("T5-7: hashchange (адресу вписали руками) веде в м
   await frameReady(page, /it=it2.*page=holovna/);
 });
 
-test("T5-8: видалена ітерація в записі стека — тихий запасний варіант, без тосту й без зависання", async (t) => {
+test("T5-8: запис стека вказує на видалену ітерацію — Назад тихо веде на запасну (остання ітерація, перша сторінка), без тосту", async (t) => {
   const { page } = await boot(t, 1100);
+  await waitHash(page, /it=it2.*p=holovna/);                    // запис 1: it2/holovna
   await page.click('#bar [data-dd="iter"]');
   await page.click('#bar [data-act="iter"][data-val="it1"]');
-  await waitHash(page, /it=it1/);
+  await waitHash(page, /it=it1.*p=holovna/);                    // запис 2: it1/holovna
   await page.click('#bar [data-dd="iter"]');
   await page.click('#bar [data-act="iter"][data-val="it2"]');
   await waitHash(page, /it=it2/);
+  await page.click('[data-act="page"][data-val="poshuk"]');
+  await waitHash(page, /it=it2.*p=poshuk/);                     // записи 3 (it2/holovna) і 4 (it2/poshuk)
   await page.evaluate(async () => { await fetch("/api/iteration-delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: "it1" }) }); });
-  await page.click(NB);   // запис вказує на it1, якої нема: падаємо на останню (it2), без зависання
-  await waitHash(page, /it=it2/);
+  await page.click(NB);                                         // → запис 3: it2/holovna
+  await waitHash(page, /it=it2.*p=holovna/);
+  await page.click(NB);                                         // → запис 2: it1 (видалена) — падаємо на it2/holovna
+  await page.waitForFunction(() => /it=it2/.test(location.hash) && /p=holovna/.test(location.hash) && !/it=it1/.test(location.hash));
+  await frameReady(page, /it=it2.*page=holovna/);
+  assert.equal(await page.evaluate(() => document.getElementById("cv-toast")?.classList.contains("show") ?? false), false, "тосту нема");
+  assert.equal(await page.evaluate(() => document.querySelector("#pages-panel .pp-err") === null), true, "панель без помилки сторінок");
 });
-```
 
 Додатково — **відмова охоронця (T5-5)**: майстер незбережених налаштувань не пускає Назад. Скопіювати в початок `tests/live/nav-history.test.mjs` рівно ці шматки з `tests/live/wizard.test.mjs` (імена ті самі): імпорти `cpSync, mkdirSync, mkdtempSync` (`node:fs`), `tmpdir` (`node:os`), `fileURLToPath` (`node:url`), `stop, waitBarReady, goTasks` (`./_spaces-kit.mjs`); константи `ROOT`, `CONN_MODULES`, `SECRET`, `MOCKUP` (рядки ~80–87); `wizardModules()` (~102–121); хелпери `step`, `next`, `card`, `pick`, `field`, `askText` (~279–290); `openFromMenu`, `firstSpace`, `pickAndNext` (~301–329) і `studio()` (~273). Власний мінімальний `boot` (без `plant*`/`watch*`, яких тут не треба):
 
@@ -1960,7 +2055,6 @@ test("T5-5: майстер із незбереженим на кроці 3 ві�
   await page.waitForFunction(() => document.querySelector('#tasks-home .wz[data-step="3"]'));
   assert.equal(await hash(page), before, "адреса не змінилась");
   assert.equal(await page.inputValue(field("memo-publish", "note")), "draft", "набране на місці");
-  assert.equal(await page.isDisabled(NB).catch(() => false), false, "індекс стека не зрушив: Назад і далі доступна");
   await page.keyboard.press("Meta+BracketLeft");
   await page.waitForSelector(".cv-ask-scrim");
   await page.click('.cv-ask-scrim button[data-a="ok"]');             // «Відкинути»
@@ -1968,7 +2062,7 @@ test("T5-5: майстер із незбереженим на кроці 3 ві�
   assert.doesNotMatch(await hash(page), /h=tasks/);
 });
 ```
-(Кнопки ← на екрані майстра нема — лише ⌘[; тому `isDisabled(NB)` загорнуто `.catch`; головна перевірка — незмінні адреса й набране та те, що наступний ⌘[ після «Відкинути» таки веде назад.)
+(Кнопки ← на екрані майстра нема — лише ⌘[; перевірки: адреса й набране не змінились, а наступний ⌘[ після «Відкинути» таки веде назад.)
 
 Run: команда з «Спільних правил» для `nav-history`. Expected: `rc=0`.
 
@@ -2331,10 +2425,12 @@ function findGuard() { if (find.isOpen() && (mode === 'canvas' || homeOpen)) fin
  *  «згрупувати» в дереві (обробник нижче в глобальному keydown). */
 function navKeys(ev) {
   if (ev.isComposing || ev.altKey || !(ev.metaKey || ev.ctrlKey)) return false;
-  if (shellModalOpen()) return false;
   const k = (ev.key || '').toLowerCase();
-  if (!ev.shiftKey && (ev.code === 'BracketLeft' || ev.key === '[')) { if (!ev.repeat) nav.back(); return true; }
-  if (!ev.shiftKey && (ev.code === 'BracketRight' || ev.key === ']')) { if (!ev.repeat) nav.forward(); return true; }
+  const modal = shellModalOpen();
+  /* Під модальним ⌘[ ⌘] перехоплюємо (`true`), але не веземо — рідна «Назад» браузера не мусить спрацювати. */
+  if (!ev.shiftKey && (ev.code === 'BracketLeft' || ev.key === '[')) { if (!modal && !ev.repeat) nav.back(); return true; }
+  if (!ev.shiftKey && (ev.code === 'BracketRight' || ev.key === ']')) { if (!modal && !ev.repeat) nav.forward(); return true; }
+  if (modal) return false;
   if (!ev.shiftKey && (ev.code === 'KeyF' || k === 'f')) return findHere();
   if ((ev.code === 'KeyG' || k === 'g') && find.isOpen()) { if (!ev.repeat) (ev.shiftKey ? find.prev() : find.next()); return true; }
   return false;
@@ -2453,7 +2549,7 @@ test("4: зміна сторінки при відкритій плашці — 
   await page.waitForFunction(() => document.getElementById("find-n").textContent === "1 / 1", null, { timeout: 15000 });
 });
 
-test("5: «Огляд» — ⌘F ставить фокус у фільтр сторінок, плашки нема; ⌘G «згрупувати» справді спрацьовує, коли плашка закрита", async (t) => {
+test("5: «Огляд» — ⌘F ставить фокус у фільтр сторінок, плашки нема; ⌘G «згрупувати» справді створює теку, коли плашка закрита", async (t) => {
   const { page } = await boot(t, 400);
   await page.click('#bar [data-act="mode"][data-val="overview"]');
   await page.waitForSelector("#canvas:not([hidden])");
@@ -2463,14 +2559,9 @@ test("5: «Огляд» — ⌘F ставить фокус у фільтр ст�
   await page.click('#bar [data-act="mode"][data-val="layout"]');
   await page.waitForSelector("#stage:not([hidden])");
   await page.click('[data-act="page"][data-val="holovna"]');
-  /* Спостерігач стоїть на `document` ПІСЛЯ обробника застосунку (той самий target, пізніша реєстрація): `defaultPrevented` каже,
-     що гілка «згрупувати» (`ev.preventDefault()`) відпрацювала, а не просто «плашка схована». */
-  await page.evaluate(() => {
-    window.__g = null;
-    document.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.code === "KeyG") window.__g = e.defaultPrevented; });
-  });
   await page.keyboard.press("Control+KeyG");
-  assert.equal(await page.evaluate(() => window.__g), true, "⌘G при закритій плашці — «згрупувати» (preventDefault), а не пошук");
+  /* Ефект, а не `defaultPrevented`: «згрупувати» створює теку — у дереві зʼявляється рядок `data-kind="folder"` (`rowHTML`, shell-panel.js). */
+  await page.waitForSelector('#pages-panel [data-kind="folder"]', { timeout: 15000 });
   assert.equal(await page.evaluate(() => document.getElementById("find").hidden), true);
 });
 
@@ -2485,7 +2576,7 @@ test("6: «Задачі» — ⌘F ставить фокус у пошук за�
 
 Run (команда з «Спільних правил», `find`): `rc=0`. Якщо тест 3 бачить мутації — шукати їх у `find-bar.js` (єдине, що торкається рамки: `adoptedStyleSheets`, `CSS.highlights`, `createRange`; жодне не повинно ловитись `MutationObserver`).
 
-- [ ] **Step 5b: Мутаційна перевірка.** По одній мутації, після кожної `git checkout -- app/find-bar.js app/app.js`: у `find-bar.js` замінити `adoptedStyleSheets`/`CSS.highlights` на `<mark>` у DOM рамки → тест 3 (MutationObserver) червоний; прибрати `p.getClientRects().length === 0` → тест 1 (4 збіги) червоний; у `navKeys` прибрати гілку `find.isOpen()` для ⌘G → тест 1 (⌘G) червоний; прибрати `find.rerun()` з `load` → тест 4 червоний; у `findHere` прибрати гілку `mode === 'canvas'` → тест 5 червоний; прибрати `ev.preventDefault()` гілки «згрупувати» в глобальному keydown → тест 5 (`defaultPrevented`) червоний.
+- [ ] **Step 5b: Мутаційна перевірка.** По одній мутації, після кожної `git checkout -- app/find-bar.js app/app.js`: у `find-bar.js` замінити `adoptedStyleSheets`/`CSS.highlights` на `<mark>` у DOM рамки → тест 3 (MutationObserver) червоний; прибрати `p.getClientRects().length === 0` → тест 1 (4 збіги) червоний; у `navKeys` прибрати гілку `find.isOpen()` для ⌘G → тест 1 (⌘G) червоний; прибрати `find.rerun()` з `load` → тест 4 червоний; у `findHere` прибрати гілку `mode === 'canvas'` → тест 5 червоний; замінити в глобальному keydown умову гілки «згрупувати» на `false` → тест 5 (рядок теки не зʼявляється) червоний.
 
 - [ ] **Step 6: Регресія навколо клавіш** — по одному: `shell-typing.test.mjs`, `shell-palette.test.mjs`, `panel-tree.test.mjs` (⌘G «згрупувати»), `comments-panel.test.mjs`, `inspector.test.mjs`. Expected: `rc=0`.
 
@@ -2741,7 +2832,7 @@ git -c user.name=neodisa -c user.email=neodisa@users.noreply.github.com commit -
 **Що змінилось після ревʼю (рішення контролера 25.11):**
 1. **Назад/Вперед — не на історії браузера.** Виміряно: кожне `frame.src = …` і кожне посилання в макеті додають записи в спільну історію сеансу, тож `history.back()/go()` спершу ходить по записах iframe, `popstate` не приходить, `history.length` 6 замість 3. Адреса тепер лише `replaceState`; стек — власний (`app/nav.js`); `popstate` не обробляємо; `hashchange` — так.
 2. **Жетон замість 5-секундного наміру:** дія-перехід відкриває жетон, `render()`/`sync()` записує рівно один запис, `finally` закриває; `sync()` стримано, поки йде `goTo`, і осідає один раз із фінальним місцем (застарілий індекс, перезаписи з `enterHome`/`wiz.requestExit`).
-3. **Міжпросторові задачі:** `/api/tasks` без `?all=1` бачить лише поточний простір — розвʼязуємо через `?all=1` (`resolveTaskLoc`); невідома задача → ітерація/сторінка з адреси НЕ застосовуються.
+3. **Міжпросторові задачі:** `/api/tasks` без `?all=1` бачить лише поточний простір — розвʼязуємо через `?all=1` (`resolveTaskLoc` + чиста `classifyTask`; `'unknown'` лише коли запит удався, збій — `'error'`); невідома задача → ітерація/сторінка з адреси НЕ застосовуються.
 4. **T9:** нова тема ламала бюджет блока `AGENTS.md` (81 рядок) — розділ у наявній темі `tasks`.
 5. Тести: свіжа сторінка для `/app/#…`; ⌘G «згрупувати» перевіряється через `defaultPrevented`; `v=flow` справді відновлюється (граф у фікстурі); тест «⌘R, потім Назад»; відмова майстра веде реальні хелпери `wizard.test.mjs` і ⌘[; кожен новий тест має мутацію-свідка.
 6. Коментарі, що переїхали зі `setModeState` (`camWorld`, «єдина точка входу»), оновлено явно (T2, T5).
@@ -2754,6 +2845,6 @@ git -c user.name=neodisa -c user.email=neodisa@users.noreply.github.com commit -
 5. Смуга вже `1fr auto 1fr`; ймовірна причина стрибка — різна ширина решти центральної зони (поле ширини лише в «Макеті», «Сітка/Флоу» лише в «Огляді»); винесення решти забирає місце в правій колонці — перевірка перекриття на 1024/1280/1440.
 6. Кнопки ← → ⟳ за спекою — лише на смузі задачі; на «Задачах» їх нема (через `bar-narrow` на 320–375), але ⌘[ ⌘] працюють скрізь.
 7. `wiz.requestExit()` не повертає результату — відмову `goTo` визначає за тим, що майстер лишився відкритим.
-8. Однакові id задач у двох просторах: `task-switch` дає 409 → `resolveTaskLoc` повертає `'unknown'` (тихо), `sp` розвʼязує неоднозначність лише у виборі рядка з `?all=1`.
+8. Однакові id задач у двох просторах: `task-switch` приймає лише `id` (409, `sp` не бере) → двозначний id явно `'unknown'` (тихо; `classifyTask` + юніт); `sp` в адресі — лише інформація. Збій запиту чи відмова перемикання — `'error'` → `goTo` повертає `false`, запис стека НЕ викидається.
 
 **Пункти спеки без окремої задачі:** жодного. Перепублікацію превʼю й перелік клавіш у довідці-оверлеї (`openKeys`) спека не просить — не робимо.
