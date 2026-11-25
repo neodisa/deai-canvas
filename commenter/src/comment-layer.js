@@ -1550,7 +1550,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         const label = this.appLocal ? '' : String(this._seqOf(c));
         if (p.textContent !== label) p.textContent = label;
         const col = this._audColor(c);
-        p.style.background = col || '';
+        if (col) p.style.background = col; else if (p.style.background) p.style.background = '';
         if (c._aud) p.dataset.aud = c._aud; else delete p.dataset.aud;
         p.style.left = (r.left + 10) + 'px'; p.style.top = (r.top + 10) + 'px';
       }
