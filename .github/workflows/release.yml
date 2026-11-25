@@ -1,0 +1,40 @@
+# GitHub Release для кожного тега vX.Y.Z. Текст — секція CHANGELOG.md (ops/release_notes.py).
+# Лише читає тег: не створює й не рухає теги, тож канал оновлень застосунку (git-теги) не зачіпає.
+# Workflow береться з ТЕГОВАНОГО коміту: тег, у коміті якого цього файла ще нема, Release не отримає — тоді вручну:
+#   python3 -B ops/release_notes.py vX.Y.Z > notes.md && gh release create vX.Y.Z --verify-tag --title "Deai Canvas X.Y.Z" --notes-file notes.md
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: The tagged commit is on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Notes from CHANGELOG.md
+        run: python3 -B ops/release_notes.py "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists"
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "Deai Canvas ${GITHUB_REF_NAME#v}" \
+            --notes-file "$RUNNER_TEMP/notes.md"
