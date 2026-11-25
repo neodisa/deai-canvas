@@ -39,15 +39,16 @@
   адресами на `neodisa.github.io/deai-canvas/`; `assets/og.png` 1200×630 (PNG — WebP не всі месенджери показують).
 - **Бренд (L#4):** скрізь «Deai Canvas», а не «Canvas»: «Set up Deai Canvas», «In Deai Canvas, you…».
 - **Мобільне меню:** до 760 px — кнопка меню в шапці, що відкриває Workflow / Modules / FAQ / GitHub; Esc і клік повз закривають.
+  До 560 px «Get started» переходить із шапки в меню (у героя своя кнопка), у шапці лишаються Share і меню.
 - **«Get started»** — дві вкладки:
   - «With your agent»: наявний промпт і кнопка копіювання;
   - «In Terminal (macOS)»: `git clone https://github.com/neodisa/deai-canvas.git ~/deai-canvas && cd ~/deai-canvas && bash ops/canvas-app/install.sh && ./start.command`;
     рядком нижче — Overview: `npm ci && npx playwright install chromium` (Node 20+).
   Під вкладками — «Connect your agent» у три пункти (той самий текст, що в README, A2).
-- **FAQ про платформи:** «Made for macOS: the launcher, app icon and autostart. On Windows and Linux, start it with
-  `python3 app/serve.py` and open it in Chrome or Edge as an app window. A one-command start on every OS is on the roadmap.»
-- **Версія і Beta (L#3):** плашка `Beta` біля логотипа в шапці; у футері «v0.39.1 · Beta» з посиланням на «What's new»
-  (`CHANGELOG.md` на GitHub; після 0.40 — сторінка Releases). Версію вписує Pages-workflow під час деплою (A4); у файлі в репо —
+- **FAQ про платформи:** «Made for macOS: the launcher, app icon and autostart. On Windows and Linux, run `app/serve.py`
+  with Python 3.9+ and open it in Chrome or Edge as an app window. A one-command start on every OS is on the roadmap.»
+- **Версія і Beta (L#3):** плашка `Beta` біля логотипа в шапці; у футері «v0.39.1 · Beta» з посиланням на `CHANGELOG.md`
+  на GitHub (сторінка Releases для старих версій була б порожня). Версію вписує Pages-workflow під час деплою (A4); у файлі в репо —
   заглушка з поточною версією, щоб локальний перегляд не був порожнім. Запитів до GitHub з браузера відвідувача нема.
 - **Share (L#7):** друга кнопка в шапці поруч із «Get started». Є `navigator.share` (телефон) — системне меню «Поділитися»;
   нема — копіює в буфер «Deai Canvas — a local workspace for reviewing what your AI agent designs. Check it out:
@@ -77,9 +78,11 @@
 
 ### A4. GitHub Pages
 
-- `.github/workflows/pages.yml`: `on: push` у `main` зі змінами `landing/**` або `.github/workflows/pages.yml`, `push` тегів
-  `v*.*.*` (оновити версію на сайті), `workflow_dispatch`. Збирає `_site/` з `landing/` без `README.md`, вписує найбільший тег
-  `vX.Y.Z` у позначене місце HTML, публікує `actions/upload-pages-artifact` + `actions/deploy-pages`.
+- `.github/workflows/pages.yml`: `on: push` у `main` зі змінами `landing/**`, `ops/build_site.py` або самого workflow;
+  `workflow_run` після workflow «Release» (оновити версію на сайті); `workflow_dispatch`. Не `push` тегів: середовище
+  `github-pages` типово дозволяє деплой лише з `main`, а `workflow_run` іде в контексті `main`.
+- `ops/build_site.py` (stdlib, з юніт-тестами) збирає `_site/` з `landing/` без `README.md` і вписує найбільший тег `vX.Y.Z`
+  в елемент `[data-version]`; публікують `actions/upload-pages-artifact` + `actions/deploy-pages`.
 - Разове налаштування репо: Settings → Pages → Source: GitHub Actions (власник сам або агент через `gh api` після «так»).
 
 ## Частина B — живий лендинг
