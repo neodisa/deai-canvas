@@ -1628,6 +1628,8 @@ const UK = {
   frPwAdd: 'Задати',
   frPwSub: (state) => `${state} · один для всіх задач простору`,
   frPwHint: 'Один для всіх задач простору.',
+  /* 0.40 «Імена й навігація»: ручка ширини панелі (лише `aria-label`, видимого підпису нема). */
+  panelResize: 'Ширина панелі',
 };
 
 const EN = {
@@ -3014,6 +3016,8 @@ const EN = {
   frPwAdd: 'Set',
   frPwSub: (state) => `${state} · one for every task in the space`,
   frPwHint: 'One for every task in the space.',
+  /* 0.40: panel width handle (`aria-label` only). */
+  panelResize: 'Panel width',
 };
 
 /** Підтримувані мови інтерфейсу, у порядку типовості: українська — типова. */

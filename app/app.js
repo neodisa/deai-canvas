@@ -85,6 +85,7 @@ import { createSession, errArg, errField, outcome, previewFromConflict, previewT
 import { feedbackDialogHTML } from './feedback-view.js';
 import { introCardHTML } from './first-run.js';
 import { mountTooltip } from './tooltip.js';
+import { mountPanelResize } from './panel-resize.js';
 import { claudeToastKey, runCommand, unhookToastKey } from './setup-model.js';
 import {
   formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
@@ -10201,6 +10202,14 @@ document.addEventListener('keydown', (ev) => {
 
 /* Підказки (0.40): одна плашка на весь застосунок; ховається, коли ручка панелі починає перетягування (подія `dc-tip-hide`). */
 mountTooltip(document);
+
+/* Ручка ширини лівої панелі (0.40). `onResize`: подія `resize` вікна тут не приходить, тож «Огляд» вписуємо сам — лише коли камеру не рухали руками (`userMoved`); світ камери (`camWorld`) тут НЕ чіпаємо — його скидає тільки перемикач режиму (`setModeState`). */
+mountPanelResize({
+  rightW: () => (['with-insp', 'with-cmt', 'with-mod', 'with-hist'].some((c) => document.body.classList.contains(c))
+    ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--insp-w')) || 308 : 0),
+  overflows: () => [...document.querySelectorAll('#pages-panel .row-name')].map((n) => n.scrollWidth - n.clientWidth),
+  onResize: () => { if (mode === 'canvas' && !userMoved && !homeOpen) fitAll(); },
+});
 
 // Ширина зі сховища мусить лягти у стиль ДО першого рендера: інакше макет
 // встигне вималюватись на повну ширину й перекластись, тобто вибраний мобайл
