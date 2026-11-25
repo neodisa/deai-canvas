@@ -92,8 +92,9 @@ for (const button of document.querySelectorAll("[data-copy]")) {
     if (await copyText(source.textContent.trim())) {
       button.textContent = "Copied";
       copyStatus.classList.add("visually-hidden");
+      copyStatus.textContent = "";
       copyStatus.textContent = "Copied to clipboard.";
-      timer = setTimeout(() => { button.textContent = label; }, 2400);
+      timer = setTimeout(() => { button.textContent = label; copyStatus.textContent = ""; }, 2400);
     } else {
       const selection = getSelection();
       const range = document.createRange();
@@ -106,6 +107,11 @@ for (const button of document.querySelectorAll("[data-copy]")) {
     }
   });
 }
+
+document.querySelector("[data-setup-tabs]").addEventListener("click", () => {
+  copyStatus.textContent = "";
+  copyStatus.classList.add("visually-hidden");
+});
 
 async function copyText(text) {
   if (navigator.clipboard?.writeText) {
