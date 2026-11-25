@@ -88,13 +88,13 @@ if (typeof dialog.showModal === "function") {
   });
 }
 
-const setupStatus = document.querySelector("[data-copy-status]");
+const setupStatus = document.querySelector(".setup-action [data-copy-status]");
 
 for (const button of document.querySelectorAll("[data-copy]")) {
   const source = document.getElementById(button.dataset.copy);
   const label = button.textContent;
-  // A copy button reports into the live region of its own block; the setup board uses the first one on the page.
-  const copyStatus = button.closest(".cta-band")?.querySelector("[data-copy-status]") ?? setupStatus;
+  // Each copy button reports into the live region of its own [data-copy-scope] block (setup board or module CTA).
+  const copyStatus = button.closest("[data-copy-scope]").querySelector("[data-copy-status]");
   let timer;
   button.hidden = false;
   button.addEventListener("click", async () => {
