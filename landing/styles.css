@@ -94,9 +94,7 @@ section[id] { scroll-margin-top: 20px; }
   border-radius: 15px;
   overflow: hidden;
   background-color: var(--lime);
-  background-image: radial-gradient(circle, #547b4d52 .75px, transparent 1px), linear-gradient(150deg, #eaf6d3, #d9edaf 60%, #cce4b5);
-  background-position: center;
-  background-size: 16px 16px, auto;
+  background-image: linear-gradient(150deg, #eaf6d3, #d9edaf 60%, #cce4b5);
 }
 .canvas-stage::before, .canvas-stage::after, .registration::before, .registration::after {
   content: "";
@@ -325,4 +323,71 @@ section[id] { scroll-margin-top: 20px; }
 .shimmer.is-paused { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
   .shimmer { animation: none; background: none; color: var(--shimmer-base); }
+}
+
+/* Magnet: the dot grid is a canvas behind the stage content (see magnet.js). */
+.canvas-stage, .setup-board { position: relative; isolation: isolate; }
+.magnet { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; pointer-events: none; }
+
+/* Hero scene: a comment pinned to the date field, the agent's fix, then the loop restarts (see hero.js). */
+.hero-screenshot { container-type: inline-size; }
+.scene {
+  --pin-x: 75.5%;
+  --pin-y: 61.8%;
+  --pin: clamp(15px, 1.75cqw, 26px);
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  font-size: clamp(9px, .95cqw, 13px);
+  line-height: 1.35;
+  color: var(--ink);
+}
+.scene > * { position: absolute; }
+.sc-after { inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 700ms ease; border-radius: inherit; }
+.scene.is-done .sc-after { opacity: 1; }
+.sc-cursor { left: 93%; top: 96%; width: clamp(14px, 1.5cqw, 22px); opacity: 0; filter: drop-shadow(0 1px 2px #0004);
+  transition: left 1.2s cubic-bezier(.15, .7, .25, 1), top 1.2s cubic-bezier(.15, .7, .25, 1), opacity 240ms ease; }
+.scene.has-cursor .sc-cursor { left: var(--pin-x); top: var(--pin-y); opacity: 1; }
+.scene.cursor-out .sc-cursor { opacity: 0; transition: opacity 300ms ease; }
+.sc-pin { left: var(--pin-x); top: var(--pin-y); width: var(--pin); height: var(--pin); margin: calc(var(--pin) / -2) 0 0 calc(var(--pin) / -2);
+  display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: #fff; box-shadow: 0 0 0 calc(var(--pin) * .14) var(--lime), 0 2px 6px #0004;
+  font-size: calc(var(--pin) * .52); font-weight: 700; scale: .6; opacity: 0;
+  transition: scale 180ms var(--ease), opacity 120ms ease, background-color 250ms ease, color 250ms ease; }
+.scene.has-pin .sc-pin { scale: 1; opacity: 1; }
+.sc-pin > span { grid-area: 1 / 1; transition: opacity 200ms ease; }
+.sc-pin .sc-check { opacity: 0; }
+.scene.is-done .sc-pin { background: var(--lime); color: var(--ink); }
+.scene.is-done .sc-pin .sc-num { opacity: 0; }
+.scene.is-done .sc-pin .sc-check { opacity: 1; }
+.sc-ripple { left: var(--pin-x); top: var(--pin-y); width: var(--pin); height: var(--pin); margin: calc(var(--pin) / -2) 0 0 calc(var(--pin) / -2); border-radius: 50%; border: 2px solid var(--lime); opacity: 0; }
+.scene.has-pin .sc-ripple { animation: sc-ripple 600ms ease-out; }
+@keyframes sc-ripple { from { opacity: .9; scale: .8; } to { opacity: 0; scale: 2.6; } }
+.sc-card { right: calc(100% - var(--pin-x) - var(--pin)); top: 69.5%; width: clamp(140px, 17.5cqw, 262px); padding: 1.1em 1.25em; border-radius: 10px; background: #fff;
+  box-shadow: 0 1px 3px #0003, 0 10px 28px -8px #0005; opacity: 0; translate: 0 6px; transition: opacity 220ms ease, translate 220ms var(--ease); }
+.scene.has-card .sc-card { opacity: 1; translate: 0 0; }
+.sc-head { display: flex; justify-content: space-between; gap: 1em; font-weight: 700; }
+.sc-status { color: #537559; font-weight: 650; }
+.sc-ask, .sc-answer { margin-top: .5em; font-size: 1.08em; }
+.sc-answer { padding-top: .5em; border-top: 1px solid var(--line); color: var(--muted); display: none; }
+.scene.is-done .sc-answer { display: block; }
+.sc-island { left: 50%; bottom: 3.2%; translate: -50% 6px; display: inline-flex; align-items: center; gap: .6em; padding: .65em 1.3em .65em 1.05em; border-radius: 999px;
+  background: rgb(26 35 30 / .92); color: #fff; font-size: 1.3em; white-space: nowrap; box-shadow: 0 6px 20px #0005; opacity: 0; transition: opacity 220ms ease, translate 220ms var(--ease); }
+.scene.has-island .sc-island { opacity: 1; translate: -50% 0; }
+.sc-dot { width: .6em; height: .6em; border-radius: 50%; background: #3fb950; animation: sc-pulse 1.6s ease-in-out infinite; }
+.scene.is-done .sc-dot { background: #dfe9dc; animation: none; }
+@keyframes sc-pulse { 50% { opacity: .35; } }
+.sc-label.shimmer { --shimmer-base: #aebfb3; --shimmer-light: #fff; }
+.scene.is-done .sc-label.shimmer { background: none; color: #fff; animation: none; }
+.scene.is-fading { opacity: 0; transition: opacity 600ms ease; }
+.scene.is-instant, .scene.is-instant * { transition: none !important; animation: none !important; }
+@media (max-width: 560px) {
+  .sc-ask, .sc-answer { display: none !important; }
+  .sc-card { width: auto; min-width: 0; padding: .7em .9em; }
+  .sc-island { font-size: 1.15em; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene *, .scene { transition: none !important; animation: none !important; }
+  .sc-dot { animation: none; }
 }

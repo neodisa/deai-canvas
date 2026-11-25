@@ -143,3 +143,98 @@
   items.forEach((el) => observer.observe(el));
   document.addEventListener("visibilitychange", sync);
 })();
+
+// Hero scene: a comment is pinned to the date field, the agent answers, the fixed screen fades in, loop.
+(() => {
+  const link = document.querySelector(".hero-screenshot");
+  if (!link) return;
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const ASK = "Make the date field wider";
+  const LOOP = 10000;
+
+  const scene = document.createElement("div");
+  scene.className = "scene";
+  scene.setAttribute("aria-hidden", "true");
+  scene.innerHTML = `
+    <img class="sc-after" src="assets/northline-scene-after.webp" width="2880" height="1720" alt="" decoding="async">
+    <svg class="sc-cursor" viewBox="0 0 20 22" fill="none"><path d="M2 1.5v16l4.2-4 3 6.6 3-1.4-3-6.4 5.8-.2L2 1.5z" fill="#182820" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>
+    <span class="sc-ripple"></span>
+    <span class="sc-pin"><span class="sc-num">1</span><span class="sc-check">✓</span></span>
+    <div class="sc-card">
+      <div class="sc-head"><span>You</span><span class="sc-status"></span></div>
+      <p class="sc-ask"></p>
+      <p class="sc-answer">Widened the field so the full date fits on one line.</p>
+    </div>
+    <div class="sc-island"><span class="sc-dot"></span><span class="sc-label shimmer">AI is working</span></div>`;
+  link.insertBefore(scene, link.querySelector(".expand-mark"));
+
+  const ask = scene.querySelector(".sc-ask");
+  const status = scene.querySelector(".sc-status");
+  const label = scene.querySelector(".sc-label");
+
+  const setState = (...classes) => classes.forEach((c) => scene.classList.add(c));
+
+  function resetScene() {
+    scene.classList.add("is-instant");
+    scene.classList.remove("has-cursor", "cursor-out", "has-pin", "has-card", "has-island", "is-done", "is-fading");
+    ask.textContent = "";
+    status.textContent = "";
+    label.textContent = "AI is working";
+    scene.getBoundingClientRect(); // flush so the jump back is not animated
+    scene.classList.remove("is-instant");
+  }
+  function showFinal() {
+    setState("has-pin", "has-card", "has-island", "is-done");
+    ask.textContent = ASK;
+    status.textContent = "Done · It.3";
+    label.textContent = "AI: done";
+  }
+
+  let typer;
+  function typeAsk() {
+    let i = 0;
+    typer = setInterval(() => {
+      ask.textContent = ASK.slice(0, ++i);
+      if (i >= ASK.length) clearInterval(typer);
+    }, 35);
+  }
+
+  // One loop, described once: [time in ms, what happens].
+  const timeline = [
+    [500, () => setState("has-cursor")],
+    [1800, () => setState("has-pin")],
+    [2100, () => { setState("has-card"); typeAsk(); }],
+    [3600, () => { status.textContent = "Sent to AI"; setState("cursor-out"); }],
+    [4000, () => setState("has-island")],
+    [6200, () => { setState("is-done"); status.textContent = "Done · It.3"; label.textContent = "AI: done"; }],
+    [9200, () => setState("is-fading")],
+  ];
+
+  let timers = [];
+  function start() {
+    stop();
+    resetScene();
+    timers = timeline.map(([at, fn]) => setTimeout(fn, at));
+    timers.push(setTimeout(start, LOOP));
+  }
+  function stop() {
+    timers.forEach(clearTimeout);
+    clearInterval(typer);
+    timers = [];
+  }
+
+  if (reduced) { showFinal(); return; }
+
+  let inView = false;
+  let running = false;
+  function sync() {
+    const shouldRun = inView && !document.hidden;
+    scene.querySelectorAll(".shimmer").forEach((el) => el.classList.toggle("is-paused", !shouldRun));
+    if (shouldRun === running) return;
+    running = shouldRun;
+    if (running) start();
+    else stop(); // frozen where it is; the next run starts from the top of the loop
+  }
+  new IntersectionObserver(([entry]) => { inView = entry.isIntersecting; sync(); }).observe(link);
+  document.addEventListener("visibilitychange", sync);
+})();
