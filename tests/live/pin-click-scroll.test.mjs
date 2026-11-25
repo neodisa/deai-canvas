@@ -42,8 +42,6 @@ test("клік по піну влучає, хоча макет шле scroll к�
   await page.click('#hud [data-act="comments"]');
   await page.waitForSelector("#cmt-panel .cmt-card");
   await until(() => frame.evaluate(() => !!document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".pin")));
-  /* Знімаємо вибір, щоб кліку було що змінювати: натискання на сам пін не виділяє картку, поки він не влучив. */
-  await page.click('#cmt-panel .cmt-search, #cmt-panel input', { timeout: 1000 }).catch(() => {});
   await frame.evaluate(() => { setInterval(() => window.dispatchEvent(new Event("scroll")), 30); });
   const box = async () => frame.evaluate(() => {
     const p = document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".pin"); const r = p.getBoundingClientRect();

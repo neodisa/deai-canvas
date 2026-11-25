@@ -490,3 +490,12 @@ test("маркер відповідей без команди: окремий к
   mk(true).cmtSeenSet([comm, old]);
   assert.deepEqual([...JSON.parse(store.get("dc-seen:s:T1"))].sort(), ["c-col", "r-old"]);
 });
+
+test("усі «Показати» (панель і обидва тости новин) ідуть через showComment, а не прямо у focus", () => {
+  for (const name of ["newsToast", "replyNewsToast"]) {
+    const body = fn(name);
+    assert.match(body, /showComment\(/, `${name}: showComment`);
+    assert.doesNotMatch(body, /cmtLayer\(\)\?\.focus\(/, `${name}: прямий focus повертає мовчазний no-op`);
+  }
+  assert.match(src, /cmtshow: \(id\) => showComment\(id\)/);
+});

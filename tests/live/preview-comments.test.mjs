@@ -588,6 +588,23 @@ test("14: «C» у макеті в чистому вигляді не відкр
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains("cv-clean")), true, "чистий вигляд скасовано");
 });
 
+test("15б: «Показати» на картці іншої сторінки зі знімком у превʼю відкриває знімок (превʼю не веде на сторінку)", async (t) => {
+  const env = await boot(t, { port: 13050 });
+  const rows = await seed(env, SEED);
+  rows[0].meta.shotUrl = PIXEL;
+  rows[0].meta.version = "1/insha";
+  env.memo.store.set(CHANNEL, rows);
+  const o = await openPreview(env, t);
+  const { page, frame } = o;
+  await page.keyboard.press("c");
+  const show = page.locator('#cmt-panel [data-act="cmtshow"][data-val="seed-open"]');
+  await show.waitFor();
+  await show.click();
+  await frame.locator("[data-comment-layer] .cllb").waitFor();
+  await frame.locator("[data-comment-layer] .cllb").click();
+  await frame.locator("[data-comment-layer] .cllb").waitFor({ state: "detached" });
+});
+
 test("15: картка зі знімком — кнопка «cmtshot» відкриває знімок у коментаторі; зміна «свого» бере id зі стану, а не з кнопки", async (t) => {
   const env = await boot(t, { port: 13000 });
   const rows = await seed(env, SEED);

@@ -819,7 +819,10 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         // Don't navigate while typing in an editor; ignore clicks inside edit forms.
         if (this._editingId || e.target.closest('.editform')) return;
         const card = e.target.closest('.c');
-        if (card && card.id) this._focusElement(card.id.slice(1)); // 'c<id>' → <id>
+        if (card && card.id) {
+          const cid = card.id.slice(1);   // 'c<id>' → <id>
+          if (this._focusElement(cid) === false) this.openShot(cid);   // пін не тут (інша сторінка в хості): лишається знімок, як було
+        }
       });
 
       // capture clicks on the host page while in comment mode (stays armed so
@@ -1530,6 +1533,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
        (mouseup приходив на новий елемент). Тепер елемент живе, поки пін кваліфікується, а оновлюються лише позиція,
        підпис, колір і адресат; обробники читають коментар за id, тож завжди ведуть до свого. */
     _placePins() {
+      if (this._dead) return;
       if (this.anchors) return this._placeCanvasPins();
       const els = this._domPins || (this._domPins = new Map());
       const seen = new Set();
@@ -2531,6 +2535,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     document.removeEventListener('pointerdown', this._downHandler, true);
     if (this._host) this._host.remove();
     this._pinEls = null;
+    this._domPins = null;
     this._inited = false;
   };
 

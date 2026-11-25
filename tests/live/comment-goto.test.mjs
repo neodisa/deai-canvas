@@ -33,7 +33,7 @@ test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
 /** Сервер з it1+it2; відкрита it2. `pins` — піни, що лягають у файл задачі до старту. Чекає `ready` коментатора рамки. */
-async function boot(t, portOff, pins) {
+async function boot(t, portOff, pins, { openPanel = true, filter = null } = {}) {
   const { dir } = taskFixture({ html: PAGE });
   cpSync(path.join(dir, "iterations", "it1"), path.join(dir, "iterations", "it2"), { recursive: true });
   writeFileSync(path.join(dir, "iterations.json"), JSON.stringify({ iterations: [
@@ -44,6 +44,7 @@ async function boot(t, portOff, pins) {
   t.after(() => child.kill());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   t.after(() => page.close());
+  if (filter) await page.addInitScript((f) => { try { localStorage.setItem("dc-cmt-filter", f); } catch (e) {} }, filter);
   await page.addInitScript(() => {
     window.__cmtMsgs = [];
     window.addEventListener("message", (e) => { if (e.data && e.data.type === "dc-comments") window.__cmtMsgs.push(e.data.ev); });
@@ -51,8 +52,10 @@ async function boot(t, portOff, pins) {
   await page.goto(`${url}/app/`);
   await page.waitForSelector('#hud [data-act="comments"]');
   await until(() => page.evaluate(() => window.__cmtMsgs.includes("ready")));
-  await page.click('#hud [data-act="comments"]');
-  await page.waitForSelector("#cmt-panel .cmt-sec");
+  if (openPanel) {
+    await page.click('#hud [data-act="comments"]');
+    await page.waitForSelector("#cmt-panel .cmt-sec");
+  }
   return { page };
 }
 
@@ -102,18 +105,26 @@ test("2: «Показати» на картці іншої ітерації ве
   assert.equal(await page.evaluate(() => !document.getElementById("cmt-panel").hidden), true);
 });
 
-test("3: ціль нерозбірлива чи її ітерації нема — тост, рамка не рухається", async (t) => {
+test("3: ціль без розбору — мовчки; ітерації чи сторінки в цілі нема — тост; рамка не рухається ні в одному випадку", async (t) => {
   const { page } = await boot(t, 200, [
     seedPin({ id: "g1", text: "Зниклий", meta: { iteration: "99", version: "99/zzz", seq: 1, viewport: { w: 1440, h: 900 } } }),
     seedPin({ id: "g2", text: "Без тегу", meta: { route: "/commented", seq: 2, viewport: { w: 1440, h: 900 } } }),
+    seedPin({ id: "g3", text: "Нема сторінки", meta: { iteration: "2", version: "2/zzz", seq: 3, viewport: { w: 1440, h: 900 } } }),
   ]);
   const before = await src(page);
-  for (const [id, text] of [["g1", "Зниклий"], ["g2", "Без тегу"]]) {
+  const hide = () => page.evaluate(() => document.getElementById("cv-toast")?.classList.remove("show"));
+  for (const [id, text] of [["g1", "Зниклий"], ["g3", "Нема сторінки"]]) {
     await fakeCurrent(page, id);
     await showBtn(page, text).click();
     await until(async () => /Не вдалося знайти/.test((await toastText(page)) || ""));
     assert.equal(await src(page), before, `${id}: рамка не мусить рухатись`);
+    await hide();
   }
+  await fakeCurrent(page, "g2");
+  await showBtn(page, "Без тегу").click();
+  await new Promise((r) => setTimeout(r, 1200));
+  assert.equal(await toastText(page), null, "нерозбірлива ціль — без нового повідомлення");
+  assert.equal(await src(page), before);
 });
 
 test("4: «Показати» на тій самій сторінці скролить до елемента без переходу", async (t) => {
@@ -123,4 +134,20 @@ test("4: «Показати» на тій самій сторінці скрол
   await until(() => pInView(page));
   await until(async () => (await selTexts(page)).includes("Тут же"));
   assert.equal(await src(page), before);
+});
+
+test("5: тост «нового коментаря» на іншій сторінці: «Показати» веде туди й вибирає картку", async (t) => {
+  const { page } = await boot(t, 400, [seedPin({ id: "nw", text: "Нове від Олени", author: "Олена", meta: { iteration: "2", version: "2/poshuk", seq: 1, viewport: { w: 1440, h: 900 } } })], { openPanel: false, filter: "all" });
+  const f = await frameOf(page);
+  const snap = await f.evaluate(() => window.CommentLayer.snapshot());
+  const post = (comments) => f.evaluate((sn) => parent.postMessage({ type: "dc-comments", ev: "change", snapshot: sn }, location.origin), { ...snap, comments });
+  /* Спершу знімок без нього (маркер «бачив» уже є), потім із ним як командним: так він «надходить». */
+  await post(snap.comments.filter((c) => c.id !== "nw"));
+  await post(snap.comments.map((c) => (c.id === "nw" ? { ...c, _aud: "project", where: "elsewhere" } : c)));
+  const btn = page.locator('.cv-notice [data-act="cmtshownew"]');
+  await btn.waitFor();
+  await btn.click();
+  await until(async () => /page=poshuk/.test(await src(page)));
+  await until(async () => (await selTexts(page)).includes("Нове від Олени"));
+  await until(() => pInView(page));
 });

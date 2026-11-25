@@ -306,7 +306,8 @@ export function createExtComments({ frame, mount, channel, onChange = () => {}, 
   const actions = {
     comments: () => setOpen(!st.open),
     cmtadd: () => setAdding(!armed()),
-    cmtshow: (id) => { st.sel = id; try { layer()?.focus(id); } catch (e) { /* рамка пішла */ } paint(); },
+    /* Пін іншої сторінки: превʼю не веде туди, тож лишається знімок (якщо він є; `openShot` без нього мовчить). */
+    cmtshow: (id) => { st.sel = id; try { if (layer()?.focus(id) === false) layer()?.openShot(id); } catch (e) { /* рамка пішла */ } paint(); },
     cmtsec: (k) => { if (k in st.expanded) { st.expanded[k] = !st.expanded[k]; paint(); } },
     cmtshot: (id) => { try { layer()?.openShot(id); } catch (e) { /* рамка пішла */ } },
     cmtpins: () => { try { layer()?.togglePins(); } catch (e) { /* рамка пішла */ } },

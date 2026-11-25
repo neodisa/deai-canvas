@@ -2341,27 +2341,51 @@ function showComment(id) {
   const L = cmtLayer();
   const shown = L ? L.focus(id) : undefined;
   paintComments();
-  if (shown !== false || mode === 'canvas') return;
+  if (mode === 'canvas') return;
+  /* Рамка ще вантажиться (`L` нема), а показ уже чекає: клік може бути по новій цілі — розбираємо її й нижче. */
+  if (shown !== false && !(cmtPending && !L)) return;
   const c = cmtSnap?.comments?.find((x) => x && x.id === id);
   const tg = c ? commentTarget(c) : null;
-  if (tg && tg.it === picked && tg.page === pickedPage) return;   // та сама сторінка: пін не знайдено, більше нічого зробити
-  if (!tg || !(curTask?.iterations || []).some((x) => x.id === tg.it)) { toast(t('cmtGoGone')); return; }
+  if (!tg) return;   // нерозбірлива ціль чи нема знімка: як і раніше — мовчки
+  if (cmtPending && tg.it === cmtPending.it && tg.page === cmtPending.page) {   // другий клік до тієї ж цілі: новий id, свіжий відлік
+    cmtPending.id = id;
+    if (cmtPending.armed) cmtPendingTimer();
+    return;
+  }
+  if (tg.it === picked && tg.page === pickedPage) return;   // та сама сторінка: пін не знайдено, більше нічого зробити
   goToComment(id, tg);
 }
-/** Відкладений показ `{ id, it, page, gen, timer }`: живе до `ready` потрібного кадру, ~6 с, перехід деінде чи зміну задачі. */
-let cmtPending = null;
+/** Відкладений показ `{ id, it, page, gen, armed, timer }`: живе до `ready` НОВОГО кадру, 6 с від початку його завантаження,
+ *  перехід деінде чи зміну задачі. `armed` — кадр уже призначено (`applyMode`): старий документ його не зʼїсть. */
+let cmtPending = null, cmtGoSeq = 0;
 function cmtPendingDrop() { if (cmtPending) { clearTimeout(cmtPending.timer); cmtPending = null; } }
+function cmtPendingTimer() {
+  if (!cmtPending) return;
+  clearTimeout(cmtPending.timer);
+  const p = cmtPending;
+  p.timer = setTimeout(() => { if (cmtPending === p) cmtPending = null; }, 6000);
+}
+/** `applyMode` щойно призначив адресу рамки: якщо це кадр того, до чого йдемо, — озброюємо показ і заводимо відлік. */
+function cmtPendingArm() {
+  const p = cmtPending;
+  if (!p || p.gen !== taskSwitchGen || picked !== p.it || pickedPage !== p.page) return;
+  p.armed = true;
+  cmtPendingTimer();
+}
 async function goToComment(id, tg) {
-  const gen = taskSwitchGen;
+  const gen = taskSwitchGen, seq = ++cmtGoSeq;
+  /* Сторінка мусить існувати в цілі ДО того, як чіпаємо вибір: дерево тієї ж ітерації теж свіже (сторінка могла зʼявитись). */
+  let pages = null;
+  try { pages = (await api(`/api/iteration-pages?it=${encodeURIComponent(tg.it)}`)).pages || []; } catch (e) { return; }
+  if (gen !== taskSwitchGen || seq !== cmtGoSeq) return;   // новіший клік чи інша задача
+  if (!(curTask?.iterations || []).some((x) => x.id === tg.it)
+      || !flattenPages(pages).some((f) => f.kind !== 'folder' && f.page.id === tg.page)) { toast(t('cmtGoGone')); return; }
   cmtPendingDrop();
+  cmtPending = { id, it: tg.it, page: tg.page, gen, armed: false, timer: null };
   openDd = null;
-  pickedPage = tg.page; pickedState = null; followStamps = []; followLatchKey = null;
-  if (tg.it !== picked) { picked = tg.it; await loadPages(); }
-  if (gen !== taskSwitchGen || picked !== tg.it) return;   // за час завантаження користувач пішов деінде
-  if (!flattenPages(panelPages).some((f) => f.kind !== 'folder' && f.page.id === tg.page)) { toast(t('cmtGoGone')); }
-  else if (pickedPage === tg.page) {
-    cmtPending = { id, it: tg.it, page: tg.page, gen, timer: setTimeout(cmtPendingDrop, 6000) };
-  }
+  picked = tg.it; pickedPage = tg.page; pickedState = null; followStamps = []; followLatchKey = null;
+  await loadPages();
+  if (gen !== taskSwitchGen || seq !== cmtGoSeq || picked !== tg.it || pickedPage !== tg.page) return;   // користувач пішов деінде
   await render();
 }
 /** Кадр коментатора (знову) готовий чи змінив знімок: довести відкладений показ або відкинути, якщо кадр не той. */
@@ -2369,6 +2393,7 @@ function cmtPendingApply() {
   const p = cmtPending;
   if (!p) return;
   if (p.gen !== taskSwitchGen || picked !== p.it || pickedPage !== p.page) { cmtPendingDrop(); return; }
+  if (!p.armed) return;   // посилка ще старого документа
   const L = cmtLayer();
   if (!L || L.focus(p.id) === false) return;   // пін ще не приїхав (командний канал) — наступний `change` спробує знову
   cmtPendingDrop();
@@ -8765,6 +8790,7 @@ function applyMode(task, { keepFrame = false } = {}) {
       const srcNow = frame.getAttribute('src');
       dropFrameCmt({ sel: srcNow !== lastFrameSrc });
       lastFrameSrc = srcNow;
+      cmtPendingArm();
     }
     cmtViewSwitch();
   }

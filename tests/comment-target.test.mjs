@@ -36,3 +36,8 @@ test("нерозбірливе → null", () => {
   assert.equal(commentTarget(null), null);
   assert.equal(commentTarget(c({ version: "", route: "" })), null);
 });
+
+test("тег з пробілами навколо розбирається", () => {
+  assert.deepEqual(commentTarget(c({ version: " 27/media-filter-tags " })), { it: "it27", page: "media-filter-tags" });
+  assert.deepEqual(commentTarget(c({ version: "\t27\n" })), { it: "it27", page: "main" });
+});
