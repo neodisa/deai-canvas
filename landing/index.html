@@ -22,6 +22,7 @@
   <script src="site.js" defer></script>
   <script src="hero.js" defer></script>
   <script src="magnet.js" defer></script>
+  <script src="tour.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -33,6 +34,7 @@
         <span class="beta-badge">Beta</span>
       </a>
       <nav class="nav" id="site-nav" aria-label="Main">
+        <a href="#comments">Comments</a>
         <a href="#workflow">Workflow</a>
         <a href="#modules">Modules</a>
         <a href="#faq">FAQ</a>
@@ -96,16 +98,79 @@
       </ol>
     </section>
 
+    <section class="comments wrap" id="comments" aria-labelledby="comments-title">
+      <div class="section-intro">
+        <h2 id="comments-title">Every comment<br> gets an answer.</h2>
+        <p>Pin feedback to any element on any screen. You see at once what your agent fixed, what it is still working on, and where it needs your call.</p>
+      </div>
+      <div class="comments-layout">
+        <div class="comments-main">
+          <ul class="status-list" aria-label="Example pins on the Northline booking page">
+            <li class="status-row">
+              <span class="pin-no" aria-hidden="true">1</span>
+              <div class="status-body">
+                <span class="chip chip-done"><span class="chip-dot" aria-hidden="true"></span>Done · It.3</span>
+                <p class="pin-text">Show the full departure date.</p>
+                <p class="pin-answer"><span class="who">AI</span> Widened the field so the full date fits on one line.</p>
+              </div>
+            </li>
+            <li class="status-row">
+              <span class="pin-no" aria-hidden="true">2</span>
+              <div class="status-body">
+                <span class="chip chip-wait"><span class="chip-dot" aria-hidden="true"></span>AI is waiting for your reply</span>
+                <p class="pin-text">Keep Find trains visible on mobile.</p>
+                <p class="pin-answer"><span class="who">AI</span> Sticky bar at the bottom or a button under the form? I can do either.</p>
+              </div>
+            </li>
+            <li class="status-row">
+              <span class="pin-no" aria-hidden="true">3</span>
+              <div class="status-body">
+                <span class="chip chip-work"><span class="chip-dot" aria-hidden="true"></span><span class="shimmer">AI is working</span></span>
+                <p class="pin-text">Use the route as the heading.</p>
+              </div>
+            </li>
+            <li class="status-row">
+              <span class="pin-no" aria-hidden="true">4</span>
+              <div class="status-body">
+                <span class="chip chip-team"><span class="chip-dot" aria-hidden="true"></span>Team · Assigned to AI</span>
+                <p class="pin-text">Can we show the price per person?</p>
+                <p class="pin-answer pin-from">Maya Chen · in the preview</p>
+              </div>
+            </li>
+          </ul>
+          <dl class="comments-cols">
+            <div><dt>With your agent</dt><dd>Pins go to a local inbox your agent reads. It replies in the thread when it needs you and closes each pin with a note in the iteration that fixed it.</dd></div>
+            <div><dt>With your team</dt><dd>Colleagues comment right in the published preview. New comments show up in Deai Canvas with a badge — reply in the thread or assign one to AI.</dd></div>
+          </dl>
+        </div>
+        <figure class="comments-shot">
+          <a class="screenshot-link" data-screenshot="Northline · Comments" href="assets/northline-comments.webp" aria-label="Enlarge the Northline Comments screenshot">
+            <img src="assets/northline-comments.webp" width="2880" height="2120" alt="Northline in Deai Canvas with open pins on the booking page, an agent reply in a thread, and the group of resolved comments." loading="lazy" decoding="async">
+            <span class="expand-mark" aria-hidden="true">↗</span>
+          </a>
+          <figcaption>Northline <span class="caption-divider" aria-hidden="true">/</span> Rail booking demo</figcaption>
+        </figure>
+      </div>
+    </section>
+
     <section class="workflow" id="workflow" aria-labelledby="workflow-title">
       <div class="wrap">
         <div class="section-intro">
-          <h2 id="workflow-title">The whole flow.<br> The smallest detail.</h2>
-          <p>Zoom out to see the project, zoom in to inspect a button, and publish the iteration you’re ready to share.</p>
+          <h2 id="workflow-title">Every part of the workspace.</h2>
+          <p>Scroll through the views you use every day — from the task list to the preview your team opens.</p>
         </div>
 
-        <div class="gallery">
+        <div class="gallery" data-tour>
+          <div class="gallery-frame">
           <div class="gallery-tabs" data-gallery-tabs role="tablist" aria-label="Deai Canvas views" aria-orientation="vertical" hidden>
-            <button type="button" class="gallery-tab" role="tab" id="tab-overview" aria-controls="view-overview" aria-selected="true">
+            <span class="tour-progress" aria-hidden="true"><i></i></span>
+            <button type="button" class="gallery-tab" role="tab" id="tab-tasks" aria-controls="view-tasks" aria-selected="true">
+              <span class="tab-icon tab-icon-tasks" aria-hidden="true"></span><span>Spaces &amp; tasks</span><span class="tab-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-iterations" aria-controls="view-iterations" aria-selected="false" tabindex="-1">
+              <span class="tab-icon tab-icon-iter" aria-hidden="true"></span><span>Iterations</span><span class="tab-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-overview" aria-controls="view-overview" aria-selected="false" tabindex="-1">
               <span class="tab-icon tab-icon-grid" aria-hidden="true"></span><span>Overview</span><span class="tab-arrow" aria-hidden="true">→</span>
             </button>
             <button type="button" class="gallery-tab" role="tab" id="tab-flow" aria-controls="view-flow" aria-selected="false" tabindex="-1">
@@ -114,16 +179,43 @@
             <button type="button" class="gallery-tab" role="tab" id="tab-inspector" aria-controls="view-inspector" aria-selected="false" tabindex="-1">
               <span class="tab-icon tab-icon-inspect" aria-hidden="true"></span><span>Inspector</span><span class="tab-arrow" aria-hidden="true">→</span>
             </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-comments" aria-controls="view-comments" aria-selected="false" tabindex="-1">
+              <span class="tab-icon tab-icon-comment" aria-hidden="true"></span><span>Comments</span><span class="tab-arrow" aria-hidden="true">→</span>
+            </button>
             <button type="button" class="gallery-tab" role="tab" id="tab-preview" aria-controls="view-preview" aria-selected="false" tabindex="-1">
               <span class="tab-icon tab-icon-preview" aria-hidden="true">↗</span><span>Team preview</span><span class="tab-arrow" aria-hidden="true">→</span>
             </button>
           </div>
 
           <div class="gallery-views">
+            <div class="gallery-view" id="view-tasks">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Studio · Tasks" href="assets/studio-tasks.webp" aria-label="Enlarge the Studio task list screenshot">
+                  <img src="assets/studio-tasks.webp" width="2880" height="1880" alt="The Studio space in Deai Canvas: a task list grouped by status, with each task’s latest iteration, page count and tags." decoding="async">
+                  <span class="expand-mark" aria-hidden="true">↗</span>
+                </a>
+                <figcaption>
+                  <div><h3>Keep every project in its place.</h3><p>Group tasks into spaces — one per client, product or team. The task list shows each task’s latest iteration, page count and tags, and filters by status and tag.</p></div>
+                  <span class="project-label">Studio <span aria-hidden="true">/</span> Tasks</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-iterations">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Northline · Iterations" href="assets/northline-iterations.webp" aria-label="Enlarge the Northline Iterations screenshot">
+                  <img src="assets/northline-iterations.webp" width="2880" height="1720" alt="The Northline iteration list in Deai Canvas with the agent’s note on each pass and a green dot on the iteration shown in the team preview." loading="lazy" decoding="async">
+                  <span class="expand-mark" aria-hidden="true">↗</span>
+                </a>
+                <figcaption>
+                  <div><h3>Every agent pass is an iteration.</h3><p>Each pass lands as a new iteration with a note about what changed. Earlier iterations stay editable, and a green dot marks the ones shown in the team preview.</p></div>
+                  <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
+                </figcaption>
+              </figure>
+            </div>
             <div class="gallery-view" id="view-overview">
               <figure>
                 <a class="screenshot-link" data-screenshot="Forma · Overview" href="assets/forma-overview.webp" aria-label="Enlarge the Forma Overview screenshot">
-                  <img src="assets/forma-overview.webp" width="2880" height="1720" alt="Deai Canvas Overview with five Forma checkout frames, including payment declined and order confirmed." decoding="async">
+                  <img src="assets/forma-overview.webp" width="2880" height="1720" alt="Deai Canvas Overview with five Forma checkout frames, including payment declined and order confirmed." loading="lazy" decoding="async">
                   <span class="expand-mark" aria-hidden="true">↗</span>
                 </a>
                 <figcaption>
@@ -151,7 +243,19 @@
                   <span class="expand-mark" aria-hidden="true">↗</span>
                 </a>
                 <figcaption>
-                  <div><h3>Work with live elements in a Figma-style inspector.</h3><p>Click the booking form to see its spacing, layout, and colors. Tweak a value live and send the change request to your agent.</p></div>
+                  <div><h3>Inspect live elements.</h3><p>Click any element to see its spacing, layout and colors, checked against your space’s tokens. Tweak a value live, add a note and send the change to your agent.</p></div>
+                  <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-comments">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Northline · Comments" href="assets/northline-comments.webp" aria-label="Enlarge the Northline Comments screenshot">
+                  <img src="assets/northline-comments.webp" width="2880" height="2120" alt="Northline with open pins, an agent reply in a thread and the resolved group, in the Deai Canvas comments panel." loading="lazy" decoding="async">
+                  <span class="expand-mark" aria-hidden="true">↗</span>
+                </a>
+                <figcaption>
+                  <div><h3>Pin feedback to the element.</h3><p>Comments stick to the element, not to screen coordinates, and carry over between iterations. Resolved pins keep the agent’s note and the iteration that fixed them.</p></div>
                   <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
                 </figcaption>
               </figure>
@@ -163,11 +267,12 @@
                   <span class="expand-mark" aria-hidden="true">↗</span>
                 </a>
                 <figcaption>
-                  <div><h3>Give your team the version you want reviewed.</h3><p>Publish selected iterations so colleagues can try the actual flow in their browsers. Connect team comments to collect feedback in the preview.</p></div>
+                  <div><h3>Share the version you want reviewed.</h3><p>Publish selected iterations as a clickable preview, with an optional password. Teammates try the real flow and comment right there.</p></div>
                   <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
                 </figcaption>
               </figure>
             </div>
+          </div>
           </div>
         </div>
       </div>
@@ -257,6 +362,7 @@
       <a class="brand" href="#top"><img src="assets/deai-icon.png" alt="" width="32" height="32"><span>Deai Canvas</span></a>
       <p class="footer-version"><a href="https://github.com/neodisa/deai-canvas/blob/main/CHANGELOG.md" data-version>v0.39.1</a> · Beta</p>
       <nav aria-label="Footer">
+        <a href="#comments">Comments</a>
         <a href="https://github.com/neodisa/deai-canvas/blob/main/SETUP.md">Setup</a>
         <a href="https://github.com/neodisa/deai-canvas">GitHub <span aria-hidden="true">↗</span></a>
         <a href="#top">Back to top <span aria-hidden="true">↑</span></a>

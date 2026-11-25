@@ -12,6 +12,13 @@ function initTabs(tabList, horizontalQuery) {
     });
   }
 
+  // Other scripts (the scroll tour) can follow user choices and drive the selection through events,
+  // so this function stays the single place that knows how a tab is selected.
+  function announce(index) {
+    tabList.dispatchEvent(new CustomEvent("tabs:select", { detail: { index } }));
+  }
+  tabList.addEventListener("tabs:show", (event) => show(event.detail.index));
+
   function setOrientation() {
     tabList.setAttribute("aria-orientation", horizontal() ? "horizontal" : "vertical");
   }
@@ -19,7 +26,7 @@ function initTabs(tabList, horizontalQuery) {
   tabs.forEach((tab, i) => {
     panels[i].setAttribute("role", "tabpanel");
     panels[i].setAttribute("aria-labelledby", tab.id);
-    tab.addEventListener("click", () => show(i));
+    tab.addEventListener("click", () => { show(i); announce(i); });
   });
   setOrientation();
   horizontalQuery?.addEventListener("change", setOrientation);
@@ -43,6 +50,7 @@ function initTabs(tabList, horizontalQuery) {
     event.preventDefault();
     show(index);
     tabs[index].focus();
+    announce(index);
   });
 }
 

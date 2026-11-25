@@ -134,7 +134,7 @@ section[id] { scroll-margin-top: 20px; }
 .section-intro h2, .setup h2, .faq h2 { font-size: clamp(38px, 5vw, 69px); font-weight: 620; line-height: 1.01; letter-spacing: -.04em; text-wrap: initial; }
 .section-intro > p { padding-bottom: 2px; }
 .workflow .section-intro > p { color: var(--pine-muted); }
-.gallery { display: flex; gap: clamp(24px, 4vw, 54px); align-items: start; }
+.gallery-frame { display: flex; gap: clamp(24px, 4vw, 54px); align-items: start; }
 .gallery-tabs { display: grid; align-content: start; width: clamp(174px, 17vw, 230px); flex: none; gap: 6px; }
 .gallery-tab { display: grid; grid-template-columns: 18px 1fr 16px; align-items: center; gap: 11px; padding: 0 11px; background: transparent; color: var(--pine-muted); border: 1px solid transparent; border-radius: 8px; min-height: 50px; text-align: left; font-size: 15px; font-weight: 600; transition: color 170ms var(--ease), background-color 170ms var(--ease), border-color 170ms var(--ease), scale 170ms var(--ease); }
 .gallery-tab:hover { color: var(--on-pine); background: #2b4033; }
@@ -149,6 +149,12 @@ section[id] { scroll-margin-top: 20px; }
 .tab-icon-flow::after { left: auto; right: 0; }
 .tab-icon-inspect { border: 1px dashed; border-radius: 2px; background: radial-gradient(circle, currentColor 1px, transparent 1.5px); }
 .tab-icon-preview { inset-block-start: -2px; font: 17px/1 system-ui, sans-serif; }
+.tab-icon-tasks { background: linear-gradient(currentColor, currentColor) 0 2px / 14px 1.5px no-repeat, linear-gradient(currentColor, currentColor) 0 6px / 14px 1.5px no-repeat, linear-gradient(currentColor, currentColor) 0 10px / 9px 1.5px no-repeat; }
+.tab-icon-iter::before, .tab-icon-iter::after { content: ""; position: absolute; left: 0; width: 14px; height: 5px; border: 1px solid; border-radius: 2px; }
+.tab-icon-iter::before { top: 1px; }
+.tab-icon-iter::after { top: 8px; background: currentColor; }
+.tab-icon-comment { height: 11px; border: 1px solid; border-radius: 3px; }
+.tab-icon-comment::after { content: ""; position: absolute; left: 2px; top: 7px; width: 5px; height: 5px; border: solid; border-width: 0 1px 1px 0; rotate: 45deg; background: inherit; }
 .gallery-views { flex: 1; min-width: 0; }
 .gallery-view + .gallery-view { margin-top: 38px; }
 .gallery-view[role="tabpanel"] { margin-top: 0; }
@@ -247,9 +253,10 @@ section[id] { scroll-margin-top: 20px; }
   .section-intro, .story-intro { grid-template-columns: 1fr; align-items: start; gap: 14px; }
   .hero h1 { text-wrap: balance; }
   .product-label { margin-bottom: 13px; }
-  .gallery { display: block; }
-  .gallery-tabs { width: auto; grid-template-columns: repeat(4, 1fr); margin-bottom: 12px; }
-  .gallery-tab { grid-template-columns: 14px 1fr; gap: 6px; padding-inline: 8px; min-height: 44px; }
+  .gallery-frame { display: block; }
+  .gallery-tabs { display: flex; width: auto; gap: 4px; margin: 0 calc(var(--gutter) * -1) 12px; padding-inline: var(--gutter); overflow-x: auto; scroll-padding-inline: var(--gutter); scrollbar-width: none; }
+  .gallery-tabs::-webkit-scrollbar { display: none; }
+  .gallery-tab { flex: none; grid-template-columns: 14px auto; gap: 7px; padding-inline: 11px; min-height: 44px; white-space: nowrap; }
   .tab-arrow { display: none; }
   .story-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .story-steps p, .gallery-view p { font-size: 15px; }
@@ -280,8 +287,6 @@ section[id] { scroll-margin-top: 20px; }
   .story-steps > li { display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 8px; padding-top: 11px; }
   .story-steps li > span { grid-row: span 2; margin: 5px 0 0; }
   .story-steps p { margin-top: 3px; max-width: none; }
-  .gallery-tabs { grid-template-columns: repeat(2, 1fr); gap: 4px; }
-  .gallery-tab { padding-inline: 10px; }
   .gallery-view figcaption { margin-top: 13px; }
   .setup-board { gap: 17px; }
   .setup-board > div > p { font-size: 16px; }
@@ -385,4 +390,54 @@ section[id] { scroll-margin-top: 20px; }
 @media (prefers-reduced-motion: reduce) {
   .scene *, .scene { transition: none !important; animation: none !important; }
   .sc-dot { animation: none; }
+}
+
+/* Comments: a calm status list (real text, not a screenshot) next to the comments panel. */
+.comments { padding-top: 0; padding-bottom: clamp(56px, 7vw, 102px); }
+.comments .section-intro > p { max-width: 42ch; }
+.comments-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: clamp(26px, 4.4vw, 64px); align-items: start; }
+.status-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: var(--radius); background: #fbfcf8; overflow: hidden; }
+.status-row { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 0 12px; padding: 15px 18px 16px 16px; }
+.status-row + .status-row { border-top: 1px solid var(--line); }
+.pin-no { display: grid; place-items: center; width: 24px; height: 24px; margin-top: 1px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 650; line-height: 1.4; }
+.chip-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.chip-done { background: var(--lime); color: #2c4a31; }
+.chip-wait { background: #f2e8c9; color: #664f12; }
+.chip-work { background: #e8eee3; color: var(--muted); }
+.chip-work .shimmer { --shimmer-base: var(--muted); }
+.chip-team { box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); }
+.pin-text { margin-top: 7px; font-size: 16px; font-weight: 640; letter-spacing: -.012em; line-height: 1.35; }
+.pin-answer { margin-top: 4px; color: var(--muted); font-size: 15px; line-height: 1.45; }
+.pin-answer .who { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; background: #e8eee3; color: #3b5e42; font-size: 11px; font-weight: 700; letter-spacing: .04em; vertical-align: 1px; }
+.pin-from { font-size: 13px; }
+.comments-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 clamp(18px, 2.4vw, 32px); margin: 22px 0 0; }
+.comments-cols > div { padding-top: 11px; border-top: 1px solid var(--line); }
+.comments-cols dt { font-size: 17px; font-weight: 700; letter-spacing: -.014em; }
+.comments-cols dd { margin: 3px 0 0; color: var(--muted); font-size: 15px; }
+.comments-shot .screenshot-link { box-shadow: 0 3px 9px #1a332c16; }
+.comments-shot figcaption { margin: 11px 1px 0; color: var(--muted); font-size: 13px; }
+@media (max-width: 860px) {
+  .comments-layout { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .comments-cols { grid-template-columns: 1fr; gap: 14px; }
+  .status-row { padding: 13px 14px 14px 12px; gap: 0 10px; }
+}
+
+/* Tour: on large screens with motion allowed the gallery pins while you scroll through the views (see tour.js). */
+.tour-progress { display: none; }
+.gallery.is-tour { position: relative; }
+.gallery.is-tour .gallery-frame { position: sticky; top: var(--tour-top, 24px); }
+.gallery.is-tour .gallery-tabs { position: relative; padding-left: 20px; width: calc(clamp(174px, 17vw, 230px) + 20px); }
+.gallery.is-tour .tour-progress { position: absolute; display: block; left: 0; top: 4px; bottom: 4px; width: 2px; border-radius: 1px; background: var(--pine-line); overflow: hidden; }
+.gallery.is-tour .tour-progress i { display: block; height: 100%; background: var(--lime); transform-origin: top; transform: scaleY(var(--p, 0)); }
+.gallery.is-tour .gallery-views { display: grid; }
+.gallery.is-tour .gallery-view { grid-area: 1 / 1; margin-top: 0; opacity: 1; visibility: visible; transition: opacity 220ms ease; }
+.gallery.is-tour .gallery-view[hidden] { display: block !important; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 220ms ease, visibility 0s 220ms; }
+/* One constant frame for every view, so tabs never jump; taller captures are cropped from the bottom (the lightbox shows them whole). */
+.gallery.is-tour .screenshot-link { aspect-ratio: 2880 / 1720; max-height: calc(100svh - var(--tour-top, 24px) - 190px); overflow: hidden; }
+.gallery.is-tour .screenshot-link img { height: 100%; object-fit: cover; object-position: top; }
+@media (prefers-reduced-motion: reduce) {
+  .gallery.is-tour .gallery-view, .gallery.is-tour .gallery-view[hidden] { transition: none; }
 }
