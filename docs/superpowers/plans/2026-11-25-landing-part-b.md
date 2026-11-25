@@ -358,7 +358,7 @@ Copy (use exactly, fix only typos):
 **4b. Tour (replaces the gallery in `#workflow`).** Keep the section id `workflow`, the dark band and the intro, change the h2 to
 "Every part of the workspace." and the lead to "Scroll through the views you use every day — from the task list to the preview your team opens."
 Seven tabs/panels in this order (tab label → panel h3 → panel text → image):
-1. "Spaces & tasks" → "Keep every project in its place." → "Group tasks into spaces — one per client, product or team. The task list shows each task’s latest iteration, its pages, open comments and tags." → `studio-tasks.webp`
+1. "Spaces & tasks" → "Keep every project in its place." → "Group tasks into spaces — one per client, product or team. The task list shows each task’s latest iteration, page count and tags, and filters by status and tag." → `studio-tasks.webp`
 2. "Iterations" → "Every agent pass is an iteration." → "Each pass lands as a new iteration with a note about what changed. Earlier iterations stay editable, and a green dot marks the ones shown in the team preview." → `northline-iterations.webp`
 3. "Overview" → "See every screen." → existing text → `forma-overview.webp`
 4. "Flow" → "Follow the path." → existing text → `forma-flow.webp`
@@ -390,11 +390,34 @@ Everywhere else (phones, reduced motion, short windows): the existing plain tabs
 
 ---
 
-### Task 5 (controller): canvas iteration, pins, push
+### Task 5: Owner's second round (L#13, L#14, L#15)
+
+Pins left on it2 while part B was in progress.
+
+- **L#13 — letters clipped during the heading animation.** The morph clips letters: spans have `overflow: hidden` while
+  letters move vertically (`translateY`) and widths shrink. Rework so no letter is ever partly visible: no `overflow: hidden`
+  on the morph spans; a letter fades out completely BEFORE its width collapses (keyframe offsets: opacity 1→0 in the first
+  ~45 %, width w→0 after), and a growing letter takes its width first and fades in after; vertical travel ≤ .15em.
+  Same rule for the AI→ai swap. Check frame-by-frame screenshots (every 40 ms through a fold and an unfold) at 1440 and 375.
+- **L#14 — "From brief to review" looks bare.** Each of the four steps gets an illustration on top: a small interface vignette
+  built in HTML/CSS (no images), in the landing palette, ~16:10, `aria-hidden`:
+  01 brief — a prompt bubble with the Northline brief and a small "AI is working" pill;
+  02 open in Deai Canvas — a mini app window: toolbar with Layout/Overview toggle and desktop/tablet/phone icons, three frames;
+  03 point to the change — a form field with a numbered pin and a comment bubble "Show the full date";
+  04 share the right pass — iteration chips "It.1 It.2 It.3" with a green "in preview" dot on It.3 and a "Published" card with
+  two teammate avatars (initials).
+  Subtle motion when the step scrolls into view (once; static under reduced motion).
+- **L#15 — modules section needs a break and a call to action.** After the module list, a CTA band: h3 "Need something else? Let your agent build a module.",
+  text "Describe what you need — for example, compare mockup colors with brand.css. Your agent writes the module into your space folder, following the Deai module guide.",
+  a primary button "Read the module guide ↗" (link to `https://github.com/neodisa/deai-canvas#modules`) and a secondary copy-button with the prompt
+  `Write a custom Deai module for my space: compare the mockup colors with brand.css.` (reuse `[data-copy]` from site.js).
+  Remove the duplicate "Read the module guide" link from `.module-foot` if the CTA makes it redundant.
+
+### Task 6 (controller): canvas iteration, pins, push
 
 - [ ] Copy `landing/` (index.html, styles.css, *.js, assets/) into a new iteration it3 of the canvas task `deai-landing`
   (`POST /api/iteration {from: "it2", note}` with header `X-Canvas-Task: deai-landing`, copy files, `POST /api/autosync`).
 - [ ] Open it3 in the canvas and check the animations are visible in the frame (heading, scene, magnet, tour).
-- [ ] Resolve pins L#1, L#2, L#5, L#6, L#8, L#9, L#10, L#11, L#12 with `bin/inbox.py --task deai-landing resolve <id> --it 3 --reason "…"`.
+- [ ] Resolve pins L#1, L#2, L#5, L#6, L#8–L#15 with `bin/inbox.py --task deai-landing resolve <id> --it 3 --reason "…"`.
 - [ ] Do NOT push yet: once GitHub Pages is on, a push of `landing/` to `main` publishes the site. Ask the owner to review it3
   in the canvas; push to `main` (fast-forward, origin checked) only after the owner's explicit «да».
