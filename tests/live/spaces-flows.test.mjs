@@ -255,7 +255,8 @@ test("T1 висячий current на старті: екран лікується
   writeFileSync(regFile, JSON.stringify(reg));
 
   const tr = trackTuner(page);
-  await page.reload();
+  /* Свіже відкриття БЕЗ адреси: з hash (0.40) старт сам перемикає задачу на сервері до `loadTune()` — це інший шлях (один GET). */
+  await page.goto(`${url}/app/`);
   await markLoaded(page, "X");
   await waitBarReady(page);
   await page.waitForTimeout(500);

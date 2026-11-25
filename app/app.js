@@ -86,6 +86,8 @@ import { feedbackDialogHTML } from './feedback-view.js';
 import { introCardHTML } from './first-run.js';
 import { mountTooltip } from './tooltip.js';
 import { mountPanelResize } from './panel-resize.js';
+import { createNav } from './nav.js';
+import { classifyTask, hasPlace, parseLocation } from './location-model.js';
 import { claudeToastKey, runCommand, unhookToastKey } from './setup-model.js';
 import {
   formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
@@ -1435,6 +1437,7 @@ async function render({ keepFrame = false } = {}) {
   paintBar();
   applyMode(task, { keepFrame });
   renderPanel();
+  nav.sync();   // 0.40: адреса — з одного місця, після того як стан усталився
   /* Інструменти модулів — на вході в простір чи задачу (після змін модулів — `afterModulesChange`). Не чекаємо: збій тут нічого не ламає. */
   if ((spaceNow()?.id ?? '') !== modExtKey) loadModExt();
 }
@@ -2863,6 +2866,38 @@ function toggleClean(on = !cleanView) {
 }
 frame.addEventListener('load', () => syncFrame(frame, cleanView, () => toggleClean()));
 frame.addEventListener('load', () => { if (modOpen) pageAttach(); else pageDetach(); });
+
+/* ── Місце в адресі й власний стек Назад/Вперед (0.40) ─────────────────────────────────────────────────────────────────
+   `curLoc()` — стан → місце (`location-model.js`); `nav` пише його в адресу з ОДНОГО місця (`nav.sync()` наприкінці `render()` та
+   в `enterHome`) лише через `replaceState` і веде СВІЙ стек Назад/Вперед (історію браузера не чіпає: рамка заповнює її власними
+   записами). Дії-переходи огортає `navigating()`: жетон відкривається, `sync()` від `render()` записує один запис, жетон
+   закривається в `finally`. */
+const curLoc = () => ({
+  sp: spaceNow()?.id || null,
+  t: currentTaskId || null,
+  it: picked,
+  p: pickedPage,
+  st: pickedState,
+  m: mode === 'canvas' ? 'o' : null,
+  v: mode === 'canvas' && canvasView === 'flow' ? 'flow' : null,
+  h: homeOpen ? (homePage === 'conn' ? 'settings' : 'tasks') : null,
+});
+const nav = createNav({
+  win: window,
+  store: {
+    get: () => { try { return sessionStorage.getItem('dc-nav'); } catch (e) { return null; } },
+    set: (v) => { try { sessionStorage.setItem('dc-nav', v); } catch (e) { /* без сховища стек живе до перезавантаження */ } },
+  },
+  getLoc: curLoc,
+  goTo: (loc) => goTo(loc),   // `goTo` — T5; до нього Назад/Вперед нічого не веде
+  onChange: () => paintBar(),
+});
+/** Дія-перехід (0.40): усе, що вона робить (стан + `render()`), лягає ОДНИМ записом стека; жетон не живе довше дії. */
+async function navigating(fn) {
+  const tk = nav.open();
+  try { return await fn(); } finally { nav.close(tk); }
+}
+async function goTo() { return false; }
 
 /**
  * Переключення поточної задачі: `POST /api/task-switch` і скидання пер-задачного
@@ -4760,6 +4795,7 @@ function enterHome({ spaces = true, page } = {}) {
   const el = ensureHome();
   el.hidden = false;
   paintBar();
+  nav.sync();   // 0.40: «Задачі» / «Налаштування» (h=…) — теж місце в адресі (майстер дає h=tasks, свого запису не має)
   if (homePage === 'wiz') {
     /* Майстер малює себе сам (`wiz.paint` через `paintHome`); фокус ставить `openWizard`/крок. Запізніле `loadHome` не
        сміє перемалювати сторінку. */
@@ -10229,4 +10265,63 @@ applyViewport();
    а ціна тут один запит до того ж локального сервера, з якого `render()`
    однаково починається. Сервер лежить — `loadTune` ковтає це сам і не
    затримує нічого. */
-loadTune().then(render).then(async () => { await refreshGitlab(); paintBar(); });
+/**
+ * Задача з адреси (0.40): `'current'` | `'switched'` | `'unknown'` | `'error'`. Рядки — `/api/tasks?all=1` (без `?all=1` бачимо лише
+ * поточний простір); рішення — чиста `classifyTask` (`location-model.js`). `'unknown'` ЛИШЕ коли запит удався, а задачі нема, вона
+ * `missing` чи її id двозначний (`/api/task-switch` приймає тільки `id` — однаковий id у двох просторах дає 409, `sp` його не
+ * розвʼязує: `sp` в адресі — лише інформація). Збій запиту чи відмова перемикання — `'error'`, НЕ «нема»: запис стека через
+ * збій мережі не викидається. Без тостів.
+ */
+async function resolveTaskLoc(loc, current, doSwitch) {
+  if (!loc.t || loc.t === current) return 'current';
+  let rows = null;
+  try { rows = (await api('/api/tasks?all=1')).tasks || []; } catch (e) { rows = null; }
+  const st = classifyTask(loc, current, rows);
+  if (st !== 'switch') return st;
+  try { await doSwitch(loc.t); return 'switched'; } catch (e) { return 'error'; }
+}
+/** «Огляд» (старт і `goTo`): ітерація з адреси мусить існувати в ЦІЙ задачі, інакше — остання; далі те саме, що робить кнопка режиму
+ *  (`freshen` + автозйомка). У `goTo` — перед єдиним `render()` (там `curTask` уже є). На СТАРТІ — лише ПІСЛЯ першого `render()`:
+ *  `maybeAutoShoot` → `shootWithProgress` → `renderPanel`/`panelState` читають `curTask`/`panelPages`, а до першого `render()` їх нема
+ *  (`curTask === null`) — безпечність цього не перевірено, тож не покладаємось. */
+async function freshenForCanvas() {
+  try {
+    const task = await api('/api/task');
+    const its = task.iterations || [];
+    if (!its.some((x) => x.id === picked)) picked = its.length ? its[its.length - 1].id : null;
+  } catch (e) { return; }
+  await freshen();
+  maybeAutoShoot();
+}
+/* Старт із адреси (0.40). Сервер володіє поточними простором і задачею, тож задачу з адреси перемикаємо НА СЕРВЕРІ — до
+   `loadTune()` (пакет тюнера береться для поточної задачі); решту (ітерація, сторінка, стан, режим, вид) ставимо змінними до
+   першого `render()`. ⛔ Лише коли задача знайдена (чи її в адресі нема): невідому/видалену тихо замінюємо на звичне місце
+   її ПОТОЧНОЇ задачі — ітерація з адреси іншої задачі в цій не мала б сенсу. */
+async function bootPlace() {
+  const loc = parseLocation(location.hash);
+  if (!hasPlace(loc)) return null;
+  try {
+    const cur = loc.t ? (await api('/api/tasks')).current : null;
+    const st = await resolveTaskLoc(loc, cur, (id) => post('/api/task-switch', { id }));
+    return st === 'unknown' || st === 'error' ? null : loc;   // невідома чи збій — звичне місце поточної задачі
+  } catch (e) { return null; }
+}
+function applyBootPlace(loc) {
+  if (!loc) return;
+  if (loc.it) picked = loc.it;
+  if (loc.p) { pickedPage = loc.p; pickedState = loc.st || null; }
+  if (loc.m === 'o') { mode = 'canvas'; canvasView = loc.v === 'flow' ? 'flow' : 'grid'; }
+}
+bootPlace()
+  .then(async (loc) => {
+    await loadTune();
+    applyBootPlace(loc);
+    await render();
+    if (mode === 'canvas') { await freshenForCanvas(); await render(); }   // як вхід у «Огляд» кнопкою, але ПІСЛЯ першого render (див. `freshenForCanvas`)
+    return loc;
+  })
+  .then(async (loc) => {
+    if (loc?.h === 'tasks') enterHome({ page: 'tasks' });
+    else if (loc?.h === 'settings') await enterConnections();
+    await refreshGitlab(); paintBar();
+  });

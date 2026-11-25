@@ -318,6 +318,8 @@ test("5: у «P» жодного запиту за межі машини — р�
   await waitText(page, "#bar .space-name", "P");
   await page.click('#tabs [data-act="tab"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  /* Адреса (0.40) осідає наприкінці `render()`, який `leaveHome` ще дочитує: перезавантаження до цього відкрило б «Задачі» знову. */
+  await page.waitForFunction(() => !/(^|&)h=/.test(location.hash), null, { timeout: 15000 });
 
   /* Рамка макета й коментатор просять лише локальний канал (простір без інтеграцій): свіже завантаження рамки це й покаже. */
   await page.reload();
