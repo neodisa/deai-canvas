@@ -220,7 +220,7 @@ test("сторінка wiz: paintHome малює майстер раніше з�
 });
 
 test("логотип на майстрі — вихід через майстер (питає про незбережене)", () => {
-  assert.match(A, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
+  assert.match(A, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; await navigating\(\(\) => enterHome\(\{ page: 'tasks' \}\)\); \},/);
 });
 
 test("події сторінки майстра йдуть у контролер раніше за обробники «Задач»", () => {

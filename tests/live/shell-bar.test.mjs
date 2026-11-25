@@ -124,6 +124,9 @@ const PAGE = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head>`
    конкретний елемент: для сегментів (mode/vp) «активний зараз» відсіюється
    окремо, нижче, по `aria-pressed`. */
 const DANGEROUS = new Set(["publish", "figma"]);
+/* `navback`/`navfwd`/`navreload` (0.40): на свіжому місці стек порожній — ← → вимкнені (клік по `disabled` — таймаут), а «Оновити»
+   перезавантажує лише рамку, смуга не міняється. Проводку стереже `tests/live/nav-history.test.mjs` (T5-1, T5-4). */
+const NAV_KEYS = new Set(["navback", "navfwd", "navreload"]);
 /* `figma` («В Figma», T-41) — не небезпечна, але її наслідок АСИНХРОННИЙ: тост
    живе поза `#bar`, а невдача (у цьому контексті буфер заборонений) приходить
    оверлеєм `tell()` за 1–2 с — уже поверх НАСТУПНОГО контрола циклу, і той
@@ -205,7 +208,7 @@ test("кожен контрол смуги щось робить на клік",
 
   for (const c of ordered) {
     const key = c.act || c.dd;
-    if (DANGEROUS.has(key)) continue;
+    if (DANGEROUS.has(key) || NAV_KEYS.has(key)) continue;
     if (c.tag === "INPUT") continue;      // vpw — інша делегація, див. шапку
     if (c.pressed === "true") continue;   // уже активний сегмент — свідомий ноп
 

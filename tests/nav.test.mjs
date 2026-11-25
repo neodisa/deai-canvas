@@ -323,4 +323,5 @@ test("bootFollowsServer: посилання перемикає, reload/back_forw
   assert.equal(bootFollowsServer("back_forward", L({ t: "b" }), "a"), true);
   assert.equal(bootFollowsServer("reload", L({ t: "a" }), "a"), false, "та сама задача — повне місце");
   assert.equal(bootFollowsServer("reload", L({ it: "it1" }), "a"), false, "без t нічого перемикати");
+  assert.equal(bootFollowsServer("reload", L({ t: "x" }), null), true);   // сервер без поточної задачі: reload відкидає `t` — безпечно й навмисно
 });

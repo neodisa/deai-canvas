@@ -22,15 +22,15 @@ const noComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<![:'"`]
 const fnc = (name) => noComments(fn(name));
 
 test("дії смуги: conn веде на сторінку, логотип — завжди на «Задачі»", () => {
-  assert.match(src, /\n  conn: \(\) => \{ setConnSec\('mods'\); enterConnections\(\); \},/);
-  assert.match(src, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
+  assert.match(src, /\n  conn: \(\) => \{ setConnSec\('mods'\); navigating\(\(\) => enterConnections\(\)\); \},/);
+  assert.match(src, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; await navigating\(\(\) => enterHome\(\{ page: 'tasks' \}\)\); \},/);
   assert.match(fn("wireHome"), /case 'conn': setConnSec\('mods'\); enterConnections\(\); break;/);
 });
 
 test("логотип і «назад до задачі» не гублять брудну панель мовчки: через dismissCnDrawer, а без панелі — синхронно, як було", () => {
   /* Умова `cnDrawer &&` ПЕРЕД `await`: без панелі дія виконується в тому ж такті (жодного зайвого мікрозавдання). */
   assert.doesNotMatch(src, /\n  back: async/, "дія back прибрана: назад до задачі — вкладка");
-  assert.match(src, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
+  assert.match(src, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; await navigating\(\(\) => enterHome\(\{ page: 'tasks' \}\)\); \},/);
   const b = fnc("dismissCnDrawer");
   assert.match(b, /^\{\s*if \(!cnDrawer\) return true;\s*if \(cnDrawer\.busy\) return false;\s*await requestCloseCnDrawer\(\);\s*return !cnDrawer;\s*\}$/,
     "нема панелі — true; запит у польоті — false (ігнор); інакше закриття з питанням, і true лише коли панель справді зникла");
@@ -93,7 +93,7 @@ test("рамка: окремого reloadFrame після виходу нема 
   assert.doesNotMatch(b, /reloadFrame/, "після render() рамка не перезавантажується вдруге — location.reload() бере старий URL");
   assert.match(b, /\n  await render\(\);\n/, "render() на виході — єдине, що оновлює рамку");
   /* `reloadFrame` лишається лише для живого перезавантаження макета (опитування штампа і плашка «Оновити»). */
-  assert.equal([...noComments(src).matchAll(/reloadFrame\(\)/g)].length, 3, "функція + дві дії штампа; leaveHome її не кличе");
+  assert.equal([...noComments(src).matchAll(/reloadFrame\(\)/g)].length, 4, "функція + дві дії штампа + кнопка «Оновити» (navreload); leaveHome її не кличе");
   assert.doesNotMatch(fnc("connCheck"), /frameStale|reloadFrame/);
   assert.doesNotMatch(fnc("cnDrawerCheck"), /frameStale|reloadFrame/);
 });

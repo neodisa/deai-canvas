@@ -50,7 +50,7 @@ test("`space`: не перемикає на той самий простір, п
   assert.match(body, /val === spaceNow\(\)\?\.id\) return;/);
   assert.match(body, /post\('\/api\/space-switch', \{ id: val \}\)/);
   assert.match(body, /catch \(e\) \{ tellError\(t\('errTSpaceSwitch'\), e\.message\); return; \}/);
-  assert.match(body, /await afterSpaceChange\(\);/);
+  assert.match(body, /await navigating\(\(\) => afterSpaceChange\(\)\);/);
 });
 
 /* ── вимикач інтеграцій: опитування НЕ запускаються ────────────────────── */
@@ -247,7 +247,7 @@ test("loadHome: перелік просторів не перепитуєтьс�
   assert.match(lh, /if \(healed\) \{ await resetSpaceState\(\{ reload: false \}\); if \(homeOpen\) enterHome\(\{ spaces: false \}\); return; \}/);
   assert.match(src, /function enterHome\(\{ spaces = true, page \} = \{\}\) \{/);
   assert.match(fn("enterHome"), /loadHome\(false, \{ spaces \}\);/);
-  assert.match(src, /home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/, "вхід логотипом перепитує простори (там і лікування) і веде саме на «Задачі»; брудна панель «Підключення» спершу питає, майстер — через wiz.requestExit");
+  assert.match(src, /home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; await navigating\(\(\) => enterHome\(\{ page: 'tasks' \}\)\); \},/, "вхід логотипом перепитує простори (там і лікування) і веде саме на «Задачі»; брудна панель «Підключення» спершу питає, майстер — через wiz.requestExit");
 });
 
 test("loadHome: успішний огляд знімає смугу «простір не читається» (але не чужу причину) і перемальовує смугу", () => {

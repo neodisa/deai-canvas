@@ -512,6 +512,15 @@ function crumbTask(model, openDd, state) {
  * Смуга нічого не знає про аудиторію коментарів (принцип 6 PRODUCT.md): адресата
  * вибирають у формі коментатора, а `state.commentMode` у 0.27.0 прибрано зовсім.
  */
+/* Назад / Вперед / Оновити (0.40): три кнопки-іконки на початку зони 1. Підказки — `data-tip` (`app/tooltip.js`), не `title`. */
+function navHTML(model) {
+  const c = model.zone1.find((x) => x.id === "nav");
+  if (!c) return "";
+  const b = (act, icon, key, off) => `<button class="ctl ctl--icon" data-act="${act}" data-tip="${esc(t(key))}"`
+    + ` aria-label="${esc(t(key))}"${off ? " disabled" : ""}>${ico(icon, 16)}</button>`;
+  return `<div class="nav" role="group">${b("navback", "chevleft", "navBack", c.backOff)}${b("navfwd", "chevright", "navFwd", c.fwdOff)}${b("navreload", "refresh", "navReload", false)}</div>`;
+}
+
 export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
   const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
@@ -520,7 +529,7 @@ export function barHTML(model, state) {
     state?.mode === "overview", state?.iterGone === true, typeof state?.now === "number" ? state.now : Date.now());
   const zone1 = home
     ? `${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
-    : `<div class="crumbs">${crumbTask(model, openDd, state)}${iter ? `<span class="crumb-sep" aria-hidden="true">/</span>${iter}` : ""}</div>`;
+    : `${navHTML(model)}<div class="crumbs">${crumbTask(model, openDd, state)}${iter ? `<span class="crumb-sep" aria-hidden="true">/</span>${iter}` : ""}</div>`;
   /* Зони 2 і 3 екрана «Задачі» порожні в МОДЕЛІ — не малюємо їхніх контролів,
      але самі вузли лишаються (грид смуги на них тримається). */
   const zone2 = home ? "" : zone2HTML(model, state, openDd);

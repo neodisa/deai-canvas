@@ -1050,6 +1050,7 @@ function barState() {
             : 'sync';
   return {
     mode: canvas ? 'overview' : 'layout',
+    nav: { back: nav.canBack(), fwd: nav.canFwd() },
     view: canvasView,
     vp, vpw: vpWidth === null ? '' : String(vpWidth),
     // Крошка — ІДЕНТИФІКАТОР, не довгий заголовок (спека прототипу): jira,
@@ -1478,10 +1479,12 @@ async function createIteration(from) {
   const note = iterNoteOf((curTask?.iterations || []).find((x) => x.id === from));
   try {
     const r = await post('/api/iteration', { from, note });
-    picked = r.iteration.id;
-    openDd = 'iter';
-    iterUi = { ...IT_NONE, ren: r.iteration.id };
-    await refreshGitlab(); await render();
+    await navigating(async () => {
+      picked = r.iteration.id;
+      openDd = 'iter';
+      iterUi = { ...IT_NONE, ren: r.iteration.id };
+      await refreshGitlab(); await render();
+    });
     focusItRen();
   } catch (e) { tellError(t('errTDupIter'), e.message); }
   finally { creatingIt = false; }
@@ -1567,7 +1570,7 @@ async function restoreIteration(slot, label, taskId) {
       headers: { 'Content-Type': 'application/json', ...(taskId ? { 'X-Canvas-Task': taskId } : {}) },
       body: JSON.stringify({ trash: slot }),
     });
-    if (!taskId || taskId === currentTaskId) { picked = r.id; await render(); }
+    if (!taskId || taskId === currentTaskId) await navigating(async () => { picked = r.id; await render(); });
     if (r.renamed) toast(t('iterRestoredAs', r.iteration?.label_text || t('iterTag', itNum(r.id))));
   } catch (e) {
     toast(t('iterRestoreFailed', label));
@@ -2388,11 +2391,10 @@ async function goToComment(id, tg) {
       || !flattenPages(pages).some((f) => f.kind !== 'folder' && f.page.id === tg.page)) { toast(t('cmtGoGone')); return; }
   cmtPendingDrop();
   cmtPending = { id, it: tg.it, page: tg.page, gen, armed: false, timer: null };
-  openDd = null;
-  picked = tg.it; pickedPage = tg.page; pickedState = null; followStamps = []; followLatchKey = null;
-  await loadPages();
-  if (gen !== taskSwitchGen || seq !== cmtGoSeq || picked !== tg.it || pickedPage !== tg.page) return;   // користувач пішов деінде
-  await render();
+  /* Той самий перехід, що й Назад/Вперед: `goTo` ставить ітерацію/сторінку й робить один `render()`; «ще актуально» — як було. Запис
+     стека — жетоном (це клік людини). */
+  await navigating(() => goTo({ ...curLoc(), it: tg.it, p: tg.page, st: null, h: null, m: null, v: null },
+    { stillWanted: () => gen === taskSwitchGen && seq === cmtGoSeq }));
 }
 /** Кадр коментатора (знову) готовий чи змінив знімок: довести відкладений показ або відкинути, якщо кадр не той. */
 function cmtPendingApply() {
@@ -2810,6 +2812,22 @@ function frameCmtKey(ev) {
     if (mk) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.modtool(mk); }
   }
 }
+/** Клавіші навігації (0.40), спільні для оболонки й вікна рамки: ⌘[ / ⌘] (Ctrl на Windows) — Назад/Вперед у НАШОМУ стеку. `true` —
+ *  перехоплено (`preventDefault`: інакше рамка пішла б по власній історії). `code`, а не лише `key`: на українській розкладці `[` —
+ *  клавіша `х`. T7 додає сюди ⌘F і ⌘G. */
+function navKeys(ev) {
+  if (ev.isComposing || ev.altKey || ev.shiftKey || !(ev.metaKey || ev.ctrlKey)) return false;
+  /* Під модальним (палітра, діалог) ⌘[ ⌘] перехоплюємо (`true` → `preventDefault`, щоб рідна «Назад» браузера не спрацювала), але не веземо. */
+  const go = shellModalOpen() ? () => {} : (d) => { if (!ev.repeat) (d < 0 ? nav.back() : nav.forward()); };
+  if (ev.code === 'BracketLeft' || ev.key === '[') { go(-1); return true; }
+  if (ev.code === 'BracketRight' || ev.key === ']') { go(1); return true; }
+  return false;
+}
+/** Те саме у вікні рамки: `frameCmtKey` виходить на будь-якому модифікаторі, тож окремий захоплювач. */
+function frameNavKey(ev) { if (navKeys(ev)) { ev.preventDefault(); ev.stopPropagation(); } }
+frame.addEventListener('load', () => {
+  try { frame.contentWindow.addEventListener('keydown', frameNavKey, true); } catch (e) { /* чужий документ */ }
+});
 let frameHash = null;   // одноразовий `{it, page, hash}` для наступного `frame.src` (посилання всередині макета)
 /* Запобіжник спрацював — ключ «задача|ітерація», де саме: інша задача чи ітерація ходить за посиланнями як звичайно. */
 let followLatchKey = null;
@@ -2833,7 +2851,7 @@ frame.addEventListener('load', () => {
       try { h = w.location.hash || ''; } catch (e) { /* чужий документ */ }
       frameHash = { it: picked, page: id, hash: h };
       pickedPage = id; pickedState = null;
-      render();
+      navigating(() => render());
       return;
     }
   }
@@ -2890,7 +2908,7 @@ const nav = createNav({
     set: (v) => { try { sessionStorage.setItem('dc-nav', v); } catch (e) { /* без сховища стек живе до перезавантаження */ } },
   },
   getLoc: curLoc,
-  goTo: (loc) => goTo(loc),   // `goTo` — T5; до нього Назад/Вперед нічого не веде
+  goTo: (loc) => goTo(loc),
   onChange: () => paintBar(),
 });
 /** Дія-перехід (0.40): усе, що вона робить (стан + `render()`), лягає ОДНИМ записом стека; жетон не живе довше дії. */
@@ -2898,7 +2916,48 @@ async function navigating(fn) {
   const tk = nav.open();
   try { return await fn(); } finally { nav.close(tk); }
 }
-async function goTo() { return false; }
+let goGen = 0;
+/**
+ * «Веди в місце» (0.40): Назад/Вперед, `hashchange`, «Показати» коментар, у майбутньому — «агент відкриває сторінку». Одна функція,
+ * що повторює СТАН дій-переходів і робить РІВНО ОДИН `render()` (в «Огляді» — `freshen()`, потім один `render()`, як кнопка режиму).
+ * Охоронці ті самі, що в кнопок: майстер (`wiz.requestExit`), незбережена панель «Підключень» (`dismissCnDrawer`), зайняті
+ * переходи (`homeOpening`, `tabSwitch`, `creatingIt`). Результат: `true`; `false` — відмовили (стек лишає індекс); `'gone'` — задачі в
+ * записі більше нема (стек викидає запис). `stillWanted` — зовнішня умова «ще актуально» (перед `render()`); новіша `goTo`
+ * перебиває старішу. Запис у стек тут НЕ робиться: це робить той, хто викликав (`nav.back()` осідає сам; `goToComment` — жетоном).
+ * Це явна навігація: задачу з адреси перемикаємо ЗАВЖДИ (правило «перезавантаження йде за сервером» — лише старт, `bootFollowsServer`).
+ */
+async function goTo(loc, { stillWanted = () => true } = {}) {
+  if (homeOpening || tabSwitch || creatingIt) return false;
+  if (homeOpen && homePage === 'wiz') {
+    await wiz.requestExit();
+    if (homeOpen && homePage === 'wiz') return false;   // не вийшов — відмова
+  }
+  if (cnDrawer && !(await dismissCnDrawer())) return false;
+  const gen = ++goGen;
+  const live = () => gen === goGen && stillWanted();
+  if (loc.h === 'tasks') { enterHome({ page: 'tasks' }); return true; }
+  if (loc.h === 'settings') { await enterConnections(); return true; }
+  /* Задача (а з нею й простір — `task-switch` перемикає й простір). Невідома — 'gone': запис стека мертвий. */
+  const st = await resolveTaskLoc(loc, currentTaskId, async (id) => { if (!(await switchTask(id))) throw new Error('refused'); });
+  if (st === 'unknown') return 'gone';   // запит удався, а задачі нема (чи id двозначний): запис стека мертвий
+  if (st === 'error') return false;      // збій мережі, непрочитаний простір чи відмова перемикання — відмова, запис ЛИШАЄТЬСЯ
+  if (!loc.t && loc.sp && loc.sp !== spaceNow()?.id) {
+    try { await post('/api/space-switch', { id: loc.sp }); } catch (e) { return false; }
+    await resetSpaceState();
+  }
+  if (!live()) return false;
+  followStamps = []; followLatchKey = null;   // свідомий перехід скидає запобіжник від циклу редиректів
+  const wantCanvas = loc.m === 'o';
+  if (wantCanvas !== (mode === 'canvas')) setModeState(wantCanvas);
+  if (wantCanvas) canvasView = loc.v === 'flow' ? 'flow' : 'grid';
+  if (loc.it && loc.it !== picked) { picked = loc.it; pickedPage = null; pickedState = null; }   // видалена ітерація: `render()` нормалізує до останньої
+  if (loc.p) { pickedPage = loc.p; pickedState = loc.st || null; }
+  openDd = null;
+  if (mode === 'canvas' && live()) await freshenForCanvas();   // як кнопка режиму: `freshen`, ПОТІМ один `render`
+  if (!live()) return false;
+  if (homeOpen) await leaveHome(); else await render();
+  return true;
+}
 
 /**
  * Переключення поточної задачі: `POST /api/task-switch` і скидання пер-задачного
@@ -2935,6 +2994,15 @@ async function switchTask(val) {
   } catch (e) { tellError(t('errTOpenTask'), e.message); return false; }
 }
 
+/** Синхронна частина перемикача «Макет/Огляд» (0.40: спільна для кнопки смуги й `goTo`): стан без `render()`. Тут — і скидання світу
+ *  камери (`camWorld`): перемикач — не побічна перебудова, людина чекає побачити «Огляд» спочатку, а не кадр, у якому колись зумнулась. */
+function setModeState(wantCanvas) {
+  mode = wantCanvas ? 'canvas' : 'single';
+  if (wantCanvas) ensureSetup();
+  camWorld = null;
+  if (wantCanvas) closeModTool();   // «Огляд» — знімки, не живий макет: інструмент модуля там не живе
+}
+
 const BAR_ACTIONS = {
   /* ⌘K «Перейменувати задачу» (Task 10): поповер під вкладкою поточної задачі. */
   rentask: () => renameTaskFromTab(currentTaskId),
@@ -2948,7 +3016,7 @@ const BAR_ACTIONS = {
      неї `enterHome` лишив би відкриту. Відкрита панель «Підключення» з незбереженими змінами спершу питає
      «Відкинути зміни?» (`dismissCnDrawer`; під запитом панелі — ігнор), без панелі — як було, синхронно. На сторінці
      майстра (3b) логотип — те саме, що «Закрити майстер» (до створення — «Скасувати»): питає про незбережене кроку 3. */
-  home: async () => { if (homeOpen && homePage === 'wiz') { await wiz.requestExit(); return; } if (cnDrawer && !(await dismissCnDrawer())) return; enterHome({ page: 'tasks' }); },
+  home: async () => { if (homeOpen && homePage === 'wiz') { await wiz.requestExit(); return; } if (cnDrawer && !(await dismissCnDrawer())) return; await navigating(() => enterHome({ page: 'tasks' })); },
   /* Вкладка (0.25.0): та сама зміна задачі, що й скрізь (`switchTask`); з «Задач» — через `homeOpenTask`, який і виходить
      з оверлею. Відмова (нема теки, збій) — причину вже показано тостом, вкладка лишається. */
   tab: async (val) => {
@@ -2960,7 +3028,7 @@ const BAR_ACTIONS = {
     if (val === currentTaskId) return;
     if (refuseMissingTask(val)) return;
     tabSwitch = val;
-    try { if (await switchTask(val)) render(); }
+    try { if (await switchTask(val)) await navigating(() => render()); }
     finally { tabSwitch = null; }
     const q = tabQueued; tabQueued = null;
     if (q && q !== currentTaskId) await BAR_ACTIONS.tab(q);
@@ -2988,11 +3056,16 @@ const BAR_ACTIONS = {
     target?.focus({ preventScroll: true });
   },
   tabnew: () => BAR_ACTIONS.home(),
+  /* Назад / Вперед / Оновити (0.40). Назад і Вперед — власний стек (`nav`), не історія браузера. «Оновити»: у «Макеті» лише макет
+     (`reloadFrame`), в «Огляді» — перебудувати полотно (`render`). */
+  navback: () => nav.back(),
+  navfwd: () => nav.forward(),
+  navreload: () => { if (homeOpen) return; if (mode === 'canvas') render(); else reloadFrame(); },
   /* Шестерня → «Налаштування» (сторінка `conn`; вхід — `enterConnections`, як у ⌘K) з тим самим захистом незбереженого, що в `home`. */
   settings: async () => {
     if (homeOpen && homePage === 'wiz') { await wiz.requestExit(); return; }
     if (cnDrawer && !(await dismissCnDrawer())) return;
-    enterConnections();
+    await navigating(() => enterConnections());
   },
   clean: () => toggleClean(),
   /* Інструмент модуля (api 2): кнопка острівця, пункт ⌘K, літера — перемикач; `modclose` — хрестик панелі. */
@@ -3016,21 +3089,21 @@ const BAR_ACTIONS = {
     if (!val || val === spaceNow()?.id) return;
     try { await post('/api/space-switch', { id: val }); }
     catch (e) { tellError(t('errTSpaceSwitch'), e.message); return; }
-    await afterSpaceChange();
+    await navigating(() => afterSpaceChange());
   },
   spacenew: () => openWizard(),
   spaceedit: () => openSpaceEdit(),
   /* «Підключення» поточного простору (етап 3a): пункт дропдауна фішки, ⌘K і кнопка в голові «Задач». */
-  conn: () => { setConnSec('mods'); enterConnections(); },
+  conn: () => { setConnSec('mods'); navigating(() => enterConnections()); },
 
   mode: async (val) => {
     const wantCanvas = val === 'overview';
     if (wantCanvas === (mode === 'canvas')) return;
-    mode = wantCanvas ? 'canvas' : 'single';
-    if (wantCanvas) ensureSetup();
+    await navigating(async () => {
+    setModeState(wantCanvas);
     /* Перемикач — НЕ побічна перебудова: людина свідомо вийшла з полотна (або
        вернулась на нього) і чекає побачити все спочатку, а не кадр, у якому
-       колись зумнулась. Забути світ треба саме тут: `buildCanvas` переносить
+       колись зумнулась. Забути світ треба саме при перемиканні режиму (`setModeState`): `buildCanvas` переносить
        камеру, поки задача, ітерація й вид ті самі, а вихід і вхід їх не міняють,
        тож без цього рядка «зумнувся → вийшов → вернувся» віддавало б старий кадр
        (перевірка D).
@@ -3046,19 +3119,18 @@ const BAR_ACTIONS = {
        канваса, і обнулення в `applyMode` лишало D червоною на scale 0.4138
        замість fit 0.3841.
 
-       Єдина точка входу в «Огляд» — цей обробник (вийти можна ще кліком по
-       кадру, але вернутись лише сюди), тому другого місця з `camWorld = null` не
-       треба: воно було б тим самим дублем, який щойно прибрано з `saveNodePos`. */
-    camWorld = null;
-    if (mode === 'canvas') closeModTool();   // «Огляд» — знімки, не живий макет: інструмент модуля там не живе
+       Скидання світу тепер у `setModeState` (нижче): її кличуть і цей
+       обробник, і `goTo` (Назад/Вперед, адреса), тож вихід і вхід в «Огляд» з
+       будь-якого шляху забувають камеру в ОДНОМУ місці (`goTo` без цього
+       повернув би старий кадр). Вихід кліком по кадру світ не чіпає — як і раніше. */
     if (mode === 'canvas') { await freshen(); maybeAutoShoot(); }
-    render();
+    await render();
+    });
   },
 
   view: (val) => {
     if (val === canvasView) return;
-    canvasView = val;
-    render();
+    navigating(() => { canvasView = val; return render(); });
   },
 
   /* Пресет — це просто ширина, тому окремої гілки «пресет проти свого числа»
@@ -3329,12 +3401,14 @@ const BAR_ACTIONS = {
      «Огляді» показувало б застарілі кадри без бейджів. Перенесена без змін. */
   iter: async (val) => {
     if (!val || val === picked) return;
-    picked = val;
-    pickedPage = null; pickedState = null;
-    openDd = null;
-    await loadPages();
-    if (mode === 'canvas') { await freshen(); maybeAutoShoot(); }
-    render();
+    await navigating(async () => {
+      picked = val;
+      pickedPage = null; pickedState = null;
+      openDd = null;
+      await loadPages();
+      if (mode === 'canvas') { await freshen(); maybeAutoShoot(); }
+      await render();
+    });
   },
   /* ⌘K і смуга — ті самі дії, що й меню рядка переліку: без діалогів `prompt`. «Перейменувати» й «Видалити» відкривають
      дропдаун ітерації з полем/питанням на поточній; «Нова»/«Дублювати» — копія поточної з відкритим полем назви. */
@@ -4844,6 +4918,9 @@ async function leaveHome() {
   document.body.classList.remove('home-open');
   const el = homeNode();
   if (el) el.hidden = true;
+  /* 0.40: оверлей уже схований, а `render()` нижче довгий — адреса не сміє ще тримати `h=tasks` (⌘R у цьому вікні відкрив би «Задачі»).
+     Місце вже без `h`; під жетоном це й є запис переходу, а `render()` лише уточнить його (ітерація/сторінка). Під `goTo` — стримано. */
+  nav.sync();
   /* ⛔ Рамку тут НЕ перезавантажуємо окремо: `render()` присвоює `frame.src` обраної сторінки, а присвоєння і є
      перезавантаженням — тож документ із новим адаптером коментарів і токенами інспектора прийде сам (модулі могли
      змінитись, поки оверлей був відкритий: `afterModulesChange` рамку під ним не чіпає). Окремий `reloadFrame()` після
@@ -4905,7 +4982,7 @@ async function homeOpenTask(id) {
        `homeData.current` самі по собі не свіжі — перший оновлює лише `render()`,
        другий лише відповідь екрана, яка при відкритті ще в дорозі. */
     if (id !== currentTaskId && !(await switchTask(id))) return;
-    await leaveHome();
+    await navigating(() => leaveHome());
     left = true;
   } finally {
     homeOpening = false;
@@ -6640,8 +6717,8 @@ const PANEL_ACTIONS = {
        канвас і сів у `fitAll()`, тобто затер би щойно порахований переліт
        «вписати все». Перемальовуємо ЛИШЕ панель — вихід із «Огляду» відкриє
        саме цю сторінку, бо `applyMode` читає `pickedPage`. */
-    if (mode === 'canvas') { focusPage(pickedPage); renderPanel(); return; }
-    render();
+    if (mode === 'canvas') { focusPage(pickedPage); renderPanel(); nav.record(); return; }
+    navigating(() => render());
   },
 
   // «⋯» рядка — той самий шар, що правий клік (нижче, `wirePanelEvents`), і
@@ -9657,7 +9734,7 @@ function cardOf(el) { return cards.find((x) => x.el === el?.closest?.('.cv-card'
  * мовчки скидала вибір на першу — кадр показував одне, живий вид інше.
  */
 function openCard(c) {
-  pickedPage = c.page; pickedState = c.state || null; mode = 'single'; render();
+  pickedPage = c.page; pickedState = c.state || null; mode = 'single'; navigating(() => render());
 }
 
 /**
@@ -10118,6 +10195,7 @@ document.addEventListener('keydown', (ev) => {
     openPalette();
     return;
   }
+  if (navKeys(ev)) { ev.preventDefault(); return; }
   /* ⌘G / Ctrl+G — «загорнути в теку». Не в полі вводу й не під відкритим
      діалогом чи палітрою: там це «знайти далі»/звичайний набір. */
   if (meta && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'g'

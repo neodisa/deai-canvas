@@ -1187,6 +1187,9 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
 .zone{display:flex;align-items:center;gap:6px;min-width:0}
 .zone-2{justify-content:center}
 .zone-3{justify-content:flex-end}
+/* Назад / Вперед / Оновити (0.40): кнопки 28 px, роздільник праворуч. */
+.nav{display:flex;align-items:center;gap:2px;flex:none;padding-right:6px;margin-right:4px;border-right:1px solid var(--line)}
+.nav .ctl--icon{width:var(--h-sm);height:var(--h-sm)}
 /* ── контейнерні запити смуги ─────────────────────────────────────────── */
 /* Смуга міряє СЕБЕ, а не вікно: інструмент живе у вікні, яке рідко на весь
    екран, і медіа-запит по вікну брехав би. Типова умова — ПЕРЕД запитами:

@@ -1630,6 +1630,10 @@ const UK = {
   frPwHint: 'Один для всіх задач простору.',
   /* 0.40 «Імена й навігація»: ручка ширини панелі (лише `aria-label`, видимого підпису нема). */
   panelResize: 'Ширина панелі',
+  /* 0.40: кнопки навігації смуги (підказки через `data-tip`). */
+  navBack: 'Назад ⌘[',
+  navFwd: 'Вперед ⌘]',
+  navReload: 'Оновити макет',
 };
 
 const EN = {
@@ -3018,6 +3022,10 @@ const EN = {
   frPwHint: 'One for every task in the space.',
   /* 0.40: panel width handle (`aria-label` only). */
   panelResize: 'Panel width',
+  /* 0.40: bar navigation buttons (tips via `data-tip`). */
+  navBack: 'Back ⌘[',
+  navFwd: 'Forward ⌘]',
+  navReload: 'Reload mockup',
 };
 
 /** Підтримувані мови інтерфейсу, у порядку типовості: українська — типова. */

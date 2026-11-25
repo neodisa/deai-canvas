@@ -89,7 +89,7 @@ test("leaveHome: фокус на вкладку — лише коли його �
     const env = {
       document, closeCnDrawer: () => {}, connEntrySeq: 0, wiz: { reset: () => {} }, homeNode: () => homeEl, homeSeq: 0,
       closeTaskMenu: () => {}, homeComposing: true, homePaintPending: true, homeOpen: true, openDd: null,
-      glCache: null, glBusyTimer: null, scheduleGlRetry: () => {}, glKeyNow: () => null,
+      glCache: null, glBusyTimer: null, scheduleGlRetry: () => {}, glKeyNow: () => null, nav: { sync: () => {} },
       tabsEl: { querySelector: (s) => (s.includes("aria-current") ? tab : null) },
       render: async () => { document.activeElement = nodes[where]; },
     };

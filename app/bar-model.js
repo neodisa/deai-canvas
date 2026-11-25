@@ -210,6 +210,10 @@ export function barModel(s) {
     });
   }
 
+  /* Назад / Вперед / Оновити (0.40) — перші в зоні 1, лише коли оболонка дала стан стека: золоті знімки ЛІГИ й превʼю
+     (`ext-bar.js`) стану `nav` не мають, тож їхня розмітка не змінюється. Екран «Задачі» повертається вище — без кнопок. */
+  if (s.nav) zone1.unshift({ id: "nav", tier: 0, backOff: !s.nav.back, fwdOff: !s.nav.fwd });
+
   const zone2 = [
     {
       id: "mode", tier: 0, labelTier: TIERS.mode, value: s.mode,

@@ -93,7 +93,7 @@ test("«Повернути» йде в задачу, де видалили: id �
   const res = fn("async function restoreIteration(", "/**\n * Забути ВСЕ");
   assert.match(res, /'X-Canvas-Task': taskId/);
   assert.match(res, /\/api\/iteration-restore/);
-  assert.match(res, /taskId === currentTaskId\) \{ picked = r\.id; await render\(\); \}/, "чужу задачу не перемальовуємо");
+  assert.match(res, /taskId === currentTaskId\) await navigating\(async \(\) => \{ picked = r\.id; await render\(\); \}\);/, "чужу задачу не перемальовуємо");
 });
 
 test("права панель одна: історія закривається при відкритті коментарів, модуля, інспектора (кнопка й клавіша `I`) і події `mode` коментатора", () => {
