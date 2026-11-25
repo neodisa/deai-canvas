@@ -47,3 +47,10 @@ test("що пропускаємо при обході: теги й оверле�
   for (const tag of ["script", "style", "noscript", "template"]) assert.ok(SKIP_TAGS.has(tag), tag);
   for (const sel of ["[data-comment-layer]", "[data-deai-marks]", "[data-canvas-inspector]"]) assert.ok(SKIP_SELECTORS.includes(sel), sel);
 });
+
+test("кінець збігу береться з карти кінців, а не з довжини запиту: після İ зсув згорнутого рядка ≠ оригіналу", () => {
+  const text = "İİxİ";
+  const r = findInTexts([text], "x");
+  assert.equal(r.hits.length, 1);
+  assert.equal(text.slice(r.hits[0].start, r.hits[0].end), "x");
+});
