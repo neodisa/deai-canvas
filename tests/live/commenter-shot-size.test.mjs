@@ -169,15 +169,18 @@ test("лайтбокс: клік по img.shot картки відкриває m
   }
 });
 
-test("лайтбокс: openShot і «інша сторінка» (host) відкривають meta.shotUrl, інакше meta.shot", async () => {
+/* 0.39.1: `focus()` піна іншої сторінки в режимі хоста сам нічого не показує й вертає false — показ вирішує хост:
+   оболонка Deai веде на сторінку коментаря, превʼю відкриває знімок через `openShot` (живий тест 15б у
+   preview-comments). */
+test("лайтбокс: openShot відкриває meta.shotUrl, інакше meta.shot; focus «іншої сторінки» (host) — false без лайтбокса", async () => {
   for (const [extra, want] of [[{ shotUrl: SHOT_FULL }, SHOT_FULL], [{}, SHOT_THUMB]]) {
     const page = await boot({ withHost: true, version: "1/holovna", seed: seed(extra) });
     await page.evaluate(() => window.CommentLayer.openShot("p1"));
     assert.equal(await lbSrc(page), want);
     await page.evaluate(`${SHADOW}.querySelector('.cllb').click()`);
     assert.equal(await lbSrc(page), null);
-    await page.evaluate(() => window.CommentLayer.focus("p1"));
-    assert.equal(await lbSrc(page), want, "інша сторінка зі знімком — лайтбокс");
+    assert.equal(await page.evaluate(() => window.CommentLayer.focus("p1")), false, "інша сторінка (host): focus вертає false");
+    assert.equal(await lbSrc(page), null, "інша сторінка (host): focus сам лайтбокс не відкриває");
     await page.close();
   }
 });
