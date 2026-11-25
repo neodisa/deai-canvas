@@ -3,6 +3,22 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.39.1] — 25.11.2026
+
+«Показати» on a comment now leads to it wherever it lives, and a click on a pin is no longer lost while the mockup
+scrolls.
+
+### Виправлено
+- «Показати» on a comment from another page or another iteration did nothing: the comment was looked for only on the
+  page that was open. Now, in «Макет», the canvas opens the comment's iteration and page (the viewport and the comments
+  panel stay as they were), scrolls to the element and selects the card. The same goes for the «new comment» notice.
+  When the comment's page or iteration no longer exists, a short message says so; a comment whose place cannot be read
+  stays where it is, silently, as before. «Огляд» is unchanged.
+- In a published preview, «Показати» on a comment from another page still opens its screenshot.
+- A click on a pin could be lost when the mockup scrolled at the same moment (auto-scroll, carousels, animated
+  headers): pins were rebuilt on every scroll. Now pins are kept and only moved.
+- The iteration menu item «Історія змін» / «Change history» is now «Історія» / «History».
+
 ## [0.39.0] — 24.11.2026
 
 A module tool can work with the mockup page. Its code still never runs inside the mockup: a helper of the core does the
