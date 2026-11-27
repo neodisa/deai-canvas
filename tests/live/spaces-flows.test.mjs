@@ -128,28 +128,59 @@ function trackTuner(page) {
   return { posts, gets };
 }
 
-/** Рамка завантажила сторінку задачі з цим маркером і в ній підвішено інспектор. */
-const markLoaded = (page, mark) => page.waitForFunction((m) => {
+/** Рамка завантажила сторінку задачі з цим маркером і в ній підвішено інспектор. `not` — документ рамки (handle), який
+ *  НЕ рахується: той самий маркер, але документ, що от-от зміниться (див. `spaceNameOnTasks`). */
+const markLoaded = (page, mark, { not = null } = {}) => page.waitForFunction(([m, old]) => {
   const f = document.getElementById("frame");
   const doc = f && f.contentDocument;
-  return !!(doc && doc.body && doc.body.dataset.mark === m && f.contentWindow.CanvasInspector);
-}, mark, { timeout: 15000 });
+  return !!(doc && doc !== old && doc.body && doc.body.dataset.mark === m && f.contentWindow.CanvasInspector);
+}, [mark, not], { timeout: 15000 });
 
-/* Фішка простору (0.25.0) живе лише на смузі екрана «Задачі»: назву простору читаємо звідти й вертаємось на вкладку задачі. */
+/* Фішка простору (0.25.0) живе лише на смузі екрана «Задачі»: назву простору читаємо звідти й вертаємось на вкладку задачі.
+   Повертає handle документа, що стояв у рамці під «Задачами». Вихід з екрана (`leaveHome`) знімає `home-open` одразу, а
+   рамку перезавантажує пізніше — `render()` присвоює `frame.src` лише ПІСЛЯ `/api/task` і `/api/tasks`. Доти в рамці
+   той самий документ із тим самим маркером: `markLoaded` без `{ not }` проходить по ньому, а перезавантаження влучає в
+   наступні кроки (повний прогін 0.39.0, 24.11.2026: T1 → `turnInspectorOn` → «reading 'on'»). */
 async function spaceNameOnTasks(page, want) {
   await goTasks(page);
   await waitText(page, "#bar .space-name", want);
+  const stale = await page.evaluateHandle(() => document.getElementById("frame").contentDocument);
   await page.click('#tabs [data-act="tab"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  return stale;
 }
 
-async function turnInspectorOn(page) {
-  await page.waitForFunction(() => {
-    const f = document.getElementById("frame");
-    return !!(f && f.contentWindow && f.contentWindow.CanvasInspector);
-  }, null, { timeout: 15000 });
-  await page.click('#hud [data-act="inspector"]');
-  await page.waitForFunction(() => document.getElementById("frame").contentWindow.CanvasInspector.on === true, null, { timeout: 5000 });
+/* Увімкнути інспектор у тому документі рамки, який лишиться на екрані. Стан оверлея живе в ДОКУМЕНТІ макета, а рамку
+   перезавантажує кожен повний `render()` (`applyMode` → `frame.src`): новий документ народжується з вимкненим оверлеєм,
+   і поки його модуль `inspector.js` не виконався, `CanvasInspector` у рамці нема зовсім. Тому предикати не читають `.on`
+   з `undefined`, клікаємо лише по готовому документу з вимкненим оверлеєм (кнопка — перемикач), а якщо між кліком і
+   підтвердженням рамка змінила документ — клацаємо ще раз, уже в новому. Стеля — `reloads` перезавантажень поспіль:
+   більше — це цикл перезавантажень, тобто поломка, яку тест мусить показати, а не перечекати. */
+async function turnInspectorOn(page, { timeout = 15000, reloads = 3 } = {}) {
+  const deadline = Date.now() + timeout;
+  const left = (cap = Infinity) => Math.max(1, Math.min(cap, deadline - Date.now()));
+  for (let i = 0; i <= reloads; i += 1) {
+    const api = await page.waitForFunction(() => {
+      const f = document.getElementById("frame");
+      const w = f && f.contentWindow;
+      const ready = !!(w && w.CanvasInspector && f.contentDocument && f.contentDocument.readyState === "complete");
+      return ready && w.CanvasInspector;
+    }, null, { timeout: left() });
+    const on = await page.evaluate((a) => {
+      const cur = document.getElementById("frame").contentWindow?.CanvasInspector;
+      return cur === a ? cur.on === true : null;
+    }, api);
+    if (on === true) return;
+    if (on === null) continue;                            // документ змінився між двома запитами — беремо новий
+    await page.click('#hud [data-act="inspector"]');
+    const got = await page.waitForFunction((a) => {
+      const cur = document.getElementById("frame").contentWindow?.CanvasInspector;
+      if (cur !== a) return "reloaded";                   // новий документ: оверлей у ньому вимкнений, клік пропав
+      return cur.on === true && "on";
+    }, api, { timeout: left(5000) });
+    if (await got.jsonValue() === "on") return;
+  }
+  throw new Error(`інспектор не увімкнувся: рамка перезавантажилась ${reloads + 1} рази поспіль`);
 }
 
 /** Закріпити елемент у рамці кліком по ньому. */
@@ -264,8 +295,8 @@ test("T1 висячий current на старті: екран лікується
      стан скинуто й пакет читається ЗНОВУ. Третій означав би зайве читання, нуль чи один —
      що пакет вилікуваної задачі не прочитано взагалі. */
   assert.equal(tr.gets.length, 2, `GET /api/tuner після лікування: ${tr.gets.length} (очікувалось рівно 2)`);
-  await spaceNameOnTasks(page, "P");
-  await markLoaded(page, "X");
+  const stale = await spaceNameOnTasks(page, "P");
+  await markLoaded(page, "X", { not: stale });         // свіжий X після виходу з «Задач», а не той, що стояв під ними
 
   await turnInspectorOn(page);
   await pin(page, "#target");
