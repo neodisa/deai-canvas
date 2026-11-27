@@ -1187,11 +1187,17 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
 .zone{display:flex;align-items:center;gap:6px;min-width:0}
 .zone-2{justify-content:center}
 .zone-3{justify-content:flex-end}
-/* 0.40: центр смуги — лише сегмент режиму (`.zone-2` у центральній колонці `auto` несе тільки його). `.zone-2x` (Сітка/Флоу, ширини,
-   «⋯») виходить із потоку й стоїть упритул праворуч від сегмента, у просторі правої колонки, — тому різна ширина решти в «Макеті»
-   й «Огляді» сегмент не зсуває. `:has` — щоб зовнішня оболонка превʼю (власна розмітка зони 2, без `.zone-2x`) лишилась як була. */
-.zone-2:has(>.zone-2x){position:relative}
-.zone-2x{position:absolute;left:calc(100% + 10px);top:0;bottom:0;width:max-content;display:flex;align-items:center;gap:6px;white-space:nowrap}
+/* 0.40: центр смуги — лише сегмент режиму (`.zone-2` у центральній колонці `auto`). Решта зони 2 (`.zone-2x`: Сітка/Флоу, ширини, «⋯»)
+   стоїть першою в зоні 3 — упритул праворуч від сегмента, на лівому краї правої колонки, — тож різна ширина решти в «Макеті» й «Огляді»
+   сегмент не зсуває. Вона в потоці й стискається першою (`flex-shrink:100`): коли місця бракує, скорочується видима причина вимкненого
+   «Флоу» (`.dd-why`, «…»), а не налазить на кнопки зони 3. Без `overflow` на самій `.zone-2x` — дропдаун «⋯» мусить виходити за її межі. */
+.zone-2x{flex:0 100 auto;min-width:0;margin-right:auto;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.zone-2x>*{flex:none}
+.zone-2x .seg[data-seg=view]{flex:0 1 auto;min-width:0}
+.zone-2x .seg[data-seg=view] button{min-width:0}
+/* Вимкнений пункт з видимою причиною: причина стоїть замість підпису (імʼя кнопки — в `aria-label`), відступи тісніші — щоб причина вміщалась. */
+.zone-2x .seg[data-seg=view] button:has(.dd-why){padding:0 7px;gap:4px}
+.zone-2x .seg[data-seg=view] button:has(.dd-why) .lbl-view{display:none}
 /* Назад / Вперед / Оновити (0.40): кнопки 28 px, роздільник праворуч. */
 .nav{display:flex;align-items:center;gap:2px;flex:none;padding-right:6px;margin-right:4px;border-right:1px solid var(--line)}
 .nav .ctl--icon{width:var(--h-sm);height:var(--h-sm)}
@@ -1218,10 +1224,8 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
 /* 0.40: підписи «Сітка/Флоу» (`TIERS.viewLabel`) зникають раніше за решту: `.zone-2x` стоїть праворуч від центрального сегмента й з ними
    налазила б на зону 3. */
 @container (max-width:1440px){ .lbl-view{display:none} }
-/* Видима причина вимкненого «Флоу» (`.dd-why`) в смузі (`TIERS.viewWhy`) розпирала б `.zone-2x` до зони 3 (виміряно без `flow.json`: 25px на
-   1024, 16px на 1360, 22px на 1500; 1700 — 2.6px, 1800 вільно): вужче — лише `title` й `aria-label`. */
-.zone-2x .seg .dd-why{white-space:nowrap}
-@container (max-width:1800px){ .zone-2x .seg .dd-why{display:none} }
+/* Причина вимкненого «Флоу» в смузі — видимий КОРОТКИЙ текст (`<whyKey>Bar` у shell-bar.js), не ховається на жодній ширині; повна — у `title`/`aria-label`. */
+.zone-2x .seg .dd-why{white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* Превʼю (0.32.1): інструменти — іконки в правому куті смуги перед «Копіювати посилання». Бейдж коментарів сидить на кнопці
    (`.isl-count` — абсолютний), на увімкненій кнопці (фон `--sel`) міняє колір, щоб не злитись із нею. */
 .ext-tools{display:flex;align-items:center;gap:2px}

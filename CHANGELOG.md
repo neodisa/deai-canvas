@@ -35,7 +35,7 @@ Reload in the bar, ⌘F searches the mockup, and the «Макет / Огляд»
 - The «Макет / Огляд» switch stays in the centre of the bar in both modes. Measured cause: the controls next to it have a
   different width in each mode, and the whole group was centred. Now the other controls sit to the right of the switch.
   In «Огляд», «Сітка» and «Флоу» show icons only when the bar is 1440 px wide or narrower (names in the tooltip), and
-  the reason why «Флоу» is unavailable stays in its tooltip unless the bar is wider than 1800 px. Checked against the
+  the reason why «Флоу» is unavailable is always visible in the bar as a short text (full text in the tooltip); the controls now share a row with the right-hand buttons and shrink that text with an ellipsis instead of overlapping them. Checked against the
   widest states of the right side of the bar (not published, GitLab behind/ahead, GitHub/Git) from 1024 to 1920 px.
 
 ### Known limits

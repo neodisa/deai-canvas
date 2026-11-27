@@ -303,11 +303,13 @@ function seg(model, id, extraCls = "") {
   if (!c) return "";
   const buttons = c.items.map((sub) => {
     const why = sub.disabled ? t(sub.whyKey) : "";
+    /* У смузі «Флоу» показує КОРОТКУ причину (`<whyKey>Bar`): повна розпирала б `.zone-2x` до зони 3; повний текст — у title й aria-label. */
+    const whyShort = why && id === "view" ? t(`${sub.whyKey}Bar`) : why;
     return `<button data-act="${id}" data-val="${sub.id}"
       aria-pressed="${sub.id === c.value}"${sub.disabled ? " disabled" : ""}
       title="${esc(why ? `${t(sub.labelKey)} — ${why}` : t(sub.labelKey))}"${id === "view" ? ` aria-label="${esc(why ? `${t(sub.labelKey)} — ${why}` : t(sub.labelKey))}"` : ""}>${ico(sub.id)}
       <span class="${lblCls(c.labelTier)}">${esc(t(sub.labelKey))}</span>
-      ${why ? `<span class="dd-why">${esc(why)}</span>` : ""}</button>`;
+      ${whyShort ? `<span class="dd-why">${esc(whyShort)}</span>` : ""}</button>`;
   }).join("");
   return `<div class="seg${extraCls}" role="group" data-seg="${id}">${buttons}</div>`;
 }
@@ -343,15 +345,19 @@ function ddMore(model, state) {
   return `<div class="dd dd--right"><div class="dd-head">${esc(t("view"))}</div>${parts}</div>`;
 }
 
-function zone2HTML(model, state, openDd) {
+function zone2HTML(model) {
+  /* 0.40: сегмент режиму — єдиний у центрі смуги (ширина решти зони різна в «Макеті» й «Огляді» — через неї він «стрибав»);
+     решта контролів — поруч, у лівому краї правої колонки (`.zone-2x`). Зовнішня оболонка превʼю (`ext-bar.js`) має власну розмітку. */
+  return seg(model, "mode");
+}
+/* Решта зони 2 — на початку зони 3 (потік, не абсолют): так вона СТИСКАЄТЬСЯ (причина «Флоу» → «…»), а не налазить на кнопки зони 3. */
+function zone2xHTML(model, state, openDd) {
   const more = `<div class="ddhost view-more">
     <button class="ctl ctl--icon" data-dd="more" aria-expanded="${openDd === "more"}"
       title="${esc(t("view"))}">${ico("dots")}</button>
     ${openDd === "more" ? ddMore(model, state) : ""}
   </div>`;
-  /* 0.40: сегмент режиму — єдиний у центрі смуги (ширина решти зони різна в «Макеті» й «Огляді» — через неї він «стрибав»);
-     решта контролів — поруч, у лівому краї правої колонки (`.zone-2x`). Зовнішня оболонка превʼю (`ext-bar.js`) має власну розмітку. */
-  return `${seg(model, "mode")}<div class="zone-2x">${seg(model, "view")}${vpSeg(model)}${more}</div>`;
+  return `<div class="zone-2x">${seg(model, "view")}${vpSeg(model)}${more}</div>`;
 }
 
 /* ── зона 3: GitLab і публікація ──────────────────────────────────────────── */
@@ -537,10 +543,10 @@ export function barHTML(model, state) {
     : `${navHTML(model)}<div class="crumbs">${crumbTask(model, openDd, state)}${iter ? `<span class="crumb-sep" aria-hidden="true">/</span>${iter}` : ""}</div>`;
   /* Зони 2 і 3 екрана «Задачі» порожні в МОДЕЛІ — не малюємо їхніх контролів,
      але самі вузли лишаються (грид смуги на них тримається). */
-  const zone2 = home ? "" : zone2HTML(model, state, openDd);
+  const zone2 = home ? "" : zone2HTML(model);
   const publish = model.zone3.find((x) => x.id === "publish");
   const zone3 = home ? ""
-    : `${figmaBtn(model)}${zoneGl(model, state ?? {}, openDd)}${zonePublish(publish, openDd)}`;
+    : `${zone2xHTML(model, state, openDd)}${figmaBtn(model)}${zoneGl(model, state ?? {}, openDd)}${zonePublish(publish, openDd)}`;
 
   const errbar = model.error
     ? `<div class="errbar">${ico("warn")}<span>${esc(t(model.error.whyKey))}</span>

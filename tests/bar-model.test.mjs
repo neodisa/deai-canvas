@@ -120,7 +120,7 @@ test("у публікації завжди є іконка, у кожному с
 });
 
 test("яруси — три, і саме ті, що в спеці", () => {
-  assert.deepEqual(TIERS, { gl: 1300, mode: 1180, view: 1060, viewLabel: 1440, viewWhy: 1800 });
+  assert.deepEqual(TIERS, { gl: 1300, mode: 1180, view: 1060, viewLabel: 1440 });
 });
 
 /* Чисті функції причин перевіряємо і напряму: DOM-шар кличе саме їх, і

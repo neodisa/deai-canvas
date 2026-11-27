@@ -294,6 +294,10 @@ const UK = {
   whyNoFlow: 'у цій ітерації немає flow.json',
   whyPagesError: 'перелік сторінок не завантажився', // немає в прототипі, див. вище
   whyFlowBroken: 'flow.json є, але не читається', // немає в прототипі, див. вище
+  // Короткі форми тих самих причин для смуги (`seg()` у shell-bar.js): там місця мало, повний текст лишається в `title` й `aria-label`.
+  whyNoFlowBar: 'нема flow.json',
+  whyPagesErrorBar: 'без сторінок',
+  whyFlowBrokenBar: 'flow.json битий',
   whyNoPublish: 'задача ще не опублікована',
   teamsNotify: 'Сповіщати Teams про коментарі',
   teamsOnSub: (ch) => `увімкнено для всього проєкту ${ch} · для всіх`,
@@ -1846,6 +1850,9 @@ const EN = {
   whyNoFlow: 'this iteration has no flow.json',
   whyPagesError: 'the page list failed to load',
   whyFlowBroken: 'flow.json exists but cannot be read',
+  whyNoFlowBar: 'no flow.json',
+  whyPagesErrorBar: 'no pages',
+  whyFlowBrokenBar: 'flow.json broken',
   whyNoPublish: 'this task has never been published',
   teamsNotify: 'Notify Teams about comments',
   teamsOnSub: (ch) => `on for the whole project ${ch} · for everyone`,

@@ -63,7 +63,7 @@ for (const [withFlow, width] of [true, false].flatMap((f) => [1024, 1280, 1440].
       await page.waitForFunction((m) => document.querySelector(`#bar [data-act="mode"][data-val="${m}"]`)?.getAttribute("aria-pressed") === "true", mode);
       const g = await page.evaluate(() => {
         const x = document.querySelector("#bar .zone-2x")?.getBoundingClientRect();
-        const z3 = [...document.querySelectorAll("#bar .zone-3 > *")].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
+        const z3 = [...document.querySelectorAll("#bar .zone-3 > :not(.zone-2x)")].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
         return { right: x ? x.right : 0, z3left: z3.length ? Math.min(...z3.map((r) => r.left)) : 1e9,
           bar: document.querySelector("#bar .bar").getBoundingClientRect().right };
       });
@@ -109,7 +109,7 @@ test("решта контролів зони 2 не налазить на зон
           const st = { ...base, ...o, mode, flowRaw: flow ? true : null };
           bar.innerHTML = barHTML(barModel(st), st);
           const x = document.querySelector("#bar .zone-2x").getBoundingClientRect();
-          const z3 = [...document.querySelectorAll("#bar .zone-3 > *")].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
+          const z3 = [...document.querySelectorAll("#bar .zone-3 > :not(.zone-2x)")].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
           out.push({ lang, name, mode, flow, right: x.right, z3left: Math.min(...z3.map((r) => r.left)), bar: document.querySelector("#bar .bar").getBoundingClientRect().right });
         }
       }

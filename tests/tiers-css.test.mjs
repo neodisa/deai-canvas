@@ -13,7 +13,7 @@ const widthOf = (sel) => {
   return found;
 };
 
-for (const [tier, sel] of [["gl", ".lbl-gl{"], ["mode", ".lbl-mode,"], ["viewLabel", ".lbl-view{"], ["viewWhy", ".zone-2x .seg .dd-why{display:none}"], ["view", ".view-extra{"]]) {
+for (const [tier, sel] of [["gl", ".lbl-gl{"], ["mode", ".lbl-mode,"], ["viewLabel", ".lbl-view{"], ["view", ".view-extra{"]]) {
   test(`TIERS.${tier} = ${TIERS[tier]} збігається з контейнерним запитом для «${sel}»`, () => {
     assert.deepEqual(widthOf(sel), [TIERS[tier]]);
   });
