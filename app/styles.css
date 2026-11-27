@@ -1194,7 +1194,9 @@ body.with-panel.panel-collapsed.with-hist .cv-canvas{width:calc(100% - var(--pan
 .zone-2x{flex:0 100 auto;min-width:0;margin-right:auto;display:flex;align-items:center;gap:6px;white-space:nowrap}
 .zone-2x>*{flex:none}
 .zone-2x .seg[data-seg=view]{flex:0 1 auto;min-width:0}
-.zone-2x .seg[data-seg=view] button{min-width:0}
+.zone-2x .seg[data-seg=view] button{flex:none}
+.zone-2x .seg[data-seg=view] button:has(.dd-why){flex:0 1 auto;min-width:0}
+.zone-2x .ico{flex:none}
 /* Вимкнений пункт з видимою причиною: причина стоїть замість підпису (імʼя кнопки — в `aria-label`), відступи тісніші — щоб причина вміщалась. */
 .zone-2x .seg[data-seg=view] button:has(.dd-why){padding:0 7px;gap:4px}
 .zone-2x .seg[data-seg=view] button:has(.dd-why) .lbl-view{display:none}

@@ -111,7 +111,9 @@ test("решта контролів зони 2 не налазить на зон
           const x = document.querySelector("#bar .zone-2x").getBoundingClientRect();
           const z3 = [...document.querySelectorAll("#bar .zone-3 > :not(.zone-2x)")].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
           const seg = document.querySelector('#bar [data-seg="mode"]').getBoundingClientRect();
-          out.push({ lang, name, mode, flow, right: x.right, left: x.left, segRight: seg.right, z3left: Math.min(...z3.map((r) => r.left)), bar: document.querySelector("#bar .bar").getBoundingClientRect().right });
+          const icons = [...document.querySelectorAll('#bar [data-seg="view"] .ico, #bar [data-seg="vp"] .ico, #bar .view-more .ico')].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0 || r.height > 0);
+          const smallIcon = icons.some((r) => r.width < 14 || r.height < 14);
+          out.push({ lang, name, mode, flow, smallIcon, right: x.right, left: x.left, segRight: seg.right, z3left: Math.min(...z3.map((r) => r.left)), bar: document.querySelector("#bar .bar").getBoundingClientRect().right });
         }
       }
       setLang("uk");
@@ -120,6 +122,7 @@ test("решта контролів зони 2 не налазить на зон
     for (const r of rows) {
       checked += 1;
       /* Решта зони 2 в потоці зони 3: коли місця бракує, її не слід штовхнути ЛІВОРУЧ на центральний сегмент (зона 3 переповнена). */
+      if (r.smallIcon) bad.push(`${width} ${r.lang}/${r.name}/${r.mode}/flow=${r.flow}: іконка контролу зони 2 стисла (<14px)`);
       if (r.right > r.z3left + 0.5 || r.right > r.bar || r.left < r.segRight - 0.5) bad.push(`${width} ${r.lang}/${r.name}/${r.mode}/flow=${r.flow}: ${r.right.toFixed(1)} проти ${r.z3left.toFixed(1)}`);
     }
   }
