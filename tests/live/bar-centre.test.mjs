@@ -110,7 +110,8 @@ test("решта контролів зони 2 не налазить на зон
           bar.innerHTML = barHTML(barModel(st), st);
           const x = document.querySelector("#bar .zone-2x").getBoundingClientRect();
           const z3 = [...document.querySelectorAll("#bar .zone-3 > :not(.zone-2x)")].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
-          out.push({ lang, name, mode, flow, right: x.right, z3left: Math.min(...z3.map((r) => r.left)), bar: document.querySelector("#bar .bar").getBoundingClientRect().right });
+          const seg = document.querySelector('#bar [data-seg="mode"]').getBoundingClientRect();
+          out.push({ lang, name, mode, flow, right: x.right, left: x.left, segRight: seg.right, z3left: Math.min(...z3.map((r) => r.left)), bar: document.querySelector("#bar .bar").getBoundingClientRect().right });
         }
       }
       setLang("uk");
@@ -118,7 +119,8 @@ test("решта контролів зони 2 не налазить на зон
     });
     for (const r of rows) {
       checked += 1;
-      if (r.right > r.z3left + 0.5 || r.right > r.bar) bad.push(`${width} ${r.lang}/${r.name}/${r.mode}/flow=${r.flow}: ${r.right.toFixed(1)} проти ${r.z3left.toFixed(1)}`);
+      /* Решта зони 2 в потоці зони 3: коли місця бракує, її не слід штовхнути ЛІВОРУЧ на центральний сегмент (зона 3 переповнена). */
+      if (r.right > r.z3left + 0.5 || r.right > r.bar || r.left < r.segRight - 0.5) bad.push(`${width} ${r.lang}/${r.name}/${r.mode}/flow=${r.flow}: ${r.right.toFixed(1)} проти ${r.z3left.toFixed(1)}`);
     }
   }
   assert.ok(checked >= 17 * 2 * 9 * 2 * 2, `перевірено лише ${checked} комбінацій`);
