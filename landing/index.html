@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en" id="top">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Design with AI and keep control of the result. Deai Canvas is a local workspace for live HTML prototypes, Figma-style inspection, iterations and team review.">
+  <meta name="theme-color" content="#f5f6f1">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Deai Canvas — Design with AI. Keep control.">
+  <meta property="og:description" content="Work with live HTML prototypes, give your coding agent precise feedback, and choose the iteration your team sees.">
+  <meta property="og:url" content="https://deai-canvas.vercel.app/">
+  <meta property="og:image" content="https://deai-canvas.vercel.app/assets/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Deai Canvas: a live HTML prototype with pinned feedback on the canvas.">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://deai-canvas.vercel.app/">
+  <title>Deai Canvas — Design with AI. Keep control.</title>
+  <link rel="icon" href="assets/deai-icon.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script>document.documentElement.classList.add("js");</script>
+  <script src="site.js" defer></script>
+  <script src="hero.js" defer></script>
+  <script src="magnet.js" defer></script>
+  <script src="tour.js" defer></script>
+  <script src="story.js" defer></script>
+</head>
+<body>
+<svg hidden aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-folder-kanban" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/><path d="M8 10v4"/><path d="M12 10v2"/><path d="M16 10v6"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></symbol>
+  <symbol id="i-layout-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></symbol>
+  <symbol id="i-workflow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/></symbol>
+  <symbol id="i-scan-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/><path d="m16 16-1.9-1.9"/></symbol>
+  <symbol id="i-message-square" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/></symbol>
+  <symbol id="i-blocks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2"/><rect x="14" y="2" width="8" height="8" rx="1"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+  <symbol id="i-arrow-up-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></symbol>
+  <symbol id="i-arrow-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+  <symbol id="i-maximize-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16"/><path d="M4 12h16"/><path d="M4 19h16"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19h8"/><path d="m4 17 6-6-6-6"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></symbol>
+  <symbol id="i-tablet" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="20" x="4" y="2" rx="2" ry="2"/><line x1="12" x2="12.01" y1="18" y2="18"/></symbol>
+  <symbol id="i-smartphone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></symbol>
+  <symbol id="i-git-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></symbol>
+  <symbol id="i-ticket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></symbol>
+  <symbol id="i-puzzle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></symbol>
+</svg>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap masthead">
+      <a class="brand" href="#top">
+        <img src="assets/deai-icon.png" alt="" width="32" height="32">
+        <span>Deai Canvas</span>
+        <span class="beta-badge">Beta</span>
+      </a>
+      <nav class="nav" id="site-nav" aria-label="Main">
+        <a href="#workflow">Workflow</a>
+        <a href="#modules">Modules</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/neodisa/deai-canvas">GitHub <svg class="icon" aria-hidden="true"><use href="#i-arrow-up-right"/></svg></a>
+        <a class="nav-setup" href="#setup">Get started <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
+      </nav>
+      <div class="masthead-actions">
+        <button type="button" class="button button-small button-outline share-button" data-share hidden>Share</button>
+        <a href="#setup" class="button button-small button-outline header-setup">Get started <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
+        <button type="button" class="menu-button" aria-controls="site-nav" aria-expanded="false" data-menu hidden>
+          <span class="visually-hidden">Menu</span><svg class="icon icon-open" aria-hidden="true"><use href="#i-menu"/></svg><svg class="icon icon-close" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <p class="visually-hidden" role="status" data-share-status></p>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <p class="product-label"><span aria-hidden="true"></span> <span class="shimmer">AI-first design workspace</span></p>
+      <div class="hero-heading">
+        <h1 id="hero-title" data-morph><span class="morph-line">Design with AI.</span><br> Keep control.</h1>
+        <div class="hero-summary">
+          <p>Your agent builds the HTML. In Deai Canvas, you work with live screens, refine the details, and choose which iteration your team sees.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#setup">Set up Deai Canvas <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
+            <a class="text-link" href="#story">See how it works <svg class="icon" aria-hidden="true"><use href="#i-arrow-down"/></svg></a>
+          </div>
+        </div>
+      </div>
+
+      <figure class="hero-figure">
+        <div class="canvas-stage">
+          <span class="registration" aria-hidden="true"></span>
+          <a class="screenshot-link hero-screenshot" data-screenshot="Northline · Comment → fix" href="assets/northline-scene-before.webp" aria-label="Enlarge the Northline screenshot with the pinned comment">
+            <img src="assets/northline-scene-before.webp" width="2880" height="1720" alt="Northline rail booking in Deai Canvas: a comment pinned to the departure date field and the agent’s fix in the next iteration." fetchpriority="high">
+            <span class="expand-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"/></svg></span>
+          </a>
+        </div>
+        <figcaption class="hero-caption">
+          <span><strong>Northline</strong><span class="caption-divider" aria-hidden="true">/</span> Rail booking demo</span>
+          <span>Comment → fix · Iteration 3</span>
+        </figcaption>
+      </figure>
+
+    </section>
+
+    <section class="story wrap" id="story" aria-labelledby="story-title">
+      <div class="story-intro">
+        <h2 id="story-title">From brief to review.</h2>
+      </div>
+      <ol class="story-steps">
+        <li><div class="vig vig-brief" aria-hidden="true"><div class="v-bubble v-up"><span class="v-meta">Brief</span><p><span class="v-w" style="--i:0">Design</span> <span class="v-w" style="--i:1">a</span> <span class="v-w" style="--i:2">train</span> <span class="v-w" style="--i:3">booking</span> <span class="v-w" style="--i:4">flow</span> <span class="v-w" style="--i:5">for</span> <span class="v-w" style="--i:6">desktop</span> <span class="v-w" style="--i:7">and</span> <span class="v-w" style="--i:8">mobile…</span><i class="v-caret"></i></p></div><div class="v-pill v-pop"><span class="v-live"></span><span class="shimmer">AI is working</span></div></div><span aria-hidden="true">01</span><h3>Give your agent a brief</h3><p>Start a blank task or import an existing HTML prototype. Your agent builds the first pass in the workspace folder.</p></li>
+        <li><div class="vig vig-open" aria-hidden="true"><div class="v-win"><div class="v-top"><span class="v-seg"><b class="on">Layout</b><b>Overview</b></span><span class="v-dev"><i class="on"><svg class="icon" aria-hidden="true"><use href="#i-monitor"/></svg></i><i><svg class="icon" aria-hidden="true"><use href="#i-tablet"/></svg></i><i><svg class="icon" aria-hidden="true"><use href="#i-smartphone"/></svg></i></span></div><div class="v-body"><div class="v-frame f-d" style="--i:0"><div class="v-screen"><b class="v-bar"></b><b class="v-line"></b><b class="v-line s"></b><b class="v-btn"></b></div><span>Desktop</span></div><div class="v-frame f-t" style="--i:1"><div class="v-screen"><b class="v-bar"></b><b class="v-line"></b><b class="v-line s"></b><b class="v-btn"></b></div><span>Tablet</span></div><div class="v-frame f-p" style="--i:2"><div class="v-screen"><b class="v-bar"></b><b class="v-line"></b><b class="v-line s"></b><b class="v-btn"></b></div><span>Phone</span></div></div></div></div><span aria-hidden="true">02</span><h3>Open it in Deai Canvas</h3><p>Open the live booking page, check it at phone width, then zoom out to see the entire flow and its edge states.</p></li>
+        <li><div class="vig vig-pin" aria-hidden="true"><div class="v-page"><span class="v-label">Find trains</span><div class="v-field"><span>Departure · Fri, 18 Sep</span><b class="v-pinno v-pop">1</b></div></div><div class="v-comment v-up"><div class="v-chead"><span>Pin 1</span><em>Open</em></div><p>Show the full date</p></div></div><span aria-hidden="true">03</span><h3>Point to the change</h3><p>Pin a note to the departure field. Your agent reads the pin, updates the page in a new iteration, and can leave a note explaining the fix.</p></li>
+        <li><div class="vig vig-share" aria-hidden="true"><div class="v-chips"><span class="v-chip">It.1</span><span class="v-chip">It.2</span><span class="v-chip on">It.3<b class="v-land"></b></span><em>in preview</em></div><div class="v-pub v-up"><div class="v-chead"><span>Published</span><span class="v-ok"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span></div><div class="v-link">northline.example/preview</div><div class="v-people"><span class="v-av a">MC</span><span class="v-av b">JS</span><em>2 reviewers</em></div></div></div><span aria-hidden="true">04</span><h3>Share the right pass</h3><p>Keep earlier iterations editable. Mark the one you want reviewed and publish a clickable preview for your team.</p></li>
+      </ol>
+    </section>
+
+    <section class="workflow" id="workflow" aria-labelledby="workflow-title">
+      <div class="wrap">
+        <div class="gallery" data-tour>
+          <div class="tour-stage">
+          <div class="section-intro">
+            <h2 id="workflow-title">Every part of the workspace.</h2>
+            <p>Scroll through the views you use every day — from the task list to the preview your team opens.</p>
+          </div>
+          <div class="gallery-frame">
+          <div class="gallery-tabs" data-gallery-tabs role="tablist" aria-label="Deai Canvas views" aria-orientation="vertical" hidden>
+            <span class="tour-progress" aria-hidden="true"><i></i></span>
+            <button type="button" class="gallery-tab" role="tab" id="tab-tasks" aria-controls="view-tasks" aria-selected="true">
+              <svg class="icon tab-icon" aria-hidden="true"><use href="#i-folder-kanban"/></svg><span class="tab-name"><b>Organize</b><span class="visually-hidden">, </span><small>Spaces &amp; tasks</small></span><svg class="icon tab-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-iterations" aria-controls="view-iterations" aria-selected="false" tabindex="-1">
+              <svg class="icon tab-icon" aria-hidden="true"><use href="#i-layers"/></svg><span class="tab-name"><b>Build</b><span class="visually-hidden">, </span><small>Iterations</small></span><svg class="icon tab-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-overview" aria-controls="view-overview" aria-selected="false" tabindex="-1">
+              <svg class="icon tab-icon" aria-hidden="true"><use href="#i-layout-grid"/></svg><span class="tab-name"><b>Review</b><span class="visually-hidden">, </span><small>Overview</small></span><svg class="icon tab-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-flow" aria-controls="view-flow" aria-selected="false" tabindex="-1">
+              <svg class="icon tab-icon" aria-hidden="true"><use href="#i-workflow"/></svg><span class="tab-name"><b>Flow</b><span class="visually-hidden">, </span><small>Screen map</small></span><svg class="icon tab-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-inspector" aria-controls="view-inspector" aria-selected="false" tabindex="-1">
+              <svg class="icon tab-icon" aria-hidden="true"><use href="#i-scan-search"/></svg><span class="tab-name"><b>Inspect</b><span class="visually-hidden">, </span><small>Inspector</small></span><svg class="icon tab-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-comments" aria-controls="view-comments" aria-selected="false" tabindex="-1">
+              <svg class="icon tab-icon" aria-hidden="true"><use href="#i-message-square"/></svg><span class="tab-name"><b>Comment</b><span class="visually-hidden">, </span><small>Comments</small></span><svg class="icon tab-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-preview" aria-controls="view-preview" aria-selected="false" tabindex="-1">
+              <svg class="icon tab-icon" aria-hidden="true"><use href="#i-send"/></svg><span class="tab-name"><b>Share</b><span class="visually-hidden">, </span><small>Team preview</small></span><svg class="icon tab-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-team" aria-controls="view-team" aria-selected="false" tabindex="-1">
+              <svg class="icon tab-icon" aria-hidden="true"><use href="#i-users"/></svg><span class="tab-name"><b>Collaborate</b><span class="visually-hidden">, </span><small>Team &amp; git</small></span><svg class="icon tab-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </button>
+            <button type="button" class="gallery-tab" role="tab" id="tab-modules" aria-controls="view-modules" aria-selected="false" tabindex="-1">
+              <svg class="icon tab-icon" aria-hidden="true"><use href="#i-blocks"/></svg><span class="tab-name"><b>Connect</b><span class="visually-hidden">, </span><small>Modules</small></span><svg class="icon tab-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </button>
+          </div>
+
+          <div class="gallery-views">
+            <div class="gallery-view" id="view-tasks">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Studio · Tasks" href="assets/studio-tasks.webp" aria-label="Enlarge the Studio task list screenshot">
+                  <img src="assets/studio-tasks.webp" width="2880" height="1880" alt="The Studio space in Deai Canvas: a task list grouped by status, with each task’s latest iteration, page count and tags." decoding="async">
+                  <span class="expand-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"/></svg></span>
+                </a>
+                <figcaption>
+                  <div><h3>Keep every project in its place.</h3><p>Group tasks into spaces — one per client, product or team. The task list shows each task’s latest iteration, page count and tags, and filters by status and tag.</p></div>
+                  <span class="project-label">Studio <span aria-hidden="true">/</span> Tasks</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-iterations">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Northline · Iterations" href="assets/northline-iterations.webp" aria-label="Enlarge the Northline Iterations screenshot">
+                  <img src="assets/northline-iterations.webp" width="2880" height="1720" alt="The Northline iteration list in Deai Canvas with the agent’s note on each pass and a green dot on the iteration shown in the team preview." loading="lazy" decoding="async">
+                  <span class="expand-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"/></svg></span>
+                </a>
+                <figcaption>
+                  <div><h3>Every agent pass is an iteration.</h3><p>Each pass lands as a new iteration with a note about what changed. Earlier iterations stay editable, and a green dot marks the ones shown in the team preview.</p></div>
+                  <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-overview">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Forma · Overview" href="assets/forma-overview.webp" aria-label="Enlarge the Forma Overview screenshot">
+                  <img src="assets/forma-overview.webp" width="2880" height="1720" alt="Deai Canvas Overview with five Forma checkout frames, including payment declined and order confirmed." loading="lazy" decoding="async">
+                  <span class="expand-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"/></svg></span>
+                </a>
+                <figcaption>
+                  <div><h3>See every screen.</h3><p>Compare checkout steps and payment states in one grid. Switch between desktop, tablet and mobile snapshots.</p></div>
+                  <span class="project-label">Forma <span aria-hidden="true">/</span> Store checkout demo</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-flow">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Forma · Checkout flow" href="assets/forma-flow.webp" aria-label="Enlarge the Forma checkout flow screenshot">
+                  <img src="assets/forma-flow.webp" width="2880" height="1720" alt="Forma checkout screens linked by arrows, with separate paths for an accepted or declined payment." loading="lazy" decoding="async">
+                  <span class="expand-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"/></svg></span>
+                </a>
+                <figcaption>
+                  <div><h3>Follow the path.</h3><p>Arrange screens on the canvas and label their connections. Trace the path from shopping bag to confirmation, including what happens when a card is declined.</p></div>
+                  <span class="project-label">Forma <span aria-hidden="true">/</span> Store checkout demo</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-inspector">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Northline · Inspector" href="assets/northline-inspector.webp" aria-label="Enlarge the Northline Inspector screenshot">
+                  <img src="assets/northline-inspector.webp" width="2880" height="1720" alt="The Northline booking form is selected in Deai Canvas with its layout and spacing properties open in the Inspector." loading="lazy" decoding="async">
+                  <span class="expand-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"/></svg></span>
+                </a>
+                <figcaption>
+                  <div><h3>Inspect live elements.</h3><p>Click any element to see its spacing, layout and colors, checked against your space’s tokens. Tweak a value live, add a note and send the change to your agent.</p></div>
+                  <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-comments">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Northline · Comments" href="assets/northline-comments.webp" aria-label="Enlarge the Northline Comments screenshot">
+                  <img src="assets/northline-comments.webp" width="2880" height="2120" alt="Northline with open pins, an agent reply in a thread and the resolved group, in the Deai Canvas comments panel." loading="lazy" decoding="async">
+                  <span class="expand-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"/></svg></span>
+                </a>
+                <figcaption>
+                  <div><h3>Every comment gets an answer.</h3><p>Pin feedback to any element. Your agent closes each pin with a note in the iteration that fixed it, or replies in the thread when it needs your call. Teammates comment in the published preview — assign any of their comments to AI.</p>
+                  <ul class="chip-row" role="list" aria-label="Example comment statuses">
+                    <li class="chip chip-done"><span class="chip-dot" aria-hidden="true"></span>Done · It.3</li>
+                    <li class="chip chip-wait"><span class="chip-dot" aria-hidden="true"></span>AI is waiting for your reply</li>
+                    <li class="chip chip-team"><span class="chip-dot" aria-hidden="true"></span>Team · Assigned to AI</li>
+                  </ul><p class="tour-services"><span class="tour-services-label">Runs on</span> your computer for pins to AI · your Supabase project for team comments · Microsoft Teams for alerts</p></div>
+                  <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-preview">
+              <figure>
+                <a class="screenshot-link" data-screenshot="Northline · Published preview" href="assets/northline-preview.webp" aria-label="Enlarge the published Northline preview screenshot">
+                  <img src="assets/northline-preview.webp" width="2880" height="1720" alt="The published Northline fare selection screen with page navigation for the reviewer." loading="lazy" decoding="async">
+                  <span class="expand-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"/></svg></span>
+                </a>
+                <figcaption>
+                  <div><h3>Share the version you want reviewed.</h3><p>Publish selected iterations as a clickable preview, with an optional password. Teammates try the real flow and comment right there.</p><p class="tour-services"><span class="tour-services-label">Runs on</span> a folder on your computer or your own Vercel account</p></div>
+                  <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-team">
+              <figure>
+                <div class="screenshot-link team-shot" role="img" aria-label="The Northline task in Deai Canvas with git sync on: iteration 4 pulled from a colleague, iteration 3 sent to git, and a Team tab next to Mine on the Tasks screen.">
+                  <div class="tp" aria-hidden="true">
+                    <div class="tp-head"><span class="tp-title"><b>Northline</b> · Rail booking</span><span class="tp-sync"><i></i>Git sync · up to date</span></div>
+                    <div class="tp-tabs"><span>Mine · 5</span><span class="on">Team · 12</span></div>
+                    <ul class="tp-list">
+                      <li><span class="tp-it">It.4</span><span class="tp-av a">AR</span><span class="tp-who"><b>Alex Rivera</b> · pulled from git</span><span class="tp-tag in"><svg class="icon" aria-hidden="true"><use href="#i-arrow-down"/></svg>git</span></li>
+                      <li><span class="tp-it">It.3</span><span class="tp-av b">MC</span><span class="tp-who"><b>Maya Chen</b> · sent to git</span><span class="tp-tag out"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"/></svg>git</span></li>
+                      <li><span class="tp-it">It.2</span><span class="tp-av a">AR</span><span class="tp-who"><b>Alex Rivera</b> · sent to git</span><span class="tp-tag out"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"/></svg>git</span></li>
+                      <li><span class="tp-it">It.1</span><span class="tp-av b">MC</span><span class="tp-who"><b>Maya Chen</b> · first pass</span><span class="tp-tag">local</span></li>
+                    </ul>
+                  </div>
+                </div>
+                <figcaption>
+                  <div><h3>Pick up where a colleague left off.</h3><p>Work alone or as a team. Git sync sends an iteration to a shared repository and pulls a colleague’s changes back as a new iteration, so anyone can continue a task. With the team dashboard, the Tasks screen gets a Team tab with everyone’s tasks.</p><p class="tour-services"><span class="tour-services-label">Runs on</span> any git host — GitHub, GitLab or your own server · your Supabase project for the dashboard</p></div>
+                  <span class="project-label">Northline <span aria-hidden="true">/</span> Rail booking demo</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="gallery-view" id="view-modules">
+              <figure>
+                <div class="screenshot-link team-shot" role="img" aria-label="Settings, Modules in the Studio space: Publishing (folder, Vercel), Design tokens (CSS file), Team comments (Supabase), Notifications (Microsoft Teams), Git sync (any git repo), Issue tracker (Jira), and an empty card for your own module written by your agent.">
+                  <div class="tp mp" aria-hidden="true">
+                    <div class="tp-head"><span class="tp-title"><b>Settings</b> · Modules</span><span class="tp-sync"><i></i>Studio space</span></div>
+                    <ul class="mp-grid">
+                      <li><span class="mp-ico"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg></span><span class="mp-txt"><b>Publishing</b><small>Folder, Vercel</small></span><span class="mp-on"></span></li>
+                      <li><span class="mp-ico"><svg class="icon" aria-hidden="true"><use href="#i-palette"/></svg></span><span class="mp-txt"><b>Design tokens</b><small>CSS file</small></span><span class="mp-on"></span></li>
+                      <li><span class="mp-ico"><svg class="icon" aria-hidden="true"><use href="#i-database"/></svg></span><span class="mp-txt"><b>Team comments</b><small>Supabase</small></span><span class="mp-on"></span></li>
+                      <li><span class="mp-ico"><svg class="icon" aria-hidden="true"><use href="#i-bell"/></svg></span><span class="mp-txt"><b>Notifications</b><small>Microsoft Teams</small></span><span class="mp-on"></span></li>
+                      <li><span class="mp-ico"><svg class="icon" aria-hidden="true"><use href="#i-git-branch"/></svg></span><span class="mp-txt"><b>Git sync</b><small>any git repo</small></span><span class="mp-on"></span></li>
+                      <li><span class="mp-ico"><svg class="icon" aria-hidden="true"><use href="#i-ticket"/></svg></span><span class="mp-txt"><b>Issue tracker</b><small>Jira</small></span><span class="mp-on"></span></li>
+                      <li class="mp-own"><span class="mp-ico"><svg class="icon" aria-hidden="true"><use href="#i-puzzle"/></svg></span><span class="mp-txt"><b>Your own module</b><small>written by your agent</small></span></li>
+                    </ul>
+                  </div>
+                </div>
+                <figcaption>
+                  <div><h3>Connect the tools you already use.</h3><p>A module connects one part of the workflow to a tool you choose: publish to a folder or Vercel, check values against your CSS tokens, keep team comments in Supabase, post a Microsoft Teams card for every new comment, sync iterations with git, show Jira statuses. Turn modules on per space in Settings — or let your agent write your own.</p><p class="tour-services"><span class="tour-services-label">Runs on</span> services you already use — Deai Canvas brings them into one workspace and hosts none of them itself</p></div>
+                  <span class="project-label">Studio <span aria-hidden="true">/</span> Settings → Modules</span>
+                </figcaption>
+              </figure>
+            </div>
+          </div>
+          </div>
+          </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="modules wrap" id="modules" aria-labelledby="modules-title">
+      <div class="section-intro module-intro">
+        <h2 id="modules-title">Make Deai Canvas fit<br> your workflow.</h2>
+        <p>Set up a space once, then open it to pick up your work. Screens, iterations, the Inspector and local pins are built in. A module connects one part of the workflow to a tool you choose.</p>
+      </div>
+      <div class="module-layout">
+        <figure class="module-capture">
+          <a class="screenshot-link" data-screenshot="Studio · Workspace modules" href="assets/studio-modules.webp" aria-label="Enlarge the Deai Canvas modules settings screenshot">
+            <img src="assets/studio-modules.webp" width="2880" height="1360" alt="Deai Canvas module settings with folder publishing and CSS tokens connected in the Studio space." loading="lazy" decoding="async">
+            <span class="expand-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"/></svg></span>
+          </a>
+          <figcaption>Studio demo <span class="caption-divider" aria-hidden="true">/</span> Settings → Modules</figcaption>
+        </figure>
+        <div class="module-side">
+        <dl class="module-list">
+          <div><dt>Publishing</dt><dd>Export a static preview to a folder from day one. Connect Vercel to publish a shareable preview on your own account.</dd></div>
+          <div><dt>Design system</dt><dd>Connect a CSS tokens file so the Inspector can flag values that fall outside your design system.</dd></div>
+          <div><dt>Team review</dt><dd>Use Supabase for shared comments and a team dashboard. Turn on Microsoft Teams notifications for new comments.</dd></div>
+          <div><dt>Project tools</dt><dd>Sync editable iterations to your own git repo and show Jira issue status alongside tasks in Deai Canvas.</dd></div>
+        </dl>
+          <aside class="module-own" aria-labelledby="module-own-title">
+            <h3 id="module-own-title">Your own module</h3>
+            <p>Ask your agent to write one for your space — it follows the Deai module guide.</p>
+            <a class="text-link" href="https://github.com/neodisa/deai-canvas#modules">Read the module guide <svg class="icon" aria-hidden="true"><use href="#i-arrow-up-right"/></svg></a>
+          </aside>
+        </div>
+      </div>
+      <div class="module-foot">
+        <p>Choose or swap providers in each space’s Settings. Use the built-in modules or add one for your team’s own service.</p>
+      </div>
+    </section>
+
+    <section class="setup wrap" id="setup" aria-labelledby="setup-title">
+      <div class="setup-board">
+        <div class="setup-copy">
+          <h2 id="setup-title">Start with<br> your agent.</h2>
+          <p>Paste the setup prompt into Claude Code, Codex, or another coding agent that can work with local files. No agent? Run one command in Terminal on macOS or in PowerShell on Windows.</p>
+        </div>
+        <div class="setup-action" data-copy-scope>
+          <div class="setup-tabs" data-setup-tabs role="tablist" aria-label="Ways to install Deai Canvas" hidden>
+            <button type="button" class="setup-tab" role="tab" id="setup-tab-agent" aria-controls="setup-agent" aria-selected="true">With your agent</button>
+            <button type="button" class="setup-tab" role="tab" id="setup-tab-terminal" aria-controls="setup-terminal" aria-selected="false" tabindex="-1">macOS<span class="visually-hidden"> (Terminal)</span></button>
+            <button type="button" class="setup-tab" role="tab" id="setup-tab-windows" aria-controls="setup-windows" aria-selected="false" tabindex="-1">Windows<span class="visually-hidden"> (PowerShell)</span></button>
+          </div>
+          <div class="prompt-card" id="setup-agent">
+            <div class="prompt-toolbar"><span><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg> Setup prompt</span><button class="button button-small copy-button" type="button" data-copy="setup-prompt" hidden>Copy prompt</button></div>
+            <p><code id="setup-prompt">Install Deai Canvas: clone https://github.com/neodisa/deai-canvas.git into <span class="nowrap">~/deai-canvas</span> and follow <span class="nowrap">~/deai-canvas</span>/SETUP.md.</code></p>
+          </div>
+          <div class="prompt-card" id="setup-terminal">
+            <div class="prompt-toolbar"><span><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg> Terminal · macOS</span><button class="button button-small copy-button" type="button" data-copy="setup-command" hidden>Copy command</button></div>
+            <p><code id="setup-command">git clone https://github.com/neodisa/deai-canvas.git <span class="nowrap">~/deai-canvas</span> &amp;&amp; cd <span class="nowrap">~/deai-canvas</span> &amp;&amp; bash ops/canvas-app/install.sh &amp;&amp; ./start.command</code></p>
+            <p class="prompt-note">For Overview snapshots, also run <code>npm ci &amp;&amp; npx playwright install chromium</code> in the same folder (Node.js 20+).</p>
+          </div>
+          <div class="prompt-card" id="setup-windows">
+            <div class="prompt-toolbar"><span><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg> PowerShell · Windows</span><button class="button button-small copy-button" type="button" data-copy="setup-command-windows" hidden>Copy command</button></div>
+            <p><code id="setup-command-windows">git clone https://github.com/neodisa/deai-canvas.git <span class="nowrap">$HOME\deai-canvas</span>; cd <span class="nowrap">$HOME\deai-canvas</span>; py <span class="nowrap">app\serve.py</span></code></p>
+            <p class="prompt-note">Then open http://localhost:8765/app/ in Chrome or Edge. Needs Git and Python 3.9+. Windows support is experimental — not yet tested on a real Windows machine; the app icon and autostart are macOS-only for now. On Linux, run the same with <code>python3</code>.</p>
+          </div>
+          <p class="copy-status visually-hidden" role="status" data-copy-status></p>
+          <a class="text-link manual-link" href="https://github.com/neodisa/deai-canvas/blob/main/SETUP.md">Read the installation guide <svg class="icon" aria-hidden="true"><use href="#i-arrow-up-right"/></svg></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="faq wrap" id="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">Good to know.</h2>
+      <div class="faq-list">
+        <details>
+          <summary>How do I start a project?<svg class="icon faq-plus" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+          <p>Open an existing space folder or create a space for a client or project. Start from an empty task, import an HTML folder, or have your agent build the first iteration. Your tasks stay together in the space, with search, tags and tabs for open work.</p>
+        </details>
+        <details>
+          <summary>Can I bring the prototype into Figma?<svg class="icon faq-plus" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+          <p>Use To Figma to copy the live mockup and paste it into Figma. In Deai Canvas, select a live element to inspect its properties, measure distances and prepare precise edits for your agent.</p>
+        </details>
+        <details>
+          <summary>Where does my work live?<svg class="icon faq-plus" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+          <p>Prototypes, iterations, local comments and snapshots are files on your computer. You choose where to publish previews and which integrations to connect.</p>
+        </details>
+        <details>
+          <summary>Can my team review without installing Deai Canvas?<svg class="icon faq-plus" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+          <p>Yes. Publish a preview to a web host and send your team the URL. They can open it in a browser and, with a team comments module configured, leave feedback there.</p>
+        </details>
+        <details>
+          <summary>What do I need to run it?<svg class="icon faq-plus" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+          <p>Python 3.9 or later and Chrome or Edge. Overview snapshots also use Node.js 20+ and Playwright. Deai Canvas is made for macOS: the launcher, app icon and autostart. On Windows and Linux, run <code>app/serve.py</code> with Python 3.9+ and open it in Chrome or Edge as an app window. A one-command start on every OS is on the roadmap.</p>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <a class="brand" href="#top"><img src="assets/deai-icon.png" alt="" width="32" height="32"><span>Deai Canvas</span></a>
+      <p class="footer-version"><a href="https://github.com/neodisa/deai-canvas/blob/main/CHANGELOG.md" data-version>v0.39.1</a> · Beta</p>
+      <nav aria-label="Footer">
+        <a href="https://github.com/neodisa/deai-canvas/blob/main/SETUP.md">Setup</a>
+        <a href="https://github.com/neodisa/deai-canvas">GitHub <svg class="icon" aria-hidden="true"><use href="#i-arrow-up-right"/></svg></a>
+        <a href="#top">Back to top <svg class="icon" aria-hidden="true"><use href="#i-arrow-up"/></svg></a>
+      </nav>
+    </div>
+  </footer>
+
+  <dialog class="screenshot-dialog" aria-labelledby="screenshot-title" data-screenshot-dialog>
+    <header>
+      <h2 id="screenshot-title"></h2>
+      <a class="button button-small button-outline" href="assets/northline-scene-before.webp" target="_blank" rel="noopener" data-full-size>Full size <svg class="icon" aria-hidden="true"><use href="#i-arrow-up-right"/></svg></a>
+      <form method="dialog"><button class="button button-small dialog-close" type="submit" aria-label="Close screenshot" autofocus><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button></form>
+    </header>
+    <div class="dialog-viewport" data-enlarged-image></div>
+  </dialog>
+</body>
+</html>

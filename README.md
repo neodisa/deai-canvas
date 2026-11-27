@@ -4,12 +4,15 @@
 other) makes the pages. Deai Canvas keeps every iteration, shows all screens at once, lets you point at an
 element and tell the agent what to change, and publishes a protected preview for your team.
 
+[Website](https://deai-canvas.vercel.app/) · [What's new](CHANGELOG.md) · [Setup guide for agents](SETUP.md)
+
 ![Deai Canvas: the workplace with the page tree, a mockup, pinned comments and the agent status](docs/screenshots/hero.png)
 
-## Install
+## Get started
 
-Paste this into Claude Code (or another agent) in a terminal — it installs what is missing, starts the canvas, creates your
-first space and modules, and asks only for the space name, where to publish and the preview password:
+**With your agent.** Paste this into Claude Code, Codex or another agent that can work with files and a terminal. It installs
+what is missing, starts the canvas, creates your first space and modules, and asks only for the space name, where to publish
+and the preview password:
 
 ```text
 Install Deai Canvas: clone https://github.com/neodisa/deai-canvas.git into ~/deai-canvas and follow ~/deai-canvas/SETUP.md.
@@ -21,17 +24,34 @@ Install Deai Canvas: clone https://github.com/neodisa/deai-canvas.git into ~/dea
 Встанови Deai Canvas: склонуй https://github.com/neodisa/deai-canvas.git у ~/deai-canvas і зроби все за ~/deai-canvas/SETUP.md.
 ```
 
-By hand:
+**In Terminal (macOS).**
 
 ```bash
 git clone https://github.com/neodisa/deai-canvas.git ~/deai-canvas && cd ~/deai-canvas
-npm install && npx playwright install chromium   # Overview screenshots; needs Node.js 20+
-bash ops/canvas-app/install.sh                   # macOS: app icon and autostart
+bash ops/canvas-app/install.sh                   # app icon and autostart
 ./start.command                                  # then open http://localhost:8765/app/
+npm ci && npx playwright install chromium        # optional: Overview snapshots, needs Node.js 20+
 ```
+
+On Windows and Linux, run `app/serve.py` with Python 3.9+ and open http://localhost:8765/app/ in Chrome or Edge.
+Updates come from the canvas itself (Settings → Updates), so keep the folder a git checkout: a downloaded zip cannot update.
 
 The canvas opens on a welcome screen: copy the prompt from there to an agent, or create a space with the wizard.
 ⌘K → "Canvas tour" shows the map of the workplace and a demo task.
+
+## Connect your agent
+
+Deai Canvas works with any coding agent that can read and write files on your computer: Claude Code, Codex and others.
+
+1. **Install** with the prompt above, or point the agent at an existing space folder.
+2. **The space tells the agent how to work.** Every space folder has an `AGENTS.md` with the canvas routes and the reference
+   topics the agent reads on its own. For Claude Code the folder also gets a `CLAUDE.md` with `@AGENTS.md`; in
+   Settings → AGENTS.md, «Підключити» in the «Claude Code» row adds a Stop hook, so Claude's edits are saved as AI edits in the
+   iteration history. Start Claude Code in the space folder, not inside a task folder.
+3. **Work in a loop.** Pin a comment on an element. The agent reads the pins, makes a new iteration and closes each pin with a
+   note about what it changed.
+
+See *AGENTS.md* below for what the file holds and how the canvas keeps it current.
 
 ## Why
 
